@@ -1,17 +1,24 @@
 {
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
-    "target": "ES2019",
-    "moduleResolution": "NodeNext",
-    "module": "NodeNext",
-    "esModuleInterop": true,
-    "allowSyntheticDefaultImports": true,
-    "forceConsistentCasingInFileNames": true,
-    "strict": true,
-    "skipLibCheck": true,
-    "resolveJsonModule": true,
     "outDir": "dist",
-    "rootDir": "."
+    "rootDir": ".",
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "baseUrl": ".",
+    "paths": {
+      "@codepol/core": ["./packages/core/src/index.ts"],
+      "@codepol/eslint-plugin": ["./packages/eslint-plugin/src/index.ts"],
+      "@codepol/esbuild-plugin": ["./packages/esbuild-plugin/src/index.ts"]
+    }
   },
-  "include": ["tools/**/*.ts", "tests/**/*.ts", "policy.json"],
-  "exclude": ["dist", "node_modules"]
+  "include": ["tests/**/*.ts", "policy.json"],
+  "exclude": ["dist", "node_modules", "packages", "apps"],
+  "references": [
+    { "path": "./packages/core" },
+    { "path": "./packages/eslint-plugin" },
+    { "path": "./packages/esbuild-plugin" },
+    { "path": "./apps/cli" }
+  ]
 }

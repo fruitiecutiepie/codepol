@@ -1,19 +1,14 @@
 {
   "name": "codepol",
   "version": "1.0.0",
-  "private": true,
+  "description": "Policy-driven code enforcement for TypeScript projects",
   "type": "commonjs",
   "scripts": {
-    "build": "tsc --project tsconfig.json",
+    "build": "pnpm -r build",
     "test": "vitest run",
     "test:watch": "vitest",
-    "policy:check": "ts-node --project tsconfig.json tools/policy-check.ts",
-    "policy:fix": "ts-node --project tsconfig.json tools/policy-check.ts --fix",
-    "policy:watch": "ts-node --project tsconfig.json tools/policy-check.ts --watch"
-  },
-  "dependencies": {
-    "tree-sitter": "^0.21.1",
-    "tree-sitter-typescript": "^0.23.2"
+    "clean": "pnpm -r exec rm -rf dist",
+    "typecheck": "pnpm -r typecheck"
   },
   "devDependencies": {
     "@types/node": "25.0.3",
@@ -27,9 +22,27 @@
     "eslint": "9.39.2",
     "fast-glob": "3.3.3",
     "minimatch": "10.1.1",
+    "tree-sitter": "0.21.1",
+    "tree-sitter-typescript": "0.23.2",
     "ts-node": "10.9.2",
     "typescript": "5.9.3",
     "vitest": "4.0.16",
     "yargs": "18.0.0"
-  }
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/codepol/codepol"
+  },
+  "license": "MIT",
+  "keywords": [
+    "eslint",
+    "esbuild",
+    "policy",
+    "logging",
+    "typescript",
+    "tree-sitter"
+  ]
 }

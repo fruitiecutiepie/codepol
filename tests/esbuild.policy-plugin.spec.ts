@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { policyPlugin } from '../tools/esbuild-plugin-policy';
+import { policyPlugin } from '@codepol/esbuild-plugin';
 
 describe('esbuild policy plugin', () => {
   it('fails the build when policy violations are present and succeeds after fixes', async () => {

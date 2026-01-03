@@ -1,45 +1,54 @@
+/**
+ * @packageDocumentation
+ * @codepol/eslint-plugin - ESLint plugin for enforcing logger instrumentation.
+ *
+ * This plugin provides a rule that ensures all functions have proper
+ * logger.enter() and logger.exit() calls wrapped in a try/finally block.
+ *
+ * @example ESLint flat config (eslint.config.js)
+ * ```javascript
+ * import codepolPlugin from '@codepol/eslint-plugin';
+ *
+ * export default [
+ *   {
+ *     plugins: {
+ *       codepol: codepolPlugin,
+ *     },
+ *     rules: {
+ *       'codepol/require-logger-enter-exit': ['error', {
+ *         policyPath: './policy.json'
+ *       }],
+ *     },
+ *   },
+ * ];
+ * ```
+ */
+
 import fs from 'fs';
 import path from 'path';
 import { ESLintUtils, TSESLint, TSESTree } from '@typescript-eslint/utils';
 import { minimatch } from 'minimatch';
+import type { LoggerConfig, PolicyFile } from '@codepol/core';
 
-interface LoggerImportConfig {
-  module: string;
-  named: string;
-}
-
-interface LoggerConfig {
-  identifier: string;
-  enterMethod: string;
-  exitMethod: string;
-  import: LoggerImportConfig;
-}
-
-interface PolicyRule {
-  id: string;
-  description: string;
-  language: 'typescript' | 'tsx';
-  files: string[];
-  exclude?: string[];
-}
-
-interface PolicyFile {
-  $schema?: string;
-  rules: PolicyRule[];
-  exclude?: string[];
-  logger: LoggerConfig;
-}
-
+/**
+ * Rule options for require-logger-enter-exit.
+ */
 type Options = [
   {
+    /** Path to the policy.json file */
     policyPath?: string;
   }?
 ];
 
-const createRule = ESLintUtils.RuleCreator(name => `https://org.example/rule/${name}`);
+const RULE_URL = 'https://github.com/codepol/codepol/blob/main/docs/rules/require-logger-enter-exit.md';
+
+const createRule = ESLintUtils.RuleCreator(() => RULE_URL);
 
 const policyCache = new Map<string, PolicyFile>();
 
+/**
+ * Loads a policy file with caching.
+ */
 function loadPolicy(policyPath: string): PolicyFile {
   const resolved = path.resolve(policyPath);
   const cached = policyCache.get(resolved);
@@ -50,6 +59,13 @@ function loadPolicy(policyPath: string): PolicyFile {
   const parsed = JSON.parse(raw) as PolicyFile;
   policyCache.set(resolved, parsed);
   return parsed;
+}
+
+/**
+ * Clears the policy cache. Useful for testing.
+ */
+export function clearPolicyCache(): void {
+  policyCache.clear();
 }
 
 function matchesAny(patterns: string[] | undefined, relativeFile: string): boolean {
@@ -210,6 +226,15 @@ function buildArrowReplacement(
 
 type MessageIds = 'missingLogger';
 
+/**
+ * ESLint rule that enforces logger.enter/exit instrumentation on all functions.
+ *
+ * This rule:
+ * - Checks that every function has logger.enter() as the first statement
+ * - Checks that function body is wrapped in try/finally with logger.exit() in finally
+ * - Provides autofix to add the instrumentation
+ * - Automatically adds the logger import if missing
+ */
 const requireLoggerRule = createRule<Options, MessageIds>({
   name: 'require-logger-enter-exit',
   meta: {
@@ -228,6 +253,7 @@ const requireLoggerRule = createRule<Options, MessageIds>({
         properties: {
           policyPath: {
             type: 'string',
+            description: 'Path to the policy.json file',
           },
         },
         additionalProperties: false,
@@ -321,6 +347,9 @@ const requireLoggerRule = createRule<Options, MessageIds>({
   },
 });
 
+/**
+ * The ESLint plugin object with all rules.
+ */
 const plugin = {
   rules: {
     'require-logger-enter-exit': requireLoggerRule,
