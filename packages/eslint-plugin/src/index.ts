@@ -40,7 +40,7 @@ type Options = [
   }?
 ];
 
-const RULE_URL = 'https://github.com/codepol/codepol/blob/main/docs/rules/require-logger-enter-exit.md';
+const RULE_URL = 'https://github.com/fruitiecutiepie/codepol/blob/main/docs/rules/require-logger-enter-exit.md';
 
 const createRule = ESLintUtils.RuleCreator(() => RULE_URL);
 

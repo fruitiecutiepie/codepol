@@ -40,7 +40,7 @@ Create `policy.json` in your project root:
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/codepol/codepol/main/policy.schema.json",
+  "$schema": "https://raw.githubusercontent.com/fruitiecutiepie/codepol/main/policy.schema.json",
   "rules": [
     {
       "id": "function-logging",

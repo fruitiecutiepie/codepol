@@ -8,7 +8,7 @@ You can enable IDE autocompletion by adding the `$schema` property:
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/codepol/codepol/main/policy.schema.json"
+  "$schema": "https://raw.githubusercontent.com/fruitiecutiepie/codepol/main/policy.schema.json"
 }
 ```
 
@@ -120,7 +120,7 @@ Codepol uses [fast-glob](https://github.com/mrmlnc/fast-glob) for file matching.
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/codepol/codepol/main/policy.schema.json",
+  "$schema": "https://raw.githubusercontent.com/fruitiecutiepie/codepol/main/policy.schema.json",
   "rules": [
     {
       "id": "function-logging",
