@@ -21,6 +21,7 @@ import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import { ESLint } from 'eslint';
 import {
+  initParser,
   loadPolicy,
   collectRuleMatches,
   scanWithPolicy,
@@ -28,8 +29,6 @@ import {
   type PolicyFile,
   type PolicyViolation,
 } from '@codepol/core';
-import eslintPlugin from '@codepol/eslint-plugin';
-
 interface CliOptions {
   fix: boolean;
   watch: boolean;
@@ -66,9 +65,6 @@ async function runPolicyChecks(options: {
 
   const eslint = new ESLint({
     overrideConfigFile: eslintConfigPath,
-    plugins: {
-      codepol: eslintPlugin as unknown as ESLint.Plugin,
-    },
     fix,
     cwd,
   });
@@ -160,6 +156,8 @@ function createWatcher(options: CliOptions, files: string[], patterns: string[])
 }
 
 async function main(): Promise<void> {
+  await initParser();
+
   const argv = await yargs(hideBin(process.argv))
     .scriptName('codepol')
     .usage('$0 [options]')
@@ -180,7 +178,7 @@ async function main(): Promise<void> {
     })
     .option('eslint-config', {
       type: 'string',
-      default: path.resolve('.eslintrc.cjs'),
+      default: path.resolve('eslint.config.js'),
       describe: 'Path to the ESLint config file',
     })
     .example('$0', 'Run policy checks once')

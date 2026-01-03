@@ -4,17 +4,21 @@
  *
  * This package provides the foundation for policy-driven code enforcement:
  * - Load and parse policy.json files
- * - Scan TypeScript files using Tree-sitter for structural analysis
+ * - Scan TypeScript files using web-tree-sitter (WASM) for structural analysis
  * - Detect missing logger instrumentation
  * - Format and report violations
  *
  * @example
  * ```typescript
  * import {
+ *   initParser,
  *   loadPolicy,
  *   scanWithPolicy,
  *   formatTreeViolations
  * } from '@codepol/core';
+ *
+ * // Initialize the WASM parser before scanning
+ * await initParser();
  *
  * const policy = loadPolicy('./policy.json');
  * const violations = await scanWithPolicy(policy, process.cwd());
@@ -47,6 +51,8 @@ export {
 
 // Tree-sitter scanning
 export {
+  initParser,
+  isParserInitialized,
   scanFileForViolations,
   scanWithPolicy,
 } from './scanner';

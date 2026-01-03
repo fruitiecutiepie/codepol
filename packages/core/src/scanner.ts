@@ -1,10 +1,70 @@
 import fs from 'fs';
-import Parser from 'tree-sitter';
-import TreeSitterTS from 'tree-sitter-typescript';
+import path from 'path';
+import Parser, { Language, SyntaxNode } from 'web-tree-sitter';
 import type { LoggerConfig, PolicyFile, PolicyRule, PolicyViolation } from './types';
 import { collectRuleMatches } from './policy-loader';
 
 const blockNodeTypes = new Set(['statement_block', 'block', 'function_body']);
+
+let typescriptLanguage: Language | null = null;
+let tsxLanguage: Language | null = null;
+
+let parserInitialized = false;
+
+/**
+ * Resolves the path to a WASM grammar file.
+ * Looks in the wasm directory relative to this package.
+ */
+function getWasmPath(grammarName: string): string {
+  return path.resolve(__dirname, '..', 'wasm', `${grammarName}.wasm`);
+}
+
+/**
+ * Initializes the web-tree-sitter parser and loads language grammars.
+ * Must be called before any scanning operations.
+ *
+ * @example
+ * ```typescript
+ * import { initParser, scanWithPolicy } from '@codepol/core';
+ *
+ * await initParser();
+ * const violations = await scanWithPolicy(policy, cwd);
+ * ```
+ */
+export async function initParser(): Promise<void> {
+  if (parserInitialized) {
+    return;
+  }
+
+  await Parser.init();
+
+  const [tsLang, tsxLang] = await Promise.all([
+    Parser.Language.load(getWasmPath('tree-sitter-typescript')),
+    Parser.Language.load(getWasmPath('tree-sitter-tsx')),
+  ]);
+
+  typescriptLanguage = tsLang;
+  tsxLanguage = tsxLang;
+  parserInitialized = true;
+}
+
+/**
+ * Checks if the parser has been initialized.
+ */
+export function isParserInitialized(): boolean {
+  return parserInitialized;
+}
+
+/**
+ * Throws if the parser has not been initialized.
+ */
+function ensureInitialized(): void {
+  if (!parserInitialized) {
+    throw new Error(
+      'Parser not initialized. Call initParser() before scanning files.'
+    );
+  }
+}
 
 /**
  * Creates a Tree-sitter parser configured for the given file type.
@@ -13,11 +73,12 @@ const blockNodeTypes = new Set(['statement_block', 'block', 'function_body']);
  * @returns Configured Parser instance
  */
 function getParserForFile(filePath: string): Parser {
+  ensureInitialized();
   const parser = new Parser();
   if (filePath.endsWith('.tsx')) {
-    parser.setLanguage(TreeSitterTS.tsx);
+    parser.setLanguage(tsxLanguage);
   } else {
-    parser.setLanguage(TreeSitterTS.typescript);
+    parser.setLanguage(typescriptLanguage);
   }
   return parser;
 }
@@ -28,7 +89,7 @@ function getParserForFile(filePath: string): Parser {
  * @param node - The function/method syntax node
  * @returns The function name or '<anonymous>' if not found
  */
-function getFunctionName(node: Parser.SyntaxNode): string {
+function getFunctionName(node: SyntaxNode): string {
   const nameNode = node.childForFieldName('name');
   if (nameNode) {
     return nameNode.text;
@@ -46,7 +107,12 @@ function getFunctionName(node: Parser.SyntaxNode): string {
 /**
  * Checks if a node is a call expression matching logger.method().
  */
-function isLoggerCall(source: string, node: Parser.SyntaxNode, loggerId: string, method: string): boolean {
+function isLoggerCall(
+  source: string,
+  node: SyntaxNode,
+  loggerId: string,
+  method: string
+): boolean {
   if (node.type !== 'call_expression' && node.type !== 'call_expression_v2') {
     return false;
   }
@@ -63,7 +129,7 @@ function isLoggerCall(source: string, node: Parser.SyntaxNode, loggerId: string,
  */
 function findLoggerEnterStatement(
   source: string,
-  block: Parser.SyntaxNode,
+  block: SyntaxNode,
   loggerId: string,
   method: string
 ): boolean {
@@ -86,7 +152,7 @@ function findLoggerEnterStatement(
  */
 function hasLoggerExitInFinally(
   source: string,
-  tryNode: Parser.SyntaxNode,
+  tryNode: SyntaxNode,
   loggerId: string,
   method: string
 ): boolean {
@@ -112,7 +178,9 @@ function hasLoggerExitInFinally(
 /**
  * Finds a try_statement within a block.
  */
-function findSurroundingTry(block: Parser.SyntaxNode): Parser.SyntaxNode | undefined {
+function findSurroundingTry(
+  block: SyntaxNode
+): SyntaxNode | undefined {
   for (const child of block.namedChildren) {
     if (child.type === 'try_statement') {
       return child;
@@ -131,7 +199,7 @@ interface FunctionAnalysisResult {
  */
 function analyseFunction(
   source: string,
-  node: Parser.SyntaxNode,
+  node: SyntaxNode,
   logger: LoggerConfig
 ): FunctionAnalysisResult {
   const body = node.childForFieldName('body');
@@ -153,7 +221,10 @@ function analyseFunction(
 /**
  * Recursively visits all function nodes in a syntax tree.
  */
-function visitFunctions(node: Parser.SyntaxNode, visitor: (fnNode: Parser.SyntaxNode) => void): void {
+function visitFunctions(
+  node: SyntaxNode,
+  visitor: (fnNode: SyntaxNode) => void
+): void {
   if (
     node.type === 'function_declaration' ||
     node.type === 'function_expression' ||
@@ -177,8 +248,9 @@ function visitFunctions(node: Parser.SyntaxNode, visitor: (fnNode: Parser.Syntax
  *
  * @example
  * ```typescript
- * import { scanFileForViolations } from '@codepol/core';
+ * import { initParser, scanFileForViolations } from '@codepol/core';
  *
+ * await initParser();
  * const violations = scanFileForViolations(
  *   '/path/to/file.ts',
  *   rule,
@@ -231,8 +303,9 @@ export function scanFileForViolations(
  *
  * @example
  * ```typescript
- * import { loadPolicy, scanWithPolicy } from '@codepol/core';
+ * import { initParser, loadPolicy, scanWithPolicy } from '@codepol/core';
  *
+ * await initParser();
  * const policy = loadPolicy('./policy.json');
  * const violations = await scanWithPolicy(policy, process.cwd());
  *
@@ -242,6 +315,7 @@ export function scanFileForViolations(
  * ```
  */
 export async function scanWithPolicy(policy: PolicyFile, cwd: string): Promise<PolicyViolation[]> {
+  ensureInitialized();
   const matches = await collectRuleMatches(policy, cwd);
   const allViolations: PolicyViolation[] = [];
   for (const match of matches) {

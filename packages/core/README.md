@@ -1,21 +1,33 @@
 # @codepol/core
 
-Core policy loading, Tree-sitter scanning, and enforcement for codepol.
+Core policy loading, web-tree-sitter (WASM) scanning, and enforcement for codepol.
 
 ## Installation
 
 ```bash
-pnpm add @codepol/core tree-sitter tree-sitter-typescript
+pnpm add @codepol/core
 ```
 
 ## Features
 
 - Load and parse `policy.json` configuration files
-- Scan TypeScript files using Tree-sitter for structural analysis
+- Scan TypeScript files using web-tree-sitter (WASM) for structural analysis
+- No native dependencies - works across all platforms
 - Detect missing logger instrumentation patterns
 - Format violations for display
 
 ## Usage
+
+### Initializing the Parser
+
+Before scanning files, you must initialize the WASM parser:
+
+```typescript
+import { initParser } from '@codepol/core';
+
+// Call once at application startup
+await initParser();
+```
 
 ### Loading a Policy
 
@@ -35,7 +47,9 @@ for (const match of matches) {
 ### Scanning for Violations
 
 ```typescript
-import { loadPolicy, scanWithPolicy, formatTreeViolations } from '@codepol/core';
+import { initParser, loadPolicy, scanWithPolicy, formatTreeViolations } from '@codepol/core';
+
+await initParser();
 
 const policy = loadPolicy('./policy.json');
 const violations = await scanWithPolicy(policy, process.cwd());
@@ -49,7 +63,9 @@ if (violations.length > 0) {
 ### Scanning a Single File
 
 ```typescript
-import { scanFileForViolations } from '@codepol/core';
+import { initParser, scanFileForViolations } from '@codepol/core';
+
+await initParser();
 
 const violations = scanFileForViolations(
   '/path/to/file.ts',
@@ -71,7 +87,9 @@ const violations = scanFileForViolations(
 ### Running Full Policy Checks
 
 ```typescript
-import { runPolicyChecks, formatTreeViolations } from '@codepol/core';
+import { initParser, runPolicyChecks, formatTreeViolations } from '@codepol/core';
+
+await initParser();
 
 const result = await runPolicyChecks({
   policyPath: './policy.json',
@@ -127,6 +145,8 @@ interface PolicyViolation {
 
 | Function | Description |
 | -------- | ----------- |
+| `initParser()` | Initialize the WASM parser (must be called before scanning) |
+| `isParserInitialized()` | Check if the parser has been initialized |
 | `loadPolicy(path)` | Load and parse a policy.json file |
 | `clearPolicyCache()` | Clear the internal policy cache |
 | `collectRuleMatches(policy, cwd)` | Get files matching each rule |

@@ -1,10 +1,14 @@
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import basePolicy from '../policy.json';
 import type { PolicyFile, PolicyRule } from '@codepol/core';
-import { scanWithPolicy } from '@codepol/core';
+import { initParser, scanWithPolicy } from '@codepol/core';
 
 describe('tree-sitter policy scan', () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
   it('finds missing logger instrumentation while ignoring already instrumented files', async () => {
     const policy: PolicyFile = {
       ...basePolicy,

@@ -23,15 +23,12 @@ pnpm add -D @codepol/eslint-plugin @typescript-eslint/utils
 
 # For esbuild integration
 pnpm add -D @codepol/esbuild-plugin esbuild
-
-# Required peer dependencies
-pnpm add -D tree-sitter tree-sitter-typescript
 ```
 
 ### Minimal Setup (ESLint only)
 
 ```bash
-pnpm add -D @codepol/eslint-plugin @codepol/core tree-sitter tree-sitter-typescript
+pnpm add -D @codepol/eslint-plugin @codepol/core
 ```
 
 ## Step 2: Create a Policy File

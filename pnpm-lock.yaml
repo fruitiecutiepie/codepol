@@ -41,12 +41,12 @@ importers:
       minimatch:
         specifier: 10.1.1
         version: 10.1.1
-      tree-sitter:
-        specifier: 0.21.1
-        version: 0.21.1
+      tree-sitter-cli:
+        specifier: 0.24.7
+        version: 0.24.7
       tree-sitter-typescript:
         specifier: 0.23.2
-        version: 0.23.2(tree-sitter@0.21.1)
+        version: 0.23.2
       ts-node:
         specifier: 10.9.2
         version: 10.9.2(@types/node@25.0.3)(typescript@5.9.3)
@@ -59,6 +59,9 @@ importers:
       vitest:
         specifier: 4.0.16
         version: 4.0.16(@types/node@25.0.3)
+      web-tree-sitter:
+        specifier: 0.24.7
+        version: 0.24.7
       yargs:
         specifier: 18.0.0
         version: 18.0.0
@@ -99,16 +102,13 @@ importers:
       minimatch:
         specifier: ^10.1.1
         version: 10.1.1
+      web-tree-sitter:
+        specifier: ^0.24.7
+        version: 0.24.7
     devDependencies:
       '@types/node':
         specifier: ^25.0.3
         version: 25.0.3
-      tree-sitter:
-        specifier: ^0.21.1
-        version: 0.21.1
-      tree-sitter-typescript:
-        specifier: ^0.23.2
-        version: 0.23.2(tree-sitter@0.21.1)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1678,6 +1678,11 @@ packages:
     resolution: {integrity: sha512-65P7iz6X5yEr1cwcgvQxbbIw7Uk3gOy5dIdtZ4rDveLqhrdJP+Li/Hx6tyK0NEb+2GCyneCMJiGqrADCSNk8sQ==}
     engines: {node: '>=8.0'}
 
+  tree-sitter-cli@0.24.7:
+    resolution: {integrity: sha512-o4gnE82pVmMMhJbWwD6+I9yr4lXii5Ci5qEQ2pFpUbVy1YiD8cizTJaqdcznA0qEbo7l2OneI1GocChPrI4YGQ==}
+    engines: {node: '>=12.0.0'}
+    hasBin: true
+
   tree-sitter-javascript@0.23.1:
     resolution: {integrity: sha512-/bnhbrTD9frUYHQTiYnPcxyHORIw157ERBa6dqzaKxvR/x3PC4Yzd+D1pZIMS6zNg2v3a8BZ0oK7jHqsQo9fWA==}
     peerDependencies:
@@ -1693,9 +1698,6 @@ packages:
     peerDependenciesMeta:
       tree-sitter:
         optional: true
-
-  tree-sitter@0.21.1:
-    resolution: {integrity: sha512-7dxoA6kYvtgWw80265MyqJlkRl4yawIjO7S5MigytjELkX43fV2WsAXzsNfO7sBpPPCF5Gp0+XzHk0DwLCq3xQ==}
 
   trim-lines@3.0.1:
     resolution: {integrity: sha512-kRj8B+YHZCc9kQYdWfJB2/oUl9rA99qbowYYBtr4ui4mZyAQ2JpvVBd/6U2YloATfqBhBTSMhTpgBHtU0Mf3Rg==}
@@ -1883,6 +1885,9 @@ packages:
     peerDependenciesMeta:
       typescript:
         optional: true
+
+  web-tree-sitter@0.24.7:
+    resolution: {integrity: sha512-CdC/TqVFbXqR+C51v38hv6wOPatKEUGxa39scAeFSm98wIhZxAYonhRQPSMmfZ2w7JDI0zQDdzdmgtNk06/krQ==}
 
   which@2.0.2:
     resolution: {integrity: sha512-BLI3Tl1TW3Pvl70l3yq3Y64i+awpwXqsGBYWkkqMtnbXgrMD+yj7rhW0kuEDxzJaYXGjEW5ogapKNMEKNMjibA==}
@@ -3382,25 +3387,18 @@ snapshots:
     dependencies:
       is-number: 7.0.0
 
-  tree-sitter-javascript@0.23.1(tree-sitter@0.21.1):
-    dependencies:
-      node-addon-api: 8.5.0
-      node-gyp-build: 4.8.4
-    optionalDependencies:
-      tree-sitter: 0.21.1
+  tree-sitter-cli@0.24.7: {}
 
-  tree-sitter-typescript@0.23.2(tree-sitter@0.21.1):
+  tree-sitter-javascript@0.23.1:
     dependencies:
       node-addon-api: 8.5.0
       node-gyp-build: 4.8.4
-      tree-sitter-javascript: 0.23.1(tree-sitter@0.21.1)
-    optionalDependencies:
-      tree-sitter: 0.21.1
 
-  tree-sitter@0.21.1:
+  tree-sitter-typescript@0.23.2:
     dependencies:
       node-addon-api: 8.5.0
       node-gyp-build: 4.8.4
+      tree-sitter-javascript: 0.23.1
 
   trim-lines@3.0.1: {}
 
@@ -3589,6 +3587,8 @@ snapshots:
       '@vue/shared': 3.5.26
     optionalDependencies:
       typescript: 5.9.3
+
+  web-tree-sitter@0.24.7: {}
 
   which@2.0.2:
     dependencies:

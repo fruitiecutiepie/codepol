@@ -9,7 +9,7 @@ The core package provides policy loading, scanning, and formatting utilities.
 ### Installation
 
 ```bash
-pnpm add @codepol/core tree-sitter tree-sitter-typescript
+pnpm add @codepol/core
 ```
 
 ### Types

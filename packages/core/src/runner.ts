@@ -44,12 +44,16 @@ function resolveWithinCwd(targetPath: string | undefined, cwd: string, fallback:
  * Runs Tree-sitter policy checks on the codebase.
  * This is the core scanning function without ESLint integration.
  *
+ * Note: You must call `initParser()` before using this function.
+ *
  * @param options - Configuration options for the check
  * @returns Result containing policy, matched files, and violations
  *
  * @example
  * ```typescript
- * import { runPolicyChecks } from '@codepol/core';
+ * import { initParser, runPolicyChecks } from '@codepol/core';
+ *
+ * await initParser();
  *
  * const result = await runPolicyChecks({
  *   policyPath: './policy.json',

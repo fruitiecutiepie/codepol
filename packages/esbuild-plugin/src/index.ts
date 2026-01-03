@@ -28,6 +28,7 @@ import path from 'path';
 import type { Plugin } from 'esbuild';
 import { ESLint } from 'eslint';
 import {
+  initParser,
   loadPolicy,
   collectRuleMatches,
   scanWithPolicy,
@@ -73,6 +74,9 @@ async function runPolicyChecks(options: {
   cwd: string;
 }): Promise<PolicyRunResult> {
   const { policyPath, eslintConfigPath, fix, cwd } = options;
+
+  // Initialize web-tree-sitter WASM parser
+  await initParser();
 
   const policy = loadPolicy(policyPath);
   const matches = await collectRuleMatches(policy, cwd);
