@@ -1,0 +1,22 @@
+{
+  "$schema": "./policy.schema.json",
+  "rules": [
+    {
+      "id": "function-logging",
+      "description": "Ensure all exported TypeScript functions are wrapped with logger enter/exit",
+      "language": "typescript",
+      "files": ["src/**/*.ts", "src/**/*.tsx"],
+      "exclude": ["**/*.spec.ts", "**/*.test.ts", "**/__mocks__/**"]
+    }
+  ],
+  "exclude": ["dist/**"],
+  "logger": {
+    "identifier": "logger",
+    "enterMethod": "enter",
+    "exitMethod": "exit",
+    "import": {
+      "module": "@org/logger",
+      "named": "logger"
+    }
+  }
+}
