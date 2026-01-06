@@ -1,7 +1,7 @@
 import type { SyntaxNode } from 'web-tree-sitter';
-import type { LoggerConfig, PolicyPlugin, PolicyRule, PolicyScanContext, PolicyViolation } from './policyTypes';
-import { parserInit, parserGetForFile } from '../parser/parserInit';
-import { isErr } from '../result/result';
+import type { LoggerConfig, PolicyPlugin, PolicyRule, PolicyScanContext, PolicyViolation } from '@codepol/core';
+import { parserInit, parserGetForFile } from '@codepol/core';
+import { policyLoggerConfigGet } from './policyLoggerConfig';
 
 const blockNodeTypes = new Set(['statement_block', 'block', 'function_body']);
 
@@ -164,13 +164,17 @@ function loggerRuleScan(
   context: PolicyScanContext
 ): PolicyViolation[] {
   const parserResult = parserGetForFile(context.filePath);
-  if (isErr(parserResult)) {
+  if ('Err' in parserResult) {
     return []; // Error already logged in parserGetForFile
   }
   const parser = parserResult.Ok;
   const tree = parser.parse(context.source);
   const violations: PolicyViolation[] = [];
-  const logger = context.policy.logger;
+  const logger = policyLoggerConfigGet(context.policy);
+  if (!logger) {
+    console.error('Logger configuration missing. Configure @codepol/plugin with rule args.logger.');
+    return violations;
+  }
 
   functionsVisit(tree.rootNode, fnNode => {
     const { enterPresent, exitPresent } = functionAnalysisGet(context.source, fnNode, logger);

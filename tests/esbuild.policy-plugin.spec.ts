@@ -20,20 +20,39 @@ describe('esbuild policy plugin', () => {
           rules: [
             {
               id: 'function-logging',
-              description: 'Ensure functions include logger enter/exit',
-              language: 'typescript',
-              files: ['index.ts'],
+              semantics: {
+                description: 'Ensure functions include logger enter/exit',
+                type: 'logger',
+              },
+              targets: [
+                {
+                  language: 'typescript',
+                  files: ['index.ts'],
+                },
+              ],
             },
           ],
-          logger: {
-            identifier: 'logger',
-            enterMethod: 'enter',
-            exitMethod: 'exit',
-            import: {
-              module: './logger',
-              named: 'logger',
+          plugins: [
+            {
+              module: '@codepol/plugin',
+              rules: [
+                {
+                  id: 'require-logger-enter-exit',
+                  args: {
+                    logger: {
+                      identifier: 'logger',
+                      enterMethod: 'enter',
+                      exitMethod: 'exit',
+                      import: {
+                        module: './logger',
+                        named: 'logger',
+                      },
+                    },
+                  },
+                },
+              ],
             },
-          },
+          ],
         },
         null,
         2,

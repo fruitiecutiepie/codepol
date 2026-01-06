@@ -71,9 +71,9 @@ importers:
       '@codepol/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@codepol/plugin-logger':
+      '@codepol/plugin':
         specifier: workspace:*
-        version: link:../../packages/plugin-logger
+        version: link:../../packages/plugin
       chokidar:
         specifier: ^5.0.0
         version: 5.0.0
@@ -136,9 +136,9 @@ importers:
 
   packages/eslint-plugin:
     dependencies:
-      '@codepol/plugin-logger':
+      '@codepol/plugin':
         specifier: workspace:*
-        version: link:../plugin-logger
+        version: link:../plugin
     devDependencies:
       '@codepol/core':
         specifier: workspace:*
@@ -156,7 +156,7 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
-  packages/plugin-logger:
+  packages/plugin:
     dependencies:
       minimatch:
         specifier: ^10.1.1

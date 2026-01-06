@@ -1,6 +1,6 @@
 /**
  * @packageDocumentation
- * @codepol/plugin-logger - Logger plugin capabilities for codepol.
+ * @codepol/plugin - Logger plugin capabilities for codepol.
  *
  * Provides ESLint rule definitions plus tree-sitter scan integration.
  */
@@ -19,7 +19,9 @@ import type {
   PolicyRuleTarget,
   PolicyRuleTargetContext,
 } from '@codepol/core';
-import { defaultPluginType, policyPluginLogger } from '@codepol/core';
+import { defaultPluginType } from '@codepol/core';
+import { policyLoggerConfigGet } from './policyLoggerConfig';
+import { policyPluginLogger } from './policyPluginLogger';
 
 /**
  * Rule options for require-logger-enter-exit.
@@ -254,6 +256,69 @@ function replacementGetForArrow(
 
 type MessageIds = 'missingLogger';
 
+type RuleContext = Readonly<TSESLint.RuleContext<MessageIds, Options>>;
+
+function reportMissing(
+  context: RuleContext,
+  sourceCode: TSESLint.SourceCode,
+  logger: LoggerConfig,
+  node: TSESTree.Node,
+  block: TSESTree.BlockStatement | null
+): void {
+  context.report({
+    node,
+    messageId: 'missingLogger',
+    data: {
+      enter: `${logger.identifier}.${logger.enterMethod}`,
+      exit: `${logger.identifier}.${logger.exitMethod}`,
+    },
+    fix: fixer => {
+      const fixes: TSESLint.RuleFix[] = [];
+      if (node.type === TSESTree.AST_NODE_TYPES.ArrowFunctionExpression) {
+        const replacement = replacementGetForArrow(sourceCode, node, logger);
+        fixes.push(fixer.replaceText(node.body, replacement));
+      } else if (block) {
+        const replacement = replacementGetForBlock(sourceCode, block, logger);
+        fixes.push(fixer.replaceText(block, replacement));
+      }
+
+      if (!loggerHasImport(sourceCode, logger)) {
+        const importBinding =
+          logger.import.named === logger.identifier
+            ? logger.import.named
+            : `${logger.import.named} as ${logger.identifier}`;
+        const importStatement = `import { ${importBinding} } from '${logger.import.module}';\n`;
+        const firstNode = sourceCode.ast.body[0];
+        if (firstNode) {
+          fixes.push(fixer.insertTextBefore(firstNode, importStatement));
+        } else {
+          fixes.push(fixer.insertTextBeforeRange([0, 0], importStatement));
+        }
+      }
+
+      return fixes;
+    },
+  });
+}
+
+function checkBlock(
+  context: RuleContext,
+  sourceCode: TSESLint.SourceCode,
+  logger: LoggerConfig,
+  node: TSESTree.Node,
+  block: TSESTree.BlockStatement | null
+): void {
+  if (!block) {
+    reportMissing(context, sourceCode, logger, node, null);
+    return;
+  }
+  const hasEnter = loggerHasEnter(block, logger);
+  const hasExit = loggerExitHas(block, logger);
+  if (!hasEnter || !hasExit) {
+    reportMissing(context, sourceCode, logger, node, block);
+  }
+}
+
 /**
  * ESLint rule that enforces logger.enter/exit instrumentation on all functions.
  */
@@ -357,57 +422,13 @@ const requireLoggerRule = createRule<Options, MessageIds>({
     if (policyFile == null) {
       policyFile = policyFileGet(policyPath);
     }
-    const logger = policyFile.logger;
+    const loggerMaybe = policyLoggerConfigGet(policyFile);
+    if (!loggerMaybe) {
+      console.error('Logger configuration missing. Configure @codepol/plugin with rule args.logger.');
+      return {};
+    }
+    const logger = loggerMaybe;
     const sourceCode = context.sourceCode;
-
-    function reportMissing(node: TSESTree.Node, block: TSESTree.BlockStatement | null) {
-      context.report({
-        node,
-        messageId: 'missingLogger',
-        data: {
-          enter: `${logger.identifier}.${logger.enterMethod}`,
-          exit: `${logger.identifier}.${logger.exitMethod}`,
-        },
-        fix: fixer => {
-          const fixes: TSESLint.RuleFix[] = [];
-          if (node.type === TSESTree.AST_NODE_TYPES.ArrowFunctionExpression) {
-            const replacement = replacementGetForArrow(sourceCode, node, logger);
-            fixes.push(fixer.replaceText(node.body, replacement));
-          } else if (block) {
-            const replacement = replacementGetForBlock(sourceCode, block, logger);
-            fixes.push(fixer.replaceText(block, replacement));
-          }
-
-          if (!loggerHasImport(sourceCode, logger)) {
-            const importBinding =
-              logger.import.named === logger.identifier
-                ? logger.import.named
-                : `${logger.import.named} as ${logger.identifier}`;
-            const importStatement = `import { ${importBinding} } from '${logger.import.module}';\n`;
-            const firstNode = sourceCode.ast.body[0];
-            if (firstNode) {
-              fixes.push(fixer.insertTextBefore(firstNode, importStatement));
-            } else {
-              fixes.push(fixer.insertTextBeforeRange([0, 0], importStatement));
-            }
-          }
-
-          return fixes;
-        },
-      });
-    }
-
-    function checkBlock(node: TSESTree.Node, block: TSESTree.BlockStatement | null) {
-      if (!block) {
-        reportMissing(node, null);
-        return;
-      }
-      const hasEnter = loggerHasEnter(block, logger);
-      const hasExit = loggerExitHas(block, logger);
-      if (!hasEnter || !hasExit) {
-        reportMissing(node, block);
-      }
-    }
 
     return {
       FunctionDeclaration(node) {
@@ -415,20 +436,20 @@ const requireLoggerRule = createRule<Options, MessageIds>({
         if (node.body != null) {
           body = node.body;
         }
-        checkBlock(node, body);
+        checkBlock(context, sourceCode, logger, node, body);
       },
       FunctionExpression(node) {
         let body: TSESTree.BlockStatement | null = null;
         if (node.body != null) {
           body = node.body;
         }
-        checkBlock(node, body);
+        checkBlock(context, sourceCode, logger, node, body);
       },
       ArrowFunctionExpression(node) {
         if (node.body.type === TSESTree.AST_NODE_TYPES.BlockStatement) {
-          checkBlock(node, node.body);
+          checkBlock(context, sourceCode, logger, node, node.body);
         } else {
-          reportMissing(node, null);
+          reportMissing(context, sourceCode, logger, node, null);
         }
       },
       MethodDefinition(node) {
@@ -437,7 +458,7 @@ const requireLoggerRule = createRule<Options, MessageIds>({
           if (node.value.body != null) {
             body = node.value.body;
           }
-          checkBlock(node.value, body);
+          checkBlock(context, sourceCode, logger, node.value, body);
         }
       },
     };
@@ -452,8 +473,8 @@ export const eslintRuleProvider: EslintRuleProvider = {
   pluginName: 'codepol',
   rules: eslintRules,
   rulesConfigGet: (ctx: EslintRuleProviderContext) => {
-    const ruleOptions =
-      ctx.ruleOptions && typeof ctx.ruleOptions === 'object' ? ctx.ruleOptions : {};
+    const ruleArgs =
+      ctx.ruleArgs && typeof ctx.ruleArgs === 'object' ? ctx.ruleArgs : {};
     return {
       'codepol/require-logger-enter-exit': [
         'error',
@@ -461,7 +482,7 @@ export const eslintRuleProvider: EslintRuleProvider = {
           policyPath: ctx.policyPath,
           ruleTargets: ctx.ruleTargets,
           policyExclude: ctx.policy.exclude,
-          ...(ruleOptions as Record<string, unknown>),
+          ...(ruleArgs as Record<string, unknown>),
         },
       ],
     };
@@ -483,5 +504,7 @@ export const loggerRulePlugins = [loggerEnterExitRule];
 export const rulePlugins = loggerRulePlugins;
 export const rules = eslintRules;
 
-export const plugin = { rulePlugins };
-export default plugin;
+const rulePluginBundle = { rulePlugins };
+
+export const plugin = policyPluginLogger;
+export default rulePluginBundle;

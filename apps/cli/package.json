@@ -17,7 +17,7 @@
   },
   "dependencies": {
     "@codepol/core": "workspace:*",
-    "@codepol/plugin-logger": "workspace:*",
+    "@codepol/plugin": "workspace:*",
     "chokidar": "^5.0.0",
     "yargs": "^18.0.0"
   },

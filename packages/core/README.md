@@ -185,7 +185,7 @@ type PolicyFile = {
   $schema?: string;
   rules: PolicyRule[];
   exclude?: string[];
-  logger: LoggerConfig;
+  plugins?: PolicyPluginDeclaration[];
 };
 
 type PolicyViolation = {

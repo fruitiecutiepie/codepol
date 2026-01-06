@@ -38,6 +38,27 @@ Create `policy.json` in your project root:
 ```json
 {
   "$schema": "https://raw.githubusercontent.com/fruitiecutiepie/codepol/master/policy.schema.json",
+  "plugins": [
+    {
+      "module": "@codepol/plugin",
+      "rules": [
+        {
+          "id": "require-logger-enter-exit",
+          "args": {
+            "logger": {
+              "identifier": "logger",
+              "enterMethod": "enter",
+              "exitMethod": "exit",
+              "import": {
+                "module": "@your-org/logger",
+                "named": "logger"
+              }
+            }
+          }
+        }
+      ]
+    }
+  ],
   "rules": [
     {
       "id": "function-logging",
@@ -63,16 +84,7 @@ Create `policy.json` in your project root:
     "dist/**",
     "node_modules/**",
     "*.config.ts"
-  ],
-  "logger": {
-    "identifier": "logger",
-    "enterMethod": "enter",
-    "exitMethod": "exit",
-    "import": {
-      "module": "@your-org/logger",
-      "named": "logger"
-    }
-  }
+  ]
 }
 ```
 
@@ -138,15 +150,27 @@ Update your `policy.json` to reference it:
 
 ```json
 {
-  "logger": {
-    "identifier": "logger",
-    "enterMethod": "enter",
-    "exitMethod": "exit",
-    "import": {
-      "module": "./logger",
-      "named": "logger"
+  "plugins": [
+    {
+      "module": "@codepol/plugin",
+      "rules": [
+        {
+          "id": "require-logger-enter-exit",
+          "args": {
+            "logger": {
+              "identifier": "logger",
+              "enterMethod": "enter",
+              "exitMethod": "exit",
+              "import": {
+                "module": "./logger",
+                "named": "logger"
+              }
+            }
+          }
+        }
+      ]
     }
-  }
+  ]
 }
 ```
 

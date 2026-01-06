@@ -3,7 +3,7 @@
  * @codepol/eslint-plugin - ESLint plugin adapter for codepol plugins.
  */
 
-import loggerPlugin, { clearPolicyCache, rulePlugins as loggerRulePlugins } from '@codepol/plugin-logger';
+import loggerPlugin, { clearPolicyCache, rulePlugins as loggerRulePlugins } from '@codepol/plugin';
 
 const collectedRules: Record<string, unknown> = {};
 for (const rulePlugin of loggerRulePlugins) {

@@ -57,18 +57,18 @@ type PolicyCheckResult = {
 
 type RulePluginEntry = {
   rulePlugin: CodepolRulePlugin;
-  options?: unknown;
+  args?: unknown;
   sourceLabel: string;
 };
 
 type EslintRuleProviderEntry = {
   provider: EslintRuleProvider;
   ruleId: string;
-  ruleOptions?: unknown;
+  ruleArgs?: unknown;
 };
 
 const builtinPluginModules: Record<string, string> = {
-  logger: '@codepol/plugin-logger',
+  logger: '@codepol/plugin',
 };
 
 function rulePluginCapabilitiesGet(rulePlugin: CodepolRulePlugin): PolicyPluginCapabilities {
@@ -213,7 +213,7 @@ async function policyRulePluginsGet(
       rulePluginIds.add(rulePlugin.id);
       rulePlugins.push({
         rulePlugin,
-        options: override?.options,
+        args: override?.args,
         sourceLabel,
       });
     }
@@ -268,7 +268,7 @@ function eslintConfigGet(
     const ruleConfig = provider.rulesConfigGet({
       ...context,
       ruleId: entry.ruleId,
-      ruleOptions: entry.ruleOptions,
+      ruleArgs: entry.ruleArgs,
     });
     const configKey = `${provider.pluginName}/${ruleName}`;
     if (!(configKey in ruleConfig)) {
@@ -326,7 +326,7 @@ async function policyCheck(options: {
       return {
         provider: capabilities.eslintRuleProvider,
         ruleId: entry.rulePlugin.id,
-        ruleOptions: entry.options,
+        ruleArgs: entry.args,
       };
     })
     .filter((entry): entry is EslintRuleProviderEntry => entry !== null);

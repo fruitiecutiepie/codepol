@@ -20,7 +20,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@codepol/plugin-logger": "workspace:*"
+    "@codepol/plugin": "workspace:*"
   },
   "peerDependencies": {
     "@codepol/core": "^1.0.0",

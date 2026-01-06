@@ -37,7 +37,7 @@ Codepol provides a comprehensive enforcement pipeline that ensures functions are
 | [@codepol/core](./packages/core) | Core policy loading, Tree-sitter scanning, and enforcement |
 | [@codepol/eslint-plugin](./packages/eslint-plugin) | ESLint rule with autofix for logger instrumentation |
 | [@codepol/esbuild-plugin](./packages/esbuild-plugin) | esbuild plugin for build-time enforcement |
-| [@codepol/plugin-logger](./packages/plugin-logger/README.md) | Logger plugin with Tree-sitter + ESLint capabilities |
+| [@codepol/plugin](./packages/plugin/README.md) | Logger plugin with Tree-sitter + ESLint capabilities |
 | [@codepol/cli](./apps/cli) | Command-line interface for running checks |
 
 ## Quick Start
@@ -61,12 +61,23 @@ Create `policy.json` in your project root:
   "$schema": "https://raw.githubusercontent.com/fruitiecutiepie/codepol/master/policy.schema.json",
   "plugins": [
     {
-      "module": "@codepol/plugin-logger",
+      "module": "@codepol/plugin",
       "rules": [
         {
           "id": "require-logger-enter-exit",
           "enabled": true,
-          "options": { "policyPath": "./policy.json" }
+          "args": {
+            "policyPath": "./policy.json",
+            "logger": {
+              "identifier": "logger",
+              "enterMethod": "enter",
+              "exitMethod": "exit",
+              "import": {
+                "module": "@your-org/logger",
+                "named": "logger"
+              }
+            }
+          }
         }
       ]
     }
@@ -86,16 +97,7 @@ Create `policy.json` in your project root:
       ]
     }
   ],
-  "exclude": ["dist/**"],
-  "logger": {
-    "identifier": "logger",
-    "enterMethod": "enter",
-    "exitMethod": "exit",
-    "import": {
-      "module": "@your-org/logger",
-      "named": "logger"
-    }
-  }
+  "exclude": ["dist/**"]
 }
 ```
 
@@ -132,7 +134,7 @@ to decide which ESLint rules and fix providers to run, while Tree-sitter scannin
 and their associated tree scan providers.
 
 The `@codepol/eslint-plugin` package is a thin adapter that re-exports rules from capability plugins such as
-`@codepol/plugin-logger`. Each rule is exported as its own plugin (for example, `loggerEnterExitRule`), and the
+`@codepol/plugin`. Each rule is exported as its own plugin (for example, `loggerEnterExitRule`), and the
 `rulePlugins` export bundles them for convenience.
 
 ### Run Checks

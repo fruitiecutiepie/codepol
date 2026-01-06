@@ -65,7 +65,7 @@ import { policyFileGet } from '@codepol/core';
 
 const policy = policyFileGet('./policy.json');
 console.log(policy.rules.length);
-console.log(policy.logger.identifier);
+console.log(policy.plugins?.length ?? 0);
 ```
 
 ---
@@ -339,24 +339,24 @@ import plugin from '@codepol/eslint-plugin';
 // plugin.rules['require-logger-enter-exit']
 ```
 
-The ESLint plugin is a thin adapter that re-exports rules from capability plugins like `@codepol/plugin-logger`.
+The ESLint plugin is a thin adapter that re-exports rules from capability plugins like `@codepol/plugin`.
 
 ---
 
-## @codepol/plugin-logger
+## @codepol/plugin
 
 ### Rule Plugins
 
 ```typescript
-import { loggerEnterExitRule, rulePlugins } from '@codepol/plugin-logger';
+import { loggerEnterExitRule, rulePlugins } from '@codepol/plugin';
 
 // loggerEnterExitRule.id === 'require-logger-enter-exit'
 // loggerEnterExitRule.capabilities?.eslintRuleProvider
 // rulePlugins (array for convenience)
 ```
 
-Use `eslintRuleProvider.rulesConfigGet({ policy, policyPath, cwd, ruleId, ruleOptions })` to build ESLint rule
-configurations that match your policy file and per-rule options.
+Use `eslintRuleProvider.rulesConfigGet({ policy, policyPath, cwd, ruleId, ruleArgs })` to build ESLint rule
+configurations that match your policy file and per-rule args.
 
 **Policy configuration example:**
 
@@ -364,12 +364,23 @@ configurations that match your policy file and per-rule options.
 {
   "plugins": [
     {
-      "module": "@codepol/plugin-logger",
+      "module": "@codepol/plugin",
       "rules": [
         {
           "id": "require-logger-enter-exit",
           "enabled": true,
-          "options": { "policyPath": "./policy.json" }
+          "args": {
+            "policyPath": "./policy.json",
+            "logger": {
+              "identifier": "logger",
+              "enterMethod": "enter",
+              "exitMethod": "exit",
+              "import": {
+                "module": "@org/logger",
+                "named": "logger"
+              }
+            }
+          }
         }
       ]
     }

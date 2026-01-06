@@ -129,7 +129,7 @@ The rule reads your `policy.json` to determine:
 
 - Which files to check (via `files` patterns)
 - Which files to exclude (via `exclude` patterns)
-- Logger configuration (identifier, methods, import)
+- Logger configuration (identifier, methods, import) via rule args
 
 Example `policy.json`:
 
@@ -151,15 +151,27 @@ Example `policy.json`:
       ]
     }
   ],
-  "logger": {
-    "identifier": "logger",
-    "enterMethod": "enter",
-    "exitMethod": "exit",
-    "import": {
-      "module": "@org/logger",
-      "named": "logger"
+  "plugins": [
+    {
+      "module": "@codepol/plugin",
+      "rules": [
+        {
+          "id": "require-logger-enter-exit",
+          "args": {
+            "logger": {
+              "identifier": "logger",
+              "enterMethod": "enter",
+              "exitMethod": "exit",
+              "import": {
+                "module": "@org/logger",
+                "named": "logger"
+              }
+            }
+          }
+        }
+      ]
     }
-  }
+  ]
 }
 ```
 

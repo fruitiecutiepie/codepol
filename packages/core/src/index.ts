@@ -65,7 +65,7 @@ export {
 } from './policy/policyGet';
 
 // Tree-sitter scanning
-export { parserInit } from './parser/parserInit';
+export { parserInit, parserGetForFile } from './parser/parserInit';
 export {
   policyViolationsGetForFile,
   policyViolationsGetFromDir,
@@ -81,7 +81,6 @@ export {
   defaultPluginType,
   policyPluginsGet,
 } from './policy/policyPluginsGet';
-export { policyPluginLogger } from './policy/policyPluginLogger';
 
 // Runner
 export type {

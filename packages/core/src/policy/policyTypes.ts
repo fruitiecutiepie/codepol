@@ -64,8 +64,8 @@ export type PolicyPluginRuleDeclaration = {
   id: string;
   /** Enable or disable the rule (default: true) */
   enabled?: boolean;
-  /** Rule-specific options passed to the rule provider */
-  options?: unknown;
+  /** Rule-specific arguments passed to the rule provider */
+  args?: unknown;
 };
 
 /**
@@ -125,7 +125,24 @@ export type PolicyRule = {
  *   "$schema": "./policy.schema.json",
  *   "rules": [...],
  *   "exclude": ["dist/**"],
- *   "logger": {...}
+ *   "plugins": [
+ *     {
+ *       "module": "@codepol/plugin",
+ *       "rules": [
+ *         {
+ *           "id": "require-logger-enter-exit",
+ *           "args": {
+ *             "logger": {
+ *               "identifier": "logger",
+ *               "enterMethod": "enter",
+ *               "exitMethod": "exit",
+ *               "import": { "module": "@org/logger", "named": "logger" }
+ *             }
+ *           }
+ *         }
+ *       ]
+ *     }
+ *   ]
  * }
  * ```
  */
@@ -138,8 +155,6 @@ export type PolicyFile = {
   exclude?: string[];
   /** Plugin declarations used by this policy */
   plugins?: PolicyPluginDeclaration[];
-  /** Logger configuration used for instrumentation */
-  logger: LoggerConfig;
 };
 
 /**
@@ -196,8 +211,8 @@ export type EslintRuleProviderContext = {
   policyPath: string;
   /** Rule id associated with the provider (for rule-level plugins) */
   ruleId?: string;
-  /** Rule-level options passed from the policy */
-  ruleOptions?: unknown;
+  /** Rule-level arguments passed from the policy */
+  ruleArgs?: unknown;
   /** Rule targets resolved from the policy */
   ruleTargets?: PolicyRuleTargetContext[];
 };

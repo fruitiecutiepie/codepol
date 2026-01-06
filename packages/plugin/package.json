@@ -1,5 +1,5 @@
 {
-  "name": "@codepol/plugin-logger",
+  "name": "@codepol/plugin",
   "version": "1.0.0",
   "description": "Codepol logger plugin with ESLint rule provider",
   "type": "commonjs",
@@ -40,7 +40,7 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/fruitiecutiepie/codepol",
-    "directory": "packages/plugin-logger"
+    "directory": "packages/plugin"
   },
   "license": "MIT",
   "keywords": [

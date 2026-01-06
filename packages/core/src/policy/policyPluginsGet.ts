@@ -5,66 +5,55 @@ import type {
   PolicyPlugin,
   PolicyPluginDeclaration,
 } from './policyTypes';
-import { policyPluginLogger } from './policyPluginLogger';
 import { Result, Ok, Err, isErr } from '../result/result';
 
 export const defaultPluginType = 'logger';
 
 export type PolicyPluginsMap = Map<string, PolicyPlugin>;
 
-const pluginsBuiltinMap: Record<string, PolicyPlugin> = {
-  logger: policyPluginLogger,
+const pluginsBuiltinModules: Record<string, string> = {
+  logger: '@codepol/plugin',
 };
 
 async function policyPluginGet(
   declaration: PolicyPluginDeclaration,
-  cwd: string,
-  source: 'module' | 'builtin'
+  cwd: string
 ): Promise<Result<PolicyPlugin, string>> {
-  let plugin: PolicyPlugin;
-
-  if (source === 'builtin') {
-    if (!declaration.builtin) {
-      const error = 'Plugin declaration missing builtin identifier.';
-      console.error(error);
-      return Err(error);
-    }
-    const pluginBuiltin = pluginsBuiltinMap[declaration.builtin];
-    if (!pluginBuiltin) {
+  let moduleSpecifier = declaration.module;
+  if (declaration.builtin) {
+    moduleSpecifier = pluginsBuiltinModules[declaration.builtin];
+    if (!moduleSpecifier) {
       const error = `Unknown builtin plugin: ${declaration.builtin}.`;
       console.error(error);
       return Err(error);
     }
-    plugin = pluginBuiltin;
-  } else {
-    if (!declaration.module) {
-      const error = 'Plugin declaration missing module specifier.';
-      console.error(error);
-      return Err(error);
-    }
-    const moduleSpecifier = declaration.module;
-    const moduleSource = moduleSpecifier.startsWith('.') || moduleSpecifier.startsWith('/')
-      ? pathToFileURL(path.resolve(cwd, moduleSpecifier)).href
-      : moduleSpecifier;
-    const moduleLoaded = await import(moduleSource);
-    let pluginExported;
-    if (declaration.export) {
-      pluginExported = moduleLoaded[declaration.export];
-    } else {
-      pluginExported = moduleLoaded.plugin;
-      if (moduleLoaded.default != null) {
-        pluginExported = moduleLoaded.default;
-      }
-    }
-    if (!pluginExported) {
-      const error = `No plugin export found in ${moduleSpecifier}.`;
-      console.error(error);
-      return Err(error);
-    }
-    plugin = pluginExported as PolicyPlugin;
   }
+  if (!moduleSpecifier) {
+    const error = 'Plugin declaration missing module specifier.';
+    console.error(error);
+    return Err(error);
+  }
+  const moduleSource = moduleSpecifier.startsWith('.') || moduleSpecifier.startsWith('/')
+    ? pathToFileURL(path.resolve(cwd, moduleSpecifier)).href
+    : moduleSpecifier;
+  const moduleLoaded = await import(moduleSource);
+  let pluginExported;
+  if (declaration.export) {
+    pluginExported = moduleLoaded[declaration.export];
+  } else {
+    pluginExported = moduleLoaded.plugin;
+    if (moduleLoaded.default != null) {
+      pluginExported = moduleLoaded.default;
+    }
+  }
+  if (!pluginExported) {
+    const error = `No plugin export found in ${moduleSpecifier}.`;
+    console.error(error);
+    return Err(error);
+  }
+  const plugin = pluginExported as PolicyPlugin;
 
-  const sourceLabel = source === 'builtin' ? `builtin:${declaration.builtin}` : declaration.module!;
+  const sourceLabel = declaration.builtin ? `builtin:${declaration.builtin}` : moduleSpecifier;
   if (!plugin.id || !plugin.version || !plugin.scan) {
     const error = `Invalid plugin exported by ${sourceLabel}.`;
     console.error(error);
@@ -94,8 +83,7 @@ export async function policyPluginsGet(
   const pluginsMapGet = new Map<string, PolicyPlugin>();
 
   for (const declaration of declarations) {
-    const source = declaration.builtin ? 'builtin' : 'module';
-    const pluginResult = await policyPluginGet(declaration, cwd, source);
+    const pluginResult = await policyPluginGet(declaration, cwd);
     if (isErr(pluginResult)) {
       return pluginResult;
     }
@@ -106,18 +94,6 @@ export async function policyPluginsGet(
       return Err(error);
     }
     pluginsMapGet.set(plugin.id, plugin);
-  }
-
-  // Auto-register built-in plugins for rule types that reference them
-  for (const rule of policy.rules) {
-    let ruleType = defaultPluginType;
-    if (rule.semantics.type != null) {
-      ruleType = rule.semantics.type;
-    }
-    if (!pluginsMapGet.has(ruleType) && pluginsBuiltinMap[ruleType]) {
-      const builtinPlugin = pluginsBuiltinMap[ruleType];
-      pluginsMapGet.set(ruleType, builtinPlugin);
-    }
   }
 
   for (const plugin of pluginsMapGet.values()) {

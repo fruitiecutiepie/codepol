@@ -1,15 +1,15 @@
-# @codepol/plugin-logger
+# @codepol/plugin
 
 ## Purpose
 
-`@codepol/plugin-logger` provides the logger enforcement rule plugin for Codepol. It supplies both
+`@codepol/plugin` provides the logger enforcement rule plugin for Codepol. It supplies both
 Tree-sitter scanning and ESLint rule integration to ensure functions are instrumented with logger
 enter/exit calls.
 
 ## Installation
 
 ```bash
-pnpm add -D @codepol/plugin-logger
+pnpm add -D @codepol/plugin
 ```
 
 ## Exports
@@ -27,13 +27,31 @@ Use `semantics` and `targets` in your policy rules, then wire the logger rule pl
   "$schema": "https://raw.githubusercontent.com/fruitiecutiepie/codepol/master/policy.schema.json",
   "plugins": [
     {
-      "module": "@codepol/plugin-logger",
+      "module": "@codepol/plugin",
+      "config": {
+        "identifier": "logger",
+        "enterMethod": "enter",
+        "exitMethod": "exit",
+        "import": {
+          "module": "@org/logger",
+          "named": "logger"
+        }
+      },
       "rules": [
         {
           "id": "require-logger-enter-exit",
           "enabled": true,
-          "options": {
-            "policyPath": "./policy.json"
+          "args": {
+            "policyPath": "./policy.json",
+            "logger": {
+              "identifier": "logger",
+              "enterMethod": "enter",
+              "exitMethod": "exit",
+              "import": {
+                "module": "@org/logger",
+                "named": "logger"
+              }
+            }
           }
         }
       ]
@@ -54,15 +72,6 @@ Use `semantics` and `targets` in your policy rules, then wire the logger rule pl
         }
       ]
     }
-  ],
-  "logger": {
-    "identifier": "logger",
-    "enterMethod": "enter",
-    "exitMethod": "exit",
-    "import": {
-      "module": "@org/logger",
-      "named": "logger"
-    }
-  }
+  ]
 }
 ```

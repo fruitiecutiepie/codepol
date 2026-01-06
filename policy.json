@@ -2,7 +2,23 @@
   "$schema": "./policy.schema.json",
   "plugins": [
     {
-      "builtin": "logger"
+      "module": "@codepol/plugin",
+      "rules": [
+        {
+          "id": "require-logger-enter-exit",
+          "args": {
+            "logger": {
+              "identifier": "logger",
+              "enterMethod": "enter",
+              "exitMethod": "exit",
+              "import": {
+                "module": "@org/logger",
+                "named": "logger"
+              }
+            }
+          }
+        }
+      ]
     }
   ],
   "rules": [
@@ -21,14 +37,5 @@
       ]
     }
   ],
-  "exclude": ["dist/**"],
-  "logger": {
-    "identifier": "logger",
-    "enterMethod": "enter",
-    "exitMethod": "exit",
-    "import": {
-      "module": "@org/logger",
-      "named": "logger"
-    }
-  }
+  "exclude": ["dist/**"]
 }

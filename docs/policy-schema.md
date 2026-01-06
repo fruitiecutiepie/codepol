@@ -20,7 +20,6 @@ You can enable IDE autocompletion by adding the `$schema` property:
 | `rules` | PolicyRule[] | Yes | Array of enforcement rules |
 | `exclude` | string[] | No | Global file patterns to exclude |
 | `plugins` | PolicyPluginDeclaration[] | No | Plugins available to policy rules |
-| `logger` | LoggerConfig | Yes | Logger configuration |
 
 ## PolicyRule
 
@@ -74,7 +73,8 @@ Defines which files to check and how.
 
 ## LoggerConfig
 
-Configures the logger instrumentation pattern.
+Configures the logger instrumentation pattern. Provide this under
+`plugins[].rules[].args.logger` for the logger rule.
 
 ```json
 {
@@ -110,7 +110,23 @@ Declares a plugin that can handle policy rules.
 
 ```json
 {
-  "builtin": "logger"
+  "module": "@codepol/plugin",
+  "rules": [
+    {
+      "id": "require-logger-enter-exit",
+      "args": {
+        "logger": {
+          "identifier": "logger",
+          "enterMethod": "enter",
+          "exitMethod": "exit",
+          "import": {
+            "module": "@org/logger",
+            "named": "logger"
+          }
+        }
+      }
+    }
+  ]
 }
 ```
 
@@ -125,9 +141,41 @@ Declares a plugin that can handle policy rules.
 
 | Property | Type | Required | Description |
 | -------- | ---- | -------- | ----------- |
-| `builtin` | string | No | Built-in plugin identifier (e.g., `logger`) |
+| `builtin` | string | No | Built-in plugin identifier (if supported) |
 | `module` | string | No | Module specifier or path to import |
 | `export` | string | No | Named export to load from the module |
+| `rules` | PolicyPluginRuleDeclaration[] | No | Rule-level configuration for this plugin |
+
+## PolicyPluginRuleDeclaration
+
+Configures rule-specific arguments and enablement within a plugin declaration.
+
+```json
+{
+  "id": "require-logger-enter-exit",
+  "enabled": true,
+  "args": {
+    "policyPath": "./policy.json",
+    "logger": {
+      "identifier": "logger",
+      "enterMethod": "enter",
+      "exitMethod": "exit",
+      "import": {
+        "module": "@org/logger",
+        "named": "logger"
+      }
+    }
+  }
+}
+```
+
+### PolicyPluginRuleDeclaration Properties
+
+| Property | Type | Required | Description |
+| -------- | ---- | -------- | ----------- |
+| `id` | string | Yes | Rule identifier exported by the plugin |
+| `enabled` | boolean | No | Toggle the rule on/off (default: true) |
+| `args` | object | No | Rule-specific arguments for the plugin |
 
 ## Glob Patterns
 
@@ -170,7 +218,23 @@ Codepol uses [fast-glob](https://github.com/mrmlnc/fast-glob) for file matching.
   "$schema": "https://raw.githubusercontent.com/fruitiecutiepie/codepol/master/policy.schema.json",
   "plugins": [
     {
-      "builtin": "logger"
+      "module": "@codepol/plugin",
+      "rules": [
+        {
+          "id": "require-logger-enter-exit",
+          "args": {
+            "logger": {
+              "identifier": "logger",
+              "enterMethod": "enter",
+              "exitMethod": "exit",
+              "import": {
+                "module": "@myorg/observability",
+                "named": "logger"
+              }
+            }
+          }
+        }
+      ]
     }
   ],
   "rules": [
@@ -218,16 +282,7 @@ Codepol uses [fast-glob](https://github.com/mrmlnc/fast-glob) for file matching.
     "node_modules/**",
     "**/*.config.ts",
     "**/*.config.js"
-  ],
-  "logger": {
-    "identifier": "logger",
-    "enterMethod": "enter",
-    "exitMethod": "exit",
-    "import": {
-      "module": "@myorg/observability",
-      "named": "logger"
-    }
-  }
+  ]
 }
 ```
 
@@ -237,15 +292,27 @@ Codepol uses [fast-glob](https://github.com/mrmlnc/fast-glob) for file matching.
 
 ```json
 {
-  "logger": {
-    "identifier": "log",
-    "enterMethod": "info",
-    "exitMethod": "info",
-    "import": {
-      "module": "./logger",
-      "named": "log"
+  "plugins": [
+    {
+      "module": "@codepol/plugin",
+      "rules": [
+        {
+          "id": "require-logger-enter-exit",
+          "args": {
+            "logger": {
+              "identifier": "log",
+              "enterMethod": "info",
+              "exitMethod": "info",
+              "import": {
+                "module": "./logger",
+                "named": "log"
+              }
+            }
+          }
+        }
+      ]
     }
-  }
+  ]
 }
 ```
 
@@ -253,15 +320,27 @@ Codepol uses [fast-glob](https://github.com/mrmlnc/fast-glob) for file matching.
 
 ```json
 {
-  "logger": {
-    "identifier": "pino",
-    "enterMethod": "trace",
-    "exitMethod": "trace",
-    "import": {
-      "module": "./pino-logger",
-      "named": "pino"
+  "plugins": [
+    {
+      "module": "@codepol/plugin",
+      "rules": [
+        {
+          "id": "require-logger-enter-exit",
+          "args": {
+            "logger": {
+              "identifier": "pino",
+              "enterMethod": "trace",
+              "exitMethod": "trace",
+              "import": {
+                "module": "./pino-logger",
+                "named": "pino"
+              }
+            }
+          }
+        }
+      ]
     }
-  }
+  ]
 }
 ```
 
@@ -269,15 +348,27 @@ Codepol uses [fast-glob](https://github.com/mrmlnc/fast-glob) for file matching.
 
 ```json
 {
-  "logger": {
-    "identifier": "tracer",
-    "enterMethod": "startSpan",
-    "exitMethod": "endSpan",
-    "import": {
-      "module": "@opentelemetry/api",
-      "named": "tracer"
+  "plugins": [
+    {
+      "module": "@codepol/plugin",
+      "rules": [
+        {
+          "id": "require-logger-enter-exit",
+          "args": {
+            "logger": {
+              "identifier": "tracer",
+              "enterMethod": "startSpan",
+              "exitMethod": "endSpan",
+              "import": {
+                "module": "@opentelemetry/api",
+                "named": "tracer"
+              }
+            }
+          }
+        }
+      ]
     }
-  }
+  ]
 }
 ```
 
@@ -322,12 +413,23 @@ import type {
 
 const policy: PolicyFile = {
   rules: [...],
-  plugins: [{ builtin: 'logger' }],
-  logger: {
-    identifier: 'logger',
-    enterMethod: 'enter',
-    exitMethod: 'exit',
-    import: { module: '@org/logger', named: 'logger' },
-  },
+  plugins: [
+    {
+      module: '@codepol/plugin',
+      rules: [
+        {
+          id: 'require-logger-enter-exit',
+          args: {
+            logger: {
+              identifier: 'logger',
+              enterMethod: 'enter',
+              exitMethod: 'exit',
+              import: { module: '@org/logger', named: 'logger' },
+            },
+          },
+        },
+      ],
+    },
+  ],
 };
 ```
