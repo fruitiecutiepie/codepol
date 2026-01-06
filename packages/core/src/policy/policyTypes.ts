@@ -137,7 +137,7 @@ export type PolicyScanContext = {
 /**
  * Plugin struct for policy scanning.
  */
-export type PolicyPlugin = {
+export type TreeScanProvider = {
   /** Stable plugin identifier */
   id: string;
   /** Plugin version */
@@ -148,6 +148,86 @@ export type PolicyPlugin = {
   init?: (context: PolicyPluginInitContext) => void | Promise<void>;
   /** Scan a file against a rule */
   scan: (rule: PolicyRule, context: PolicyScanContext) => PolicyViolation[];
+};
+
+/**
+ * Context passed to ESLint rule providers.
+ */
+export type EslintRuleProviderContext = {
+  /** Current working directory */
+  cwd: string;
+  /** Loaded policy definition */
+  policy: PolicyFile;
+  /** Policy path used for loading */
+  policyPath: string;
+};
+
+/**
+ * ESLint rule provider capability.
+ */
+export type EslintRuleProvider = {
+  /** ESLint plugin name to register under */
+  pluginName: string;
+  /** ESLint rule map */
+  rules: Record<string, unknown>;
+  /** Optional ESLint config presets */
+  configs?: Record<string, unknown>;
+  /** Build ESLint rule configuration */
+  rulesConfigGet: (context: EslintRuleProviderContext) => Record<string, unknown>;
+};
+
+/**
+ * Context passed to fix providers.
+ */
+export type FixProviderContext = {
+  /** Current working directory */
+  cwd: string;
+  /** Loaded policy definition */
+  policy: PolicyFile;
+  /** Policy path used for loading */
+  policyPath: string;
+  /** Files matched by policy rules */
+  files: string[];
+};
+
+/**
+ * Fix provider capability.
+ */
+export type FixProvider = {
+  /** Apply fixes for matched files */
+  apply: (context: FixProviderContext) => void | Promise<void>;
+};
+
+/**
+ * Plugin capability contract.
+ */
+export type PolicyPluginCapabilities = {
+  /** Optional ESLint rule provider */
+  eslintRuleProvider?: EslintRuleProvider;
+  /** Optional Tree-sitter scan provider */
+  treeScanProvider?: TreeScanProvider;
+  /** Optional fix provider */
+  fixProvider?: FixProvider;
+};
+
+/**
+ * Codepol plugin definition with optional capabilities.
+ */
+export type CodepolPlugin = {
+  /** Stable plugin identifier */
+  id: string;
+  /** Plugin version */
+  version: string;
+  /** Capability providers */
+  capabilities: PolicyPluginCapabilities;
+};
+
+/**
+ * Plugin struct for policy scanning.
+ */
+export type PolicyPlugin = TreeScanProvider & {
+  /** Optional capability providers */
+  capabilities?: PolicyPluginCapabilities;
 };
 
 /**
@@ -175,4 +255,3 @@ export type RuleMatch = {
   /** Absolute paths to files matching this rule */
   files: string[];
 };
-

@@ -36,6 +36,13 @@ export type {
   LoggerConfig,
   PolicyRule,
   PolicyFile,
+  TreeScanProvider,
+  EslintRuleProviderContext,
+  EslintRuleProvider,
+  FixProviderContext,
+  FixProvider,
+  PolicyPluginCapabilities,
+  CodepolPlugin,
   PolicyPlugin,
   PolicyPluginDeclaration,
   PolicyPluginInitContext,
@@ -69,6 +76,7 @@ export {
   defaultPluginType,
   policyPluginsGet,
 } from './policy/policyPluginsGet';
+export { policyPluginLogger } from './policy/policyPluginLogger';
 
 // Runner
 export type {

@@ -10,7 +10,8 @@
     "paths": {
       "@codepol/core": ["./packages/core/src/index.ts"],
       "@codepol/eslint-plugin": ["./packages/eslint-plugin/src/index.ts"],
-      "@codepol/esbuild-plugin": ["./packages/esbuild-plugin/src/index.ts"]
+      "@codepol/esbuild-plugin": ["./packages/esbuild-plugin/src/index.ts"],
+      "@codepol/plugin-logger": ["./packages/plugin-logger/src/index.ts"]
     }
   },
   "include": ["tests/**/*.ts", "policy.json"],
@@ -19,6 +20,7 @@
     { "path": "./packages/core" },
     { "path": "./packages/eslint-plugin" },
     { "path": "./packages/esbuild-plugin" },
+    { "path": "./packages/plugin-logger" },
     { "path": "./apps/cli" }
   ]
 }

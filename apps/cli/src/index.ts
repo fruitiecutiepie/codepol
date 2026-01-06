@@ -16,6 +16,7 @@
  */
 
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import chokidar from 'chokidar';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
@@ -27,7 +28,12 @@ import {
   ruleMatchesGet,
   policyViolationsGetFromDir,
   policyViolationsGetOutputPretty,
+  defaultPluginType,
+  type CodepolPlugin,
+  type EslintRuleProvider,
+  type FixProvider,
   type PolicyFile,
+  type PolicyPluginDeclaration,
   type PolicyViolation,
 } from '@codepol/core';
 
@@ -46,6 +52,108 @@ type PolicyCheckResult = {
   violations: PolicyViolation[];
 };
 
+const builtinPluginModules: Record<string, string> = {
+  logger: '@codepol/plugin-logger',
+};
+
+async function policyPluginsGetCapabilities(
+  policy: PolicyFile,
+  cwd: string
+): Promise<Map<string, CodepolPlugin>> {
+  const declarations = policy.plugins ?? [];
+  const pluginsMap = new Map<string, CodepolPlugin>();
+
+  const pluginLoad = async (
+    declaration: PolicyPluginDeclaration,
+    moduleSpecifier: string
+  ): Promise<CodepolPlugin> => {
+    const moduleSource =
+      moduleSpecifier.startsWith('.') || moduleSpecifier.startsWith('/')
+        ? pathToFileURL(path.resolve(cwd, moduleSpecifier)).href
+        : moduleSpecifier;
+    const moduleLoaded = await import(moduleSource);
+    const pluginExported = declaration.export
+      ? moduleLoaded[declaration.export]
+      : moduleLoaded.default ?? moduleLoaded.plugin;
+    if (!pluginExported || typeof pluginExported !== 'object') {
+      throw new Error(`Invalid plugin exported by ${moduleSpecifier}.`);
+    }
+    const pluginValue = pluginExported as Partial<CodepolPlugin>;
+    if (!pluginValue.id || !pluginValue.version) {
+      throw new Error(`Plugin ${moduleSpecifier} must declare id and version.`);
+    }
+    return {
+      id: pluginValue.id,
+      version: pluginValue.version,
+      capabilities: pluginValue.capabilities ?? {},
+    };
+  };
+
+  for (const declaration of declarations) {
+    const moduleSpecifier =
+      declaration.module ??
+      (declaration.builtin ? builtinPluginModules[declaration.builtin] : undefined);
+    if (!moduleSpecifier) {
+      continue;
+    }
+    const plugin = await pluginLoad(declaration, moduleSpecifier);
+    if (pluginsMap.has(plugin.id)) {
+      throw new Error(`Duplicate plugin id detected: ${plugin.id}.`);
+    }
+    pluginsMap.set(plugin.id, plugin);
+  }
+
+  const ruleTypes = new Set(policy.rules.map(rule => rule.type ?? defaultPluginType));
+  for (const ruleType of ruleTypes) {
+    if (pluginsMap.has(ruleType)) {
+      continue;
+    }
+    const moduleSpecifier = builtinPluginModules[ruleType];
+    if (!moduleSpecifier) {
+      continue;
+    }
+    const plugin = await pluginLoad({ builtin: ruleType }, moduleSpecifier);
+    if (!pluginsMap.has(plugin.id)) {
+      pluginsMap.set(plugin.id, plugin);
+    }
+  }
+
+  return pluginsMap;
+}
+
+function eslintConfigGet(
+  providers: EslintRuleProvider[],
+  context: { policy: PolicyFile; policyPath: string; cwd: string }
+): ESLint.Options['overrideConfig'] {
+  const plugins: Record<string, ESLint.Plugin> = {};
+  const rules: Record<string, unknown> = {};
+
+  for (const provider of providers) {
+    if (plugins[provider.pluginName]) {
+      throw new Error(`Duplicate ESLint plugin name detected: ${provider.pluginName}.`);
+    }
+    plugins[provider.pluginName] = {
+      rules: provider.rules as ESLint.Plugin['rules'],
+      ...(provider.configs ? { configs: provider.configs as ESLint.Plugin['configs'] } : {}),
+    };
+    Object.assign(rules, provider.rulesConfigGet(context));
+  }
+
+  return {
+    plugins,
+    rules,
+  } as ESLint.Options['overrideConfig'];
+}
+
+async function fixProvidersApply(
+  providers: FixProvider[],
+  context: { policy: PolicyFile; policyPath: string; cwd: string; files: string[] }
+): Promise<void> {
+  for (const provider of providers) {
+    await provider.apply(context);
+  }
+}
+
 async function policyCheck(options: {
   policyPath: string;
   eslintConfigPath: string;
@@ -55,22 +163,39 @@ async function policyCheck(options: {
   const { policyPath, eslintConfigPath, fix, cwd } = options;
 
   const policy = policyFileGet(policyPath);
+  const capabilityPlugins = await policyPluginsGetCapabilities(policy, cwd);
+  const eslintRuleProviders = Array.from(capabilityPlugins.values())
+    .map(plugin => plugin.capabilities.eslintRuleProvider)
+    .filter((provider): provider is EslintRuleProvider => Boolean(provider));
+  const fixProviders = Array.from(capabilityPlugins.values())
+    .map(plugin => plugin.capabilities.fixProvider)
+    .filter((provider): provider is FixProvider => Boolean(provider));
+
   const matches = await ruleMatchesGet(policy, cwd);
   const files = Array.from(new Set(matches.flatMap(match => match.files)));
 
-  const eslint = new ESLint({
-    overrideConfigFile: eslintConfigPath,
-    fix,
-    cwd,
-  });
-
-  const lintResults = files.length > 0 ? await eslint.lintFiles(files) : [];
-  if (fix) {
-    await ESLint.outputFixes(lintResults);
+  if (fix && fixProviders.length > 0) {
+    await fixProvidersApply(fixProviders, { policy, policyPath, cwd, files });
   }
-  const formatter = await eslint.loadFormatter('stylish');
-  const eslintOutput = lintResults.length > 0 ? (await formatter.format(lintResults)).trim() : '';
-  const eslintHasErrors = lintResults.some(result => result.errorCount > 0);
+
+  let eslintOutput = '';
+  let eslintHasErrors = false;
+  if (eslintRuleProviders.length > 0) {
+    const eslint = new ESLint({
+      overrideConfigFile: eslintConfigPath,
+      overrideConfig: eslintConfigGet(eslintRuleProviders, { policy, policyPath, cwd }),
+      fix,
+      cwd,
+    });
+
+    const lintResults = files.length > 0 ? await eslint.lintFiles(files) : [];
+    if (fix) {
+      await ESLint.outputFixes(lintResults);
+    }
+    const formatter = await eslint.loadFormatter('stylish');
+    eslintOutput = lintResults.length > 0 ? (await formatter.format(lintResults)).trim() : '';
+    eslintHasErrors = lintResults.some(result => result.errorCount > 0);
+  }
 
   const violationsResult = await policyViolationsGetFromDir(policy, cwd);
 

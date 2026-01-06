@@ -1,7 +1,7 @@
 {
-  "name": "@codepol/eslint-plugin",
+  "name": "@codepol/plugin-logger",
   "version": "1.0.0",
-  "description": "ESLint plugin for enforcing logger instrumentation with autofix support",
+  "description": "Codepol logger plugin with ESLint rule provider",
   "type": "commonjs",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -20,7 +20,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@codepol/plugin-logger": "workspace:*"
+    "minimatch": "^10.1.1"
   },
   "peerDependencies": {
     "@codepol/core": "^1.0.0",
@@ -40,15 +40,14 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/fruitiecutiepie/codepol",
-    "directory": "packages/eslint-plugin"
+    "directory": "packages/plugin-logger"
   },
   "license": "MIT",
   "keywords": [
+    "codepol",
+    "logger",
     "eslint",
-    "eslintplugin",
-    "eslint-plugin",
-    "logging",
-    "typescript",
-    "autofix"
+    "rules",
+    "plugin"
   ]
 }

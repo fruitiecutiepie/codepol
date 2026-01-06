@@ -205,3 +205,7 @@ export const policyPluginLogger: PolicyPlugin = {
   init: parserInit,
   scan: loggerRuleScan,
 };
+
+policyPluginLogger.capabilities = {
+  treeScanProvider: policyPluginLogger,
+};

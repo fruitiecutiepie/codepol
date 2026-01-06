@@ -17,7 +17,7 @@
   },
   "dependencies": {
     "@codepol/core": "workspace:*",
-    "@codepol/eslint-plugin": "workspace:*",
+    "@codepol/plugin-logger": "workspace:*",
     "chokidar": "^5.0.0",
     "yargs": "^18.0.0"
   },

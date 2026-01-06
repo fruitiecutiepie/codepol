@@ -37,6 +37,7 @@ Codepol provides a comprehensive enforcement pipeline that ensures functions are
 | [@codepol/core](./packages/core) | Core policy loading, Tree-sitter scanning, and enforcement |
 | [@codepol/eslint-plugin](./packages/eslint-plugin) | ESLint rule with autofix for logger instrumentation |
 | [@codepol/esbuild-plugin](./packages/esbuild-plugin) | esbuild plugin for build-time enforcement |
+| [@codepol/plugin-logger](./packages/plugin-logger) | Logger plugin with Tree-sitter + ESLint capabilities |
 | [@codepol/cli](./apps/cli) | Command-line interface for running checks |
 
 ## Quick Start
@@ -58,6 +59,11 @@ Create `policy.json` in your project root:
 ```json
 {
   "$schema": "https://raw.githubusercontent.com/fruitiecutiepie/codepol/master/policy.schema.json",
+  "plugins": [
+    {
+      "module": "@codepol/plugin-logger"
+    }
+  ],
   "rules": [
     {
       "id": "function-logging",
@@ -98,6 +104,14 @@ export default [
   },
 ];
 ```
+
+### Plugin Loading
+
+Codepol loads plugin capabilities from `policy.json` declarations. The CLI uses these capabilities to decide which
+ESLint rules and fix providers to run, while Tree-sitter scanning uses the plugin's tree scan provider.
+
+The `@codepol/eslint-plugin` package is a thin adapter that re-exports rules from capability plugins such as
+`@codepol/plugin-logger`.
 
 ### Run Checks
 
