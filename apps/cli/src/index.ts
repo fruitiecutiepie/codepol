@@ -21,6 +21,7 @@ import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import { ESLint } from 'eslint';
 import {
+  langAdd,
   parserInit,
   policyFileGet,
   ruleMatchesGet,
@@ -155,6 +156,8 @@ function fsSubNew(options: CliOptions, files: string[], patterns: string[]): voi
 }
 
 async function main(): Promise<void> {
+  langAdd({ langId: 'typescript', fileExtensions: ['.ts'] });
+  langAdd({ langId: 'tsx', fileExtensions: ['.tsx'] });
   await parserInit();
 
   const argv = await yargs(hideBin(process.argv))

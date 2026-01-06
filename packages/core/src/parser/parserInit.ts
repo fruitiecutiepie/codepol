@@ -1,55 +1,53 @@
-import path from 'node:path';
-import Parser, { Language } from 'web-tree-sitter';
+import Parser from 'web-tree-sitter';
 import { Result, Ok, Err } from '../result/result';
+import {
+  langGetForFile,
+  langsGet,
+  langExists,
+  langSet,
+} from './parserLangs';
 
-let typescriptLanguage: Language | null = null;
-let tsxLanguage: Language | null = null;
-let parserInitializedValue = false;
-
-/**
- * Resolves the path to a WASM grammar file.
- * Looks in the wasm directory relative to this package.
- */
-function wasmPathGet(grammarNameValue: string): string {
-  return path.resolve(__dirname, '..', '..', 'wasm', `${grammarNameValue}.wasm`);
-}
+let parserInitialized = false;
 
 /**
  * Initializes the web-tree-sitter parser and loads language grammars.
  * Must be called before any scanning operations.
  */
 export async function parserInit(): Promise<void> {
-  if (parserInitializedValue) {
-    return;
+  if (!parserInitialized) {
+    await Parser.init();
+    parserInitialized = true;
   }
 
-  await Parser.init();
-
-  const [tsLangValue, tsxLangValue] = await Promise.all([
-    Parser.Language.load(wasmPathGet('tree-sitter-typescript')),
-    Parser.Language.load(wasmPathGet('tree-sitter-tsx')),
-  ]);
-
-  typescriptLanguage = tsLangValue;
-  tsxLanguage = tsxLangValue;
-  parserInitializedValue = true;
+  const langs = langsGet();
+  await Promise.all(
+    langs.map(async lang => {
+      if (langExists(lang.langId)) {
+        return;
+      }
+      const language = await Parser.Language.load(lang.wasmPath);
+      langSet(lang.langId, language);
+    })
+  );
 }
 
 /**
  * Creates a Tree-sitter parser configured for the given file type.
  * @returns Result containing the parser or an error message
  */
-export function parserGetForFile(filePathValue: string): Result<Parser, string> {
-  if (!parserInitializedValue) {
+export function parserGetForFile(filePath: string): Result<Parser, string> {
+  if (!parserInitialized) {
     const error = 'Parser not initialized. Call parserInit() before scanning files.';
     console.error(error);
     return Err(error);
   }
-  const parserValue = new Parser();
-  if (filePathValue.endsWith('.tsx')) {
-    parserValue.setLanguage(tsxLanguage);
-  } else {
-    parserValue.setLanguage(typescriptLanguage);
+  const parser = new Parser();
+  const language = langGetForFile(filePath);
+  if (!language) {
+    const error = `No language registered for file "${filePath}". Register one with langAdd().`;
+    console.error(error);
+    return Err(error);
   }
-  return Ok(parserValue);
+  parser.setLanguage(language);
+  return Ok(parser);
 }

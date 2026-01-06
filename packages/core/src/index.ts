@@ -59,6 +59,10 @@ export {
   policyViolationsGetFromDir,
 } from './policy/policyScan';
 
+// Languages
+export type { Lang } from './parser/parserLangs';
+export { langAdd, langsGet, wasmPathGet } from './parser/parserLangs';
+
 // Plugins
 export type { PolicyPluginsMap } from './policy/policyPluginsGet';
 export {
