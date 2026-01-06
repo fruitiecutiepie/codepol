@@ -87,17 +87,17 @@ async function policyPluginsGetCapabilities(
     if (!pluginExported || typeof pluginExported !== 'object') {
       throw new Error(`Invalid plugin exported by ${moduleSpecifier}.`);
     }
-    const pluginValue = pluginExported as Partial<CodepolPlugin>;
-    if (!pluginValue.id || !pluginValue.version) {
+    const pluginData = pluginExported as Partial<CodepolPlugin>;
+    if (!pluginData.id || !pluginData.version) {
       throw new Error(`Plugin ${moduleSpecifier} must declare id and version.`);
     }
     let capabilities: CodepolPlugin['capabilities'] = {};
-    if (pluginValue.capabilities != null) {
-      capabilities = pluginValue.capabilities;
+    if (pluginData.capabilities != null) {
+      capabilities = pluginData.capabilities;
     }
     return {
-      id: pluginValue.id,
-      version: pluginValue.version,
+      id: pluginData.id,
+      version: pluginData.version,
       capabilities,
     };
   };
@@ -336,17 +336,17 @@ async function main(): Promise<void> {
     .version()
     .parseAsync();
 
-  let fixValue = false;
+  let fix = false;
   if (argv.fix != null) {
-    fixValue = argv.fix;
+    fix = argv.fix;
   }
-  let watchValue = false;
+  let watch = false;
   if (argv.watch != null) {
-    watchValue = argv.watch;
+    watch = argv.watch;
   }
   const options: CliOptions = {
-    fix: fixValue,
-    watch: watchValue,
+    fix: fix,
+    watch: watch,
     policy: path.resolve(argv.policy as string),
     eslintConfig: path.resolve(argv['eslint-config'] as string),
   };

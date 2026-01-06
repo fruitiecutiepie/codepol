@@ -22,16 +22,16 @@ const policyCacheStore = new Map<string, PolicyFile>();
  * console.log(policy.rules.length);
  * ```
  */
-export function policyFileGet(policyPathValue: string): PolicyFile {
-  const absolutePathValue = path.resolve(policyPathValue);
-  const cachedValue = policyCacheStore.get(absolutePathValue);
-  if (cachedValue) {
-    return cachedValue;
+export function policyFileGet(policyPath: string): PolicyFile {
+  const absolutePath = path.resolve(policyPath);
+  const cached = policyCacheStore.get(absolutePath);
+  if (cached) {
+    return cached;
   }
-  const rawValue = fs.readFileSync(absolutePathValue, 'utf8');
-  const parsedValue = JSON.parse(rawValue) as PolicyFile;
-  policyCacheStore.set(absolutePathValue, parsedValue);
-  return parsedValue;
+  const raw = fs.readFileSync(absolutePath, 'utf8');
+  const parsed = JSON.parse(raw) as PolicyFile;
+  policyCacheStore.set(absolutePath, parsed);
+  return parsed;
 }
 
 /**
@@ -41,11 +41,11 @@ export function policyFileGet(policyPathValue: string): PolicyFile {
  * @param relativeFile - Relative file path to check
  * @returns True if any pattern matches
  */
-export function globPatternsGetMatchAny(patternsValue: string[] | undefined, relativeFileValue: string): boolean {
-  if (!patternsValue || patternsValue.length === 0) {
+export function globPatternsGetMatchAny(patterns: string[] | undefined, relativeFile: string): boolean {
+  if (!patterns || patterns.length === 0) {
     return false;
   }
-  return patternsValue.some(patternValue => minimatch(relativeFileValue, patternValue, { dot: true }));
+  return patterns.some(pattern => minimatch(relativeFile, pattern, { dot: true }));
 }
 
 /**
@@ -57,21 +57,21 @@ export function globPatternsGetMatchAny(patternsValue: string[] | undefined, rel
  * @returns True if the file should be checked against the policy
  */
 export function policyFileGetChecked(
-  policyValue: PolicyFile,
-  filePathValue: string,
-  cwdValue: string
+  policy: PolicyFile,
+  filePath: string,
+  cwd: string
 ): boolean {
-  const relativeValue = path.relative(cwdValue, filePathValue);
-  if (globPatternsGetMatchAny(policyValue.exclude, relativeValue)) {
+  const relative = path.relative(cwd, filePath);
+  if (globPatternsGetMatchAny(policy.exclude, relative)) {
     return false;
   }
-  for (const ruleValue of policyValue.rules) {
-    if (globPatternsGetMatchAny(ruleValue.files, relativeValue)) {
-      if (globPatternsGetMatchAny(ruleValue.exclude, relativeValue)) {
+  for (const rule of policy.rules) {
+    if (globPatternsGetMatchAny(rule.files, relative)) {
+      if (globPatternsGetMatchAny(rule.exclude, relative)) {
         continue;
       }
-      const isTsValue = relativeValue.endsWith('.ts') || relativeValue.endsWith('.tsx');
-      if (!isTsValue) {
+      const isTs = relative.endsWith('.ts') || relative.endsWith('.tsx');
+      if (!isTs) {
         continue;
       }
       return true;
@@ -100,32 +100,32 @@ export function policyFileGetChecked(
  * }
  * ```
  */
-export async function ruleMatchesGet(policyValue: PolicyFile, cwdValue: string): Promise<RuleMatch[]> {
-  const matchesValue: RuleMatch[] = [];
-  let globalExcludeValue: string[] = [];
-  if (policyValue.exclude != null) {
-    globalExcludeValue = policyValue.exclude;
+export async function ruleMatchesGet(policy: PolicyFile, cwd: string): Promise<RuleMatch[]> {
+  const matches: RuleMatch[] = [];
+  let globalExclude: string[] = [];
+  if (policy.exclude != null) {
+    globalExclude = policy.exclude;
   }
-  for (const ruleValue of policyValue.rules) {
-    let ruleExcludeValue: string[] = [];
-    if (ruleValue.exclude != null) {
-      ruleExcludeValue = ruleValue.exclude;
+  for (const rule of policy.rules) {
+    let ruleExclude: string[] = [];
+    if (rule.exclude != null) {
+      ruleExclude = rule.exclude;
     }
-    const ignoreValue = [...globalExcludeValue, ...ruleExcludeValue];
-    const filesValue = await fg(ruleValue.files, {
-      cwd: cwdValue,
+    const ignore = [...globalExclude, ...ruleExclude];
+    const files = await fg(rule.files, {
+      cwd: cwd,
       absolute: true,
-      ignore: ignoreValue,
+      ignore: ignore,
       onlyFiles: true,
     });
-    const filteredValue = filesValue.filter(fileValue => {
-      if (ruleValue.language === 'tsx') {
-        return fileValue.endsWith('.tsx');
+    const filtered = files.filter(file => {
+      if (rule.language === 'tsx') {
+        return file.endsWith('.tsx');
       }
-      return fileValue.endsWith('.ts') || fileValue.endsWith('.tsx');
+      return file.endsWith('.ts') || file.endsWith('.tsx');
     });
-    matchesValue.push({ rule: ruleValue, files: filteredValue });
+    matches.push({ rule: rule, files: filtered });
   }
-  return matchesValue;
+  return matches;
 }
 

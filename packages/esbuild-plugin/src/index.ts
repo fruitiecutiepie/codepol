@@ -85,16 +85,16 @@ async function policyCheck(options: {
   const matches = await ruleMatchesGet(policy, cwd);
   const files = Array.from(new Set(matches.flatMap(matchGet => matchGet.files)));
 
-  let fixValue = false;
+  let fixEnabled = false;
   if (fix != null) {
-    fixValue = fix;
+    fixEnabled = fix;
   }
   const eslint = new ESLint({
     overrideConfigFile: eslintConfigPath,
     plugins: {
       codepol: eslintPlugin as unknown as ESLint.Plugin,
     },
-    fix: fixValue,
+    fix: fixEnabled,
     cwd: cwd,
   });
 

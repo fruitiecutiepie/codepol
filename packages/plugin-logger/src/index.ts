@@ -315,18 +315,18 @@ const requireLoggerRule = createRule<Options, MessageIds>({
 
     return {
       FunctionDeclaration(node) {
-        let bodyValue: TSESTree.BlockStatement | null = null;
+        let body: TSESTree.BlockStatement | null = null;
         if (node.body != null) {
-          bodyValue = node.body;
+          body = node.body;
         }
-        checkBlock(node, bodyValue);
+        checkBlock(node, body);
       },
       FunctionExpression(node) {
-        let bodyValue: TSESTree.BlockStatement | null = null;
+        let body: TSESTree.BlockStatement | null = null;
         if (node.body != null) {
-          bodyValue = node.body;
+          body = node.body;
         }
-        checkBlock(node, bodyValue);
+        checkBlock(node, body);
       },
       ArrowFunctionExpression(node) {
         if (node.body.type === TSESTree.AST_NODE_TYPES.BlockStatement) {
@@ -337,11 +337,11 @@ const requireLoggerRule = createRule<Options, MessageIds>({
       },
       MethodDefinition(node) {
         if (node.value && node.value.type === TSESTree.AST_NODE_TYPES.FunctionExpression) {
-          let bodyValue: TSESTree.BlockStatement | null = null;
+          let body: TSESTree.BlockStatement | null = null;
           if (node.value.body != null) {
-            bodyValue = node.value.body;
+            body = node.value.body;
           }
-          checkBlock(node.value, bodyValue);
+          checkBlock(node.value, body);
         }
       },
     };
@@ -355,8 +355,8 @@ const eslintRules = {
 export const eslintRuleProvider: EslintRuleProvider = {
   pluginName: 'codepol',
   rules: eslintRules,
-  rulesConfigGet: (contextValue: EslintRuleProviderContext) => ({
-    'codepol/require-logger-enter-exit': ['error', { policyPath: contextValue.policyPath }],
+  rulesConfigGet: (ctx: EslintRuleProviderContext) => ({
+    'codepol/require-logger-enter-exit': ['error', { policyPath: ctx.policyPath }],
   }),
 };
 

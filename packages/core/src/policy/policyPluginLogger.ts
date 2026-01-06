@@ -8,16 +8,16 @@ const blockNodeTypes = new Set(['statement_block', 'block', 'function_body']);
 /**
  * Extracts the function name from a syntax node.
  */
-function functionNameGet(nodeValue: SyntaxNode): string {
-  const nameNodeValue = nodeValue.childForFieldName('name');
-  if (nameNodeValue) {
-    return nameNodeValue.text;
+function functionNameGet(node: SyntaxNode): string {
+  const nameNode = node.childForFieldName('name');
+  if (nameNode) {
+    return nameNode.text;
   }
-  const parentValue = nodeValue.parent;
-  if (parentValue && parentValue.type === 'method_definition') {
-    const methodNameValue = parentValue.childForFieldName('name');
-    if (methodNameValue) {
-      return methodNameValue.text;
+  const parent = node.parent;
+  if (parent && parent.type === 'method_definition') {
+    const methodName = parent.childForFieldName('name');
+    if (methodName) {
+      return methodName.text;
     }
   }
   return '<anonymous>';
@@ -27,39 +27,39 @@ function functionNameGet(nodeValue: SyntaxNode): string {
  * Checks if a node is a call expression matching logger.method().
  */
 function loggerIsCallExpr(
-  sourceValue: string,
-  nodeValue: SyntaxNode,
-  loggerIdValue: string,
-  methodValue: string
+  source: string,
+  node: SyntaxNode,
+  loggerId: string,
+  method: string
 ): boolean {
-  if (nodeValue.type !== 'call_expression' && nodeValue.type !== 'call_expression_v2') {
+  if (node.type !== 'call_expression' && node.type !== 'call_expression_v2') {
     return false;
   }
-  const startValue = nodeValue.child(0);
-  if (!startValue) {
+  const start = node.child(0);
+  if (!start) {
     return false;
   }
-  const calleeTextValue = sourceValue.slice(startValue.startIndex, startValue.endIndex).replace(/\s+/g, '');
-  return calleeTextValue === `${loggerIdValue}.${methodValue}`;
+  const calleeText = source.slice(start.startIndex, start.endIndex).replace(/\s+/g, '');
+  return calleeText === `${loggerId}.${method}`;
 }
 
 /**
  * Checks if the first statement in a block is a logger.enter() call.
  */
 function loggerFindEnterStatement(
-  sourceValue: string,
-  blockValue: SyntaxNode,
-  loggerIdValue: string,
-  methodValue: string
+  source: string,
+  block: SyntaxNode,
+  loggerId: string,
+  method: string
 ): boolean {
-  for (const childValue of blockValue.namedChildren) {
-    if (childValue.type === 'expression_statement') {
-      const expressionValue = childValue.namedChildren[0];
-      if (expressionValue && loggerIsCallExpr(sourceValue, expressionValue, loggerIdValue, methodValue)) {
+  for (const child of block.namedChildren) {
+    if (child.type === 'expression_statement') {
+      const expression = child.namedChildren[0];
+      if (expression && loggerIsCallExpr(source, expression, loggerId, method)) {
         return true;
       }
     }
-    if (childValue.type !== 'comment') {
+    if (child.type !== 'comment') {
       break;
     }
   }
@@ -70,23 +70,23 @@ function loggerFindEnterStatement(
  * Checks if a try statement's finally block contains a logger.exit() call.
  */
 function loggerHasExitInFinally(
-  sourceValue: string,
-  tryNodeValue: SyntaxNode,
-  loggerIdValue: string,
-  methodValue: string
+  source: string,
+  tryNode: SyntaxNode,
+  loggerId: string,
+  method: string
 ): boolean {
-  const finalizerValue = tryNodeValue.childForFieldName('finalizer');
-  if (!finalizerValue) {
+  const finalizer = tryNode.childForFieldName('finalizer');
+  if (!finalizer) {
     return false;
   }
-  const blockValue = finalizerValue.namedChildren.find(childValue => blockNodeTypes.has(childValue.type));
-  if (!blockValue) {
+  const block = finalizer.namedChildren.find(child => blockNodeTypes.has(child.type));
+  if (!block) {
     return false;
   }
-  for (const statementValue of blockValue.namedChildren) {
-    if (statementValue.type === 'expression_statement') {
-      const expressionValue = statementValue.namedChildren[0];
-      if (expressionValue && loggerIsCallExpr(sourceValue, expressionValue, loggerIdValue, methodValue)) {
+  for (const statement of block.namedChildren) {
+    if (statement.type === 'expression_statement') {
+      const expression = statement.namedChildren[0];
+      if (expression && loggerIsCallExpr(source, expression, loggerId, method)) {
         return true;
       }
     }
@@ -98,11 +98,11 @@ function loggerHasExitInFinally(
  * Finds a try_statement within a block.
  */
 function trySurroundingFind(
-  blockValue: SyntaxNode
+  block: SyntaxNode
 ): SyntaxNode | undefined {
-  for (const childValue of blockValue.namedChildren) {
-    if (childValue.type === 'try_statement') {
-      return childValue;
+  for (const child of block.namedChildren) {
+    if (child.type === 'try_statement') {
+      return child;
     }
   }
   return undefined;
@@ -117,85 +117,85 @@ type FunctionAnalysisResult = {
  * Analyzes a function node for proper logger instrumentation.
  */
 function functionAnalysisGet(
-  sourceValue: string,
-  nodeValue: SyntaxNode,
-  loggerValue: LoggerConfig
+  source: string,
+  node: SyntaxNode,
+  logger: LoggerConfig
 ): FunctionAnalysisResult {
-  const bodyValue = nodeValue.childForFieldName('body');
-  if (!bodyValue) {
+  const body = node.childForFieldName('body');
+  if (!body) {
     return { enterPresent: false, exitPresent: false };
   }
 
-  if (!blockNodeTypes.has(bodyValue.type)) {
+  if (!blockNodeTypes.has(body.type)) {
     return { enterPresent: false, exitPresent: false };
   }
 
-  const hasEnterValue = loggerFindEnterStatement(sourceValue, bodyValue, loggerValue.identifier, loggerValue.enterMethod);
-  const tryNodeValue = trySurroundingFind(bodyValue);
-  const hasExitValue = tryNodeValue
-    ? loggerHasExitInFinally(sourceValue, tryNodeValue, loggerValue.identifier, loggerValue.exitMethod)
+  const hasEnter = loggerFindEnterStatement(source, body, logger.identifier, logger.enterMethod);
+  const tryNode = trySurroundingFind(body);
+  const hasExit = tryNode
+    ? loggerHasExitInFinally(source, tryNode, logger.identifier, logger.exitMethod)
     : false;
 
-  return { enterPresent: hasEnterValue, exitPresent: hasExitValue };
+  return { enterPresent: hasEnter, exitPresent: hasExit };
 }
 
 /**
  * Recursively visits all function nodes in a syntax tree.
  */
 function functionsVisit(
-  nodeValue: SyntaxNode,
-  visitorValue: (fnNodeValue: SyntaxNode) => void
+  node: SyntaxNode,
+  visitor: (fnNode: SyntaxNode) => void
 ): void {
   if (
-    nodeValue.type === 'function_declaration' ||
-    nodeValue.type === 'function_expression' ||
-    nodeValue.type === 'arrow_function' ||
-    nodeValue.type === 'method_definition'
+    node.type === 'function_declaration' ||
+    node.type === 'function_expression' ||
+    node.type === 'arrow_function' ||
+    node.type === 'method_definition'
   ) {
-    visitorValue(nodeValue);
+    visitor(node);
   }
-  for (const childValue of nodeValue.namedChildren) {
-    functionsVisit(childValue, visitorValue);
+  for (const child of node.namedChildren) {
+    functionsVisit(child, visitor);
   }
 }
 
 function loggerRuleScan(
-  ruleValue: PolicyRule,
-  contextValue: PolicyScanContext
+  rule: PolicyRule,
+  context: PolicyScanContext
 ): PolicyViolation[] {
-  const parserResult = parserGetForFile(contextValue.filePath);
+  const parserResult = parserGetForFile(context.filePath);
   if (isErr(parserResult)) {
     return []; // Error already logged in parserGetForFile
   }
-  const parserValue = parserResult.Ok;
-  const treeValue = parserValue.parse(contextValue.source);
-  const violationsValue: PolicyViolation[] = [];
-  const loggerValue = contextValue.policy.logger;
+  const parser = parserResult.Ok;
+  const tree = parser.parse(context.source);
+  const violations: PolicyViolation[] = [];
+  const logger = context.policy.logger;
 
-  functionsVisit(treeValue.rootNode, fnNodeValue => {
-    const { enterPresent, exitPresent } = functionAnalysisGet(contextValue.source, fnNodeValue, loggerValue);
+  functionsVisit(tree.rootNode, fnNode => {
+    const { enterPresent, exitPresent } = functionAnalysisGet(context.source, fnNode, logger);
     if (!enterPresent || !exitPresent) {
-      const nameValue = functionNameGet(fnNodeValue);
-      const missingValue: string[] = [];
+      const name = functionNameGet(fnNode);
+      const missing: string[] = [];
       if (!enterPresent) {
-        missingValue.push(`${loggerValue.identifier}.${loggerValue.enterMethod}`);
+        missing.push(`${logger.identifier}.${logger.enterMethod}`);
       }
       if (!exitPresent) {
-        missingValue.push(`${loggerValue.identifier}.${loggerValue.exitMethod}`);
+        missing.push(`${logger.identifier}.${logger.exitMethod}`);
       }
-      const firstMissingValue = missingValue.join(' & ');
-      const { row: rowValue, column: columnValue } = fnNodeValue.startPosition;
-      violationsValue.push({
-        ruleId: ruleValue.id,
-        filePath: contextValue.filePath,
-        message: `Function ${nameValue} is missing ${firstMissingValue}`,
-        line: rowValue + 1,
-        column: columnValue + 1,
+      const firstMissing = missing.join(' & ');
+      const { row: row, column: column } = fnNode.startPosition;
+      violations.push({
+        ruleId: rule.id,
+        filePath: context.filePath,
+        message: `Function ${name} is missing ${firstMissing}`,
+        line: row + 1,
+        column: column + 1,
       });
     }
   });
 
-  return violationsValue;
+  return violations;
 }
 
 export const policyPluginLogger: PolicyPlugin = {
