@@ -48,7 +48,10 @@ export function langAdd(lang: Lang): void {
     throw new Error(`Language "${langId}" must include at least one file extension.`);
   }
 
-  const wasmPath = lang.wasmPath ?? wasmPathGet(`tree-sitter-${langId}`);
+  let wasmPath = wasmPathGet(`tree-sitter-${langId}`);
+  if (lang.wasmPath != null) {
+    wasmPath = lang.wasmPath;
+  }
 
   const existing = langMap.get(langId);
   if (existing) {
@@ -101,5 +104,9 @@ export function langGetForFile(filePath: string): Language | null {
   if (!langId) {
     return null;
   }
-  return langsMap.get(langId) ?? null;
+  let result: Language | null = null;
+  if (langsMap.get(langId) != null) {
+    result = langsMap.get(langId)!;
+  }
+  return result;
 }

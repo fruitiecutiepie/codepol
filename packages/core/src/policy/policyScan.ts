@@ -8,7 +8,10 @@ function policyPluginGet(
   pluginsMap: PolicyPluginsMap,
   rule: PolicyRule
 ): Result<PolicyPlugin, string> {
-  const ruleType = rule.type ?? defaultPluginType;
+  let ruleType = defaultPluginType;
+  if (rule.type != null) {
+    ruleType = rule.type;
+  }
   const plugin = pluginsMap.get(ruleType);
   if (!plugin) {
     const error = `No plugin registered for rule type ${ruleType}.`;

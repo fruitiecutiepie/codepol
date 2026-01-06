@@ -102,9 +102,16 @@ export function policyFileGetChecked(
  */
 export async function ruleMatchesGet(policyValue: PolicyFile, cwdValue: string): Promise<RuleMatch[]> {
   const matchesValue: RuleMatch[] = [];
-  const globalExcludeValue = policyValue.exclude ?? [];
+  let globalExcludeValue: string[] = [];
+  if (policyValue.exclude != null) {
+    globalExcludeValue = policyValue.exclude;
+  }
   for (const ruleValue of policyValue.rules) {
-    const ignoreValue = [...globalExcludeValue, ...(ruleValue.exclude ?? [])];
+    let ruleExcludeValue: string[] = [];
+    if (ruleValue.exclude != null) {
+      ruleExcludeValue = ruleValue.exclude;
+    }
+    const ignoreValue = [...globalExcludeValue, ...ruleExcludeValue];
     const filesValue = await fg(ruleValue.files, {
       cwd: cwdValue,
       absolute: true,

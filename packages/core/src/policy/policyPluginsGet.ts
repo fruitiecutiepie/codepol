@@ -47,9 +47,15 @@ async function policyPluginGet(
       ? pathToFileURL(path.resolve(cwd, moduleSpecifier)).href
       : moduleSpecifier;
     const moduleLoaded = await import(moduleSource);
-    const pluginExported = declaration.export
-      ? moduleLoaded[declaration.export]
-      : moduleLoaded.default ?? moduleLoaded.plugin;
+    let pluginExported;
+    if (declaration.export) {
+      pluginExported = moduleLoaded[declaration.export];
+    } else {
+      pluginExported = moduleLoaded.plugin;
+      if (moduleLoaded.default != null) {
+        pluginExported = moduleLoaded.default;
+      }
+    }
     if (!pluginExported) {
       const error = `No plugin export found in ${moduleSpecifier}.`;
       console.error(error);
@@ -81,7 +87,10 @@ export async function policyPluginsGet(
   policy: PolicyFile,
   cwd: string
 ): Promise<Result<PolicyPluginsMap, string>> {
-  const declarations = policy.plugins ?? [];
+  let declarations: PolicyPluginDeclaration[] = [];
+  if (policy.plugins != null) {
+    declarations = policy.plugins;
+  }
   const pluginsMapGet = new Map<string, PolicyPlugin>();
 
   for (const declaration of declarations) {
@@ -101,7 +110,10 @@ export async function policyPluginsGet(
 
   // Auto-register built-in plugins for rule types that reference them
   for (const rule of policy.rules) {
-    const ruleType = rule.type ?? defaultPluginType;
+    let ruleType = defaultPluginType;
+    if (rule.type != null) {
+      ruleType = rule.type;
+    }
     if (!pluginsMapGet.has(ruleType) && pluginsBuiltinMap[ruleType]) {
       const builtinPlugin = pluginsBuiltinMap[ruleType];
       pluginsMapGet.set(ruleType, builtinPlugin);
@@ -115,7 +127,10 @@ export async function policyPluginsGet(
   }
 
   for (const rule of policy.rules) {
-    const ruleType = rule.type ?? defaultPluginType;
+    let ruleType = defaultPluginType;
+    if (rule.type != null) {
+      ruleType = rule.type;
+    }
     const plugin = pluginsMapGet.get(ruleType);
     if (!plugin) {
       const error = `No plugin registered for rule type ${ruleType}.`;

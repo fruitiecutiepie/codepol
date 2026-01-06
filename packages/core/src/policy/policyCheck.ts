@@ -20,7 +20,10 @@ export type PolicyCheckResult = {
  * @returns Result containing the check result or an error message
  */
 export async function policyCheck(options: PolicyCheckOptions): Promise<Result<PolicyCheckResult, string>> {
-  const cwd = options.cwd ?? process.cwd();
+  let cwd = process.cwd();
+  if (options.cwd != null) {
+    cwd = options.cwd;
+  }
   const policyPath = path.resolve(cwd, options.policyPath);
   const policy = policyFileGet(policyPath);
   const matches = await ruleMatchesGet(policy, cwd);
@@ -48,7 +51,10 @@ export function policyViolationsGetOutputPretty(violations: PolicyViolation[], c
   const grouped = new Map<string, PolicyViolation[]>();
   for (const violation of violations) {
     const relative = path.relative(cwd, violation.filePath);
-    const list = grouped.get(relative) ?? [];
+    let list: PolicyViolation[] = [];
+    if (grouped.get(relative) != null) {
+      list = grouped.get(relative)!;
+    }
     list.push(violation);
     grouped.set(relative, list);
   }

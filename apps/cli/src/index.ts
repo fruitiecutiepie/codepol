@@ -60,7 +60,10 @@ async function policyPluginsGetCapabilities(
   policy: PolicyFile,
   cwd: string
 ): Promise<Map<string, CodepolPlugin>> {
-  const declarations = policy.plugins ?? [];
+  let declarations: PolicyPluginDeclaration[] = [];
+  if (policy.plugins != null) {
+    declarations = policy.plugins;
+  }
   const pluginsMap = new Map<string, CodepolPlugin>();
 
   const pluginLoad = async (
@@ -72,9 +75,15 @@ async function policyPluginsGetCapabilities(
         ? pathToFileURL(path.resolve(cwd, moduleSpecifier)).href
         : moduleSpecifier;
     const moduleLoaded = await import(moduleSource);
-    const pluginExported = declaration.export
-      ? moduleLoaded[declaration.export]
-      : moduleLoaded.default ?? moduleLoaded.plugin;
+    let pluginExported;
+    if (declaration.export) {
+      pluginExported = moduleLoaded[declaration.export];
+    } else {
+      pluginExported = moduleLoaded.plugin;
+      if (moduleLoaded.default != null) {
+        pluginExported = moduleLoaded.default;
+      }
+    }
     if (!pluginExported || typeof pluginExported !== 'object') {
       throw new Error(`Invalid plugin exported by ${moduleSpecifier}.`);
     }
@@ -82,17 +91,22 @@ async function policyPluginsGetCapabilities(
     if (!pluginValue.id || !pluginValue.version) {
       throw new Error(`Plugin ${moduleSpecifier} must declare id and version.`);
     }
+    let capabilities: CodepolPlugin['capabilities'] = {};
+    if (pluginValue.capabilities != null) {
+      capabilities = pluginValue.capabilities;
+    }
     return {
       id: pluginValue.id,
       version: pluginValue.version,
-      capabilities: pluginValue.capabilities ?? {},
+      capabilities,
     };
   };
 
   for (const declaration of declarations) {
-    const moduleSpecifier =
-      declaration.module ??
-      (declaration.builtin ? builtinPluginModules[declaration.builtin] : undefined);
+    let moduleSpecifier: string | undefined = declaration.builtin ? builtinPluginModules[declaration.builtin] : undefined;
+    if (declaration.module != null) {
+      moduleSpecifier = declaration.module;
+    }
     if (!moduleSpecifier) {
       continue;
     }
@@ -103,7 +117,13 @@ async function policyPluginsGetCapabilities(
     pluginsMap.set(plugin.id, plugin);
   }
 
-  const ruleTypes = new Set(policy.rules.map(rule => rule.type ?? defaultPluginType));
+  const ruleTypes = new Set(policy.rules.map(rule => {
+    let ruleType = defaultPluginType;
+    if (rule.type != null) {
+      ruleType = rule.type;
+    }
+    return ruleType;
+  }));
   for (const ruleType of ruleTypes) {
     if (pluginsMap.has(ruleType)) {
       continue;
@@ -316,9 +336,17 @@ async function main(): Promise<void> {
     .version()
     .parseAsync();
 
+  let fixValue = false;
+  if (argv.fix != null) {
+    fixValue = argv.fix;
+  }
+  let watchValue = false;
+  if (argv.watch != null) {
+    watchValue = argv.watch;
+  }
   const options: CliOptions = {
-    fix: argv.fix ?? false,
-    watch: argv.watch ?? false,
+    fix: fixValue,
+    watch: watchValue,
     policy: path.resolve(argv.policy as string),
     eslintConfig: path.resolve(argv['eslint-config'] as string),
   };

@@ -249,8 +249,14 @@ const requireLoggerRule = createRule<Options, MessageIds>({
     if (filename === '<input>' || !filename) {
       return {};
     }
-    const option = context.options[0] ?? {};
-    const policyPath = option.policyPath ?? path.resolve(process.cwd(), 'policy.json');
+    let option: NonNullable<Options[0]> = {};
+    if (context.options[0] != null) {
+      option = context.options[0];
+    }
+    let policyPath = path.resolve(process.cwd(), 'policy.json');
+    if (option.policyPath != null) {
+      policyPath = option.policyPath;
+    }
     const policyFile = policyFileGet(policyPath);
     if (!policyFileGetChecked(policyFile, filename)) {
       return {};
@@ -309,10 +315,18 @@ const requireLoggerRule = createRule<Options, MessageIds>({
 
     return {
       FunctionDeclaration(node) {
-        checkBlock(node, node.body ?? null);
+        let bodyValue: TSESTree.BlockStatement | null = null;
+        if (node.body != null) {
+          bodyValue = node.body;
+        }
+        checkBlock(node, bodyValue);
       },
       FunctionExpression(node) {
-        checkBlock(node, node.body ?? null);
+        let bodyValue: TSESTree.BlockStatement | null = null;
+        if (node.body != null) {
+          bodyValue = node.body;
+        }
+        checkBlock(node, bodyValue);
       },
       ArrowFunctionExpression(node) {
         if (node.body.type === TSESTree.AST_NODE_TYPES.BlockStatement) {
@@ -323,7 +337,11 @@ const requireLoggerRule = createRule<Options, MessageIds>({
       },
       MethodDefinition(node) {
         if (node.value && node.value.type === TSESTree.AST_NODE_TYPES.FunctionExpression) {
-          checkBlock(node.value, node.value.body ?? null);
+          let bodyValue: TSESTree.BlockStatement | null = null;
+          if (node.value.body != null) {
+            bodyValue = node.value.body;
+          }
+          checkBlock(node.value, bodyValue);
         }
       },
     };
@@ -342,10 +360,15 @@ export const eslintRuleProvider: EslintRuleProvider = {
   }),
 };
 
+let baseCapabilities: PolicyPlugin['capabilities'] = { treeScanProvider: policyPluginLogger };
+if (policyPluginLogger.capabilities != null) {
+  baseCapabilities = policyPluginLogger.capabilities;
+}
+
 export const plugin: PolicyPlugin = {
   ...policyPluginLogger,
   capabilities: {
-    ...(policyPluginLogger.capabilities ?? { treeScanProvider: policyPluginLogger }),
+    ...baseCapabilities,
     eslintRuleProvider,
   },
 };
