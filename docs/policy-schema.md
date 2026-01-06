@@ -176,28 +176,40 @@ Codepol uses [fast-glob](https://github.com/mrmlnc/fast-glob) for file matching.
   "rules": [
     {
       "id": "function-logging",
-      "description": "Ensure all exported functions have logger instrumentation",
-      "type": "logger",
-      "language": "typescript",
-      "files": [
-        "src/**/*.ts",
-        "src/**/*.tsx"
-      ],
-      "exclude": [
-        "**/*.spec.ts",
-        "**/*.test.ts",
-        "**/*.d.ts",
-        "**/__mocks__/**",
-        "**/__tests__/**"
+      "semantics": {
+        "description": "Ensure all exported functions have logger instrumentation",
+        "type": "logger"
+      },
+      "targets": [
+        {
+          "language": "typescript",
+          "files": [
+            "src/**/*.ts",
+            "src/**/*.tsx"
+          ],
+          "exclude": [
+            "**/*.spec.ts",
+            "**/*.test.ts",
+            "**/*.d.ts",
+            "**/__mocks__/**",
+            "**/__tests__/**"
+          ]
+        }
       ]
     },
     {
       "id": "api-logging",
-      "description": "Ensure API handlers have logging",
-      "type": "logger",
-      "language": "typescript",
-      "files": [
-        "src/api/**/*.ts"
+      "semantics": {
+        "description": "Ensure API handlers have logging",
+        "type": "logger"
+      },
+      "targets": [
+        {
+          "language": "typescript",
+          "files": [
+            "src/api/**/*.ts"
+          ]
+        }
       ]
     }
   ],

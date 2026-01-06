@@ -41,14 +41,21 @@ Create `policy.json` in your project root:
   "rules": [
     {
       "id": "function-logging",
-      "description": "Ensure all functions have logger.enter/exit instrumentation",
-      "language": "typescript",
-      "files": ["src/**/*.ts", "src/**/*.tsx"],
-      "exclude": [
-        "**/*.spec.ts",
-        "**/*.test.ts",
-        "**/__mocks__/**",
-        "**/__tests__/**"
+      "semantics": {
+        "description": "Ensure all functions have logger.enter/exit instrumentation",
+        "type": "logger"
+      },
+      "targets": [
+        {
+          "language": "typescript",
+          "files": ["src/**/*.ts", "src/**/*.tsx"],
+          "exclude": [
+            "**/*.spec.ts",
+            "**/*.test.ts",
+            "**/__mocks__/**",
+            "**/__tests__/**"
+          ]
+        }
       ]
     }
   ],
@@ -104,10 +111,12 @@ module.exports = {
   parser: '@typescript-eslint/parser',
   plugins: ['@codepol/eslint-plugin'],
   rules: {
-    '@codepol/require-logger-enter-exit': 'error',
+    'codepol/require-logger-enter-exit': 'error',
   },
 };
 ```
+
+Rule keys use the ESLint plugin name `codepol` (for example, `codepol/require-logger-enter-exit`) even when the package is scoped.
 
 ## Step 4: Create Your Logger
 

@@ -89,7 +89,12 @@ await parserInit();
 const policy = policyFileGet('./policy.json');
 const result = await policyViolationsGetFromDir(policy, process.cwd());
 
-if ('Ok' in result && result.Ok.length > 0) {
+if ('Err' in result) {
+  console.error(result.Err);
+  process.exit(1);
+}
+
+if (result.Ok.length > 0) {
   console.log(policyViolationsGetOutputPretty(result.Ok, process.cwd()));
   process.exit(1);
 }
@@ -114,13 +119,28 @@ const result = await policyCheck({
   cwd: process.cwd(),
 });
 
-if ('Ok' in result) {
-  console.log(`Checked ${result.Ok.files.length} files`);
-  console.log(`Found ${result.Ok.treeViolations.length} violations`);
+if ('Err' in result) {
+  console.error(result.Err);
+  process.exit(1);
+}
+
+console.log(`Checked ${result.Ok.files.length} files`);
+console.log(`Found ${result.Ok.treeViolations.length} violations`);
+
+if (result.Ok.treeViolations.length > 0) {
+  console.log(
+    policyViolationsGetOutputPretty(result.Ok.treeViolations, process.cwd())
+  );
 }
 ```
 
 ## API Reference
+
+### API naming note
+
+`@codepol/core` exports `policyFileGet`-style names (`policyFileGet`, `ruleMatchesGet`,
+`policyViolationsGetFromDir`, etc.). If you rely on `loadPolicy`-style names in existing code, update your imports
+to the canonical names listed below.
 
 ### Types
 
@@ -189,7 +209,7 @@ type PolicyViolation = {
 | `policyFileGetChecked(policy, filePath, cwd)` | Check if a file is covered by the policy |
 | `ruleMatchesGet(policy, cwd)` | Get files matching each rule |
 | `globPatternsGetMatchAny(patterns, path)` | Check if path matches any glob pattern |
-| `policyViolationsGetForFile(filePath, source, policy, dir)` | Scan a single file for violations |
+| `policyViolationsGetForFile(filePath, rule, target, policy, pluginsMap, dir)` | Scan a single file for violations |
 | `policyViolationsGetFromDir(policy, cwd)` | Scan all matching files in a directory |
 | `policyCheck(options)` | Run complete policy checks |
 | `policyViolationsGetOutputPretty(violations, cwd)` | Format violations as string |

@@ -59,7 +59,7 @@ export default [
 module.exports = {
   plugins: ['@codepol/eslint-plugin'],
   rules: {
-    '@codepol/require-logger-enter-exit': 'error',
+    'codepol/require-logger-enter-exit': 'error',
   },
 };
 ```
@@ -138,10 +138,17 @@ Example `policy.json`:
   "rules": [
     {
       "id": "function-logging",
-      "description": "Ensure functions have logger instrumentation",
-      "language": "typescript",
-      "files": ["src/**/*.ts"],
-      "exclude": ["**/*.spec.ts"]
+      "semantics": {
+        "description": "Ensure functions have logger instrumentation",
+        "type": "logger"
+      },
+      "targets": [
+        {
+          "language": "typescript",
+          "files": ["src/**/*.ts"],
+          "exclude": ["**/*.spec.ts"]
+        }
+      ]
     }
   ],
   "logger": {
