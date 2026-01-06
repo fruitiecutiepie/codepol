@@ -15,8 +15,11 @@ import type {
   EslintRuleProviderContext,
   LoggerConfig,
   PolicyFile,
+  PolicyRuleSemantics,
+  PolicyRuleTarget,
+  PolicyRuleTargetContext,
 } from '@codepol/core';
-import { policyPluginLogger } from '@codepol/core';
+import { defaultPluginType, policyPluginLogger } from '@codepol/core';
 
 /**
  * Rule options for require-logger-enter-exit.
@@ -25,6 +28,10 @@ type Options = [
   {
     /** Path to the policy.json file */
     policyPath?: string;
+    /** Resolved rule targets passed from the CLI */
+    ruleTargets?: PolicyRuleTargetContext[];
+    /** Global exclude patterns from the policy */
+    policyExclude?: string[];
   }?
 ];
 
@@ -64,18 +71,50 @@ function globPatternsGetMatchAny(patterns: string[] | undefined, relativeFile: s
   return patterns.some(pattern => minimatch(relativeFile, pattern, { dot: true }));
 }
 
-function policyFileGetChecked(policy: PolicyFile, filePath: string): boolean {
+function ruleTypeGet(semantics: PolicyRuleSemantics): string {
+  return semantics.type ?? defaultPluginType;
+}
+
+function ruleTargetMatchesLanguage(target: PolicyRuleTarget, filePath: string): boolean {
+  if (target.language === 'tsx') {
+    return filePath.endsWith('.tsx');
+  }
+  if (target.language === 'typescript') {
+    return filePath.endsWith('.ts') || filePath.endsWith('.tsx');
+  }
+  return true;
+}
+
+function policyRuleTargetsGet(policy: PolicyFile): PolicyRuleTargetContext[] {
+  const targets: PolicyRuleTargetContext[] = [];
+  for (const rule of policy.rules) {
+    for (const target of rule.targets) {
+      targets.push({
+        ruleId: rule.id,
+        semantics: rule.semantics,
+        target,
+      });
+    }
+  }
+  return targets;
+}
+
+function policyFileGetChecked(
+  ruleTargets: PolicyRuleTargetContext[],
+  policyExclude: string[],
+  filePath: string
+): boolean {
   const relative = path.relative(process.cwd(), filePath);
-  if (globPatternsGetMatchAny(policy.exclude, relative)) {
+  if (globPatternsGetMatchAny(policyExclude, relative)) {
     return false;
   }
-  for (const rule of policy.rules) {
-    if (globPatternsGetMatchAny(rule.files, relative)) {
-      if (globPatternsGetMatchAny(rule.exclude, relative)) {
+  for (const ruleTarget of ruleTargets) {
+    const target = ruleTarget.target;
+    if (globPatternsGetMatchAny(target.files, relative)) {
+      if (globPatternsGetMatchAny(target.exclude, relative)) {
         continue;
       }
-      const isTs = relative.endsWith('.ts') || relative.endsWith('.tsx');
-      if (!isTs) {
+      if (!ruleTargetMatchesLanguage(target, relative)) {
         continue;
       }
       return true;
@@ -238,6 +277,44 @@ const requireLoggerRule = createRule<Options, MessageIds>({
             type: 'string',
             description: 'Path to the policy.json file',
           },
+          ruleTargets: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                ruleId: { type: 'string' },
+                semantics: {
+                  type: 'object',
+                  properties: {
+                    description: { type: 'string' },
+                    type: { type: 'string' },
+                  },
+                  additionalProperties: false,
+                },
+                target: {
+                  type: 'object',
+                  properties: {
+                    language: { type: 'string' },
+                    parser: { type: 'string' },
+                    files: {
+                      type: 'array',
+                      items: { type: 'string' },
+                    },
+                    exclude: {
+                      type: 'array',
+                      items: { type: 'string' },
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              additionalProperties: false,
+            },
+          },
+          policyExclude: {
+            type: 'array',
+            items: { type: 'string' },
+          },
         },
         additionalProperties: false,
       },
@@ -257,9 +334,28 @@ const requireLoggerRule = createRule<Options, MessageIds>({
     if (option.policyPath != null) {
       policyPath = option.policyPath;
     }
-    const policyFile = policyFileGet(policyPath);
-    if (!policyFileGetChecked(policyFile, filename)) {
+    let policyExclude: string[] = [];
+    let ruleTargets: PolicyRuleTargetContext[] = [];
+    if (option.ruleTargets != null) {
+      ruleTargets = option.ruleTargets;
+      if (option.policyExclude != null) {
+        policyExclude = option.policyExclude;
+      }
+    }
+    let policyFile: PolicyFile | null = null;
+    if (ruleTargets.length === 0) {
+      policyFile = policyFileGet(policyPath);
+      policyExclude = policyFile.exclude ?? [];
+      ruleTargets = policyRuleTargetsGet(policyFile);
+    }
+    const loggerRuleTargets = ruleTargets.filter(
+      ruleTarget => ruleTypeGet(ruleTarget.semantics) === defaultPluginType
+    );
+    if (!policyFileGetChecked(loggerRuleTargets, policyExclude, filename)) {
       return {};
+    }
+    if (policyFile == null) {
+      policyFile = policyFileGet(policyPath);
     }
     const logger = policyFile.logger;
     const sourceCode = context.sourceCode;
@@ -361,7 +457,12 @@ export const eslintRuleProvider: EslintRuleProvider = {
     return {
       'codepol/require-logger-enter-exit': [
         'error',
-        { policyPath: ctx.policyPath, ...(ruleOptions as Record<string, unknown>) },
+        {
+          policyPath: ctx.policyPath,
+          ruleTargets: ctx.ruleTargets,
+          policyExclude: ctx.policy.exclude,
+          ...(ruleOptions as Record<string, unknown>),
+        },
       ],
     };
   },

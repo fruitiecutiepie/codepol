@@ -18,6 +18,9 @@ pnpm add @codepol/core
 import type {
   PolicyFile,
   PolicyRule,
+  PolicyRuleSemantics,
+  PolicyRuleTarget,
+  PolicyRuleTargetContext,
   LoggerConfig,
   LoggerImportConfig,
   PolicyViolation,
@@ -33,6 +36,10 @@ import type {
   PolicyPluginRuleDeclaration,
 } from '@codepol/core';
 ```
+
+Policy rules split semantics (meaning) from language targets. `PolicyRuleSemantics` defines the shared intent
+(description and plugin type), while `PolicyRuleTarget` declares the language adapter or parser plus its file globs.
+This lets a single rule id apply across multiple languages without duplicating the rule meaning.
 
 ---
 
@@ -108,6 +115,7 @@ const matches = await collectRuleMatches(policy, process.cwd());
 
 for (const match of matches) {
   console.log(`Rule: ${match.rule.id}`);
+  console.log(`Target language: ${match.target.language}`);
   console.log(`Files: ${match.files.length}`);
 }
 ```
@@ -174,9 +182,15 @@ const violations = scanFileForViolations(
   '/path/to/file.ts',
   {
     id: 'my-rule',
-    description: 'My rule',
-    language: 'typescript',
-    files: ['**/*.ts'],
+    semantics: {
+      description: 'My rule',
+    },
+    targets: [
+      {
+        language: 'typescript',
+        files: ['**/*.ts'],
+      },
+    ],
   },
   {
     identifier: 'logger',

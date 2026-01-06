@@ -37,6 +37,7 @@ import {
   type PolicyPluginRuleDeclaration,
   type PolicyPluginCapabilities,
   type PolicyViolation,
+  type PolicyRuleTargetContext,
 } from '@codepol/core';
 
 type CliOptions = {
@@ -79,6 +80,20 @@ function rulePluginCapabilitiesGet(rulePlugin: CodepolRulePlugin): PolicyPluginC
     treeScanProvider: rulePlugin.treeScanProvider,
     fixProvider: rulePlugin.fixProvider,
   };
+}
+
+function policyRuleTargetsGet(policy: PolicyFile): PolicyRuleTargetContext[] {
+  const targets: PolicyRuleTargetContext[] = [];
+  for (const rule of policy.rules) {
+    for (const target of rule.targets) {
+      targets.push({
+        ruleId: rule.id,
+        semantics: rule.semantics,
+        target,
+      });
+    }
+  }
+  return targets;
 }
 
 function rulePluginsNormalize(
@@ -129,7 +144,7 @@ async function policyRulePluginsGet(
   const declaredModules = new Set(declarations.filter(decl => decl.module).map(decl => decl.module!));
   const declaredBuiltins = new Set(declarations.filter(decl => decl.builtin).map(decl => decl.builtin!));
 
-  const ruleTypes = new Set(policy.rules.map(rule => rule.type ?? defaultPluginType));
+  const ruleTypes = new Set(policy.rules.map(rule => rule.semantics.type ?? defaultPluginType));
   for (const ruleType of ruleTypes) {
     const builtinModule = builtinPluginModules[ruleType];
     if (!builtinModule) {
@@ -215,7 +230,7 @@ async function policyRulePluginsGet(
 
 function eslintConfigGet(
   providers: EslintRuleProviderEntry[],
-  context: { policy: PolicyFile; policyPath: string; cwd: string }
+  context: { policy: PolicyFile; policyPath: string; cwd: string; ruleTargets: PolicyRuleTargetContext[] }
 ): ESLint.Options['overrideConfig'] {
   const plugins: Record<string, ESLint.Plugin> = {};
   const rules: Record<string, unknown> = {};
@@ -284,7 +299,7 @@ function eslintConfigGet(
 
 async function fixProvidersApply(
   providers: FixProvider[],
-  context: { policy: PolicyFile; policyPath: string; cwd: string; files: string[] }
+  context: { policy: PolicyFile; policyPath: string; cwd: string; files: string[]; ruleTargets: PolicyRuleTargetContext[] }
 ): Promise<void> {
   for (const provider of providers) {
     await provider.apply(context);
@@ -301,6 +316,7 @@ async function policyCheck(options: {
 
   const policy = policyFileGet(policyPath);
   const rulePlugins = await policyRulePluginsGet(policy, cwd);
+  const ruleTargets = policyRuleTargetsGet(policy);
   const eslintRuleProviders = rulePlugins
     .map((entry): EslintRuleProviderEntry | null => {
       const capabilities = rulePluginCapabilitiesGet(entry.rulePlugin);
@@ -322,7 +338,7 @@ async function policyCheck(options: {
   const files = Array.from(new Set(matches.flatMap(match => match.files)));
 
   if (fix && fixProviders.length > 0) {
-    await fixProvidersApply(fixProviders, { policy, policyPath, cwd, files });
+    await fixProvidersApply(fixProviders, { policy, policyPath, cwd, files, ruleTargets });
   }
 
   let eslintOutput = '';
@@ -330,7 +346,7 @@ async function policyCheck(options: {
   if (eslintRuleProviders.length > 0) {
     const eslint = new ESLint({
       overrideConfigFile: eslintConfigPath,
-      overrideConfig: eslintConfigGet(eslintRuleProviders, { policy, policyPath, cwd }),
+      overrideConfig: eslintConfigGet(eslintRuleProviders, { policy, policyPath, cwd, ruleTargets }),
       fix,
       cwd,
     });
@@ -481,7 +497,9 @@ async function main(): Promise<void> {
   const policy = policyFileGet(options.policy);
   const matches = await ruleMatchesGet(policy, process.cwd());
   const files = Array.from(new Set(matches.flatMap(match => match.files)));
-  const patterns = Array.from(new Set(policy.rules.flatMap(rule => rule.files)));
+  const patterns = Array.from(
+    new Set(policy.rules.flatMap(rule => rule.targets.flatMap(target => target.files)))
+  );
 
   if (options.watch) {
     fsSubNew(options, files, patterns);

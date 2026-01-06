@@ -1,16 +1,17 @@
 import fs from 'node:fs';
-import type { PolicyFile, PolicyRule, PolicyViolation, PolicyPlugin } from './policyTypes';
+import type { PolicyFile, PolicyRule, PolicyRuleTarget, PolicyViolation, PolicyPlugin } from './policyTypes';
 import { ruleMatchesGet } from './policyGet';
 import { policyPluginsGet, defaultPluginType, type PolicyPluginsMap } from './policyPluginsGet';
 import { Result, Ok, Err, isErr } from '../result/result';
 
 function policyPluginGet(
   pluginsMap: PolicyPluginsMap,
-  rule: PolicyRule
+  rule: PolicyRule,
+  target: PolicyRuleTarget
 ): Result<PolicyPlugin, string> {
   let ruleType = defaultPluginType;
-  if (rule.type != null) {
-    ruleType = rule.type;
+  if (rule.semantics.type != null) {
+    ruleType = rule.semantics.type;
   }
   const plugin = pluginsMap.get(ruleType);
   if (!plugin) {
@@ -18,8 +19,8 @@ function policyPluginGet(
     console.error(error);
     return Err(error);
   }
-  if (!plugin.languages.includes(rule.language)) {
-    const error = `Plugin ${plugin.id} does not support language ${rule.language} for rule ${rule.id}.`;
+  if (!plugin.languages.includes(target.language)) {
+    const error = `Plugin ${plugin.id} does not support language ${target.language} for rule ${rule.id}.`;
     console.error(error);
     return Err(error);
   }
@@ -33,11 +34,12 @@ function policyPluginGet(
 export function policyViolationsGetForFile(
   filePath: string,
   rule: PolicyRule,
+  target: PolicyRuleTarget,
   policy: PolicyFile,
   pluginsMap: PolicyPluginsMap,
   dir: string
 ): Result<PolicyViolation[], string> {
-  const pluginResult = policyPluginGet(pluginsMap, rule);
+  const pluginResult = policyPluginGet(pluginsMap, rule, target);
   if (isErr(pluginResult)) {
     return pluginResult;
   }
@@ -48,6 +50,7 @@ export function policyViolationsGetForFile(
     source: source,
     policy: policy,
     dir: dir,
+    target: target,
   }));
 }
 
@@ -71,6 +74,7 @@ export async function policyViolationsGetFromDir(
       const violationsResult = policyViolationsGetForFile(
         filePath,
         match.rule,
+        match.target,
         policy,
         pluginsMap,
         dir

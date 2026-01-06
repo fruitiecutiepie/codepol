@@ -38,23 +38,39 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["id", "description", "language", "files"],
+        "required": ["id", "semantics", "targets"],
         "properties": {
           "id": { "type": "string" },
-          "description": { "type": "string" },
-          "type": { "type": "string", "default": "logger" },
-          "language": {
-            "type": "string",
-            "enum": ["typescript", "tsx"]
+          "semantics": {
+            "type": "object",
+            "required": ["description"],
+            "properties": {
+              "description": { "type": "string" },
+              "type": { "type": "string", "default": "logger" }
+            },
+            "additionalProperties": false
           },
-          "files": {
+          "targets": {
             "type": "array",
-            "items": { "type": "string" },
-            "minItems": 1
-          },
-          "exclude": {
-            "type": "array",
-            "items": { "type": "string" }
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": ["language", "files"],
+              "properties": {
+                "language": { "type": "string" },
+                "parser": { "type": "string" },
+                "files": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "minItems": 1
+                },
+                "exclude": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                }
+              },
+              "additionalProperties": false
+            }
           }
         },
         "additionalProperties": false

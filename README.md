@@ -74,10 +74,16 @@ Create `policy.json` in your project root:
   "rules": [
     {
       "id": "function-logging",
-      "description": "Ensure all functions have logger instrumentation",
-      "language": "typescript",
-      "files": ["src/**/*.ts", "src/**/*.tsx"],
-      "exclude": ["**/*.spec.ts", "**/*.test.ts"]
+      "semantics": {
+        "description": "Ensure all functions have logger instrumentation"
+      },
+      "targets": [
+        {
+          "language": "typescript",
+          "files": ["src/**/*.ts", "src/**/*.tsx"],
+          "exclude": ["**/*.spec.ts", "**/*.test.ts"]
+        }
+      ]
     }
   ],
   "exclude": ["dist/**"],
@@ -92,6 +98,13 @@ Create `policy.json` in your project root:
   }
 }
 ```
+
+### Semantics vs. Language Targets
+
+Each policy rule carries a shared semantic meaning (what you want to enforce) and one or more language targets
+(which files and adapters to apply). The `semantics` block describes the rule intent and plugin type, while each
+entry in `targets` specifies the language adapter or parser plus file globs. This lets contributors add new
+languages without redefining rule meaning or rule ids.
 
 ### Configure ESLint
 

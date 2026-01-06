@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import fg from 'fast-glob';
 import { minimatch } from 'minimatch';
-import type { PolicyFile, RuleMatch } from './policyTypes';
+import type { PolicyFile, PolicyRuleTarget, RuleMatch } from './policyTypes';
 
 const policyCacheStore = new Map<string, PolicyFile>();
 
@@ -66,18 +66,29 @@ export function policyFileGetChecked(
     return false;
   }
   for (const rule of policy.rules) {
-    if (globPatternsGetMatchAny(rule.files, relative)) {
-      if (globPatternsGetMatchAny(rule.exclude, relative)) {
-        continue;
+    for (const target of rule.targets) {
+      if (globPatternsGetMatchAny(target.files, relative)) {
+        if (globPatternsGetMatchAny(target.exclude, relative)) {
+          continue;
+        }
+        if (!ruleTargetMatchesLanguage(target, relative)) {
+          continue;
+        }
+        return true;
       }
-      const isTs = relative.endsWith('.ts') || relative.endsWith('.tsx');
-      if (!isTs) {
-        continue;
-      }
-      return true;
     }
   }
   return false;
+}
+
+function ruleTargetMatchesLanguage(target: PolicyRuleTarget, filePath: string): boolean {
+  if (target.language === 'tsx') {
+    return filePath.endsWith('.tsx');
+  }
+  if (target.language === 'typescript') {
+    return filePath.endsWith('.ts') || filePath.endsWith('.tsx');
+  }
+  return true;
 }
 
 /**
@@ -107,25 +118,17 @@ export async function ruleMatchesGet(policy: PolicyFile, cwd: string): Promise<R
     globalExclude = policy.exclude;
   }
   for (const rule of policy.rules) {
-    let ruleExclude: string[] = [];
-    if (rule.exclude != null) {
-      ruleExclude = rule.exclude;
+    for (const target of rule.targets) {
+      const ignore = [...globalExclude, ...(target.exclude ?? [])];
+      const files = await fg(target.files, {
+        cwd: cwd,
+        absolute: true,
+        ignore: ignore,
+        onlyFiles: true,
+      });
+      const filtered = files.filter(file => ruleTargetMatchesLanguage(target, file));
+      matches.push({ rule: rule, target: target, files: filtered });
     }
-    const ignore = [...globalExclude, ...ruleExclude];
-    const files = await fg(rule.files, {
-      cwd: cwd,
-      absolute: true,
-      ignore: ignore,
-      onlyFiles: true,
-    });
-    const filtered = files.filter(file => {
-      if (rule.language === 'tsx') {
-        return file.endsWith('.tsx');
-      }
-      return file.endsWith('.ts') || file.endsWith('.tsx');
-    });
-    matches.push({ rule: rule, files: filtered });
   }
   return matches;
 }
-

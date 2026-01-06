@@ -111,8 +111,8 @@ export async function policyPluginsGet(
   // Auto-register built-in plugins for rule types that reference them
   for (const rule of policy.rules) {
     let ruleType = defaultPluginType;
-    if (rule.type != null) {
-      ruleType = rule.type;
+    if (rule.semantics.type != null) {
+      ruleType = rule.semantics.type;
     }
     if (!pluginsMapGet.has(ruleType) && pluginsBuiltinMap[ruleType]) {
       const builtinPlugin = pluginsBuiltinMap[ruleType];
@@ -128,8 +128,8 @@ export async function policyPluginsGet(
 
   for (const rule of policy.rules) {
     let ruleType = defaultPluginType;
-    if (rule.type != null) {
-      ruleType = rule.type;
+    if (rule.semantics.type != null) {
+      ruleType = rule.semantics.type;
     }
     const plugin = pluginsMapGet.get(ruleType);
     if (!plugin) {
@@ -137,10 +137,12 @@ export async function policyPluginsGet(
       console.error(error);
       return Err(error);
     }
-    if (!plugin.languages.includes(rule.language)) {
-      const error = `Plugin ${plugin.id} does not support language ${rule.language} for rule ${rule.id}.`;
-      console.error(error);
-      return Err(error);
+    for (const target of rule.targets) {
+      if (!plugin.languages.includes(target.language)) {
+        const error = `Plugin ${plugin.id} does not support language ${target.language} for rule ${rule.id}.`;
+        console.error(error);
+        return Err(error);
+      }
     }
   }
 

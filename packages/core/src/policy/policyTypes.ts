@@ -75,26 +75,44 @@ export type PolicyPluginRuleDeclaration = {
  * ```json
  * {
  *   "id": "function-logging",
- *   "description": "Ensure all exported functions have logger instrumentation",
- *   "language": "typescript",
- *   "files": ["src/**\/*.ts"],
- *   "exclude": ["**\/*.spec.ts"]
+ *   "semantics": {
+ *     "description": "Ensure all exported functions have logger instrumentation"
+ *   },
+ *   "targets": [
+ *     {
+ *       "language": "typescript",
+ *       "files": ["src/**\/*.ts"],
+ *       "exclude": ["**\/*.spec.ts"]
+ *     }
+ *   ]
  * }
  * ```
  */
-export type PolicyRule = {
-  /** Unique identifier for this rule */
-  id: string;
+export type PolicyRuleSemantics = {
   /** Human-readable description of what this rule enforces */
   description: string;
   /** Plugin type to handle this rule (defaults to 'logger') */
   type?: string;
-  /** Target language: 'typescript' for .ts files, 'tsx' for .tsx only */
-  language: 'typescript' | 'tsx';
+};
+
+export type PolicyRuleTarget = {
+  /** Target language adapter or parser identifier */
+  language: string;
+  /** Optional parser identifier override */
+  parser?: string;
   /** Glob patterns for files to include */
   files: string[];
   /** Optional glob patterns for files to exclude */
   exclude?: string[];
+};
+
+export type PolicyRule = {
+  /** Unique identifier for this rule */
+  id: string;
+  /** Semantic meaning for this rule */
+  semantics: PolicyRuleSemantics;
+  /** Language-specific targets this rule should enforce */
+  targets: PolicyRuleTarget[];
 };
 
 /**
@@ -146,6 +164,8 @@ export type PolicyScanContext = {
   policy: PolicyFile;
   /** Working directory used for resolution */
   dir: string;
+  /** Target definition used to resolve this scan */
+  target: PolicyRuleTarget;
 };
 
 /**
@@ -178,6 +198,8 @@ export type EslintRuleProviderContext = {
   ruleId?: string;
   /** Rule-level options passed from the policy */
   ruleOptions?: unknown;
+  /** Rule targets resolved from the policy */
+  ruleTargets?: PolicyRuleTargetContext[];
 };
 
 /**
@@ -206,6 +228,8 @@ export type FixProviderContext = {
   policyPath: string;
   /** Files matched by policy rules */
   files: string[];
+  /** Rule targets resolved from the policy */
+  ruleTargets?: PolicyRuleTargetContext[];
 };
 
 /**
@@ -270,6 +294,20 @@ export type PolicyViolation = {
 export type RuleMatch = {
   /** The policy rule */
   rule: PolicyRule;
+  /** The policy target for this match */
+  target: PolicyRuleTarget;
   /** Absolute paths to files matching this rule */
   files: string[];
+};
+
+/**
+ * Target context for a policy rule and its semantics.
+ */
+export type PolicyRuleTargetContext = {
+  /** Rule identifier */
+  ruleId: string;
+  /** Semantic definition for the rule */
+  semantics: PolicyRuleSemantics;
+  /** Target definition */
+  target: PolicyRuleTarget;
 };

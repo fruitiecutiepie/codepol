@@ -145,8 +145,18 @@ type LoggerConfig = {
 
 type PolicyRule = {
   id: string;
+  semantics: PolicyRuleSemantics;
+  targets: PolicyRuleTarget[];
+};
+
+type PolicyRuleSemantics = {
   description: string;
-  language: 'typescript' | 'tsx';
+  type?: string;
+};
+
+type PolicyRuleTarget = {
+  language: string;
+  parser?: string;
   files: string[];
   exclude?: string[];
 };

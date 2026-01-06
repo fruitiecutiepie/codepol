@@ -29,11 +29,17 @@ Defines which files to check and how.
 ```json
 {
   "id": "function-logging",
-  "description": "Ensure all functions have logger instrumentation",
-  "type": "logger",
-  "language": "typescript",
-  "files": ["src/**/*.ts"],
-  "exclude": ["**/*.spec.ts"]
+  "semantics": {
+    "description": "Ensure all functions have logger instrumentation",
+    "type": "logger"
+  },
+  "targets": [
+    {
+      "language": "typescript",
+      "files": ["src/**/*.ts"],
+      "exclude": ["**/*.spec.ts"]
+    }
+  ]
 }
 ```
 
@@ -42,11 +48,24 @@ Defines which files to check and how.
 | Property | Type | Required | Description |
 | -------- | ---- | -------- | ----------- |
 | `id` | string | Yes | Unique identifier for this rule |
+| `semantics` | PolicyRuleSemantics | Yes | Semantic meaning shared across targets |
+| `targets` | PolicyRuleTarget[] | Yes | Language adapter or parser targets |
+
+### PolicyRuleSemantics Properties
+
+| Property | Type | Required | Description |
+| -------- | ---- | -------- | ----------- |
 | `description` | string | Yes | Human-readable description |
 | `type` | string | No | Plugin identifier that handles this rule (defaults to `logger`) |
-| `language` | `"typescript"` \| `"tsx"` | Yes | Target file type |
+
+### PolicyRuleTarget Properties
+
+| Property | Type | Required | Description |
+| -------- | ---- | -------- | ----------- |
+| `language` | string | Yes | Language adapter or parser identifier |
+| `parser` | string | No | Optional parser override |
 | `files` | string[] | Yes | Glob patterns for files to include |
-| `exclude` | string[] | No | Glob patterns to exclude from this rule |
+| `exclude` | string[] | No | Glob patterns to exclude from this target |
 
 ### Language Values
 
