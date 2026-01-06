@@ -15,30 +15,57 @@ pnpm add @codepol/core
 - No native dependencies - works across all platforms
 - Detect missing logger instrumentation patterns
 - Format violations for display
+- Extensible language registration system
 
 ## Usage
 
-### Initializing the Parser
+### Registering Languages and Initializing the Parser
 
-Before scanning files, you must initialize the WASM parser:
+Before scanning files, you must register languages and initialize the WASM parser:
 
 ```typescript
-import { initParser } from '@codepol/core';
+import { langAdd, parserInit } from '@codepol/core';
 
-// Call once at application startup
-await initParser();
+// Register languages (uses bundled WASM by default)
+langAdd({ langId: 'typescript', fileExtensions: ['.ts'] });
+langAdd({ langId: 'tsx', fileExtensions: ['.tsx'] });
+
+// Initialize the parser (call once at application startup)
+await parserInit();
+```
+
+You can also provide a custom WASM path:
+
+```typescript
+import { langAdd, wasmPathGet, parserInit } from '@codepol/core';
+
+// Use bundled WASM with custom grammar name
+langAdd({
+  langId: 'javascript',
+  wasmPath: wasmPathGet('tree-sitter-javascript'),
+  fileExtensions: ['.js', '.mjs'],
+});
+
+// Or use a completely custom path
+langAdd({
+  langId: 'python',
+  wasmPath: '/path/to/tree-sitter-python.wasm',
+  fileExtensions: ['.py'],
+});
+
+await parserInit();
 ```
 
 ### Loading a Policy
 
 ```typescript
-import { loadPolicy, collectRuleMatches } from '@codepol/core';
+import { policyFileGet, ruleMatchesGet } from '@codepol/core';
 
 // Load the policy file
-const policy = loadPolicy('./policy.json');
+const policy = policyFileGet('./policy.json');
 
 // Get files matching each rule
-const matches = await collectRuleMatches(policy, process.cwd());
+const matches = await ruleMatchesGet(policy, process.cwd());
 for (const match of matches) {
   console.log(`Rule ${match.rule.id}: ${match.files.length} files`);
 }
@@ -47,57 +74,50 @@ for (const match of matches) {
 ### Scanning for Violations
 
 ```typescript
-import { initParser, loadPolicy, scanWithPolicy, formatTreeViolations } from '@codepol/core';
+import {
+  langAdd,
+  parserInit,
+  policyFileGet,
+  policyViolationsGetFromDir,
+  policyViolationsGetOutputPretty,
+} from '@codepol/core';
 
-await initParser();
+langAdd({ langId: 'typescript', fileExtensions: ['.ts'] });
+langAdd({ langId: 'tsx', fileExtensions: ['.tsx'] });
+await parserInit();
 
-const policy = loadPolicy('./policy.json');
-const violations = await scanWithPolicy(policy, process.cwd());
+const policy = policyFileGet('./policy.json');
+const result = await policyViolationsGetFromDir(policy, process.cwd());
 
-if (violations.length > 0) {
-  console.log(formatTreeViolations(violations, process.cwd()));
+if ('Ok' in result && result.Ok.length > 0) {
+  console.log(policyViolationsGetOutputPretty(result.Ok, process.cwd()));
   process.exit(1);
 }
-```
-
-### Scanning a Single File
-
-```typescript
-import { initParser, scanFileForViolations } from '@codepol/core';
-
-await initParser();
-
-const violations = scanFileForViolations(
-  '/path/to/file.ts',
-  {
-    id: 'my-rule',
-    description: 'My rule',
-    language: 'typescript',
-    files: ['src/**/*.ts'],
-  },
-  {
-    identifier: 'logger',
-    enterMethod: 'enter',
-    exitMethod: 'exit',
-    import: { module: '@org/logger', named: 'logger' },
-  }
-);
 ```
 
 ### Running Full Policy Checks
 
 ```typescript
-import { initParser, runPolicyChecks, formatTreeViolations } from '@codepol/core';
+import {
+  langAdd,
+  parserInit,
+  policyCheck,
+  policyViolationsGetOutputPretty,
+} from '@codepol/core';
 
-await initParser();
+langAdd({ langId: 'typescript', fileExtensions: ['.ts'] });
+langAdd({ langId: 'tsx', fileExtensions: ['.tsx'] });
+await parserInit();
 
-const result = await runPolicyChecks({
+const result = await policyCheck({
   policyPath: './policy.json',
   cwd: process.cwd(),
 });
 
-console.log(`Checked ${result.files.length} files`);
-console.log(`Found ${result.treeViolations.length} violations`);
+if ('Ok' in result) {
+  console.log(`Checked ${result.Ok.files.length} files`);
+  console.log(`Found ${result.Ok.treeViolations.length} violations`);
+}
 ```
 
 ## API Reference
@@ -105,56 +125,64 @@ console.log(`Found ${result.treeViolations.length} violations`);
 ### Types
 
 ```typescript
-interface LoggerImportConfig {
+type Lang = {
+  langId: string;
+  wasmPath?: string;  // Uses bundled wasm/tree-sitter-{langId}.wasm if omitted
+  fileExtensions: string[];
+};
+
+type LoggerImportConfig = {
   module: string;  // e.g., '@org/logger'
   named: string;   // e.g., 'logger'
-}
+};
 
-interface LoggerConfig {
+type LoggerConfig = {
   identifier: string;   // e.g., 'logger'
   enterMethod: string;  // e.g., 'enter'
   exitMethod: string;   // e.g., 'exit'
   import: LoggerImportConfig;
-}
+};
 
-interface PolicyRule {
+type PolicyRule = {
   id: string;
   description: string;
   language: 'typescript' | 'tsx';
   files: string[];
   exclude?: string[];
-}
+};
 
-interface PolicyFile {
+type PolicyFile = {
   $schema?: string;
   rules: PolicyRule[];
   exclude?: string[];
   logger: LoggerConfig;
-}
+};
 
-interface PolicyViolation {
+type PolicyViolation = {
   ruleId: string;
   filePath: string;
   message: string;
   line: number;
   column: number;
-}
+};
 ```
 
 ### Functions
 
 | Function | Description |
 | -------- | ----------- |
-| `initParser()` | Initialize the WASM parser (must be called before scanning) |
-| `isParserInitialized()` | Check if the parser has been initialized |
-| `loadPolicy(path)` | Load and parse a policy.json file |
-| `clearPolicyCache()` | Clear the internal policy cache |
-| `collectRuleMatches(policy, cwd)` | Get files matching each rule |
-| `isFileCovered(policy, filePath, cwd)` | Check if a file is covered by the policy |
-| `scanFileForViolations(file, rule, logger)` | Scan a single file |
-| `scanWithPolicy(policy, cwd)` | Scan all matching files |
-| `runPolicyChecks(options)` | Run complete policy checks |
-| `formatTreeViolations(violations, cwd)` | Format violations as string |
+| `langAdd(registration)` | Register a language for parsing |
+| `langsGet()` | Get all registered languages |
+| `wasmPathGet(grammarName)` | Get path to bundled WASM file |
+| `parserInit()` | Initialize the WASM parser (must be called after registering languages) |
+| `policyFileGet(path)` | Load and parse a policy.json file |
+| `policyFileGetChecked(policy, filePath, cwd)` | Check if a file is covered by the policy |
+| `ruleMatchesGet(policy, cwd)` | Get files matching each rule |
+| `globPatternsGetMatchAny(patterns, path)` | Check if path matches any glob pattern |
+| `policyViolationsGetForFile(filePath, source, policy, dir)` | Scan a single file for violations |
+| `policyViolationsGetFromDir(policy, cwd)` | Scan all matching files in a directory |
+| `policyCheck(options)` | Run complete policy checks |
+| `policyViolationsGetOutputPretty(violations, cwd)` | Format violations as string |
 
 ## License
 

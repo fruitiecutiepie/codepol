@@ -9,12 +9,12 @@
  * }
  * ```
  */
-export interface LoggerImportConfig {
+export type LoggerImportConfig = {
   /** The module specifier to import from (e.g., '@org/logger') */
   module: string;
   /** The named export to import (e.g., 'logger') */
   named: string;
-}
+};
 
 /**
  * Configuration for the logger instrumentation.
@@ -30,7 +30,7 @@ export interface LoggerImportConfig {
  * }
  * ```
  */
-export interface LoggerConfig {
+export type LoggerConfig = {
   /** The variable name used to reference the logger (e.g., 'logger') */
   identifier: string;
   /** The method name called on function entry (e.g., 'enter') */
@@ -39,17 +39,20 @@ export interface LoggerConfig {
   exitMethod: string;
   /** Import configuration for the logger module */
   import: LoggerImportConfig;
-}
+};
 
 /**
- * Metadata about policy plugins and their configuration.
+ * Declaration for loading a policy plugin.
+ * Either a built-in plugin name or a module specifier must be provided.
  */
-export interface PolicyPlugins {
-  /** Module specifiers or local paths to load policy plugins from. */
-  plugins?: string[];
-  /** Plugin-specific configuration keyed by plugin type. */
-  pluginConfig?: Record<string, unknown>;
-}
+export type PolicyPluginDeclaration = {
+  /** Built-in plugin identifier (e.g., 'logger') */
+  builtin?: string;
+  /** Module specifier or path to import */
+  module?: string;
+  /** Named export to load from the module */
+  export?: string;
+};
 
 /**
  * A single policy rule that defines which files to check and how.
@@ -61,28 +64,24 @@ export interface PolicyPlugins {
  *   "description": "Ensure all exported functions have logger instrumentation",
  *   "language": "typescript",
  *   "files": ["src/**\/*.ts"],
- *   "exclude": ["**\/*.spec.ts"],
- *   "type": "logger",
- *   "config": {}
+ *   "exclude": ["**\/*.spec.ts"]
  * }
  * ```
  */
-export interface PolicyRule {
+export type PolicyRule = {
   /** Unique identifier for this rule */
   id: string;
   /** Human-readable description of what this rule enforces */
   description: string;
+  /** Plugin type to handle this rule (defaults to 'logger') */
+  type?: string;
   /** Target language: 'typescript' for .ts files, 'tsx' for .tsx only */
   language: 'typescript' | 'tsx';
   /** Glob patterns for files to include */
   files: string[];
   /** Optional glob patterns for files to exclude */
   exclude?: string[];
-  /** Plugin type to execute for this rule */
-  type: string;
-  /** Plugin-specific rule configuration */
-  config: Record<string, unknown>;
-}
+};
 
 /**
  * The complete policy file structure.
@@ -92,33 +91,69 @@ export interface PolicyRule {
  * ```json
  * {
  *   "$schema": "./policy.schema.json",
- *   "plugins": ["@codepol/plugin-logger"],
- *   "pluginConfig": {
- *     "logger": {
- *       "identifier": "logger",
- *       "enterMethod": "enter",
- *       "exitMethod": "exit",
- *       "import": { "module": "@org/logger", "named": "logger" }
- *     }
- *   },
  *   "rules": [...],
- *   "exclude": ["dist/**"]
+ *   "exclude": ["dist/**"],
+ *   "logger": {...}
  * }
  * ```
  */
-export interface PolicyFile extends PolicyPlugins {
+export type PolicyFile = {
   /** Optional JSON schema reference */
   $schema?: string;
   /** Array of policy rules to enforce */
   rules: PolicyRule[];
   /** Global exclusion patterns applied to all rules */
   exclude?: string[];
-}
+  /** Plugin declarations used by this policy */
+  plugins?: PolicyPluginDeclaration[];
+  /** Logger configuration used for instrumentation */
+  logger: LoggerConfig;
+};
+
+/**
+ * Context provided to plugin initialization hooks.
+ */
+export type PolicyPluginInitContext = {
+  /** Current working directory used for resolution */
+  cwd: string;
+  /** Loaded policy definition */
+  policy: PolicyFile;
+};
+
+/**
+ * Context passed to plugin scans.
+ */
+export type PolicyScanContext = {
+  /** Absolute path to the file being scanned */
+  filePath: string;
+  /** File contents */
+  source: string;
+  /** Loaded policy definition */
+  policy: PolicyFile;
+  /** Working directory used for resolution */
+  dir: string;
+};
+
+/**
+ * Plugin struct for policy scanning.
+ */
+export type PolicyPlugin = {
+  /** Stable plugin identifier */
+  id: string;
+  /** Plugin version */
+  version: string;
+  /** Supported languages */
+  languages: string[];
+  /** Optional initialization hook */
+  init?: (context: PolicyPluginInitContext) => void | Promise<void>;
+  /** Scan a file against a rule */
+  scan: (rule: PolicyRule, context: PolicyScanContext) => PolicyViolation[];
+};
 
 /**
  * Represents a single policy violation found during scanning.
  */
-export interface PolicyViolation {
+export type PolicyViolation = {
   /** The rule ID that was violated */
   ruleId: string;
   /** Absolute path to the file containing the violation */
@@ -129,14 +164,15 @@ export interface PolicyViolation {
   line: number;
   /** 1-based column number where the violation occurs */
   column: number;
-}
+};
 
 /**
  * Internal type representing a rule matched to its target files.
  */
-export interface RuleMatch {
+export type RuleMatch = {
   /** The policy rule */
   rule: PolicyRule;
   /** Absolute paths to files matching this rule */
   files: string[];
-}
+};
+

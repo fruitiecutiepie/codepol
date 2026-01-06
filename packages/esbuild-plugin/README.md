@@ -78,7 +78,7 @@ main();
 ## Options
 
 ```typescript
-interface PolicyPluginOptions {
+type PolicyPluginOptions = {
   /** Path to the policy.json file (default: './policy.json') */
   policyPath?: string;
 
@@ -90,7 +90,7 @@ interface PolicyPluginOptions {
 
   /** Working directory (default: esbuild's absWorkingDir or cwd) */
   cwd?: string;
-}
+};
 ```
 
 ## How It Works

@@ -15,52 +15,46 @@
  *   --version      Show version
  */
 
-import path from 'path';
+import path from 'node:path';
 import chokidar from 'chokidar';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import { ESLint } from 'eslint';
 import {
-  initParser,
-  loadPolicy,
-  collectRuleMatches,
-  scanWithPolicy,
-  formatTreeViolations,
+  parserInit,
+  policyFileGet,
+  ruleMatchesGet,
+  policyViolationsGetFromDir,
+  policyViolationsGetOutputPretty,
   type PolicyFile,
   type PolicyViolation,
 } from '@codepol/core';
-interface CliOptions {
+
+type CliOptions = {
   fix: boolean;
   watch: boolean;
   policy: string;
   eslintConfig: string;
-}
+};
 
-interface PolicyRunResult {
+type PolicyCheckResult = {
   policy: PolicyFile;
   files: string[];
   eslintOutput: string;
   eslintHasErrors: boolean;
-  treeViolations: PolicyViolation[];
-}
+  violations: PolicyViolation[];
+};
 
-function resolveWithinCwd(targetPath: string | undefined, cwd: string, fallback: string): string {
-  if (!targetPath || targetPath.length === 0) {
-    return path.resolve(cwd, fallback);
-  }
-  return path.isAbsolute(targetPath) ? targetPath : path.resolve(cwd, targetPath);
-}
-
-async function runPolicyChecks(options: {
+async function policyCheck(options: {
   policyPath: string;
   eslintConfigPath: string;
   fix: boolean;
   cwd: string;
-}): Promise<PolicyRunResult> {
+}): Promise<PolicyCheckResult> {
   const { policyPath, eslintConfigPath, fix, cwd } = options;
 
-  const policy = loadPolicy(policyPath);
-  const matches = await collectRuleMatches(policy, cwd);
+  const policy = policyFileGet(policyPath);
+  const matches = await ruleMatchesGet(policy, cwd);
   const files = Array.from(new Set(matches.flatMap(match => match.files)));
 
   const eslint = new ESLint({
@@ -77,20 +71,25 @@ async function runPolicyChecks(options: {
   const eslintOutput = lintResults.length > 0 ? (await formatter.format(lintResults)).trim() : '';
   const eslintHasErrors = lintResults.some(result => result.errorCount > 0);
 
-  const treeViolations = await scanWithPolicy(policy, cwd);
+  const violationsResult = await policyViolationsGetFromDir(policy, cwd);
+
+  if ('Err' in violationsResult) {
+    // Error already logged in core
+    throw new Error(violationsResult.Err);
+  }
 
   return {
     policy,
     files,
     eslintOutput,
     eslintHasErrors,
-    treeViolations,
+    violations: violationsResult.Ok!,
   };
 }
 
-async function runOnce(options: CliOptions): Promise<boolean> {
+async function policyCheckAndPrintOutput(options: CliOptions): Promise<boolean> {
   const cwd = process.cwd();
-  const result = await runPolicyChecks({
+  const result = await policyCheck({
     policyPath: options.policy,
     eslintConfigPath: options.eslintConfig,
     fix: options.fix,
@@ -101,7 +100,7 @@ async function runOnce(options: CliOptions): Promise<boolean> {
   if (result.eslintOutput.length > 0) {
     outputs.push(result.eslintOutput);
   }
-  const treeOutput = formatTreeViolations(result.treeViolations, cwd);
+  const treeOutput = policyViolationsGetOutputPretty(result.violations, cwd);
   if (treeOutput) {
     outputs.push('Tree-sitter policy violations:');
     outputs.push(treeOutput);
@@ -113,10 +112,10 @@ async function runOnce(options: CliOptions): Promise<boolean> {
     console.log('✔ Policy checks passed');
   }
 
-  return !result.eslintHasErrors && result.treeViolations.length === 0;
+  return !result.eslintHasErrors && result.violations.length === 0;
 }
 
-function createWatcher(options: CliOptions, files: string[], patterns: string[]): void {
+function fsSubNew(options: CliOptions, files: string[], patterns: string[]): void {
   const watchItems = new Set<string>([options.policy]);
   for (const file of files) {
     watchItems.add(file);
@@ -132,31 +131,31 @@ function createWatcher(options: CliOptions, files: string[], patterns: string[])
   let running = false;
   let pending = false;
 
-  const execute = async () => {
+  const policyChecksRunOnces = async () => {
     if (running) {
       pending = true;
       return;
     }
     running = true;
     console.log('\nRunning policy checks...');
-    await runOnce(options);
+    await policyCheckAndPrintOutput(options);
     running = false;
     if (pending) {
       pending = false;
-      void execute();
+      void policyChecksRunOnces();
     }
   };
 
   watcher.on('all', () => {
-    void execute();
+    void policyChecksRunOnces();
   });
 
   console.log('Watching for changes...');
-  void execute();
+  void policyChecksRunOnces();
 }
 
 async function main(): Promise<void> {
-  await initParser();
+  await parserInit();
 
   const argv = await yargs(hideBin(process.argv))
     .scriptName('codepol')
@@ -196,15 +195,15 @@ async function main(): Promise<void> {
     eslintConfig: path.resolve(argv['eslint-config'] as string),
   };
 
-  const policy = loadPolicy(options.policy);
-  const matches = await collectRuleMatches(policy, process.cwd());
+  const policy = policyFileGet(options.policy);
+  const matches = await ruleMatchesGet(policy, process.cwd());
   const files = Array.from(new Set(matches.flatMap(match => match.files)));
   const patterns = Array.from(new Set(policy.rules.flatMap(rule => rule.files)));
 
   if (options.watch) {
-    createWatcher(options, files, patterns);
+    fsSubNew(options, files, patterns);
   } else {
-    const success = await runOnce(options);
+    const success = await policyCheckAndPrintOutput(options);
     if (!success) {
       process.exitCode = 1;
     }

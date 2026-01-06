@@ -1,27 +1,28 @@
 {
   "$schema": "./policy.schema.json",
-  "plugins": ["@codepol/plugin-logger"],
-  "pluginConfig": {
-    "logger": {
-      "identifier": "logger",
-      "enterMethod": "enter",
-      "exitMethod": "exit",
-      "import": {
-        "module": "@org/logger",
-        "named": "logger"
-      }
+  "plugins": [
+    {
+      "builtin": "logger"
     }
-  },
+  ],
   "rules": [
     {
       "id": "function-logging",
       "description": "Ensure all exported TypeScript functions are wrapped with logger enter/exit",
+      "type": "logger",
       "language": "typescript",
       "files": ["src/**/*.ts", "src/**/*.tsx"],
-      "exclude": ["**/*.spec.ts", "**/*.test.ts", "**/__mocks__/**"],
-      "type": "logger",
-      "config": {}
+      "exclude": ["**/*.spec.ts", "**/*.test.ts", "**/__mocks__/**"]
     }
   ],
-  "exclude": ["dist/**"]
+  "exclude": ["dist/**"],
+  "logger": {
+    "identifier": "logger",
+    "enterMethod": "enter",
+    "exitMethod": "exit",
+    "import": {
+      "module": "@org/logger",
+      "named": "logger"
+    }
+  }
 }

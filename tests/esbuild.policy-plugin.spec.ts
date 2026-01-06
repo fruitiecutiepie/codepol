@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { policyPlugin } from '@codepol/esbuild-plugin';
+import { esbuildPluginNew } from '@codepol/esbuild-plugin';
 
 describe('esbuild policy plugin', () => {
   it('fails the build when policy violations are present and succeeds after fixes', async () => {
@@ -57,7 +57,7 @@ describe('esbuild policy plugin', () => {
       outfile,
       bundle: false,
       logLevel: 'silent',
-      plugins: [policyPlugin({ policyPath: 'policy.json', eslintConfigPath: path.resolve('.eslintrc.cjs') })],
+      plugins: [esbuildPluginNew({ policyPath: 'policy.json', eslintConfigPath: path.resolve('.eslintrc.cjs') })],
     }).catch(error => error);
 
     expect(failure).toBeInstanceOf(Error);
@@ -82,7 +82,7 @@ export const f = () => {
       outfile,
       bundle: false,
       logLevel: 'silent',
-      plugins: [policyPlugin({ policyPath: 'policy.json', eslintConfigPath: path.resolve('.eslintrc.cjs') })],
+      plugins: [esbuildPluginNew({ policyPath: 'policy.json', eslintConfigPath: path.resolve('.eslintrc.cjs') })],
     });
 
     expect(result.errors.length).toBe(0);

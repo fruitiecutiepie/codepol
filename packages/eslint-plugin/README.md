@@ -117,10 +117,10 @@ The auto-fix will:
 ### Rule Options
 
 ```typescript
-interface RuleOptions {
+type RuleOptions = {
   /** Path to the policy.json file (default: './policy.json') */
   policyPath?: string;
-}
+};
 ```
 
 ## Policy Integration

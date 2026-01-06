@@ -8,14 +8,14 @@
  * @example
  * ```typescript
  * import { build } from 'esbuild';
- * import { policyPlugin } from '@codepol/esbuild-plugin';
+ * import { esbuildPluginNew } from '@codepol/esbuild-plugin';
  *
  * await build({
  *   entryPoints: ['src/index.ts'],
  *   bundle: true,
  *   outfile: 'dist/bundle.js',
  *   plugins: [
- *     policyPlugin({
+ *     esbuildPluginNew({
  *       policyPath: './policy.json',
  *       fix: false, // Set to true to auto-fix violations
  *     }),
@@ -28,11 +28,11 @@ import path from 'path';
 import type { Plugin } from 'esbuild';
 import { ESLint } from 'eslint';
 import {
-  initParser,
-  loadPolicy,
-  collectRuleMatches,
-  scanWithPolicy,
-  formatTreeViolations,
+  parserInit,
+  policyFileGet,
+  ruleMatchesGet,
+  policyViolationsGetFromDir,
+  policyViolationsGetOutputPretty,
   type PolicyFile,
   type PolicyViolation,
 } from '@codepol/core';
@@ -41,7 +41,7 @@ import eslintPlugin from '@codepol/eslint-plugin';
 /**
  * Options for the esbuild policy plugin.
  */
-export interface PolicyPluginOptions {
+export type PolicyPluginOptions = {
   /** Path to the policy.json file (default: './policy.json') */
   policyPath?: string;
   /** Path to the ESLint config file (default: './.eslintrc.cjs') */
@@ -50,37 +50,40 @@ export interface PolicyPluginOptions {
   fix?: boolean;
   /** Working directory for resolving paths (default: esbuild's absWorkingDir or cwd) */
   cwd?: string;
-}
+};
 
-interface PolicyRunResult {
+type PolicyCheckResult = {
   policy: PolicyFile;
   files: string[];
   eslintOutput: string;
   eslintHasErrors: boolean;
   treeViolations: PolicyViolation[];
-}
+};
 
-function resolvePath(value: string | undefined, cwd: string, fallback: string): string {
-  if (value === undefined) {
+function pathResolve(valueGet: string | undefined, cwd: string, fallback: string): string {
+  if (valueGet === undefined) {
     return path.resolve(cwd, fallback);
   }
-  return path.isAbsolute(value) ? value : path.resolve(cwd, value);
+  return path.isAbsolute(valueGet) ? valueGet : path.resolve(cwd, valueGet);
 }
 
-async function runPolicyChecks(options: {
+async function policyCheck(options: {
   policyPath: string;
   eslintConfigPath: string;
   fix?: boolean;
   cwd: string;
-}): Promise<PolicyRunResult> {
-  const { policyPath, eslintConfigPath, fix, cwd } = options;
+}): Promise<PolicyCheckResult> {
+  const policyPath = options.policyPath;
+  const eslintConfigPath = options.eslintConfigPath;
+  const fix = options.fix;
+  const cwd = options.cwd;
 
   // Initialize web-tree-sitter WASM parser
-  await initParser();
+  await parserInit();
 
-  const policy = loadPolicy(policyPath);
-  const matches = await collectRuleMatches(policy, cwd);
-  const files = Array.from(new Set(matches.flatMap(match => match.files)));
+  const policy = policyFileGet(policyPath);
+  const matches = await ruleMatchesGet(policy, cwd);
+  const files = Array.from(new Set(matches.flatMap(matchGet => matchGet.files)));
 
   const eslint = new ESLint({
     overrideConfigFile: eslintConfigPath,
@@ -88,25 +91,30 @@ async function runPolicyChecks(options: {
       codepol: eslintPlugin as unknown as ESLint.Plugin,
     },
     fix: fix ?? false,
-    cwd,
+    cwd: cwd,
   });
 
-  const lintResults = files.length > 0 ? await eslint.lintFiles(files) : [];
+  const lintResult = files.length > 0 ? await eslint.lintFiles(files) : [];
   if (fix) {
-    await ESLint.outputFixes(lintResults);
+    await ESLint.outputFixes(lintResult);
   }
   const formatter = await eslint.loadFormatter('stylish');
-  const eslintOutput = lintResults.length > 0 ? (await formatter.format(lintResults)).trim() : '';
-  const eslintHasErrors = lintResults.some(result => result.errorCount > 0);
+  const eslintOutput = lintResult.length > 0 ? (await formatter.format(lintResult)).trim() : '';
+  const eslintHasErrors = lintResult.some(result => result.errorCount > 0);
 
-  const treeViolations = await scanWithPolicy(policy, cwd);
+  const treeViolationsResult = await policyViolationsGetFromDir(policy, cwd);
+
+  if ('Err' in treeViolationsResult) {
+    // Error already logged in core; propagate as build failure
+    throw new Error(treeViolationsResult.Err);
+  }
 
   return {
     policy,
     files,
     eslintOutput,
     eslintHasErrors,
-    treeViolations,
+    treeViolations: treeViolationsResult.Ok!,
   };
 }
 
@@ -122,15 +130,15 @@ async function runPolicyChecks(options: {
  *
  * @example Basic usage
  * ```typescript
- * import { policyPlugin } from '@codepol/esbuild-plugin';
+ * import { esbuildPluginNew } from '@codepol/esbuild-plugin';
  *
- * plugins: [policyPlugin()]
+ * plugins: [esbuildPluginNew()]
  * ```
  *
  * @example With custom paths
  * ```typescript
  * plugins: [
- *   policyPlugin({
+ *   esbuildPluginNew({
  *     policyPath: './config/policy.json',
  *     eslintConfigPath: './config/eslint.config.js',
  *   })
@@ -140,11 +148,11 @@ async function runPolicyChecks(options: {
  * @example With autofix enabled
  * ```typescript
  * plugins: [
- *   policyPlugin({ fix: true })
+ *   esbuildPluginNew({ fix: true })
  * ]
  * ```
  */
-export function policyPlugin(options: PolicyPluginOptions = {}): Plugin {
+export function esbuildPluginNew(options: PolicyPluginOptions = {}): Plugin {
   return {
     name: 'codepol-policy',
     setup(build) {
@@ -155,37 +163,37 @@ export function policyPlugin(options: PolicyPluginOptions = {}): Plugin {
             ? path.resolve(build.initialOptions.absWorkingDir)
             : process.cwd();
 
-        const policyPath = resolvePath(options.policyPath, cwd, 'policy.json');
-        const eslintConfigPath = resolvePath(options.eslintConfigPath, cwd, '.eslintrc.cjs');
+        const policyPath = pathResolve(options.policyPath, cwd, 'policy.json');
+        const eslintConfigPath = pathResolve(options.eslintConfigPath, cwd, '.eslintrc.cjs');
 
-        const result = await runPolicyChecks({
-          policyPath,
-          eslintConfigPath,
+        const result = await policyCheck({
+          policyPath: policyPath,
+          eslintConfigPath: eslintConfigPath,
           fix: options.fix,
-          cwd,
+          cwd: cwd,
         });
 
-        const outputs: string[] = [];
+        const output: string[] = [];
         if (result.eslintOutput.length > 0) {
-          outputs.push(result.eslintOutput);
+          output.push(result.eslintOutput);
         }
-        const treeOutput = formatTreeViolations(result.treeViolations, cwd);
-        if (treeOutput) {
-          outputs.push('Tree-sitter policy violations:');
-          outputs.push(treeOutput);
+        const treeOutputGet = policyViolationsGetOutputPretty(result.treeViolations, cwd);
+        if (treeOutputGet) {
+          output.push('Tree-sitter policy violations:');
+          output.push(treeOutputGet);
         }
 
         if (result.eslintHasErrors || result.treeViolations.length > 0) {
-          const message = outputs.join('\n\n') || 'Policy enforcement failed';
+          const message = output.join('\n\n') || 'Policy enforcement failed';
           throw new Error(message);
         }
 
-        if (options.fix && outputs.length > 0) {
-          console.log(outputs.join('\n\n'));
+        if (options.fix && output.length > 0) {
+          console.log(output.join('\n\n'));
         }
       });
     },
   };
 }
 
-export default policyPlugin;
+export default esbuildPluginNew;

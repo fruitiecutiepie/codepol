@@ -22,8 +22,8 @@ import type {
   LoggerImportConfig,
   PolicyViolation,
   RuleMatch,
-  PolicyRunOptions,
-  PolicyRunResult,
+  PolicyCheckOptions,
+  PolicyCheckResult,
 } from '@codepol/core';
 ```
 
@@ -221,27 +221,27 @@ Runs complete policy checks (Tree-sitter scanning).
 
 ```typescript
 function runPolicyChecks(
-  options?: PolicyRunOptions
-): Promise<PolicyRunResult>
+  options?: PolicyCheckOptions
+): Promise<PolicyCheckResult>
 ```
 
 **Parameters:**
 
 ```typescript
-interface PolicyRunOptions {
+type PolicyCheckOptions = {
   policyPath?: string;  // Default: './policy.json'
   cwd?: string;         // Default: process.cwd()
-}
+};
 ```
 
 **Returns:**
 
 ```typescript
-interface PolicyRunResult {
+type PolicyCheckResult = {
   policy: PolicyFile;
   files: string[];
   treeViolations: PolicyViolation[];
-}
+};
 ```
 
 **Example:**
@@ -331,12 +331,12 @@ function policyPlugin(options?: PolicyPluginOptions): Plugin
 **Parameters:**
 
 ```typescript
-interface PolicyPluginOptions {
+type PolicyPluginOptions = {
   policyPath?: string;       // Default: './policy.json'
   eslintConfigPath?: string; // Default: './.eslintrc.cjs'
   fix?: boolean;             // Default: false
   cwd?: string;              // Default: esbuild's absWorkingDir or cwd
-}
+};
 ```
 
 **Returns:** esbuild Plugin

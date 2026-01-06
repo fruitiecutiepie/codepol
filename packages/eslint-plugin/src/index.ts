@@ -44,45 +44,38 @@ const RULE_URL = 'https://github.com/fruitiecutiepie/codepol/blob/master/docs/ru
 
 const createRule = ESLintUtils.RuleCreator(() => RULE_URL);
 
-const policyCache = new Map<string, PolicyFile>();
+const policyFileMap = new Map<string, PolicyFile>();
 
 /**
  * Loads a policy file with caching.
  */
-function loadPolicy(policyPath: string): PolicyFile {
+function policyFileGet(policyPath: string): PolicyFile {
   const resolved = path.resolve(policyPath);
-  const cached = policyCache.get(resolved);
+  const cached = policyFileMap.get(resolved);
   if (cached) {
     return cached;
   }
   const raw = fs.readFileSync(resolved, 'utf8');
   const parsed = JSON.parse(raw) as PolicyFile;
-  policyCache.set(resolved, parsed);
+  policyFileMap.set(resolved, parsed);
   return parsed;
 }
 
-/**
- * Clears the policy cache. Useful for testing.
- */
-export function clearPolicyCache(): void {
-  policyCache.clear();
-}
-
-function matchesAny(patterns: string[] | undefined, relativeFile: string): boolean {
+function globPatternsGetMatchAny(patterns: string[] | undefined, relativeFile: string): boolean {
   if (!patterns || patterns.length === 0) {
     return false;
   }
   return patterns.some(pattern => minimatch(relativeFile, pattern, { dot: true }));
 }
 
-function isFileCovered(policy: PolicyFile, filePath: string): boolean {
+function policyFileGetChecked(policy: PolicyFile, filePath: string): boolean {
   const relative = path.relative(process.cwd(), filePath);
-  if (matchesAny(policy.exclude, relative)) {
+  if (globPatternsGetMatchAny(policy.exclude, relative)) {
     return false;
   }
   for (const rule of policy.rules) {
-    if (matchesAny(rule.files, relative)) {
-      if (matchesAny(rule.exclude, relative)) {
+    if (globPatternsGetMatchAny(rule.files, relative)) {
+      if (globPatternsGetMatchAny(rule.exclude, relative)) {
         continue;
       }
       const isTs = relative.endsWith('.ts') || relative.endsWith('.tsx');
@@ -95,7 +88,7 @@ function isFileCovered(policy: PolicyFile, filePath: string): boolean {
   return false;
 }
 
-function isLoggerMemberExpression(
+function loggerIsMemberExpression(
   node: TSESTree.Expression,
   logger: LoggerConfig,
   method: string
@@ -115,13 +108,13 @@ function isLoggerMemberExpression(
   return false;
 }
 
-function hasLoggerEnter(block: TSESTree.BlockStatement, logger: LoggerConfig): boolean {
+function loggerHasEnter(block: TSESTree.BlockStatement, logger: LoggerConfig): boolean {
   for (const statement of block.body) {
     if (statement.type === TSESTree.AST_NODE_TYPES.ExpressionStatement) {
       const expression = statement.expression;
       if (
         expression.type === TSESTree.AST_NODE_TYPES.CallExpression &&
-        isLoggerMemberExpression(expression.callee, logger, logger.enterMethod)
+        loggerIsMemberExpression(expression.callee, logger, logger.enterMethod)
       ) {
         return true;
       }
@@ -133,7 +126,7 @@ function hasLoggerEnter(block: TSESTree.BlockStatement, logger: LoggerConfig): b
   return false;
 }
 
-function hasLoggerExit(block: TSESTree.BlockStatement, logger: LoggerConfig): boolean {
+function loggerExitHas(block: TSESTree.BlockStatement, logger: LoggerConfig): boolean {
   const tryStatement = block.body.find(
     statement => statement.type === TSESTree.AST_NODE_TYPES.TryStatement
   ) as TSESTree.TryStatement | undefined;
@@ -145,7 +138,7 @@ function hasLoggerExit(block: TSESTree.BlockStatement, logger: LoggerConfig): bo
       const expression = statement.expression;
       if (
         expression.type === TSESTree.AST_NODE_TYPES.CallExpression &&
-        isLoggerMemberExpression(expression.callee, logger, logger.exitMethod)
+        loggerIsMemberExpression(expression.callee, logger, logger.exitMethod)
       ) {
         return true;
       }
@@ -154,7 +147,7 @@ function hasLoggerExit(block: TSESTree.BlockStatement, logger: LoggerConfig): bo
   return false;
 }
 
-function hasLoggerImport(sourceCode: TSESLint.SourceCode, logger: LoggerConfig): boolean {
+function loggerHasImport(sourceCode: TSESLint.SourceCode, logger: LoggerConfig): boolean {
   for (const statement of sourceCode.ast.body) {
     if (statement.type === TSESTree.AST_NODE_TYPES.ImportDeclaration) {
       if (statement.source.value === logger.import.module) {
@@ -175,7 +168,7 @@ function hasLoggerImport(sourceCode: TSESLint.SourceCode, logger: LoggerConfig):
   return false;
 }
 
-function buildBlockReplacement(
+function replacementGetForBlock(
   sourceCode: TSESLint.SourceCode,
   block: TSESTree.BlockStatement,
   logger: LoggerConfig
@@ -202,13 +195,13 @@ function buildBlockReplacement(
   return segments.join('\n');
 }
 
-function buildArrowReplacement(
+function replacementGetForArrow(
   sourceCode: TSESLint.SourceCode,
   node: TSESTree.ArrowFunctionExpression,
   logger: LoggerConfig
 ): string {
   if (node.body.type === TSESTree.AST_NODE_TYPES.BlockStatement) {
-    return buildBlockReplacement(sourceCode, node.body, logger);
+    return replacementGetForBlock(sourceCode, node.body, logger);
   }
   const expressionText = sourceCode.getText(node.body);
   const segments = [
@@ -268,14 +261,11 @@ const requireLoggerRule = createRule<Options, MessageIds>({
     }
     const option = context.options[0] ?? {};
     const policyPath = option.policyPath ?? path.resolve(process.cwd(), 'policy.json');
-    const policy = loadPolicy(policyPath);
-    if (!isFileCovered(policy, filename)) {
+    const policyFile = policyFileGet(policyPath);
+    if (!policyFileGetChecked(policyFile, filename)) {
       return {};
     }
-    const logger = policy.pluginConfig?.logger as LoggerConfig | undefined;
-    if (!logger) {
-      throw new Error('Logger plugin configuration is required for logger rules.');
-    }
+    const logger = policyFile.logger;
     const sourceCode = context.sourceCode;
 
     function reportMissing(node: TSESTree.Node, block: TSESTree.BlockStatement | null) {
@@ -289,14 +279,14 @@ const requireLoggerRule = createRule<Options, MessageIds>({
         fix: fixer => {
           const fixes: TSESLint.RuleFix[] = [];
           if (node.type === TSESTree.AST_NODE_TYPES.ArrowFunctionExpression) {
-            const replacement = buildArrowReplacement(sourceCode, node, logger);
+            const replacement = replacementGetForArrow(sourceCode, node, logger);
             fixes.push(fixer.replaceText(node.body, replacement));
           } else if (block) {
-            const replacement = buildBlockReplacement(sourceCode, block, logger);
+            const replacement = replacementGetForBlock(sourceCode, block, logger);
             fixes.push(fixer.replaceText(block, replacement));
           }
 
-          if (!hasLoggerImport(sourceCode, logger)) {
+          if (!loggerHasImport(sourceCode, logger)) {
             const importBinding =
               logger.import.named === logger.identifier
                 ? logger.import.named
@@ -320,8 +310,8 @@ const requireLoggerRule = createRule<Options, MessageIds>({
         reportMissing(node, null);
         return;
       }
-      const hasEnter = hasLoggerEnter(block, logger);
-      const hasExit = hasLoggerExit(block, logger);
+      const hasEnter = loggerHasEnter(block, logger);
+      const hasExit = loggerExitHas(block, logger);
       if (!hasEnter || !hasExit) {
         reportMissing(node, block);
       }

@@ -11,20 +11,20 @@
  * @example
  * ```typescript
  * import {
- *   initParser,
- *   loadPolicy,
- *   scanWithPolicy,
- *   formatTreeViolations
+ *   parserInit,
+ *   policyFileGet,
+ *   policyViolationsGetFromDir,
+ *   policyViolationsGetOutputPretty
  * } from '@codepol/core';
  *
  * // Initialize the WASM parser before scanning
- * await initParser();
+ * await parserInit();
  *
- * const policy = loadPolicy('./policy.json');
- * const violations = await scanWithPolicy(policy, process.cwd());
+ * const policy = policyFileGet('./policy.json');
+ * const violations = await policyViolationsGetFromDir(policy, process.cwd());
  *
  * if (violations.length > 0) {
- *   console.log(formatTreeViolations(violations, process.cwd()));
+ *   console.log(policyViolationsGetOutputPretty(violations, process.cwd()));
  *   process.exit(1);
  * }
  * ```
@@ -35,36 +35,44 @@ export type {
   LoggerImportConfig,
   LoggerConfig,
   PolicyRule,
-  PolicyPlugins,
   PolicyFile,
+  PolicyPlugin,
+  PolicyPluginDeclaration,
+  PolicyPluginInitContext,
+  PolicyScanContext,
   PolicyViolation,
   RuleMatch,
-} from './types';
+} from './policy/policyTypes';
 
 // Policy loading
 export {
-  loadPolicy,
-  clearPolicyCache,
-  matchesAny,
-  isFileCovered,
-  collectRuleMatches,
-} from './policy-loader';
+  policyFileGet,
+  globPatternsGetMatchAny,
+  policyFileGetChecked,
+  ruleMatchesGet,
+} from './policy/policyGet';
 
 // Tree-sitter scanning
+export { parserInit } from './parser/parserInit';
 export {
-  initParser,
-  isParserInitialized,
-  scanFileForViolations,
-  scanWithPolicy,
-} from './scanner';
+  policyViolationsGetForFile,
+  policyViolationsGetFromDir,
+} from './policy/policyScan';
+
+// Plugins
+export type { PolicyPluginsMap } from './policy/policyPluginsGet';
+export {
+  defaultPluginType,
+  policyPluginsGet,
+} from './policy/policyPluginsGet';
 
 // Runner
 export type {
-  PolicyRunOptions,
-  PolicyRunResult,
-} from './runner';
+  PolicyCheckOptions,
+  PolicyCheckResult,
+} from './policy/policyCheck';
 
 export {
-  runPolicyChecks,
-  formatTreeViolations,
-} from './runner';
+  policyCheck,
+  policyViolationsGetOutputPretty,
+} from './policy/policyCheck';
