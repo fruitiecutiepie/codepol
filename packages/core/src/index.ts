@@ -1,10 +1,10 @@
 /**
  * @packageDocumentation
- * @codepol/core - Core policy loading, scanning, and enforcement for codepol.
+ * @codepol/core - Core policy loading, checking, and enforcement for codepol.
  *
  * This package provides the foundation for policy-driven code enforcement:
  * - Load and parse policy.json files
- * - Scan TypeScript files using web-tree-sitter (WASM) for structural analysis
+ * - Check TypeScript files using web-tree-sitter (WASM) for structural analysis
  * - Detect missing logger instrumentation
  * - Format and report violations
  *
@@ -17,7 +17,7 @@
  *   policyViolationsGetOutputPretty
  * } from '@codepol/core';
  *
- * // Initialize the WASM parser before scanning
+ * // Initialize the WASM parser before checking
  * await parserInit();
  *
  * const policy = policyFileGet('./policy.json');
@@ -39,7 +39,7 @@ export type {
   PolicyRuleTarget,
   PolicyRuleTargetContext,
   PolicyFile,
-  TreeScanProvider,
+  TreeCheckProvider,
   EslintRuleProviderContext,
   EslintRuleProvider,
   FixProviderContext,
@@ -51,7 +51,7 @@ export type {
   PolicyPluginDeclaration,
   PolicyPluginRuleDeclaration,
   PolicyPluginInitContext,
-  PolicyScanContext,
+  PolicyCheckContext,
   PolicyViolation,
   RuleMatch,
 } from './types';
@@ -64,12 +64,12 @@ export {
   ruleMatchesGet,
 } from './policy/policyGet';
 
-// Tree-sitter scanning
+// Tree-sitter checking
 export { parserInit, parserGetForFile } from './parser/parserInit';
 export {
   policyViolationsGetForFile,
   policyViolationsGetFromDir,
-} from './policy/policyScan';
+} from './policy/policyTreeCheck';
 
 // Languages
 export type { Lang } from './parser/parserLangs';

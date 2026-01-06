@@ -11,6 +11,7 @@
  *   --watch        Run policy checks in watch mode
  *   --policy       Path to the policy file (default: ./policy.json)
  *   --eslint-config Path to the ESLint config file
+ *   --check-plugins Validate policy and rule plugins, then exit
  *   --help         Show help
  *   --version      Show version
  */
@@ -29,6 +30,7 @@ import {
   policyViolationsGetFromDir,
   policyViolationsGetOutputPretty,
   defaultPluginType,
+  policyPluginsGet,
   type CodepolRulePlugin,
   type EslintRuleProvider,
   type FixProvider,
@@ -43,6 +45,7 @@ import {
 type CliOptions = {
   fix: boolean;
   watch: boolean;
+  checkPlugins: boolean;
   policy: string;
   eslintConfig: string;
 };
@@ -77,7 +80,7 @@ function rulePluginCapabilitiesGet(rulePlugin: CodepolRulePlugin): PolicyPluginC
   }
   return {
     eslintRuleProvider: rulePlugin.eslintRuleProvider,
-    treeScanProvider: rulePlugin.treeScanProvider,
+    treeCheckProvider: rulePlugin.treeCheckProvider,
     fixProvider: rulePlugin.fixProvider,
   };
 }
@@ -127,7 +130,7 @@ function rulePluginValidate(rulePlugin: CodepolRulePlugin, sourceLabel: string):
     throw new Error(`Rule plugin ${rulePlugin.id} must declare supported languages.`);
   }
   const capabilities = rulePluginCapabilitiesGet(rulePlugin);
-  if (!capabilities.eslintRuleProvider && !capabilities.treeScanProvider && !capabilities.fixProvider) {
+  if (!capabilities.eslintRuleProvider && !capabilities.treeCheckProvider && !capabilities.fixProvider) {
     throw new Error(`Rule plugin ${rulePlugin.id} must declare at least one capability.`);
   }
 }
@@ -404,6 +407,22 @@ async function policyCheckAndPrintOutput(options: CliOptions): Promise<boolean> 
   return !result.eslintHasErrors && result.violations.length === 0;
 }
 
+async function policyPluginsValidateAndPrint(options: CliOptions): Promise<void> {
+  const cwd = process.cwd();
+  const policy = policyFileGet(options.policy);
+  const policyPluginsResult = await policyPluginsGet(policy, cwd);
+  if ('Err' in policyPluginsResult) {
+    throw new Error(policyPluginsResult.Err);
+  }
+  const policyPlugins = Array.from(policyPluginsResult.Ok.values()).map(plugin => plugin.id).sort();
+  const rulePlugins = await policyRulePluginsGet(policy, cwd);
+  const rulePluginIds = rulePlugins.map(entry => entry.rulePlugin.id).sort();
+
+  console.log('✔ Plugins validated');
+  console.log(`Policy plugins (${policyPlugins.length}): ${policyPlugins.join(', ') || 'none'}`);
+  console.log(`Rule plugins (${rulePluginIds.length}): ${rulePluginIds.join(', ') || 'none'}`);
+}
+
 function fsSubNew(options: CliOptions, files: string[], patterns: string[]): void {
   const watchItems = new Set<string>([options.policy]);
   for (const file of files) {
@@ -471,10 +490,16 @@ async function main(): Promise<void> {
       default: path.resolve('eslint.config.js'),
       describe: 'Path to the ESLint config file',
     })
+    .option('check-plugins', {
+      type: 'boolean',
+      default: false,
+      describe: 'Validate policy and rule plugins, then exit',
+    })
     .example('$0', 'Run policy checks once')
     .example('$0 --fix', 'Run checks and apply fixes')
     .example('$0 --watch', 'Watch for changes and re-run checks')
     .example('$0 --policy ./config/policy.json', 'Use custom policy file')
+    .example('$0 --check-plugins', 'Validate plugins for the policy file')
     .help()
     .version()
     .parseAsync();
@@ -487,12 +512,22 @@ async function main(): Promise<void> {
   if (argv.watch != null) {
     watch = argv.watch;
   }
+  let checkPlugins = false;
+  if (argv['check-plugins'] != null) {
+    checkPlugins = argv['check-plugins'];
+  }
   const options: CliOptions = {
     fix: fix,
     watch: watch,
+    checkPlugins: checkPlugins,
     policy: path.resolve(argv.policy as string),
     eslintConfig: path.resolve(argv['eslint-config'] as string),
   };
+
+  if (options.checkPlugins) {
+    await policyPluginsValidateAndPrint(options);
+    return;
+  }
 
   const policy = policyFileGet(options.policy);
   const matches = await ruleMatchesGet(policy, process.cwd());

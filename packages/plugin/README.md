@@ -3,7 +3,7 @@
 ## Purpose
 
 `@codepol/plugin` provides the logger enforcement rule plugin for Codepol. It supplies both
-Tree-sitter scanning and ESLint rule integration to ensure functions are instrumented with logger
+Tree-sitter checking and ESLint rule integration to ensure functions are instrumented with logger
 enter/exit calls.
 
 ## Installation

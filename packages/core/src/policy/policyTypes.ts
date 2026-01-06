@@ -168,10 +168,10 @@ export type PolicyPluginInitContext = {
 };
 
 /**
- * Context passed to plugin scans.
+ * Context passed to plugin checks.
  */
-export type PolicyScanContext = {
-  /** Absolute path to the file being scanned */
+export type PolicyCheckContext = {
+  /** Absolute path to the file being checked */
   filePath: string;
   /** File contents */
   source: string;
@@ -179,14 +179,14 @@ export type PolicyScanContext = {
   policy: PolicyFile;
   /** Working directory used for resolution */
   dir: string;
-  /** Target definition used to resolve this scan */
+  /** Target definition used to resolve this check */
   target: PolicyRuleTarget;
 };
 
 /**
- * Plugin struct for policy scanning.
+ * Plugin struct for policy checks.
  */
-export type TreeScanProvider = {
+export type TreeCheckProvider = {
   /** Stable plugin identifier */
   id: string;
   /** Plugin version */
@@ -195,8 +195,8 @@ export type TreeScanProvider = {
   languages: string[];
   /** Optional initialization hook */
   init?: (context: PolicyPluginInitContext) => void | Promise<void>;
-  /** Scan a file against a rule */
-  scan: (rule: PolicyRule, context: PolicyScanContext) => PolicyViolation[];
+  /** Check a file against a rule */
+  check: (rule: PolicyRule, context: PolicyCheckContext) => PolicyViolation[];
 };
 
 /**
@@ -261,8 +261,8 @@ export type FixProvider = {
 export type PolicyPluginCapabilities = {
   /** Optional ESLint rule provider */
   eslintRuleProvider?: EslintRuleProvider;
-  /** Optional Tree-sitter scan provider */
-  treeScanProvider?: TreeScanProvider;
+  /** Optional Tree-sitter check provider */
+  treeCheckProvider?: TreeCheckProvider;
   /** Optional fix provider */
   fixProvider?: FixProvider;
 };
@@ -280,15 +280,15 @@ export type CodepolPlugin = {
 };
 
 /**
- * Plugin struct for policy scanning.
+ * Plugin struct for policy checks.
  */
-export type PolicyPlugin = TreeScanProvider & {
+export type PolicyPlugin = TreeCheckProvider & {
   /** Optional capability providers */
   capabilities?: PolicyPluginCapabilities;
 };
 
 /**
- * Represents a single policy violation found during scanning.
+ * Represents a single policy violation found during checking.
  */
 export type PolicyViolation = {
   /** The rule ID that was violated */

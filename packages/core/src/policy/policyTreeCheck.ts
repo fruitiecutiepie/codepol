@@ -28,7 +28,7 @@ function policyPluginGet(
 }
 
 /**
- * Scans a single file for policy violations using the configured plugin.
+ * Checks a single file for policy violations using the configured plugin.
  * @returns Result containing violations array or an error message
  */
 export function policyViolationsGetForFile(
@@ -45,7 +45,7 @@ export function policyViolationsGetForFile(
   }
   const plugin = pluginResult.Ok;
   const source = fs.readFileSync(filePath, 'utf8');
-  return Ok(plugin.scan(rule, {
+  return Ok(plugin.check(rule, {
     filePath: filePath,
     source: source,
     policy: policy,
@@ -55,7 +55,7 @@ export function policyViolationsGetForFile(
 }
 
 /**
- * Scans all files matching the policy rules for violations.
+ * Checks all files matching the policy rules for violations.
  * @returns Result containing all violations or an error message
  */
 export async function policyViolationsGetFromDir(

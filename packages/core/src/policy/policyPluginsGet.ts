@@ -54,7 +54,7 @@ async function policyPluginGet(
   const plugin = pluginExported as PolicyPlugin;
 
   const sourceLabel = declaration.builtin ? `builtin:${declaration.builtin}` : moduleSpecifier;
-  if (!plugin.id || !plugin.version || !plugin.scan) {
+  if (!plugin.id || !plugin.version || !plugin.check) {
     const error = `Invalid plugin exported by ${sourceLabel}.`;
     console.error(error);
     return Err(error);

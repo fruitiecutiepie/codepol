@@ -6,7 +6,7 @@ export type {
   PolicyRuleTarget,
   PolicyRuleTargetContext,
   PolicyFile,
-  TreeScanProvider,
+  TreeCheckProvider,
   EslintRuleProviderContext,
   EslintRuleProvider,
   FixProviderContext,
@@ -17,7 +17,7 @@ export type {
   PolicyPluginDeclaration,
   PolicyPluginRuleDeclaration,
   PolicyPluginInitContext,
-  PolicyScanContext,
+  PolicyCheckContext,
   PolicyViolation,
   RuleMatch,
 } from './policy/policyTypes';
@@ -26,7 +26,7 @@ import type {
   EslintRuleProvider,
   FixProvider,
   PolicyPluginCapabilities,
-  TreeScanProvider,
+  TreeCheckProvider,
 } from './policy/policyTypes';
 
 /**
@@ -41,8 +41,8 @@ export type CodepolRulePlugin = {
   capabilities?: PolicyPluginCapabilities;
   /** ESLint rule provider capability */
   eslintRuleProvider?: EslintRuleProvider;
-  /** Tree-sitter scan provider capability */
-  treeScanProvider?: TreeScanProvider;
+  /** Tree-sitter check provider capability */
+  treeCheckProvider?: TreeCheckProvider;
   /** Fix provider capability */
   fixProvider?: FixProvider;
 };

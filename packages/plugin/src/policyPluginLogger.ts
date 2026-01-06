@@ -1,5 +1,5 @@
 import type { SyntaxNode } from 'web-tree-sitter';
-import type { LoggerConfig, PolicyPlugin, PolicyRule, PolicyScanContext, PolicyViolation } from '@codepol/core';
+import type { LoggerConfig, PolicyCheckContext, PolicyPlugin, PolicyRule, PolicyViolation } from '@codepol/core';
 import { parserInit, parserGetForFile } from '@codepol/core';
 import { policyLoggerConfigGet } from './policyLoggerConfig';
 
@@ -159,9 +159,9 @@ function functionsVisit(
   }
 }
 
-function loggerRuleScan(
+function loggerRuleCheck(
   rule: PolicyRule,
-  context: PolicyScanContext
+  context: PolicyCheckContext
 ): PolicyViolation[] {
   const parserResult = parserGetForFile(context.filePath);
   if ('Err' in parserResult) {
@@ -207,9 +207,9 @@ export const policyPluginLogger: PolicyPlugin = {
   version: '1.0.0',
   languages: ['typescript', 'tsx'],
   init: parserInit,
-  scan: loggerRuleScan,
+  check: loggerRuleCheck,
 };
 
 policyPluginLogger.capabilities = {
-  treeScanProvider: policyPluginLogger,
+  treeCheckProvider: policyPluginLogger,
 };

@@ -4,7 +4,7 @@ import basePolicy from '../policy.json';
 import type { PolicyFile, PolicyRule } from '@codepol/core';
 import { parserInit, policyViolationsGetFromDir } from '@codepol/core';
 
-describe('tree-sitter policy scan', () => {
+describe('tree-sitter policy check', () => {
   beforeAll(async () => {
     await parserInit();
   });

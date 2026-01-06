@@ -4,7 +4,7 @@ Programmatic API for integrating codepol into your tools and scripts.
 
 ## @codepol/core
 
-The core package provides policy loading, scanning, and formatting utilities.
+The core package provides policy loading, checking, and formatting utilities.
 
 ### Installation
 
@@ -24,7 +24,7 @@ import type {
   LoggerConfig,
   LoggerImportConfig,
   PolicyViolation,
-  TreeScanProvider,
+  TreeCheckProvider,
   PolicyPluginCapabilities,
   CodepolRulePlugin,
   CodepolPlugin,
@@ -150,7 +150,7 @@ const covered = policyFileGetChecked(
 
 ### policyViolationsGetForFile
 
-Scans a single file for policy violations using Tree-sitter.
+Checks a single file for policy violations using Tree-sitter.
 
 ```typescript
 function policyViolationsGetForFile(
@@ -209,7 +209,7 @@ if ('Ok' in violationsResult) {
 
 ### policyViolationsGetFromDir
 
-Scans all files matching the policy for violations.
+Checks all files matching the policy for violations.
 
 ```typescript
 function policyViolationsGetFromDir(
@@ -244,7 +244,7 @@ if ('Ok' in violationsResult) {
 
 ### policyCheck
 
-Runs complete policy checks (Tree-sitter scanning).
+Runs complete policy checks (Tree-sitter checking).
 
 ```typescript
 function policyCheck(

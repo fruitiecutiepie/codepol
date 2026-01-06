@@ -1,6 +1,6 @@
 # @codepol/core
 
-Core policy loading, web-tree-sitter (WASM) scanning, and enforcement for codepol.
+Core policy loading, web-tree-sitter (WASM) checking, and enforcement for codepol.
 
 ## Installation
 
@@ -11,7 +11,7 @@ pnpm add @codepol/core
 ## Features
 
 - Load and parse `policy.json` configuration files
-- Scan TypeScript files using web-tree-sitter (WASM) for structural analysis
+- Check TypeScript files using web-tree-sitter (WASM) for structural analysis
 - No native dependencies - works across all platforms
 - Detect missing logger instrumentation patterns
 - Format violations for display
@@ -21,7 +21,7 @@ pnpm add @codepol/core
 
 ### Registering Languages and Initializing the Parser
 
-Before scanning files, you must register languages and initialize the WASM parser:
+Before checking files, you must register languages and initialize the WASM parser:
 
 ```typescript
 import { langAdd, parserInit } from '@codepol/core';
@@ -71,7 +71,7 @@ for (const match of matches) {
 }
 ```
 
-### Scanning for Violations
+### Checking for Violations
 
 ```typescript
 import {
@@ -209,8 +209,8 @@ type PolicyViolation = {
 | `policyFileGetChecked(policy, filePath, cwd)` | Check if a file is covered by the policy |
 | `ruleMatchesGet(policy, cwd)` | Get files matching each rule |
 | `globPatternsGetMatchAny(patterns, path)` | Check if path matches any glob pattern |
-| `policyViolationsGetForFile(filePath, rule, target, policy, pluginsMap, dir)` | Scan a single file for violations |
-| `policyViolationsGetFromDir(policy, cwd)` | Scan all matching files in a directory |
+| `policyViolationsGetForFile(filePath, rule, target, policy, pluginsMap, dir)` | Check a single file for violations |
+| `policyViolationsGetFromDir(policy, cwd)` | Check all matching files in a directory |
 | `policyCheck(options)` | Run complete policy checks |
 | `policyViolationsGetOutputPretty(violations, cwd)` | Format violations as string |
 

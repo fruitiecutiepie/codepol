@@ -292,5 +292,6 @@ echo "pnpm lint:policy" > .husky/pre-commit
 ## Next Steps
 
 - Read the [Policy Schema Reference](./policy-schema.md) for all configuration options
+- Learn how to [author custom plugins](./plugin-authoring.md)
 - Check the [API Reference](./api-reference.md) for programmatic usage
 - Explore individual package READMEs for detailed documentation

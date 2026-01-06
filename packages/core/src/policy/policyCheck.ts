@@ -1,7 +1,7 @@
 import path from 'node:path';
 import type { PolicyFile, PolicyViolation } from './policyTypes';
 import { ruleMatchesGet, policyFileGet } from './policyGet';
-import { policyViolationsGetFromDir } from './policyScan';
+import { policyViolationsGetFromDir } from './policyTreeCheck';
 import { Result, Ok, isErr } from '../result/result';
 
 export type PolicyCheckOptions = {
@@ -16,7 +16,7 @@ export type PolicyCheckResult = {
 };
 
 /**
- * Runs policy checks (Tree-sitter scanning) for a policy file.
+ * Runs policy checks (Tree-sitter checking) for a policy file.
  * @returns Result containing the check result or an error message
  */
 export async function policyCheck(options: PolicyCheckOptions): Promise<Result<PolicyCheckResult, string>> {
@@ -70,4 +70,3 @@ export function policyViolationsGetOutputPretty(violations: PolicyViolation[], c
   }
   return lines.join('\n');
 }
-

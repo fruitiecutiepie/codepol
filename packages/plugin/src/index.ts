@@ -2,7 +2,7 @@
  * @packageDocumentation
  * @codepol/plugin - Logger plugin capabilities for codepol.
  *
- * Provides ESLint rule definitions plus tree-sitter scan integration.
+ * Provides ESLint rule definitions plus tree-sitter check integration.
  */
 
 import fs from 'fs';
@@ -493,10 +493,10 @@ export const loggerEnterExitRule: CodepolRulePlugin = {
   id: 'require-logger-enter-exit',
   languages: ['typescript', 'tsx'],
   eslintRuleProvider,
-  treeScanProvider: policyPluginLogger,
+  treeCheckProvider: policyPluginLogger,
   capabilities: {
     eslintRuleProvider,
-    treeScanProvider: policyPluginLogger,
+    treeCheckProvider: policyPluginLogger,
   },
 };
 

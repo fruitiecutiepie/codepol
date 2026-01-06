@@ -2,25 +2,25 @@
 
 **Policy-driven code enforcement for TypeScript projects.**
 
-Codepol provides a comprehensive enforcement pipeline that ensures functions are wrapped with configurable logger instrumentation using ESLint rules, Tree-sitter structural scanning, and build-time enforcement.
+Codepol provides a comprehensive enforcement pipeline that ensures functions are wrapped with configurable logger instrumentation using ESLint rules, Tree-sitter structural checks, and build-time enforcement.
 
 ## Architecture
 
 ```text
-┌─────────────────────────────────────────────────────────────────┐
-│                     Consumer Codebase                           │
-│  ┌─────────────┐  ┌───────────────────────────────────────┐     │
-│  │ policy.json │  │           src/**/*.ts                 │     │
-│  └──────┬──────┘  └───────────────────────────────────────┘     │
-└─────────┼──────────────────────────────────────────────────────-┘
+┌──────────────────────────────────────┐
+│          Consumer Codebase           │
+│  ┌─────────────┐  ┌─────────────┐    │
+│  │ policy.json │  │ src/**/*.ts │    │
+│  └──────┬──────┘  └─────────────┘    │
+└─────────┼───────────────────────────-┘
           │
           ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                     @codepol/core                               │
-│  • Load and parse policy.json                                   │
-│  • Tree-sitter structural analysis                              │
-│  • Violation detection and formatting                           │
-└─────────────────────┬───────────────────────────────────────────┘
+┌────────────────────────────────────────────┐
+│               @codepol/core                │
+│  • Load and parse policy.json              │
+│  • Tree-sitter structural analysis         │
+│  • Violation detection and formatting      │
+└─────────────────────┬──────────────────────┘
                       │
           ┌─────────-─┼──────────┐
           ▼           ▼          ▼
@@ -34,7 +34,7 @@ Codepol provides a comprehensive enforcement pipeline that ensures functions are
 
 | Package | Description |
 | ------- | ----------- |
-| [@codepol/core](./packages/core) | Core policy loading, Tree-sitter scanning, and enforcement |
+| [@codepol/core](./packages/core) | Core policy loading, Tree-sitter checks, and enforcement |
 | [@codepol/eslint-plugin](./packages/eslint-plugin) | ESLint rule with autofix for logger instrumentation |
 | [@codepol/esbuild-plugin](./packages/esbuild-plugin) | esbuild plugin for build-time enforcement |
 | [@codepol/plugin](./packages/plugin/README.md) | Logger plugin with Tree-sitter + ESLint capabilities |
@@ -130,8 +130,8 @@ export default [
 ### Plugin Loading
 
 Codepol loads rule-level plugin capabilities from `policy.json` declarations. The CLI uses the enabled rule plugins
-to decide which ESLint rules and fix providers to run, while Tree-sitter scanning continues to use the policy rules
-and their associated tree scan providers.
+to decide which ESLint rules and fix providers to run, while Tree-sitter checking continues to use the policy rules
+and their associated tree check providers.
 
 The `@codepol/eslint-plugin` package is a thin adapter that re-exports rules from capability plugins such as
 `@codepol/plugin`. Each rule is exported as its own plugin (for example, `loggerEnterExitRule`), and the
@@ -172,6 +172,7 @@ The ESLint plugin can automatically transform functions to add this instrumentat
 ## Documentation
 
 - [Getting Started](./docs/getting-started.md) - Step-by-step setup guide
+- [Creating Custom Plugins](./docs/creating-custom-plugins.md) - Build custom Codepol plugins
 - [Policy Schema](./docs/policy-schema.md) - Complete policy.json reference
 - [API Reference](./docs/api-reference.md) - Programmatic usage guide
 
