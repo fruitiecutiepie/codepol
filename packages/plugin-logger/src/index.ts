@@ -10,11 +10,11 @@ import path from 'path';
 import { ESLintUtils, TSESLint, TSESTree } from '@typescript-eslint/utils';
 import { minimatch } from 'minimatch';
 import type {
+  CodepolRulePlugin,
   EslintRuleProvider,
   EslintRuleProviderContext,
   LoggerConfig,
   PolicyFile,
-  PolicyPlugin,
 } from '@codepol/core';
 import { policyPluginLogger } from '@codepol/core';
 
@@ -355,23 +355,32 @@ const eslintRules = {
 export const eslintRuleProvider: EslintRuleProvider = {
   pluginName: 'codepol',
   rules: eslintRules,
-  rulesConfigGet: (ctx: EslintRuleProviderContext) => ({
-    'codepol/require-logger-enter-exit': ['error', { policyPath: ctx.policyPath }],
-  }),
-};
-
-let baseCapabilities: PolicyPlugin['capabilities'] = { treeScanProvider: policyPluginLogger };
-if (policyPluginLogger.capabilities != null) {
-  baseCapabilities = policyPluginLogger.capabilities;
-}
-
-export const plugin: PolicyPlugin = {
-  ...policyPluginLogger,
-  capabilities: {
-    ...baseCapabilities,
-    eslintRuleProvider,
+  rulesConfigGet: (ctx: EslintRuleProviderContext) => {
+    const ruleOptions =
+      ctx.ruleOptions && typeof ctx.ruleOptions === 'object' ? ctx.ruleOptions : {};
+    return {
+      'codepol/require-logger-enter-exit': [
+        'error',
+        { policyPath: ctx.policyPath, ...(ruleOptions as Record<string, unknown>) },
+      ],
+    };
   },
 };
 
-export default plugin;
+export const loggerEnterExitRule: CodepolRulePlugin = {
+  id: 'require-logger-enter-exit',
+  languages: ['typescript', 'tsx'],
+  eslintRuleProvider,
+  treeScanProvider: policyPluginLogger,
+  capabilities: {
+    eslintRuleProvider,
+    treeScanProvider: policyPluginLogger,
+  },
+};
+
+export const loggerRulePlugins = [loggerEnterExitRule];
+export const rulePlugins = loggerRulePlugins;
 export const rules = eslintRules;
+
+export const plugin = { rulePlugins };
+export default plugin;

@@ -23,12 +23,14 @@ import type {
   PolicyViolation,
   TreeScanProvider,
   PolicyPluginCapabilities,
+  CodepolRulePlugin,
   CodepolPlugin,
   EslintRuleProvider,
   FixProvider,
   RuleMatch,
   PolicyCheckOptions,
   PolicyCheckResult,
+  PolicyPluginRuleDeclaration,
 } from '@codepol/core';
 ```
 
@@ -317,17 +319,37 @@ The ESLint plugin is a thin adapter that re-exports rules from capability plugin
 
 ## @codepol/plugin-logger
 
-### Plugin Capabilities
+### Rule Plugins
 
 ```typescript
-import plugin, { eslintRuleProvider } from '@codepol/plugin-logger';
+import { loggerEnterExitRule, rulePlugins } from '@codepol/plugin-logger';
 
-// plugin.capabilities.treeScanProvider
-// plugin.capabilities.eslintRuleProvider
+// loggerEnterExitRule.id === 'require-logger-enter-exit'
+// loggerEnterExitRule.capabilities?.eslintRuleProvider
+// rulePlugins (array for convenience)
 ```
 
-Use `eslintRuleProvider.rulesConfigGet({ policy, policyPath, cwd })` to build ESLint rule configurations that
-match your policy file.
+Use `eslintRuleProvider.rulesConfigGet({ policy, policyPath, cwd, ruleId, ruleOptions })` to build ESLint rule
+configurations that match your policy file and per-rule options.
+
+**Policy configuration example:**
+
+```json
+{
+  "plugins": [
+    {
+      "module": "@codepol/plugin-logger",
+      "rules": [
+        {
+          "id": "require-logger-enter-exit",
+          "enabled": true,
+          "options": { "policyPath": "./policy.json" }
+        }
+      ]
+    }
+  ]
+}
+```
 
 ### clearPolicyCache (ESLint Plugin)
 

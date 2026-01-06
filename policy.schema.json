@@ -12,7 +12,20 @@
         "properties": {
           "builtin": { "type": "string" },
           "module": { "type": "string" },
-          "export": { "type": "string" }
+          "export": { "type": "string" },
+          "rules": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["id"],
+              "properties": {
+                "id": { "type": "string" },
+                "enabled": { "type": "boolean", "default": true },
+                "options": {}
+              },
+              "additionalProperties": false
+            }
+          }
         },
         "additionalProperties": false,
         "oneOf": [

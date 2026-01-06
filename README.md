@@ -61,7 +61,14 @@ Create `policy.json` in your project root:
   "$schema": "https://raw.githubusercontent.com/fruitiecutiepie/codepol/master/policy.schema.json",
   "plugins": [
     {
-      "module": "@codepol/plugin-logger"
+      "module": "@codepol/plugin-logger",
+      "rules": [
+        {
+          "id": "require-logger-enter-exit",
+          "enabled": true,
+          "options": { "policyPath": "./policy.json" }
+        }
+      ]
     }
   ],
   "rules": [
@@ -107,11 +114,13 @@ export default [
 
 ### Plugin Loading
 
-Codepol loads plugin capabilities from `policy.json` declarations. The CLI uses these capabilities to decide which
-ESLint rules and fix providers to run, while Tree-sitter scanning uses the plugin's tree scan provider.
+Codepol loads rule-level plugin capabilities from `policy.json` declarations. The CLI uses the enabled rule plugins
+to decide which ESLint rules and fix providers to run, while Tree-sitter scanning continues to use the policy rules
+and their associated tree scan providers.
 
 The `@codepol/eslint-plugin` package is a thin adapter that re-exports rules from capability plugins such as
-`@codepol/plugin-logger`.
+`@codepol/plugin-logger`. Each rule is exported as its own plugin (for example, `loggerEnterExitRule`), and the
+`rulePlugins` export bundles them for convenience.
 
 ### Run Checks
 

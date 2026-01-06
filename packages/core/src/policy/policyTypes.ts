@@ -52,6 +52,20 @@ export type PolicyPluginDeclaration = {
   module?: string;
   /** Named export to load from the module */
   export?: string;
+  /** Optional rule-level configuration overrides */
+  rules?: PolicyPluginRuleDeclaration[];
+};
+
+/**
+ * Optional rule-level configuration for a plugin.
+ */
+export type PolicyPluginRuleDeclaration = {
+  /** Rule identifier exported by the plugin */
+  id: string;
+  /** Enable or disable the rule (default: true) */
+  enabled?: boolean;
+  /** Rule-specific options passed to the rule provider */
+  options?: unknown;
 };
 
 /**
@@ -160,6 +174,10 @@ export type EslintRuleProviderContext = {
   policy: PolicyFile;
   /** Policy path used for loading */
   policyPath: string;
+  /** Rule id associated with the provider (for rule-level plugins) */
+  ruleId?: string;
+  /** Rule-level options passed from the policy */
+  ruleOptions?: unknown;
 };
 
 /**

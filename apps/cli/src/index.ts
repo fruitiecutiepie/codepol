@@ -29,11 +29,13 @@ import {
   policyViolationsGetFromDir,
   policyViolationsGetOutputPretty,
   defaultPluginType,
-  type CodepolPlugin,
+  type CodepolRulePlugin,
   type EslintRuleProvider,
   type FixProvider,
   type PolicyFile,
   type PolicyPluginDeclaration,
+  type PolicyPluginRuleDeclaration,
+  type PolicyPluginCapabilities,
   type PolicyViolation,
 } from '@codepol/core';
 
@@ -52,111 +54,226 @@ type PolicyCheckResult = {
   violations: PolicyViolation[];
 };
 
+type RulePluginEntry = {
+  rulePlugin: CodepolRulePlugin;
+  options?: unknown;
+  sourceLabel: string;
+};
+
+type EslintRuleProviderEntry = {
+  provider: EslintRuleProvider;
+  ruleId: string;
+  ruleOptions?: unknown;
+};
+
 const builtinPluginModules: Record<string, string> = {
   logger: '@codepol/plugin-logger',
 };
 
-async function policyPluginsGetCapabilities(
+function rulePluginCapabilitiesGet(rulePlugin: CodepolRulePlugin): PolicyPluginCapabilities {
+  if (rulePlugin.capabilities != null) {
+    return rulePlugin.capabilities;
+  }
+  return {
+    eslintRuleProvider: rulePlugin.eslintRuleProvider,
+    treeScanProvider: rulePlugin.treeScanProvider,
+    fixProvider: rulePlugin.fixProvider,
+  };
+}
+
+function rulePluginsNormalize(
+  exported: unknown,
+  sourceLabel: string
+): CodepolRulePlugin[] {
+  if (!exported) {
+    throw new Error(`No rule plugins exported by ${sourceLabel}.`);
+  }
+  if (Array.isArray(exported)) {
+    return exported as CodepolRulePlugin[];
+  }
+  if (typeof exported === 'object' && exported !== null) {
+    const candidate = exported as { rulePlugins?: unknown };
+    if (Array.isArray(candidate.rulePlugins)) {
+      return candidate.rulePlugins as CodepolRulePlugin[];
+    }
+    return [exported as CodepolRulePlugin];
+  }
+  throw new Error(`Invalid rule plugin export from ${sourceLabel}.`);
+}
+
+function rulePluginValidate(rulePlugin: CodepolRulePlugin, sourceLabel: string): void {
+  if (!rulePlugin || typeof rulePlugin !== 'object') {
+    throw new Error(`Invalid rule plugin exported by ${sourceLabel}.`);
+  }
+  if (!rulePlugin.id || typeof rulePlugin.id !== 'string') {
+    throw new Error(`Rule plugin from ${sourceLabel} must declare an id.`);
+  }
+  if (!Array.isArray(rulePlugin.languages) || rulePlugin.languages.some(lang => typeof lang !== 'string')) {
+    throw new Error(`Rule plugin ${rulePlugin.id} must declare supported languages.`);
+  }
+  const capabilities = rulePluginCapabilitiesGet(rulePlugin);
+  if (!capabilities.eslintRuleProvider && !capabilities.treeScanProvider && !capabilities.fixProvider) {
+    throw new Error(`Rule plugin ${rulePlugin.id} must declare at least one capability.`);
+  }
+}
+
+async function policyRulePluginsGet(
   policy: PolicyFile,
   cwd: string
-): Promise<Map<string, CodepolPlugin>> {
+): Promise<RulePluginEntry[]> {
   let declarations: PolicyPluginDeclaration[] = [];
   if (policy.plugins != null) {
     declarations = policy.plugins;
   }
-  const pluginsMap = new Map<string, CodepolPlugin>();
+  const declarationsNormalized = [...declarations];
+  const declaredModules = new Set(declarations.filter(decl => decl.module).map(decl => decl.module!));
+  const declaredBuiltins = new Set(declarations.filter(decl => decl.builtin).map(decl => decl.builtin!));
 
-  const pluginLoad = async (
-    declaration: PolicyPluginDeclaration,
-    moduleSpecifier: string
-  ): Promise<CodepolPlugin> => {
-    const moduleSource =
-      moduleSpecifier.startsWith('.') || moduleSpecifier.startsWith('/')
-        ? pathToFileURL(path.resolve(cwd, moduleSpecifier)).href
-        : moduleSpecifier;
-    const moduleLoaded = await import(moduleSource);
-    let pluginExported;
-    if (declaration.export) {
-      pluginExported = moduleLoaded[declaration.export];
-    } else {
-      pluginExported = moduleLoaded.plugin;
-      if (moduleLoaded.default != null) {
-        pluginExported = moduleLoaded.default;
-      }
+  const ruleTypes = new Set(policy.rules.map(rule => rule.type ?? defaultPluginType));
+  for (const ruleType of ruleTypes) {
+    const builtinModule = builtinPluginModules[ruleType];
+    if (!builtinModule) {
+      continue;
     }
-    if (!pluginExported || typeof pluginExported !== 'object') {
-      throw new Error(`Invalid plugin exported by ${moduleSpecifier}.`);
+    if (declaredBuiltins.has(ruleType) || declaredModules.has(builtinModule)) {
+      continue;
     }
-    const pluginData = pluginExported as Partial<CodepolPlugin>;
-    if (!pluginData.id || !pluginData.version) {
-      throw new Error(`Plugin ${moduleSpecifier} must declare id and version.`);
-    }
-    let capabilities: CodepolPlugin['capabilities'] = {};
-    if (pluginData.capabilities != null) {
-      capabilities = pluginData.capabilities;
-    }
-    return {
-      id: pluginData.id,
-      version: pluginData.version,
-      capabilities,
-    };
-  };
+    declarationsNormalized.push({ builtin: ruleType });
+  }
 
-  for (const declaration of declarations) {
-    let moduleSpecifier: string | undefined = declaration.builtin ? builtinPluginModules[declaration.builtin] : undefined;
+  const rulePlugins: RulePluginEntry[] = [];
+  const rulePluginIds = new Set<string>();
+
+  for (const declaration of declarationsNormalized) {
+    let moduleSpecifier: string | undefined = declaration.builtin
+      ? builtinPluginModules[declaration.builtin]
+      : undefined;
     if (declaration.module != null) {
       moduleSpecifier = declaration.module;
     }
     if (!moduleSpecifier) {
       continue;
     }
-    const plugin = await pluginLoad(declaration, moduleSpecifier);
-    if (pluginsMap.has(plugin.id)) {
-      throw new Error(`Duplicate plugin id detected: ${plugin.id}.`);
+    const sourceLabel = declaration.builtin ? `builtin:${declaration.builtin}` : moduleSpecifier;
+    const moduleSource =
+      moduleSpecifier.startsWith('.') || moduleSpecifier.startsWith('/')
+        ? pathToFileURL(path.resolve(cwd, moduleSpecifier)).href
+        : moduleSpecifier;
+    const moduleLoaded = await import(moduleSource);
+    let pluginExported: unknown;
+    if (declaration.export) {
+      pluginExported = moduleLoaded[declaration.export];
+    } else if (moduleLoaded.rulePlugins != null) {
+      pluginExported = moduleLoaded.rulePlugins;
+    } else if (moduleLoaded.default != null) {
+      pluginExported = moduleLoaded.default;
+    } else if (moduleLoaded.plugin != null) {
+      pluginExported = moduleLoaded.plugin;
+    } else {
+      throw new Error(`No rule plugins export found in ${moduleSpecifier}.`);
     }
-    pluginsMap.set(plugin.id, plugin);
+
+    const normalizedRules = rulePluginsNormalize(pluginExported, sourceLabel);
+    const ruleOverrides = new Map<string, PolicyPluginRuleDeclaration>();
+    if (declaration.rules != null) {
+      for (const rule of declaration.rules) {
+        ruleOverrides.set(rule.id, rule);
+      }
+    }
+    const ruleIdsSeen = new Set<string>();
+
+    for (const rulePlugin of normalizedRules) {
+      rulePluginValidate(rulePlugin, sourceLabel);
+      if (ruleIdsSeen.has(rulePlugin.id)) {
+        throw new Error(`Duplicate rule id ${rulePlugin.id} exported by ${sourceLabel}.`);
+      }
+      ruleIdsSeen.add(rulePlugin.id);
+      const override = ruleOverrides.get(rulePlugin.id);
+      if (override?.enabled === false) {
+        continue;
+      }
+      if (rulePluginIds.has(rulePlugin.id)) {
+        throw new Error(`Duplicate rule id detected: ${rulePlugin.id}.`);
+      }
+      rulePluginIds.add(rulePlugin.id);
+      rulePlugins.push({
+        rulePlugin,
+        options: override?.options,
+        sourceLabel,
+      });
+    }
+
+    for (const ruleId of ruleOverrides.keys()) {
+      if (!ruleIdsSeen.has(ruleId)) {
+        throw new Error(`Plugin ${sourceLabel} does not export rule ${ruleId}.`);
+      }
+    }
   }
 
-  const ruleTypes = new Set(policy.rules.map(rule => {
-    let ruleType = defaultPluginType;
-    if (rule.type != null) {
-      ruleType = rule.type;
-    }
-    return ruleType;
-  }));
-  for (const ruleType of ruleTypes) {
-    if (pluginsMap.has(ruleType)) {
-      continue;
-    }
-    const moduleSpecifier = builtinPluginModules[ruleType];
-    if (!moduleSpecifier) {
-      continue;
-    }
-    const plugin = await pluginLoad({ builtin: ruleType }, moduleSpecifier);
-    if (!pluginsMap.has(plugin.id)) {
-      pluginsMap.set(plugin.id, plugin);
-    }
-  }
-
-  return pluginsMap;
+  return rulePlugins;
 }
 
 function eslintConfigGet(
-  providers: EslintRuleProvider[],
+  providers: EslintRuleProviderEntry[],
   context: { policy: PolicyFile; policyPath: string; cwd: string }
 ): ESLint.Options['overrideConfig'] {
   const plugins: Record<string, ESLint.Plugin> = {};
   const rules: Record<string, unknown> = {};
+  const pluginRules: Record<string, Record<string, unknown>> = {};
+  const pluginConfigs: Record<string, Record<string, unknown>> = {};
 
-  for (const provider of providers) {
-    if (plugins[provider.pluginName]) {
-      throw new Error(`Duplicate ESLint plugin name detected: ${provider.pluginName}.`);
+  for (const entry of providers) {
+    const provider = entry.provider;
+    const ruleName = entry.ruleId;
+    if (!pluginRules[provider.pluginName]) {
+      pluginRules[provider.pluginName] = {};
     }
-    plugins[provider.pluginName] = {
-      rules: provider.rules as ESLint.Plugin['rules'],
-      ...(provider.configs ? { configs: provider.configs as ESLint.Plugin['configs'] } : {}),
+    const ruleSet = provider.rules as Record<string, unknown>;
+    const ruleDefinition = ruleSet[ruleName];
+    if (!ruleDefinition) {
+      throw new Error(
+        `ESLint provider ${provider.pluginName} did not export rule ${ruleName}.`
+      );
+    }
+    if (pluginRules[provider.pluginName][ruleName]) {
+      throw new Error(`Duplicate ESLint rule detected: ${provider.pluginName}/${ruleName}.`);
+    }
+    pluginRules[provider.pluginName][ruleName] = ruleDefinition;
+    if (provider.configs) {
+      if (!pluginConfigs[provider.pluginName]) {
+        pluginConfigs[provider.pluginName] = {};
+      }
+      for (const [configName, configValue] of Object.entries(provider.configs)) {
+        if (pluginConfigs[provider.pluginName][configName]) {
+          throw new Error(`Duplicate ESLint config detected: ${provider.pluginName}/${configName}.`);
+        }
+        pluginConfigs[provider.pluginName][configName] = configValue;
+      }
+    }
+    const ruleConfig = provider.rulesConfigGet({
+      ...context,
+      ruleId: entry.ruleId,
+      ruleOptions: entry.ruleOptions,
+    });
+    const configKey = `${provider.pluginName}/${ruleName}`;
+    if (!(configKey in ruleConfig)) {
+      throw new Error(
+        `ESLint provider ${provider.pluginName} did not return config for ${configKey}.`
+      );
+    }
+    if (rules[configKey]) {
+      throw new Error(`Duplicate ESLint rule configuration detected: ${configKey}.`);
+    }
+    rules[configKey] = ruleConfig[configKey];
+  }
+
+  for (const [pluginName, ruleSet] of Object.entries(pluginRules)) {
+    plugins[pluginName] = {
+      rules: ruleSet as ESLint.Plugin['rules'],
+      ...(pluginConfigs[pluginName]
+        ? { configs: pluginConfigs[pluginName] as ESLint.Plugin['configs'] }
+        : {}),
     };
-    Object.assign(rules, provider.rulesConfigGet(context));
   }
 
   return {
@@ -183,12 +300,22 @@ async function policyCheck(options: {
   const { policyPath, eslintConfigPath, fix, cwd } = options;
 
   const policy = policyFileGet(policyPath);
-  const capabilityPlugins = await policyPluginsGetCapabilities(policy, cwd);
-  const eslintRuleProviders = Array.from(capabilityPlugins.values())
-    .map(plugin => plugin.capabilities.eslintRuleProvider)
-    .filter((provider): provider is EslintRuleProvider => Boolean(provider));
-  const fixProviders = Array.from(capabilityPlugins.values())
-    .map(plugin => plugin.capabilities.fixProvider)
+  const rulePlugins = await policyRulePluginsGet(policy, cwd);
+  const eslintRuleProviders = rulePlugins
+    .map((entry): EslintRuleProviderEntry | null => {
+      const capabilities = rulePluginCapabilitiesGet(entry.rulePlugin);
+      if (!capabilities.eslintRuleProvider) {
+        return null;
+      }
+      return {
+        provider: capabilities.eslintRuleProvider,
+        ruleId: entry.rulePlugin.id,
+        ruleOptions: entry.options,
+      };
+    })
+    .filter((entry): entry is EslintRuleProviderEntry => entry !== null);
+  const fixProviders = rulePlugins
+    .map(entry => rulePluginCapabilitiesGet(entry.rulePlugin).fixProvider)
     .filter((provider): provider is FixProvider => Boolean(provider));
 
   const matches = await ruleMatchesGet(policy, cwd);

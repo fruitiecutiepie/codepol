@@ -42,14 +42,16 @@ export type {
   FixProviderContext,
   FixProvider,
   PolicyPluginCapabilities,
+  CodepolRulePlugin,
   CodepolPlugin,
   PolicyPlugin,
   PolicyPluginDeclaration,
+  PolicyPluginRuleDeclaration,
   PolicyPluginInitContext,
   PolicyScanContext,
   PolicyViolation,
   RuleMatch,
-} from './policy/policyTypes';
+} from './types';
 
 // Policy loading
 export {
