@@ -272,7 +272,10 @@ const requireLoggerRule = createRule<Options, MessageIds>({
     if (!isFileCovered(policy, filename)) {
       return {};
     }
-    const logger = policy.logger;
+    const logger = policy.pluginConfig?.logger as LoggerConfig | undefined;
+    if (!logger) {
+      throw new Error('Logger plugin configuration is required for logger rules.');
+    }
     const sourceCode = context.sourceCode;
 
     function reportMissing(node: TSESTree.Node, block: TSESTree.BlockStatement | null) {

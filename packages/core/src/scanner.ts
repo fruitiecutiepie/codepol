@@ -238,6 +238,10 @@ function visitFunctions(
   }
 }
 
+function resolveLoggerConfig(policy: PolicyFile): LoggerConfig | undefined {
+  return policy.pluginConfig?.logger as LoggerConfig | undefined;
+}
+
 /**
  * Scans a single file for policy violations using Tree-sitter.
  *
@@ -254,7 +258,7 @@ function visitFunctions(
  * const violations = scanFileForViolations(
  *   '/path/to/file.ts',
  *   rule,
- *   policy.logger
+ *   policy.pluginConfig?.logger
  * );
  * ```
  */
@@ -318,9 +322,16 @@ export async function scanWithPolicy(policy: PolicyFile, cwd: string): Promise<P
   ensureInitialized();
   const matches = await collectRuleMatches(policy, cwd);
   const allViolations: PolicyViolation[] = [];
+  const loggerConfig = resolveLoggerConfig(policy);
   for (const match of matches) {
+    if (match.rule.type !== 'logger') {
+      continue;
+    }
+    if (!loggerConfig) {
+      throw new Error('Logger plugin configuration is required for logger rules.');
+    }
     for (const file of match.files) {
-      const fileViolations = scanFileForViolations(file, match.rule, policy.logger);
+      const fileViolations = scanFileForViolations(file, match.rule, loggerConfig);
       allViolations.push(...fileViolations);
     }
   }

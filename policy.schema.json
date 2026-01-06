@@ -1,15 +1,24 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "Logging Policy",
+  "title": "Policy",
   "type": "object",
-  "required": ["rules", "logger"],
+  "required": ["rules"],
   "properties": {
     "$schema": { "type": "string" },
+    "plugins": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "pluginConfig": {
+      "type": "object",
+      "additionalProperties": true
+    },
     "rules": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["id", "description", "language", "files"],
+        "required": ["id", "description", "language", "files", "type", "config"],
         "properties": {
           "id": { "type": "string" },
           "description": { "type": "string" },
@@ -25,6 +34,11 @@
           "exclude": {
             "type": "array",
             "items": { "type": "string" }
+          },
+          "type": { "type": "string" },
+          "config": {
+            "type": "object",
+            "additionalProperties": true
           }
         },
         "additionalProperties": false
@@ -33,25 +47,6 @@
     "exclude": {
       "type": "array",
       "items": { "type": "string" }
-    },
-    "logger": {
-      "type": "object",
-      "required": ["identifier", "enterMethod", "exitMethod", "import"],
-      "properties": {
-        "identifier": { "type": "string" },
-        "enterMethod": { "type": "string" },
-        "exitMethod": { "type": "string" },
-        "import": {
-          "type": "object",
-          "required": ["module", "named"],
-          "properties": {
-            "module": { "type": "string" },
-            "named": { "type": "string" }
-          },
-          "additionalProperties": false
-        }
-      },
-      "additionalProperties": false
     }
   },
   "additionalProperties": false

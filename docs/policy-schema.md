@@ -17,9 +17,31 @@ You can enable IDE autocompletion by adding the `$schema` property:
 | Property | Type | Required | Description |
 | -------- | ---- | -------- | ----------- |
 | `$schema` | string | No | JSON schema URL for IDE support |
+| `plugins` | string[] | No | Module specifiers or local paths for policy plugins |
+| `pluginConfig` | Record<string, unknown> | No | Plugin-level configuration map keyed by plugin type |
 | `rules` | PolicyRule[] | Yes | Array of enforcement rules |
 | `exclude` | string[] | No | Global file patterns to exclude |
-| `logger` | LoggerConfig | Yes | Logger configuration |
+
+## PolicyPlugins
+
+Defines which plugins are available and how they are configured.
+
+```json
+{
+  "plugins": ["@codepol/plugin-logger"],
+  "pluginConfig": {
+    "logger": {
+      "identifier": "logger",
+      "enterMethod": "enter",
+      "exitMethod": "exit",
+      "import": {
+        "module": "@org/logger",
+        "named": "logger"
+      }
+    }
+  }
+}
+```
 
 ## PolicyRule
 
@@ -31,7 +53,9 @@ Defines which files to check and how.
   "description": "Ensure all functions have logger instrumentation",
   "language": "typescript",
   "files": ["src/**/*.ts"],
-  "exclude": ["**/*.spec.ts"]
+  "exclude": ["**/*.spec.ts"],
+  "type": "logger",
+  "config": {}
 }
 ```
 
@@ -44,15 +68,17 @@ Defines which files to check and how.
 | `language` | `"typescript"` \| `"tsx"` | Yes | Target file type |
 | `files` | string[] | Yes | Glob patterns for files to include |
 | `exclude` | string[] | No | Glob patterns to exclude from this rule |
+| `type` | string | Yes | Plugin type that evaluates the rule |
+| `config` | Record<string, unknown> | Yes | Rule-specific configuration passed to the plugin |
 
 ### Language Values
 
 - `typescript`: Matches `.ts` and `.tsx` files
 - `tsx`: Matches only `.tsx` files
 
-## LoggerConfig
+## LoggerConfig (example)
 
-Configures the logger instrumentation pattern.
+Example configuration for a logger plugin.
 
 ```json
 {
@@ -121,6 +147,18 @@ Codepol uses [fast-glob](https://github.com/mrmlnc/fast-glob) for file matching.
 ```json
 {
   "$schema": "https://raw.githubusercontent.com/fruitiecutiepie/codepol/master/policy.schema.json",
+  "plugins": ["@codepol/plugin-logger"],
+  "pluginConfig": {
+    "logger": {
+      "identifier": "logger",
+      "enterMethod": "enter",
+      "exitMethod": "exit",
+      "import": {
+        "module": "@myorg/observability",
+        "named": "logger"
+      }
+    }
+  },
   "rules": [
     {
       "id": "function-logging",
@@ -136,7 +174,9 @@ Codepol uses [fast-glob](https://github.com/mrmlnc/fast-glob) for file matching.
         "**/*.d.ts",
         "**/__mocks__/**",
         "**/__tests__/**"
-      ]
+      ],
+      "type": "logger",
+      "config": {}
     },
     {
       "id": "api-logging",
@@ -144,7 +184,9 @@ Codepol uses [fast-glob](https://github.com/mrmlnc/fast-glob) for file matching.
       "language": "typescript",
       "files": [
         "src/api/**/*.ts"
-      ]
+      ],
+      "type": "logger",
+      "config": {}
     }
   ],
   "exclude": [
@@ -152,16 +194,7 @@ Codepol uses [fast-glob](https://github.com/mrmlnc/fast-glob) for file matching.
     "node_modules/**",
     "**/*.config.ts",
     "**/*.config.js"
-  ],
-  "logger": {
-    "identifier": "logger",
-    "enterMethod": "enter",
-    "exitMethod": "exit",
-    "import": {
-      "module": "@myorg/observability",
-      "named": "logger"
-    }
-  }
+  ]
 }
 ```
 
@@ -171,13 +204,15 @@ Codepol uses [fast-glob](https://github.com/mrmlnc/fast-glob) for file matching.
 
 ```json
 {
-  "logger": {
-    "identifier": "log",
-    "enterMethod": "info",
-    "exitMethod": "info",
-    "import": {
-      "module": "./logger",
-      "named": "log"
+  "pluginConfig": {
+    "logger": {
+      "identifier": "log",
+      "enterMethod": "info",
+      "exitMethod": "info",
+      "import": {
+        "module": "./logger",
+        "named": "log"
+      }
     }
   }
 }
@@ -187,13 +222,15 @@ Codepol uses [fast-glob](https://github.com/mrmlnc/fast-glob) for file matching.
 
 ```json
 {
-  "logger": {
-    "identifier": "pino",
-    "enterMethod": "trace",
-    "exitMethod": "trace",
-    "import": {
-      "module": "./pino-logger",
-      "named": "pino"
+  "pluginConfig": {
+    "logger": {
+      "identifier": "pino",
+      "enterMethod": "trace",
+      "exitMethod": "trace",
+      "import": {
+        "module": "./pino-logger",
+        "named": "pino"
+      }
     }
   }
 }
@@ -203,13 +240,15 @@ Codepol uses [fast-glob](https://github.com/mrmlnc/fast-glob) for file matching.
 
 ```json
 {
-  "logger": {
-    "identifier": "tracer",
-    "enterMethod": "startSpan",
-    "exitMethod": "endSpan",
-    "import": {
-      "module": "@opentelemetry/api",
-      "named": "tracer"
+  "pluginConfig": {
+    "logger": {
+      "identifier": "tracer",
+      "enterMethod": "startSpan",
+      "exitMethod": "endSpan",
+      "import": {
+        "module": "@opentelemetry/api",
+        "named": "tracer"
+      }
     }
   }
 }
@@ -224,7 +263,6 @@ The policy file is validated against the JSON schema. Common errors:
 ```text
 Error: policy.json validation failed
 - rules: is required
-- logger: is required
 ```
 
 ### Invalid Language
@@ -248,6 +286,7 @@ The types are available from `@codepol/core`:
 ```typescript
 import type {
   PolicyFile,
+  PolicyPlugins,
   PolicyRule,
   LoggerConfig,
   LoggerImportConfig,
@@ -255,6 +294,14 @@ import type {
 
 const policy: PolicyFile = {
   rules: [...],
-  logger: {...},
+  plugins: ['@codepol/plugin-logger'],
+  pluginConfig: {
+    logger: {
+      identifier: 'logger',
+      enterMethod: 'enter',
+      exitMethod: 'exit',
+      import: { module: '@org/logger', named: 'logger' },
+    },
+  },
 };
 ```

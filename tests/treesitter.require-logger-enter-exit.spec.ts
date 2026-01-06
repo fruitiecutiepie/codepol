@@ -18,6 +18,8 @@ describe('tree-sitter policy scan', () => {
         files: ['tests/fixtures/ts/**/*.ts'],
         exclude: [],
         language: rule.language as 'typescript' | 'tsx',
+        type: 'logger',
+        config: {},
       })),
     };
 

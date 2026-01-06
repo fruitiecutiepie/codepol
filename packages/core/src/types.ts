@@ -42,6 +42,16 @@ export interface LoggerConfig {
 }
 
 /**
+ * Metadata about policy plugins and their configuration.
+ */
+export interface PolicyPlugins {
+  /** Module specifiers or local paths to load policy plugins from. */
+  plugins?: string[];
+  /** Plugin-specific configuration keyed by plugin type. */
+  pluginConfig?: Record<string, unknown>;
+}
+
+/**
  * A single policy rule that defines which files to check and how.
  *
  * @example
@@ -51,7 +61,9 @@ export interface LoggerConfig {
  *   "description": "Ensure all exported functions have logger instrumentation",
  *   "language": "typescript",
  *   "files": ["src/**\/*.ts"],
- *   "exclude": ["**\/*.spec.ts"]
+ *   "exclude": ["**\/*.spec.ts"],
+ *   "type": "logger",
+ *   "config": {}
  * }
  * ```
  */
@@ -66,6 +78,10 @@ export interface PolicyRule {
   files: string[];
   /** Optional glob patterns for files to exclude */
   exclude?: string[];
+  /** Plugin type to execute for this rule */
+  type: string;
+  /** Plugin-specific rule configuration */
+  config: Record<string, unknown>;
 }
 
 /**
@@ -76,21 +92,27 @@ export interface PolicyRule {
  * ```json
  * {
  *   "$schema": "./policy.schema.json",
+ *   "plugins": ["@codepol/plugin-logger"],
+ *   "pluginConfig": {
+ *     "logger": {
+ *       "identifier": "logger",
+ *       "enterMethod": "enter",
+ *       "exitMethod": "exit",
+ *       "import": { "module": "@org/logger", "named": "logger" }
+ *     }
+ *   },
  *   "rules": [...],
- *   "exclude": ["dist/**"],
- *   "logger": {...}
+ *   "exclude": ["dist/**"]
  * }
  * ```
  */
-export interface PolicyFile {
+export interface PolicyFile extends PolicyPlugins {
   /** Optional JSON schema reference */
   $schema?: string;
   /** Array of policy rules to enforce */
   rules: PolicyRule[];
   /** Global exclusion patterns applied to all rules */
   exclude?: string[];
-  /** Logger configuration used for instrumentation */
-  logger: LoggerConfig;
 }
 
 /**

@@ -35,6 +35,7 @@ export type {
   LoggerImportConfig,
   LoggerConfig,
   PolicyRule,
+  PolicyPlugins,
   PolicyFile,
   PolicyViolation,
   RuleMatch,
