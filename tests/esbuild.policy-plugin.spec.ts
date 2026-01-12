@@ -35,6 +35,7 @@ describe('esbuild policy plugin', () => {
           plugins: [
             {
               module: '@codepol/plugin',
+              export: 'policyPluginLogger',
               rules: [
                 {
                   id: 'require-logger-enter-exit',

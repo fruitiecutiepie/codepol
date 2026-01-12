@@ -40,8 +40,9 @@ export type {
   PolicyRuleTargetContext,
   PolicyFile,
   TreeCheckProvider,
-  EslintRuleProviderContext,
-  EslintRuleProvider,
+  LintProviderContext,
+  LintProvider,
+  EslintProviderConfig,
   FixProviderContext,
   FixProvider,
   PolicyPluginCapabilities,
@@ -54,13 +55,72 @@ export type {
   PolicyCheckContext,
   PolicyViolation,
   RuleMatch,
+  // Adapter types
+  LintDiagnostic,
+  TreeCheckAdapterOptions,
+  TreeCheckLintAdapter,
 } from './types';
+
+import type {
+  CodepolRulePlugin,
+  LintProvider,
+  LintProviderContext,
+  EslintProviderConfig,
+} from './types';
+
+/**
+ * Factory for creating ESLint lint providers.
+ */
+export function eslintProviderCreate(config: {
+  languages: string[];
+  pluginName: string;
+  rules: Record<string, unknown>;
+  configs?: Record<string, unknown>;
+  rulesConfigGet: (ctx: LintProviderContext) => Record<string, unknown>;
+}): LintProvider {
+  const eslintConfig: EslintProviderConfig = {
+    pluginName: config.pluginName,
+    rules: config.rules,
+    configs: config.configs,
+    rulesConfigGet: config.rulesConfigGet,
+  };
+  return {
+    platform: 'eslint',
+    languages: config.languages,
+    config: eslintConfig,
+  };
+}
+
+/** @deprecated Use eslintProviderCreate instead */
+export const eslintProvider = eslintProviderCreate;
+
+/**
+ * Derive supported languages from all providers in a rule plugin.
+ */
+export function rulePluginLanguagesGet(plugin: CodepolRulePlugin): string[] {
+  const languages = new Set<string>();
+  const lintProviders = plugin.capabilities.lintProviders ?? [];
+  for (const provider of lintProviders) {
+    for (const lang of provider.languages) {
+      languages.add(lang);
+    }
+  }
+  const treeCheckProvider = plugin.capabilities.treeCheckProvider;
+  if (treeCheckProvider) {
+    for (const lang of treeCheckProvider.languages) {
+      languages.add(lang);
+    }
+  }
+  return Array.from(languages);
+}
 
 // Policy loading
 export {
   policyFileGet,
+  policyCacheClear,
   globPatternsGetMatchAny,
   policyFileGetChecked,
+  ruleTargetMatchesLanguage,
   ruleMatchesGet,
 } from './policy/policyGet';
 
@@ -92,3 +152,22 @@ export {
   policyCheck,
   policyViolationsGetOutputPretty,
 } from './policy/policyCheck';
+
+// Tree-check to lint provider adapters
+export {
+  violationToLintDiagnostic,
+  violationsToLintDiagnostics,
+} from './adapter/treeCheckAdapter';
+
+// Result
+export {
+  Result,
+  Ok,
+  Err,
+  isOk,
+  isErr,
+  resultFrom,
+  resFrom,
+  resultFromAsync,
+  resFromAsync,
+} from './result/result';

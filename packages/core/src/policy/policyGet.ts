@@ -35,6 +35,14 @@ export function policyFileGet(policyPath: string): PolicyFile {
 }
 
 /**
+ * Clears the cached policy files.
+ * Useful for testing or when policy files are modified.
+ */
+export function policyCacheClear(): void {
+  policyCacheStore.clear();
+}
+
+/**
  * Checks if any pattern in the list matches the given file path.
  *
  * @param patterns - Array of glob patterns to match against
@@ -81,7 +89,14 @@ export function policyFileGetChecked(
   return false;
 }
 
-function ruleTargetMatchesLanguage(target: PolicyRuleTarget, filePath: string): boolean {
+/**
+ * Checks if a file matches the language specified in the rule target.
+ *
+ * @param target - The policy rule target containing the language
+ * @param filePath - File path to check (can be relative or absolute)
+ * @returns True if the file matches the target language
+ */
+export function ruleTargetMatchesLanguage(target: PolicyRuleTarget, filePath: string): boolean {
   if (target.language === 'tsx') {
     return filePath.endsWith('.tsx');
   }

@@ -121,6 +121,9 @@ importers:
       '@codepol/eslint-plugin':
         specifier: workspace:*
         version: link:../eslint-plugin
+      '@codepol/plugin':
+        specifier: workspace:*
+        version: link:../plugin
       '@types/node':
         specifier: ^25.0.3
         version: 25.0.3
@@ -135,10 +138,6 @@ importers:
         version: 5.9.3
 
   packages/eslint-plugin:
-    dependencies:
-      '@codepol/plugin':
-        specifier: workspace:*
-        version: link:../plugin
     devDependencies:
       '@codepol/core':
         specifier: workspace:*

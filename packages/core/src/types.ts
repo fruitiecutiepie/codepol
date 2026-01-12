@@ -7,8 +7,9 @@ export type {
   PolicyRuleTargetContext,
   PolicyFile,
   TreeCheckProvider,
-  EslintRuleProviderContext,
-  EslintRuleProvider,
+  LintProviderContext,
+  LintProvider,
+  EslintProviderConfig,
   FixProviderContext,
   FixProvider,
   PolicyPluginCapabilities,
@@ -20,14 +21,13 @@ export type {
   PolicyCheckContext,
   PolicyViolation,
   RuleMatch,
+  // Adapter types
+  LintDiagnostic,
+  TreeCheckAdapterOptions,
+  TreeCheckLintAdapter,
 } from './policy/policyTypes';
 
-import type {
-  EslintRuleProvider,
-  FixProvider,
-  PolicyPluginCapabilities,
-  TreeCheckProvider,
-} from './policy/policyTypes';
+import type { PolicyPluginCapabilities } from './policy/policyTypes';
 
 /**
  * Stable per-rule plugin interface for Codepol capabilities.
@@ -35,14 +35,6 @@ import type {
 export type CodepolRulePlugin = {
   /** Rule identifier */
   id: string;
-  /** Supported languages */
-  languages: string[];
   /** Capability bundle for this rule */
-  capabilities?: PolicyPluginCapabilities;
-  /** ESLint rule provider capability */
-  eslintRuleProvider?: EslintRuleProvider;
-  /** Tree-sitter check provider capability */
-  treeCheckProvider?: TreeCheckProvider;
-  /** Fix provider capability */
-  fixProvider?: FixProvider;
+  capabilities: PolicyPluginCapabilities;
 };

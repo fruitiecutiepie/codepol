@@ -3,6 +3,7 @@
   "plugins": [
     {
       "module": "@codepol/plugin",
+      "export": "rulePlugins",
       "rules": [
         {
           "id": "require-logger-enter-exit",

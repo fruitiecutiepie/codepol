@@ -1,6 +1,5 @@
-import type { LoggerConfig, PolicyFile, PolicyPluginDeclaration } from '@codepol/core';
+import type { LoggerConfig, PolicyFile } from '@codepol/core';
 
-const loggerPluginId = 'logger';
 const loggerPluginModule = '@codepol/plugin';
 const loggerRuleId = 'require-logger-enter-exit';
 
@@ -14,10 +13,7 @@ export function policyLoggerConfigGet(policy: PolicyFile): LoggerConfig | null {
     return null;
   }
   for (const declaration of policy.plugins) {
-    if (
-      declaration.builtin !== loggerPluginId &&
-      declaration.module !== loggerPluginModule
-    ) {
+    if (declaration.module !== loggerPluginModule) {
       continue;
     }
     if (!declaration.rules) {

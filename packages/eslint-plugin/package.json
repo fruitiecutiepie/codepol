@@ -19,9 +19,7 @@
     "build": "tsc --project tsconfig.json",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {
-    "@codepol/plugin": "workspace:*"
-  },
+  "dependencies": {},
   "peerDependencies": {
     "@codepol/core": "^1.0.0",
     "@typescript-eslint/utils": "^8.0.0",

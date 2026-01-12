@@ -28,6 +28,7 @@ Use `semantics` and `targets` in your policy rules, then wire the logger rule pl
   "plugins": [
     {
       "module": "@codepol/plugin",
+      "export": "rulePlugins",
       "config": {
         "identifier": "logger",
         "enterMethod": "enter",

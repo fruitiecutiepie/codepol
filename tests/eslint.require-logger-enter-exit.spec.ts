@@ -1,7 +1,8 @@
 import path from 'node:path';
 import { RuleTester } from 'eslint';
 import tsParser from '@typescript-eslint/parser';
-import plugin from '@codepol/eslint-plugin';
+import { createEslintPlugin } from '@codepol/eslint-plugin';
+import { rulePlugins } from '@codepol/plugin';
 
 const ruleTester = new RuleTester({
   languageOptions: {
@@ -13,6 +14,7 @@ const ruleTester = new RuleTester({
   },
 });
 
+const plugin = createEslintPlugin(rulePlugins);
 const rule = (plugin as any).rules['require-logger-enter-exit'];
 const filename = path.join(process.cwd(), 'src/example.ts');
 

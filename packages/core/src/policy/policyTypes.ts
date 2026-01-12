@@ -1,3 +1,5 @@
+import { Result } from '../result/result';
+
 /**
  * Configuration for importing the logger module.
  *
@@ -43,15 +45,13 @@ export type LoggerConfig = {
 
 /**
  * Declaration for loading a policy plugin.
- * Either a built-in plugin name or a module specifier must be provided.
+ * Requires explicit module specifier and export name.
  */
 export type PolicyPluginDeclaration = {
-  /** Built-in plugin identifier (e.g., 'logger') */
-  builtin?: string;
   /** Module specifier or path to import */
-  module?: string;
+  module: string;
   /** Named export to load from the module */
-  export?: string;
+  export: string;
   /** Optional rule-level configuration overrides */
   rules?: PolicyPluginRuleDeclaration[];
 };
@@ -59,13 +59,13 @@ export type PolicyPluginDeclaration = {
 /**
  * Optional rule-level configuration for a plugin.
  */
-export type PolicyPluginRuleDeclaration = {
+export type PolicyPluginRuleDeclaration<TArgs = unknown> = {
   /** Rule identifier exported by the plugin */
   id: string;
   /** Enable or disable the rule (default: true) */
   enabled?: boolean;
   /** Rule-specific arguments passed to the rule provider */
-  args?: unknown;
+  args?: TArgs;
 };
 
 /**
@@ -128,6 +128,7 @@ export type PolicyRule = {
  *   "plugins": [
  *     {
  *       "module": "@codepol/plugin",
+ *       "export": "rulePlugins",
  *       "rules": [
  *         {
  *           "id": "require-logger-enter-exit",
@@ -187,22 +188,16 @@ export type PolicyCheckContext = {
  * Plugin struct for policy checks.
  */
 export type TreeCheckProvider = {
-  /** Stable plugin identifier */
-  id: string;
-  /** Plugin version */
-  version: string;
   /** Supported languages */
   languages: string[];
-  /** Optional initialization hook */
-  init?: (context: PolicyPluginInitContext) => void | Promise<void>;
   /** Check a file against a rule */
-  check: (rule: PolicyRule, context: PolicyCheckContext) => PolicyViolation[];
+  check: (rule: PolicyRule, context: PolicyCheckContext) => Result<PolicyViolation[], string>;
 };
 
 /**
- * Context passed to ESLint rule providers.
+ * Context passed to lint providers.
  */
-export type EslintRuleProviderContext = {
+export type LintProviderContext = {
   /** Current working directory */
   cwd: string;
   /** Loaded policy definition */
@@ -210,7 +205,7 @@ export type EslintRuleProviderContext = {
   /** Policy path used for loading */
   policyPath: string;
   /** Rule id associated with the provider (for rule-level plugins) */
-  ruleId?: string;
+  ruleId: string;
   /** Rule-level arguments passed from the policy */
   ruleArgs?: unknown;
   /** Rule targets resolved from the policy */
@@ -218,9 +213,22 @@ export type EslintRuleProviderContext = {
 };
 
 /**
- * ESLint rule provider capability.
+ * Generic lint provider capability.
+ * Each platform (ESLint, Biome, Ruff, etc.) implements this interface.
  */
-export type EslintRuleProvider = {
+export type LintProvider<TConfig = unknown> = {
+  /** Platform discriminator (e.g., 'eslint', 'biome', 'ruff') */
+  platform: string;
+  /** Languages this provider supports */
+  languages: string[];
+  /** Platform-specific configuration */
+  config: TConfig;
+};
+
+/**
+ * ESLint-specific provider configuration.
+ */
+export type EslintProviderConfig = {
   /** ESLint plugin name to register under */
   pluginName: string;
   /** ESLint rule map */
@@ -228,7 +236,7 @@ export type EslintRuleProvider = {
   /** Optional ESLint config presets */
   configs?: Record<string, unknown>;
   /** Build ESLint rule configuration */
-  rulesConfigGet: (context: EslintRuleProviderContext) => Record<string, unknown>;
+  rulesConfigGet: (context: LintProviderContext) => Record<string, unknown>;
 };
 
 /**
@@ -259,8 +267,8 @@ export type FixProvider = {
  * Plugin capability contract.
  */
 export type PolicyPluginCapabilities = {
-  /** Optional ESLint rule provider */
-  eslintRuleProvider?: EslintRuleProvider;
+  /** Lint providers for different platforms */
+  lintProviders?: LintProvider[];
   /** Optional Tree-sitter check provider */
   treeCheckProvider?: TreeCheckProvider;
   /** Optional fix provider */
@@ -268,24 +276,24 @@ export type PolicyPluginCapabilities = {
 };
 
 /**
- * Codepol plugin definition with optional capabilities.
+ * Codepol plugin definition.
  */
-export type CodepolPlugin = {
+export type PolicyPlugin = {
   /** Stable plugin identifier */
   id: string;
   /** Plugin version */
   version: string;
   /** Capability providers */
   capabilities: PolicyPluginCapabilities;
+  /** Optional initialization hook */
+  init?: (context: PolicyPluginInitContext) => void | Promise<void>;
 };
 
 /**
- * Plugin struct for policy checks.
+ * Deprecated alias for PolicyPlugin
+ * @deprecated Use PolicyPlugin instead
  */
-export type PolicyPlugin = TreeCheckProvider & {
-  /** Optional capability providers */
-  capabilities?: PolicyPluginCapabilities;
-};
+export type CodepolPlugin = PolicyPlugin;
 
 /**
  * Represents a single policy violation found during checking.
@@ -325,4 +333,56 @@ export type PolicyRuleTargetContext = {
   semantics: PolicyRuleSemantics;
   /** Target definition */
   target: PolicyRuleTarget;
+};
+
+// ============================================================================
+// Tree-Check to Lint Provider Adapter Types
+// ============================================================================
+
+/**
+ * Generic lint diagnostic that any lint provider can consume.
+ * Platform-agnostic representation of a linting issue.
+ */
+export type LintDiagnostic = {
+  /** Human-readable message describing the issue */
+  message: string;
+  /** 1-based line number where the issue occurs */
+  line: number;
+  /** 1-based column number where the issue occurs */
+  column: number;
+  /** Optional 1-based end line number */
+  endLine?: number;
+  /** Optional 1-based end column number */
+  endColumn?: number;
+  /** The rule ID that produced this diagnostic */
+  ruleId: string;
+  /** Severity level of the diagnostic */
+  severity: 'error' | 'warning' | 'info';
+};
+
+/**
+ * Options for adapting a TreeCheckProvider to a lint provider rule.
+ */
+export type TreeCheckAdapterOptions = {
+  /** Rule name for the generated lint rule */
+  ruleName?: string;
+  /** URL to rule documentation */
+  ruleUrl?: string;
+  /** Default severity for violations (default: 'error') */
+  severity?: 'error' | 'warning';
+  /** Path to the policy.json file */
+  policyPath?: string;
+};
+
+/**
+ * Adapter contract for converting TreeCheckProvider to lint provider rules.
+ * Each lint platform (ESLint, Biome, Ruff, etc.) implements this interface.
+ *
+ * @typeParam TRule - The platform-specific rule type produced by the adapter
+ */
+export type TreeCheckLintAdapter<TRule> = {
+  /** Platform identifier (e.g., 'eslint', 'biome', 'ruff') */
+  platform: string;
+  /** Adapt a TreeCheckProvider to a platform-specific lint rule */
+  adapt: (provider: PolicyPlugin, options?: TreeCheckAdapterOptions) => TRule;
 };

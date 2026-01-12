@@ -1,6 +1,6 @@
 import type { SyntaxNode } from 'web-tree-sitter';
-import type { LoggerConfig, PolicyCheckContext, PolicyPlugin, PolicyRule, PolicyViolation } from '@codepol/core';
-import { parserInit, parserGetForFile } from '@codepol/core';
+import type { LoggerConfig, PolicyCheckContext, PolicyPlugin, PolicyRule, PolicyViolation, TreeCheckProvider } from '@codepol/core';
+import { parserInit, parserGetForFile, Result, Ok, Err, isErr } from '@codepol/core';
 import { policyLoggerConfigGet } from './policyLoggerConfig';
 
 const blockNodeTypes = new Set(['statement_block', 'block', 'function_body']);
@@ -162,18 +162,17 @@ function functionsVisit(
 function loggerRuleCheck(
   rule: PolicyRule,
   context: PolicyCheckContext
-): PolicyViolation[] {
+): Result<PolicyViolation[], string> {
   const parserResult = parserGetForFile(context.filePath);
-  if ('Err' in parserResult) {
-    return []; // Error already logged in parserGetForFile
+  if (isErr(parserResult)) {
+    return Err(parserResult.Err);
   }
   const parser = parserResult.Ok;
   const tree = parser.parse(context.source);
   const violations: PolicyViolation[] = [];
   const logger = policyLoggerConfigGet(context.policy);
   if (!logger) {
-    console.error('Logger configuration missing. Configure @codepol/plugin with rule args.logger.');
-    return violations;
+    return Err('Logger configuration missing. Configure @codepol/plugin with rule args.logger.');
   }
 
   functionsVisit(tree.rootNode, fnNode => {
@@ -199,17 +198,19 @@ function loggerRuleCheck(
     }
   });
 
-  return violations;
+  return Ok(violations);
 }
+
+export const loggerTreeCheckProvider: TreeCheckProvider = {
+  languages: ['typescript', 'tsx'],
+  check: loggerRuleCheck,
+};
 
 export const policyPluginLogger: PolicyPlugin = {
   id: 'logger',
   version: '1.0.0',
-  languages: ['typescript', 'tsx'],
   init: parserInit,
-  check: loggerRuleCheck,
-};
-
-policyPluginLogger.capabilities = {
-  treeCheckProvider: policyPluginLogger,
+  capabilities: {
+    treeCheckProvider: loggerTreeCheckProvider,
+  },
 };

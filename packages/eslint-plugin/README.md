@@ -5,7 +5,7 @@ ESLint plugin for enforcing logger instrumentation with autofix support.
 ## Installation
 
 ```bash
-pnpm add -D @codepol/eslint-plugin @codepol/core eslint @typescript-eslint/utils
+pnpm add -D @codepol/eslint-plugin @codepol/core @codepol/plugin eslint @typescript-eslint/utils
 ```
 
 ## Features
@@ -21,13 +21,14 @@ pnpm add -D @codepol/eslint-plugin @codepol/core eslint @typescript-eslint/utils
 ### ESLint Flat Config (eslint.config.js)
 
 ```javascript
-import codepolPlugin from '@codepol/eslint-plugin';
+import { eslintPluginCreate } from '@codepol/eslint-plugin';
+import { rulePlugins } from '@codepol/plugin';
 
 export default [
   {
     files: ['**/*.ts', '**/*.tsx'],
     plugins: {
-      codepol: codepolPlugin,
+      codepol: eslintPluginCreate(rulePlugins),
     },
     rules: {
       'codepol/require-logger-enter-exit': 'error',
@@ -39,10 +40,13 @@ export default [
 ### With Custom Policy Path
 
 ```javascript
+import { eslintPluginCreate } from '@codepol/eslint-plugin';
+import { rulePlugins } from '@codepol/plugin';
+
 export default [
   {
     plugins: {
-      codepol: codepolPlugin,
+      codepol: eslintPluginCreate(rulePlugins),
     },
     rules: {
       'codepol/require-logger-enter-exit': ['error', {
@@ -56,8 +60,13 @@ export default [
 ### Legacy Config (.eslintrc.cjs)
 
 ```javascript
+const { eslintPluginCreate } = require('@codepol/eslint-plugin');
+const { rulePlugins } = require('@codepol/plugin');
+
 module.exports = {
-  plugins: ['@codepol/eslint-plugin'],
+  plugins: {
+    codepol: eslintPluginCreate(rulePlugins),
+  },
   rules: {
     'codepol/require-logger-enter-exit': 'error',
   },
@@ -154,6 +163,7 @@ Example `policy.json`:
   "plugins": [
     {
       "module": "@codepol/plugin",
+      "export": "rulePlugins",
       "rules": [
         {
           "id": "require-logger-enter-exit",

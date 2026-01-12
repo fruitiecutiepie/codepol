@@ -16,12 +16,17 @@ function policyPluginGet(
   const plugin = pluginsMap.get(ruleType);
   if (!plugin) {
     const error = `No plugin registered for rule type ${ruleType}.`;
-    console.error(error);
     return Err(error);
   }
-  if (!plugin.languages.includes(target.language)) {
+
+  const treeCheckProvider = plugin.capabilities.treeCheckProvider;
+  if (!treeCheckProvider) {
+    const error = `Plugin ${plugin.id} does not support tree checks (missing treeCheckProvider).`;
+    return Err(error);
+  }
+
+  if (!treeCheckProvider.languages.includes(target.language)) {
     const error = `Plugin ${plugin.id} does not support language ${target.language} for rule ${rule.id}.`;
-    console.error(error);
     return Err(error);
   }
   return Ok(plugin);
@@ -44,14 +49,19 @@ export function policyViolationsGetForFile(
     return pluginResult;
   }
   const plugin = pluginResult.Ok;
+  const treeCheckProvider = plugin.capabilities.treeCheckProvider!;
+
   const source = fs.readFileSync(filePath, 'utf8');
-  return Ok(plugin.check(rule, {
+  
+  const checkResult = treeCheckProvider.check(rule, {
     filePath: filePath,
     source: source,
     policy: policy,
     dir: dir,
     target: target,
-  }));
+  });
+
+  return checkResult;
 }
 
 /**

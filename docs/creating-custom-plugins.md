@@ -1,87 +1,123 @@
-# Authoring Codepol Plugins
+# Creating Custom Plugins
 
-This guide explains how to add a custom plugin to Codepol. Plugins can provide Tree-sitter checks, ESLint rules,
-fixers, or any combination of those capabilities.
+This guide shows how to create a custom codepol plugin. You'll write one check function that works with both the CLI and ESLint.
 
-## Plugin Types at a Glance
+## Overview
 
-Codepol has two related plugin shapes:
+A codepol plugin has two parts:
 
-- **Policy plugin (`PolicyPlugin`)**: Implements Tree-sitter checks for policy rules. These are loaded by
-  `policy.json` and used by the CLI when it checks files directly.
-- **Rule plugin (`CodepolRulePlugin`)**: A rule-level capability bundle that can expose ESLint rules, fixers,
-  and/or Tree-sitter checks. The CLI loads these from `policy.json` to decide which ESLint rules and fixers to run.
+1. **TreeCheckProvider** - The check logic (runs via CLI with Tree-sitter)
+2. **ESLint rule** - Generated automatically using the adapter
 
-A single package can export both. The built-in `@codepol/plugin` package does this: it exports a policy plugin
-and a rule plugin bundle.
+The recommended approach uses `eslintAdapter` to convert your TreeCheckProvider into an ESLint rule, so you write the check logic once.
 
-## Step 1: Create a Plugin Package
+## Quick Start
 
-Create a new package that depends on `@codepol/core`:
+### 1. Create the Package
 
 ```bash
-pnpm add -D @codepol/core
+mkdir codepol-plugin-no-todo
+cd codepol-plugin-no-todo
+pnpm init
+pnpm add -D @codepol/core @codepol/eslint-plugin typescript
 ```
 
-A minimal `package.json` might look like:
+### 2. Write the Plugin
 
-```json
-{
-  "name": "@your-org/codepol-plugin-foo",
-  "version": "0.1.0",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts"
-}
-```
-
-## Step 2: Implement a Policy Plugin (Tree-sitter Check)
-
-A policy plugin provides a `check` function and declares which languages it supports. The simplest
-implementation can check raw source without Tree-sitter, but most rule plugins call into the parser.
+Create `src/index.ts`:
 
 ```ts
-// src/index.ts
-import type { PolicyCheckContext, PolicyPlugin, PolicyRule, PolicyViolation } from '@codepol/core';
+import type {
+  PolicyCheckContext,
+  PolicyPlugin,
+  PolicyRule,
+  PolicyViolation,
+  CodepolRulePlugin,
+  LintProvider,
+  EslintProviderConfig,
+  TreeCheckProvider,
+  Result,
+} from '@codepol/core';
+import { Ok, parserInit } from '@codepol/core';
+import { eslintAdapter } from '@codepol/eslint-plugin';
 
-function todoCheck(rule: PolicyRule, context: PolicyCheckContext): PolicyViolation[] {
+// Define the check logic once
+function noTodoCheck(rule: PolicyRule, context: PolicyCheckContext): Result<PolicyViolation[], string> {
   const violations: PolicyViolation[] = [];
   const lines = context.source.split('\n');
 
   lines.forEach((line, index) => {
-    if (line.includes('TODO')) {
+    const todoIndex = line.indexOf('TODO');
+    if (todoIndex !== -1) {
       violations.push({
         ruleId: rule.id,
         filePath: context.filePath,
         message: 'TODO comments are not allowed',
         line: index + 1,
-        column: line.indexOf('TODO') + 1,
+        column: todoIndex + 1,
       });
     }
   });
 
-  return violations;
+  return Ok(violations);
 }
 
-export const todoPolicyPlugin: PolicyPlugin = {
-  id: 'todo',
-  version: '1.0.0',
+// Create the TreeCheckProvider
+export const noTodoTreeCheckProvider: TreeCheckProvider = {
   languages: ['typescript', 'tsx'],
-  check: todoCheck,
+  check: noTodoCheck,
 };
 
-export const plugin = todoPolicyPlugin;
-export default todoPolicyPlugin;
+// Create the PolicyPlugin container
+export const noTodoPlugin: PolicyPlugin = {
+  id: 'no-todo',
+  version: '1.0.0',
+  init: parserInit,
+  capabilities: {
+    treeCheckProvider: noTodoTreeCheckProvider,
+  },
+};
+
+// Adapt to ESLint (no need to rewrite the logic)
+const eslintRule = eslintAdapter.adapt(noTodoTreeCheckProvider, {
+  ruleName: 'no-todo-comments',
+});
+
+const eslintConfig: EslintProviderConfig = {
+  pluginName: 'codepol',
+  rules: { 'no-todo-comments': eslintRule },
+  rulesConfigGet: () => ({ 'codepol/no-todo-comments': 'error' }),
+};
+
+const lintProvider: LintProvider = {
+  platform: 'eslint',
+  languages: ['typescript', 'tsx'],
+  config: eslintConfig,
+};
+
+// Export the rule plugin
+export const noTodoRulePlugin: CodepolRulePlugin = {
+  id: 'no-todo-comments',
+  capabilities: {
+    lintProviders: [lintProvider],
+    treeCheckProvider: noTodoTreeCheckProvider,
+  },
+};
+
+export const rulePlugins = [noTodoRulePlugin];
+export const plugin = noTodoPlugin;
+export default noTodoPlugin;
 ```
 
-### Policy Configuration
-
-Once published (or linked), declare it in `policy.json` and route a rule to its type:
+### 3. Configure policy.json
 
 ```json
 {
   "plugins": [
     {
-      "module": "@your-org/codepol-plugin-foo"
+      "module": "./path/to/codepol-plugin-no-todo",
+      "export": "rulePlugins",
+      "rules": [{ "id": "no-todo-comments" }]
     }
   ],
   "rules": [
@@ -89,12 +125,12 @@ Once published (or linked), declare it in `policy.json` and route a rule to its 
       "id": "no-todo-comments",
       "semantics": {
         "description": "Disallow TODO comments",
-        "type": "todo"
+        "type": "no-todo"
       },
       "targets": [
         {
           "language": "typescript",
-          "files": ["src/**/*.ts", "src/**/*.tsx"]
+          "files": ["src/**/*.ts"]
         }
       ]
     }
@@ -102,66 +138,53 @@ Once published (or linked), declare it in `policy.json` and route a rule to its 
 }
 ```
 
-The `semantics.type` must match the policy plugin `id` (`todo` in this example).
+The `semantics.type` must match the plugin's `id` (`no-todo`).
 
-## Step 3: Add Rule-Level Capabilities (Optional)
+### 4. Test It
 
-To integrate with ESLint or provide fixes, export a `CodepolRulePlugin` with the capabilities you need.
-The CLI accepts any of these exports:
-
-- `rulePlugins` (array)
-- `default` export
-- `plugin` export
-
-```ts
-import type { CodepolRulePlugin, EslintRuleProvider } from '@codepol/core';
-
-const eslintRuleProvider: EslintRuleProvider = {
-  pluginName: 'codepol',
-  rules: {
-    'no-todo-comments': {
-      meta: { type: 'problem', schema: [] },
-      create(context) {
-        return {
-          Program() {
-            const sourceCode = context.getSourceCode();
-            const text = sourceCode.getText();
-            if (text.includes('TODO')) {
-              context.report({ node: sourceCode.ast, message: 'TODO comments are not allowed' });
-            }
-          },
-        };
-      },
-    },
-  },
-  rulesConfigGet() {
-    return {
-      'codepol/no-todo-comments': 'error',
-    };
-  },
-};
-
-export const todoRulePlugin: CodepolRulePlugin = {
-  id: 'no-todo-comments',
-  languages: ['typescript', 'tsx'],
-  eslintRuleProvider,
-};
-
-export const rulePlugins = [todoRulePlugin];
+```bash
+pnpm codepol --policy ./policy.json
 ```
 
-### Rule Plugin Configuration
+## Policy Configuration
 
-Reference rule plugins in the policy declaration so the CLI can enable the matching ESLint rule:
+### Plugin Declaration
+
+Register your plugin in `policy.json`:
 
 ```json
 {
   "plugins": [
     {
       "module": "@your-org/codepol-plugin-foo",
+      "export": "rulePlugins",
       "rules": [
+        { "id": "rule-one" },
+        { "id": "rule-two", "enabled": false }
+      ]
+    }
+  ]
+}
+```
+
+### Rule Definition
+
+Each rule needs a matching entry in `rules`:
+
+```json
+{
+  "rules": [
+    {
+      "id": "rule-one",
+      "semantics": {
+        "description": "What this rule enforces",
+        "type": "plugin-id"
+      },
+      "targets": [
         {
-          "id": "no-todo-comments"
+          "language": "typescript",
+          "files": ["src/**/*.ts"],
+          "exclude": ["**/*.test.ts"]
         }
       ]
     }
@@ -169,19 +192,9 @@ Reference rule plugins in the policy declaration so the CLI can enable the match
 }
 ```
 
-## Step 4: Validate Your Plugin
+## Advanced: Manual ESLint Rules
 
-- Ensure the plugin exports are loadable from the module entry point.
-- Check that each rule plugin has a unique `id` and declares `languages`.
-- Confirm policy rules route to the correct plugin type via `semantics.type`.
+If you need full control over the ESLint rule (e.g., for auto-fix support), you can write it manually instead of using the adapter:
 
-You can also validate plugin wiring directly from the CLI:
-
-```bash
-pnpm codepol --check-plugins --policy ./policy.json
-```
-
-This loads the policy plugins and rule plugins, then reports the resolved plugin ids.
-
-With those steps, you can ship new rule logic as a standalone package while still plugging into
-Codepol’s policy-driven workflow.
+```ts
+import type { CodepolRulePlugin, LintProvider, EslintProviderConfig } from '@codepol/core';

@@ -10,8 +10,8 @@
       "type": "array",
       "items": {
         "type": "object",
+        "required": ["module", "export"],
         "properties": {
-          "builtin": { "type": "string" },
           "module": { "type": "string" },
           "export": { "type": "string" },
           "rules": {
@@ -28,11 +28,7 @@
             }
           }
         },
-        "additionalProperties": false,
-        "oneOf": [
-          { "required": ["builtin"] },
-          { "required": ["module"] }
-        ]
+        "additionalProperties": false
       }
     },
     "rules": {

@@ -19,7 +19,7 @@ Choose the packages you need:
 pnpm add -D @codepol/cli
 
 # For ESLint integration
-pnpm add -D @codepol/eslint-plugin @typescript-eslint/utils
+pnpm add -D @codepol/eslint-plugin @codepol/plugin @typescript-eslint/utils
 
 # For esbuild integration
 pnpm add -D @codepol/esbuild-plugin esbuild
@@ -28,7 +28,7 @@ pnpm add -D @codepol/esbuild-plugin esbuild
 ### Minimal Setup (ESLint only)
 
 ```bash
-pnpm add -D @codepol/eslint-plugin @codepol/core
+pnpm add -D @codepol/eslint-plugin @codepol/core @codepol/plugin
 ```
 
 ## Step 2: Create a Policy File
@@ -41,6 +41,7 @@ Create `policy.json` in your project root:
   "plugins": [
     {
       "module": "@codepol/plugin",
+      "export": "rulePlugins",
       "rules": [
         {
           "id": "require-logger-enter-exit",
@@ -93,7 +94,8 @@ Create `policy.json` in your project root:
 ### Flat Config (eslint.config.js) - Recommended
 
 ```javascript
-import codepolPlugin from '@codepol/eslint-plugin';
+import { eslintPluginCreate } from '@codepol/eslint-plugin';
+import { rulePlugins } from '@codepol/plugin';
 import tsParser from '@typescript-eslint/parser';
 
 export default [
@@ -107,10 +109,11 @@ export default [
       },
     },
     plugins: {
-      codepol: codepolPlugin,
+      codepol: eslintPluginCreate(rulePlugins),
     },
     rules: {
       'codepol/require-logger-enter-exit': 'error',
+      eqeqeq: 'error',
     },
   },
 ];
@@ -119,11 +122,17 @@ export default [
 ### Legacy Config (.eslintrc.cjs)
 
 ```javascript
+const { eslintPluginCreate } = require('@codepol/eslint-plugin');
+const { rulePlugins } = require('@codepol/plugin');
+
 module.exports = {
   parser: '@typescript-eslint/parser',
-  plugins: ['@codepol/eslint-plugin'],
+  plugins: {
+    codepol: eslintPluginCreate(rulePlugins),
+  },
   rules: {
     'codepol/require-logger-enter-exit': 'error',
+    eqeqeq: 'error',
   },
 };
 ```
@@ -153,6 +162,7 @@ Update your `policy.json` to reference it:
   "plugins": [
     {
       "module": "@codepol/plugin",
+      "export": "rulePlugins",
       "rules": [
         {
           "id": "require-logger-enter-exit",
@@ -291,7 +301,6 @@ echo "pnpm lint:policy" > .husky/pre-commit
 
 ## Next Steps
 
-- Read the [Policy Schema Reference](./policy-schema.md) for all configuration options
-- Learn how to [author custom plugins](./plugin-authoring.md)
-- Check the [API Reference](./api-reference.md) for programmatic usage
-- Explore individual package READMEs for detailed documentation
+- [Policy Schema Reference](./policy-schema.md) - All configuration options for policy.json
+- [Creating Custom Plugins](./creating-custom-plugins.md) - Build your own rule plugins
+- [API Reference](./api-reference.md) - Programmatic usage and type definitions

@@ -49,7 +49,7 @@ Codepol provides a comprehensive enforcement pipeline that ensures functions are
 pnpm add -D @codepol/cli
 
 # Or install individual packages
-pnpm add -D @codepol/core @codepol/eslint-plugin
+pnpm add -D @codepol/core @codepol/eslint-plugin @codepol/plugin
 ```
 
 ### Create a Policy File
@@ -62,6 +62,7 @@ Create `policy.json` in your project root:
   "plugins": [
     {
       "module": "@codepol/plugin",
+      "export": "rulePlugins",
       "rules": [
         {
           "id": "require-logger-enter-exit",
@@ -113,12 +114,13 @@ languages without redefining rule meaning or rule ids.
 Add to your `eslint.config.js`:
 
 ```javascript
-import codepolPlugin from '@codepol/eslint-plugin';
+import { eslintPluginCreate } from '@codepol/eslint-plugin';
+import { rulePlugins } from '@codepol/plugin';
 
 export default [
   {
     plugins: {
-      codepol: codepolPlugin,
+      codepol: eslintPluginCreate(rulePlugins),
     },
     rules: {
       'codepol/require-logger-enter-exit': 'error',
@@ -133,9 +135,9 @@ Codepol loads rule-level plugin capabilities from `policy.json` declarations. Th
 to decide which ESLint rules and fix providers to run, while Tree-sitter checking continues to use the policy rules
 and their associated tree check providers.
 
-The `@codepol/eslint-plugin` package is a thin adapter that re-exports rules from capability plugins such as
-`@codepol/plugin`. Each rule is exported as its own plugin (for example, `loggerEnterExitRule`), and the
-`rulePlugins` export bundles them for convenience.
+The `@codepol/eslint-plugin` package is a thin adapter that aggregates rules from capability plugins such as
+`@codepol/plugin`. Use `eslintPluginCreate(rulePlugins)` to assemble the ESLint adapter from any set of
+`CodepolRulePlugin` instances.
 
 ### Run Checks
 

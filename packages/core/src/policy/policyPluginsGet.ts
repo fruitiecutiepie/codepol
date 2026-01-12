@@ -11,57 +11,24 @@ export const defaultPluginType = 'logger';
 
 export type PolicyPluginsMap = Map<string, PolicyPlugin>;
 
-const pluginsBuiltinModules: Record<string, string> = {
-  logger: '@codepol/plugin',
-};
-
 async function policyPluginGet(
   declaration: PolicyPluginDeclaration,
   cwd: string
 ): Promise<Result<PolicyPlugin, string>> {
-  let moduleSpecifier = declaration.module;
-  if (declaration.builtin) {
-    moduleSpecifier = pluginsBuiltinModules[declaration.builtin];
-    if (!moduleSpecifier) {
-      const error = `Unknown builtin plugin: ${declaration.builtin}.`;
-      console.error(error);
-      return Err(error);
-    }
-  }
-  if (!moduleSpecifier) {
-    const error = 'Plugin declaration missing module specifier.';
-    console.error(error);
-    return Err(error);
-  }
+  const moduleSpecifier = declaration.module;
   const moduleSource = moduleSpecifier.startsWith('.') || moduleSpecifier.startsWith('/')
     ? pathToFileURL(path.resolve(cwd, moduleSpecifier)).href
     : moduleSpecifier;
   const moduleLoaded = await import(moduleSource);
-  let pluginExported;
-  if (declaration.export) {
-    pluginExported = moduleLoaded[declaration.export];
-  } else {
-    pluginExported = moduleLoaded.plugin;
-    if (moduleLoaded.default != null) {
-      pluginExported = moduleLoaded.default;
-    }
-  }
+  const pluginExported = moduleLoaded[declaration.export];
   if (!pluginExported) {
-    const error = `No plugin export found in ${moduleSpecifier}.`;
-    console.error(error);
+    const error = `Module ${moduleSpecifier} does not export "${declaration.export}".`;
     return Err(error);
   }
   const plugin = pluginExported as PolicyPlugin;
 
-  const sourceLabel = declaration.builtin ? `builtin:${declaration.builtin}` : moduleSpecifier;
-  if (!plugin.id || !plugin.version || !plugin.check) {
-    const error = `Invalid plugin exported by ${sourceLabel}.`;
-    console.error(error);
-    return Err(error);
-  }
-  if (!Array.isArray(plugin.languages)) {
-    const error = `Plugin ${plugin.id} must declare supported languages.`;
-    console.error(error);
+  if (!plugin.id || !plugin.version || !plugin.capabilities) {
+    const error = `Invalid plugin exported by ${moduleSpecifier}.`;
     return Err(error);
   }
 
@@ -90,7 +57,6 @@ export async function policyPluginsGet(
     const plugin = pluginResult.Ok;
     if (pluginsMapGet.has(plugin.id)) {
       const error = `Duplicate plugin id detected: ${plugin.id}.`;
-      console.error(error);
       return Err(error);
     }
     pluginsMapGet.set(plugin.id, plugin);
@@ -110,13 +76,22 @@ export async function policyPluginsGet(
     const plugin = pluginsMapGet.get(ruleType);
     if (!plugin) {
       const error = `No plugin registered for rule type ${ruleType}.`;
-      console.error(error);
       return Err(error);
     }
+
+    // For tree checks, we need the treeCheckProvider
+    const treeCheckProvider = plugin.capabilities.treeCheckProvider;
+    if (!treeCheckProvider) {
+       // If the rule is strictly for other providers (e.g. lint), we might not fail here?
+       // But this function seems to prepare for policyTreeCheck.
+       // Let's assume strictness for now.
+       const error = `Plugin ${plugin.id} does not support tree checks (missing treeCheckProvider) for rule ${rule.id}.`;
+       return Err(error);
+    }
+
     for (const target of rule.targets) {
-      if (!plugin.languages.includes(target.language)) {
+      if (!treeCheckProvider.languages.includes(target.language)) {
         const error = `Plugin ${plugin.id} does not support language ${target.language} for rule ${rule.id}.`;
-        console.error(error);
         return Err(error);
       }
     }

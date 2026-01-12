@@ -5,23 +5,30 @@
  * Provides ESLint rule definitions plus tree-sitter check integration.
  */
 
-import fs from 'fs';
 import path from 'path';
 import { ESLintUtils, TSESLint, TSESTree } from '@typescript-eslint/utils';
-import { minimatch } from 'minimatch';
 import type {
   CodepolRulePlugin,
-  EslintRuleProvider,
-  EslintRuleProviderContext,
+  LintProvider,
+  LintProviderContext,
+  EslintProviderConfig,
   LoggerConfig,
   PolicyFile,
   PolicyRuleSemantics,
-  PolicyRuleTarget,
   PolicyRuleTargetContext,
 } from '@codepol/core';
-import { defaultPluginType } from '@codepol/core';
+import {
+  defaultPluginType,
+  policyFileGet,
+  policyCacheClear,
+  globPatternsGetMatchAny,
+  ruleTargetMatchesLanguage,
+} from '@codepol/core';
 import { policyLoggerConfigGet } from './policyLoggerConfig';
-import { policyPluginLogger } from './policyPluginLogger';
+import { policyPluginLogger, loggerTreeCheckProvider } from './policyPluginLogger';
+
+// Re-export cache clear for backwards compatibility
+export { policyCacheClear };
 
 /**
  * Rule options for require-logger-enter-exit.
@@ -42,49 +49,8 @@ const RULE_URL =
 
 const createRule = ESLintUtils.RuleCreator(() => RULE_URL);
 
-const policyFileMap = new Map<string, PolicyFile>();
-
-/**
- * Loads a policy file with caching.
- */
-function policyFileGet(policyPath: string): PolicyFile {
-  const resolved = path.resolve(policyPath);
-  const cached = policyFileMap.get(resolved);
-  if (cached) {
-    return cached;
-  }
-  const raw = fs.readFileSync(resolved, 'utf8');
-  const parsed = JSON.parse(raw) as PolicyFile;
-  policyFileMap.set(resolved, parsed);
-  return parsed;
-}
-
-/**
- * Clears the cached policy files.
- */
-export function clearPolicyCache(): void {
-  policyFileMap.clear();
-}
-
-function globPatternsGetMatchAny(patterns: string[] | undefined, relativeFile: string): boolean {
-  if (!patterns || patterns.length === 0) {
-    return false;
-  }
-  return patterns.some(pattern => minimatch(relativeFile, pattern, { dot: true }));
-}
-
 function ruleTypeGet(semantics: PolicyRuleSemantics): string {
   return semantics.type ?? defaultPluginType;
-}
-
-function ruleTargetMatchesLanguage(target: PolicyRuleTarget, filePath: string): boolean {
-  if (target.language === 'tsx') {
-    return filePath.endsWith('.tsx');
-  }
-  if (target.language === 'typescript') {
-    return filePath.endsWith('.ts') || filePath.endsWith('.tsx');
-  }
-  return true;
 }
 
 function policyRuleTargetsGet(policy: PolicyFile): PolicyRuleTargetContext[] {
@@ -469,10 +435,10 @@ const eslintRules = {
   'require-logger-enter-exit': requireLoggerRule,
 };
 
-export const eslintRuleProvider: EslintRuleProvider = {
+const eslintProviderConfig: EslintProviderConfig = {
   pluginName: 'codepol',
   rules: eslintRules,
-  rulesConfigGet: (ctx: EslintRuleProviderContext) => {
+  rulesConfigGet: (ctx: LintProviderContext) => {
     const ruleArgs =
       ctx.ruleArgs && typeof ctx.ruleArgs === 'object' ? ctx.ruleArgs : {};
     return {
@@ -489,22 +455,19 @@ export const eslintRuleProvider: EslintRuleProvider = {
   },
 };
 
+export const loggerLintProvider: LintProvider = {
+  platform: 'eslint',
+  languages: ['typescript', 'tsx'],
+  config: eslintProviderConfig,
+};
+
 export const loggerEnterExitRule: CodepolRulePlugin = {
   id: 'require-logger-enter-exit',
-  languages: ['typescript', 'tsx'],
-  eslintRuleProvider,
-  treeCheckProvider: policyPluginLogger,
   capabilities: {
-    eslintRuleProvider,
-    treeCheckProvider: policyPluginLogger,
+    lintProviders: [loggerLintProvider],
+    treeCheckProvider: loggerTreeCheckProvider,
   },
 };
 
-export const loggerRulePlugins = [loggerEnterExitRule];
-export const rulePlugins = loggerRulePlugins;
-export const rules = eslintRules;
-
-const rulePluginBundle = { rulePlugins };
-
-export const plugin = policyPluginLogger;
-export default rulePluginBundle;
+export const rulePlugins = [loggerEnterExitRule];
+export { policyPluginLogger };

@@ -28,13 +28,22 @@ import type {
   PolicyPluginCapabilities,
   CodepolRulePlugin,
   CodepolPlugin,
+  PolicyPlugin,
   PolicyPluginsMap,
-  EslintRuleProvider,
+  LintProvider,
+  LintProviderContext,
+  EslintProviderConfig,
   FixProvider,
   RuleMatch,
   PolicyCheckOptions,
   PolicyCheckResult,
   PolicyPluginRuleDeclaration,
+  // Adapter types
+  LintDiagnostic,
+  TreeCheckAdapterOptions,
+  TreeCheckLintAdapter,
+  // Result
+  Result,
 } from '@codepol/core';
 ```
 
@@ -329,17 +338,224 @@ if (output) {
 
 ---
 
-## @codepol/eslint-plugin
+### Tree-Check Adapter Types
 
-### Plugin Object
+The adapter layer enables converting `TreeCheckProvider` implementations into lint provider rules.
+This is a provider-agnostic design: ESLint is the first supported platform, with Biome/Ruff/others
+possible in the future.
+
+#### LintDiagnostic
+
+Platform-agnostic lint diagnostic that any lint provider can consume.
 
 ```typescript
-import plugin from '@codepol/eslint-plugin';
+type LintDiagnostic = {
+  message: string;       // Human-readable message
+  line: number;          // 1-based line number
+  column: number;        // 1-based column number
+  endLine?: number;      // Optional end line
+  endColumn?: number;    // Optional end column
+  ruleId: string;        // Rule ID that produced this diagnostic
+  severity: 'error' | 'warning' | 'info';
+};
+```
 
+#### TreeCheckAdapterOptions
+
+Options for adapting a `TreeCheckProvider` to a lint provider rule.
+
+```typescript
+type TreeCheckAdapterOptions = {
+  ruleName?: string;              // Rule name for the generated lint rule
+  ruleUrl?: string;               // URL to rule documentation
+  severity?: 'error' | 'warning'; // Default severity (default: 'error')
+  policyPath?: string;            // Path to policy.json file
+};
+```
+
+#### TreeCheckLintAdapter
+
+Adapter contract for converting `TreeCheckProvider` to lint provider rules.
+
+```typescript
+type TreeCheckLintAdapter<TRule> = {
+  platform: string;  // Platform identifier (e.g., 'eslint', 'biome')
+  adapt: (provider: TreeCheckProvider, options?: TreeCheckAdapterOptions) => TRule;
+};
+```
+
+---
+
+### violationToLintDiagnostic
+
+Converts a `PolicyViolation` to a platform-agnostic `LintDiagnostic`.
+
+```typescript
+function violationToLintDiagnostic(
+  violation: PolicyViolation,
+  severity?: 'error' | 'warning' | 'info'
+): LintDiagnostic
+```
+
+**Parameters:**
+
+- `violation`: The policy violation to convert
+- `severity`: Severity level to assign (default: `'error'`)
+
+**Returns:** A `LintDiagnostic` representing the violation
+
+**Example:**
+
+```typescript
+import { violationToLintDiagnostic } from '@codepol/core';
+
+const violation = {
+  ruleId: 'require-logger',
+  filePath: '/src/foo.ts',
+  message: 'Missing logger.enter()',
+  line: 10,
+  column: 5,
+};
+
+const diagnostic = violationToLintDiagnostic(violation);
+// { message: 'Missing logger.enter()', line: 10, column: 5, ruleId: 'require-logger', severity: 'error' }
+```
+
+---
+
+### violationsToLintDiagnostics
+
+Batch converts an array of `PolicyViolation` to `LintDiagnostic`.
+
+```typescript
+function violationsToLintDiagnostics(
+  violations: PolicyViolation[],
+  severity?: 'error' | 'warning' | 'info'
+): LintDiagnostic[]
+```
+
+**Parameters:**
+
+- `violations`: Array of policy violations to convert
+- `severity`: Severity level to assign (default: `'error'`)
+
+**Returns:** Array of `LintDiagnostic` objects
+
+---
+
+## @codepol/eslint-plugin
+
+### eslintPluginCreate
+
+```typescript
+import { eslintPluginCreate } from '@codepol/eslint-plugin';
+import { rulePlugins } from '@codepol/plugin';
+
+const plugin = eslintPluginCreate(rulePlugins);
 // plugin.rules['require-logger-enter-exit']
 ```
 
-The ESLint plugin is a thin adapter that re-exports rules from capability plugins like `@codepol/plugin`.
+The ESLint plugin is a thin adapter that aggregates rules from capability plugins like `@codepol/plugin`.
+
+---
+
+### eslintAdapter
+
+Converts a `TreeCheckProvider` into an ESLint rule module. This enables tree-sitter based checks
+to run within ESLint's infrastructure without duplicating the check logic.
+
+```typescript
+import { eslintAdapter } from '@codepol/eslint-plugin';
+
+const eslintAdapter: TreeCheckLintAdapter<TSESLint.RuleModule<string, unknown[]>>
+```
+
+**Properties:**
+
+- `platform`: `'eslint'`
+- `adapt(provider, options?)`: Converts a `TreeCheckProvider` to an ESLint rule
+
+**Example:**
+
+```typescript
+import { eslintAdapter } from '@codepol/eslint-plugin';
+import { loggerTreeCheckProvider } from '@codepol/plugin';
+
+// Convert tree-check provider to ESLint rule
+const eslintRule = eslintAdapter.adapt(loggerTreeCheckProvider, {
+  ruleName: 'require-logger-enter-exit',
+});
+
+// Use in ESLint flat config
+export default [
+  {
+    plugins: {
+      codepol: { rules: { 'require-logger-enter-exit': eslintRule } },
+    },
+    rules: {
+      'codepol/require-logger-enter-exit': 'error',
+    },
+  },
+];
+```
+
+---
+
+### eslintAdapterInit
+
+Pre-initializes a `TreeCheckProvider` for use with ESLint. Call this before running ESLint
+to ensure async initialization completes (e.g., loading Tree-sitter WASM parsers).
+
+```typescript
+async function eslintAdapterInit(
+  provider: TreeCheckProvider,
+  policy: PolicyFile,
+  cwd: string
+): Promise<void>
+```
+
+**Parameters:**
+
+- `provider`: The `TreeCheckProvider` to initialize
+- `policy`: The loaded policy file
+- `cwd`: Current working directory
+
+**Example:**
+
+```typescript
+import { eslintAdapterInit, eslintAdapter } from '@codepol/eslint-plugin';
+import { policyFileGet, parserInit, langAdd } from '@codepol/core';
+import { loggerTreeCheckProvider } from '@codepol/plugin';
+
+// Initialize tree-sitter languages
+langAdd({ langId: 'typescript', fileExtensions: ['.ts'] });
+await parserInit();
+
+// Initialize the provider
+const policy = policyFileGet('./policy.json');
+await eslintAdapterInit(loggerTreeCheckProvider, policy, process.cwd());
+
+// Now the adapted rule will work without async init warnings
+const rule = eslintAdapter.adapt(loggerTreeCheckProvider);
+```
+
+---
+
+### policyCacheClear / providerInitStateClear
+
+Utility functions for clearing cached state (useful for testing).
+
+```typescript
+import { policyCacheClear, providerInitStateClear } from '@codepol/eslint-plugin';
+
+// Clear cached policy files
+policyCacheClear();
+
+// Clear provider initialization state
+providerInitStateClear();
+```
+
+Note: The old names `clearPolicyCache` and `clearProviderInitState` are still available but deprecated.
 
 ---
 
@@ -348,15 +564,27 @@ The ESLint plugin is a thin adapter that re-exports rules from capability plugin
 ### Rule Plugins
 
 ```typescript
-import { loggerEnterExitRule, rulePlugins } from '@codepol/plugin';
+import { loggerEnterExitRule, loggerLintProvider, rulePlugins } from '@codepol/plugin';
 
 // loggerEnterExitRule.id === 'require-logger-enter-exit'
-// loggerEnterExitRule.capabilities?.eslintRuleProvider
+// loggerEnterExitRule.capabilities.lintProviders contains loggerLintProvider
+// loggerLintProvider.platform === 'eslint'
+// loggerLintProvider.languages === ['typescript', 'tsx']
 // rulePlugins (array for convenience)
 ```
 
-Use `eslintRuleProvider.rulesConfigGet({ policy, policyPath, cwd, ruleId, ruleArgs })` to build ESLint rule
-configurations that match your policy file and per-rule args.
+Use `(lintProvider.config as EslintProviderConfig).rulesConfigGet({ policy, policyPath, cwd, ruleId, ruleArgs })`
+to build ESLint rule configurations that match your policy file and per-rule args.
+
+### policyCacheClear
+
+Clears the policy file cache used by the logger plugin.
+
+```typescript
+import { policyCacheClear } from '@codepol/plugin';
+
+policyCacheClear();
+```
 
 **Policy configuration example:**
 
@@ -365,6 +593,7 @@ configurations that match your policy file and per-rule args.
   "plugins": [
     {
       "module": "@codepol/plugin",
+      "export": "rulePlugins",
       "rules": [
         {
           "id": "require-logger-enter-exit",
@@ -386,16 +615,6 @@ configurations that match your policy file and per-rule args.
     }
   ]
 }
-```
-
-### clearPolicyCache (ESLint Plugin)
-
-Clears the ESLint plugin's policy cache.
-
-```typescript
-import { clearPolicyCache } from '@codepol/eslint-plugin';
-
-clearPolicyCache();
 ```
 
 ---

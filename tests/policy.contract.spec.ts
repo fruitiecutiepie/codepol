@@ -20,8 +20,12 @@ describe('policy contract', () => {
 
   it('each rule defines at least one target glob', () => {
     for (const rule of policy.rules) {
-      expect(Array.isArray(rule.files)).toBe(true);
-      expect(rule.files.length).toBeGreaterThan(0);
+      expect(Array.isArray(rule.targets)).toBe(true);
+      expect(rule.targets.length).toBeGreaterThan(0);
+      for (const target of rule.targets) {
+        expect(Array.isArray(target.files)).toBe(true);
+        expect(target.files.length).toBeGreaterThan(0);
+      }
     }
   });
 });

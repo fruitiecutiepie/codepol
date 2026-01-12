@@ -8,14 +8,14 @@
  * @example
  * ```typescript
  * import { build } from 'esbuild';
- * import { esbuildPluginNew } from '@codepol/esbuild-plugin';
+ * import { esbuildPluginCreate } from '@codepol/esbuild-plugin';
  *
  * await build({
  *   entryPoints: ['src/index.ts'],
  *   bundle: true,
  *   outfile: 'dist/bundle.js',
  *   plugins: [
- *     esbuildPluginNew({
+ *     esbuildPluginCreate({
  *       policyPath: './policy.json',
  *       fix: false, // Set to true to auto-fix violations
  *     }),
@@ -28,6 +28,7 @@ import path from 'path';
 import type { Plugin } from 'esbuild';
 import { ESLint } from 'eslint';
 import {
+  langAdd,
   parserInit,
   policyFileGet,
   ruleMatchesGet,
@@ -36,7 +37,8 @@ import {
   type PolicyFile,
   type PolicyViolation,
 } from '@codepol/core';
-import eslintPlugin from '@codepol/eslint-plugin';
+import { eslintPluginCreate } from '@codepol/eslint-plugin';
+import { rulePlugins } from '@codepol/plugin';
 
 /**
  * Options for the esbuild policy plugin.
@@ -78,7 +80,9 @@ async function policyCheck(options: {
   const fix = options.fix;
   const cwd = options.cwd;
 
-  // Initialize web-tree-sitter WASM parser
+  // Register languages and initialize web-tree-sitter WASM parser
+  langAdd({ langId: 'typescript', fileExtensions: ['.ts'] });
+  langAdd({ langId: 'tsx', fileExtensions: ['.tsx'] });
   await parserInit();
 
   const policy = policyFileGet(policyPath);
@@ -92,7 +96,7 @@ async function policyCheck(options: {
   const eslint = new ESLint({
     overrideConfigFile: eslintConfigPath,
     plugins: {
-      codepol: eslintPlugin as unknown as ESLint.Plugin,
+      codepol: eslintPluginCreate(rulePlugins) as unknown as ESLint.Plugin,
     },
     fix: fixEnabled,
     cwd: cwd,
@@ -134,15 +138,15 @@ async function policyCheck(options: {
  *
  * @example Basic usage
  * ```typescript
- * import { esbuildPluginNew } from '@codepol/esbuild-plugin';
+ * import { esbuildPluginCreate } from '@codepol/esbuild-plugin';
  *
- * plugins: [esbuildPluginNew()]
+ * plugins: [esbuildPluginCreate()]
  * ```
  *
  * @example With custom paths
  * ```typescript
  * plugins: [
- *   esbuildPluginNew({
+ *   esbuildPluginCreate({
  *     policyPath: './config/policy.json',
  *     eslintConfigPath: './config/eslint.config.js',
  *   })
@@ -152,11 +156,11 @@ async function policyCheck(options: {
  * @example With autofix enabled
  * ```typescript
  * plugins: [
- *   esbuildPluginNew({ fix: true })
+ *   esbuildPluginCreate({ fix: true })
  * ]
  * ```
  */
-export function esbuildPluginNew(options: PolicyPluginOptions = {}): Plugin {
+export function esbuildPluginCreate(options: PolicyPluginOptions = {}): Plugin {
   return {
     name: 'codepol-policy',
     setup(build) {
@@ -200,4 +204,7 @@ export function esbuildPluginNew(options: PolicyPluginOptions = {}): Plugin {
   };
 }
 
-export default esbuildPluginNew;
+/** @deprecated Use esbuildPluginCreate instead */
+export const esbuildPluginNew = esbuildPluginCreate;
+
+export default esbuildPluginCreate;

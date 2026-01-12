@@ -111,6 +111,7 @@ Declares a plugin that can handle policy rules.
 ```json
 {
   "module": "@codepol/plugin",
+  "export": "rulePlugins",
   "rules": [
     {
       "id": "require-logger-enter-exit",
@@ -133,7 +134,7 @@ Declares a plugin that can handle policy rules.
 ```json
 {
   "module": "./plugins/custom-plugin.js",
-  "export": "customPlugin"
+  "export": "rulePlugins"
 }
 ```
 
@@ -141,9 +142,8 @@ Declares a plugin that can handle policy rules.
 
 | Property | Type | Required | Description |
 | -------- | ---- | -------- | ----------- |
-| `builtin` | string | No | Built-in plugin identifier (if supported) |
-| `module` | string | No | Module specifier or path to import |
-| `export` | string | No | Named export to load from the module |
+| `module` | string | Yes | Module specifier or path to import |
+| `export` | string | Yes | Named export to load from the module |
 | `rules` | PolicyPluginRuleDeclaration[] | No | Rule-level configuration for this plugin |
 
 ## PolicyPluginRuleDeclaration
@@ -219,6 +219,7 @@ Codepol uses [fast-glob](https://github.com/mrmlnc/fast-glob) for file matching.
   "plugins": [
     {
       "module": "@codepol/plugin",
+      "export": "rulePlugins",
       "rules": [
         {
           "id": "require-logger-enter-exit",
@@ -295,6 +296,7 @@ Codepol uses [fast-glob](https://github.com/mrmlnc/fast-glob) for file matching.
   "plugins": [
     {
       "module": "@codepol/plugin",
+      "export": "rulePlugins",
       "rules": [
         {
           "id": "require-logger-enter-exit",
@@ -323,6 +325,7 @@ Codepol uses [fast-glob](https://github.com/mrmlnc/fast-glob) for file matching.
   "plugins": [
     {
       "module": "@codepol/plugin",
+      "export": "rulePlugins",
       "rules": [
         {
           "id": "require-logger-enter-exit",
@@ -351,6 +354,7 @@ Codepol uses [fast-glob](https://github.com/mrmlnc/fast-glob) for file matching.
   "plugins": [
     {
       "module": "@codepol/plugin",
+      "export": "rulePlugins",
       "rules": [
         {
           "id": "require-logger-enter-exit",
