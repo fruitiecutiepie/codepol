@@ -37,7 +37,7 @@ import type {
   TreeCheckProvider,
   Result,
 } from '@codepol/core';
-import { Ok } from '@codepol/core';
+import { Ok, rulePluginCreate } from '@codepol/core';
 import { eslintAdapter } from '@codepol/eslint-plugin';
 
 // Define the check logic once
@@ -70,18 +70,18 @@ export const noTodoTreeCheckProvider: TreeCheckProvider = {
   check: noTodoCheck,
 };
 
-// Adapt to ESLint (no need to rewrite the logic)
-// The rule name must match the plugin's ID structure
-// NOTE: Rule ID should be descriptive. If not namespaced (no '/'), codepol will prepend the package name.
+// Rule ID must NOT contain '/' - codepol uses '/' for namespacing.
+// Your ID will be auto-prefixed: "no-todo-comments" → "@scope/plugin/no-todo-comments"
 const ruleId = 'no-todo-comments';
 
-// Create rule plugin capability structure
-const rulePluginBase: CodepolRulePlugin = {
+// Create rule plugin capability structure using rulePluginCreate()
+// This validates the ID at construction time and is required for type safety.
+const rulePluginBase = rulePluginCreate({
   id: ruleId,
   capabilities: {
     treeCheckProvider: noTodoTreeCheckProvider,
   }
-};
+});
 
 const eslintRule = eslintAdapter.adapt(rulePluginBase, {
   ruleName: 'no-todo-comments',
@@ -99,14 +99,14 @@ const lintProvider: LintProvider = {
   config: eslintConfig,
 };
 
-// Export the rule plugin
-export const noTodoRulePlugin: CodepolRulePlugin = {
+// Export the rule plugin - must use rulePluginCreate() for validation
+export const noTodoRulePlugin: CodepolRulePlugin = rulePluginCreate({
   id: ruleId,
   capabilities: {
     lintProviders: [lintProvider],
     treeCheckProvider: noTodoTreeCheckProvider,
   },
-};
+});
 
 // Default export is required for codepol to load the plugin
 export default [noTodoRulePlugin];
@@ -147,14 +147,30 @@ pnpm codepol --policy ./policy.json
 
 Plugins must use a **default export** containing an array of `CodepolRulePlugin` objects. This is the only export convention codepol uses—consumers never need to specify an export name.
 
+**Important:** All rule plugins must be created using `rulePluginCreate()`. This validates the rule ID at construction time and ensures type safety. Direct object literals won't type-check.
+
 ```typescript
 // src/index.ts
-export const myRule: CodepolRulePlugin = { /* ... */ };
-export const anotherRule: CodepolRulePlugin = { /* ... */ };
+import { rulePluginCreate, type CodepolRulePlugin } from '@codepol/core';
+
+// ✓ Correct - uses rulePluginCreate()
+export const myRule: CodepolRulePlugin = rulePluginCreate({
+  id: 'my-rule',  // Must NOT contain '/'
+  capabilities: { /* ... */ },
+});
+
+export const anotherRule: CodepolRulePlugin = rulePluginCreate({
+  id: 'another-rule',
+  capabilities: { /* ... */ },
+});
 
 // Default export is required for codepol to load the plugin
 export default [myRule, anotherRule];
 ```
+
+::: warning Rule ID Constraint
+Rule IDs must **not** contain `/`. The `/` character is reserved for namespacing—codepol automatically prefixes your ID with the module name (e.g., `my-rule` → `@your-org/plugin/my-rule`).
+:::
 
 Consumers reference your plugin by module path only:
 

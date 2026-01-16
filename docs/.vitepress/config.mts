@@ -7,15 +7,23 @@ export default defineConfig({
   themeConfig: {
     nav: [
       { text: 'Home', link: '/' },
-      { text: 'Getting Started', link: '/getting-started' }
+      { text: 'Getting Started', link: '/getting-started' },
+      { text: 'API Reference', link: '/api-reference' }
     ],
     sidebar: [
       {
-        text: 'Documentation',
+        text: 'Guide',
         items: [
           { text: 'Getting Started', link: '/getting-started' },
           { text: 'Policy Schema', link: '/policy-schema' },
+          { text: 'Creating Custom Plugins', link: '/creating-custom-plugins' },
           { text: 'API Reference', link: '/api-reference' }
+        ]
+      },
+      {
+        text: 'Rules',
+        items: [
+          { text: 'require-logger-enter-exit', link: '/rules/require-logger-enter-exit' }
         ]
       }
     ],
