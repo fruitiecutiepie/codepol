@@ -45,6 +45,7 @@ export type {
   FixProviderContext,
   FixProvider,
   PolicyPluginCapabilities,
+  RulePluginConfig,
   CodepolRulePlugin,
   RulePlugin,
   PolicyPluginDeclaration,
@@ -56,6 +57,8 @@ export type {
   TreeCheckAdapterOptions,
   TreeCheckLintAdapter,
 } from './types';
+
+export { rulePluginCreate } from './types';
 
 import type {
   CodepolRulePlugin,

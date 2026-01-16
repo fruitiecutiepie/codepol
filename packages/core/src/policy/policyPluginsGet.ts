@@ -140,6 +140,12 @@ export async function policyPluginsGet(
       if (!rulePlugin.id) {
          return Err(`Rule plugin from ${moduleSpecifier} missing id.`);
       }
+      if (rulePlugin.id.includes('/')) {
+        return Err(
+          `Rule plugin id "${rulePlugin.id}" from ${moduleSpecifier} must not contain '/'. ` +
+          `The '/' character is reserved for namespacing (e.g., "@scope/plugin/rule-id").`
+        );
+      }
       
       const resolvedId = ruleIDGetWithNamespace(rulePlugin.id, moduleSpecifier);
 

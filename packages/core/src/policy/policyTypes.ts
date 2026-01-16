@@ -211,14 +211,65 @@ export type PolicyPluginCapabilities = {
 };
 
 /**
- * Stable per-rule plugin interface for Codepol capabilities.
+ * Brand symbol for CodepolRulePlugin - ensures plugins are created via rulePluginCreate().
+ * @internal
  */
-export type CodepolRulePlugin = {
-  /** Rule identifier (namespaced) */
+declare const RulePluginBrand: unique symbol;
+
+/**
+ * Input configuration for creating a rule plugin.
+ * Use rulePluginCreate() to convert this to a CodepolRulePlugin.
+ */
+export type RulePluginConfig = {
+  /**
+   * Rule identifier. Must NOT contain '/' - this character is reserved for namespacing.
+   * Codepol will automatically namespace your ID (e.g., "my-rule" becomes "@scope/plugin/my-rule").
+   */
   id: string;
   /** Capability bundle for this rule */
   capabilities: PolicyPluginCapabilities;
 };
+
+/**
+ * Stable per-rule plugin interface for Codepol capabilities.
+ * Must be created using rulePluginCreate() to ensure valid rule IDs.
+ */
+export type CodepolRulePlugin = RulePluginConfig & {
+  /** @internal Brand to enforce creation via rulePluginCreate() */
+  readonly [RulePluginBrand]: true;
+};
+
+/**
+ * Creates a validated CodepolRulePlugin.
+ * This is the only way to create a rule plugin - direct object literals won't type-check.
+ *
+ * @param config - Rule plugin configuration
+ * @returns A branded CodepolRulePlugin
+ * @throws Error if the rule ID contains '/'
+ *
+ * @example
+ * ```typescript
+ * import { rulePluginCreate } from '@codepol/core';
+ *
+ * export const myRule = rulePluginCreate({
+ *   id: 'no-todo-comments',  // ✓ Valid - no '/'
+ *   capabilities: {
+ *     treeCheckProvider: myTreeCheckProvider,
+ *   },
+ * });
+ *
+ * export default [myRule];
+ * ```
+ */
+export function rulePluginCreate(config: RulePluginConfig): CodepolRulePlugin {
+  if (config.id.includes('/')) {
+    throw new Error(
+      `Rule plugin id "${config.id}" must not contain '/'. ` +
+      `The '/' character is reserved for namespacing (e.g., "@scope/plugin/rule-id").`
+    );
+  }
+  return config as CodepolRulePlugin;
+}
 
 /**
  * A resolved rule plugin.

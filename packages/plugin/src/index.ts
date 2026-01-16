@@ -21,6 +21,7 @@ import {
   policyCacheClear,
   globPatternsGetMatchAny,
   ruleTargetMatchesLanguage,
+  rulePluginCreate,
 } from '@codepol/core';
 import { loggerTreeCheckProvider } from './policyPluginLogger';
 
@@ -69,10 +70,10 @@ function policyFileGetMatch(
   ruleTargets: PolicyRuleTargetContext[],
   policyExclude: string[],
   filePath: string
-): PolicyRuleTargetContext | null {
+): PolicyRuleTargetContext | undefined {
   const relative = path.relative(process.cwd(), filePath);
   if (globPatternsGetMatchAny(policyExclude, relative)) {
-    return null;
+    return undefined;
   }
   for (const ruleTarget of ruleTargets) {
     const target = ruleTarget.target;
@@ -86,7 +87,7 @@ function policyFileGetMatch(
       return ruleTarget;
     }
   }
-  return null;
+  return undefined;
 }
 
 // ... logger AST helpers (same as before) ...
@@ -228,7 +229,7 @@ function reportMissing(
   sourceCode: TSESLint.SourceCode,
   logger: LoggerConfig,
   node: TSESTree.Node,
-  block: TSESTree.BlockStatement | null
+  block: TSESTree.BlockStatement | undefined
 ): void {
   context.report({
     node,
@@ -271,10 +272,10 @@ function checkBlock(
   sourceCode: TSESLint.SourceCode,
   logger: LoggerConfig,
   node: TSESTree.Node,
-  block: TSESTree.BlockStatement | null
+  block: TSESTree.BlockStatement | undefined
 ): void {
   if (!block) {
-    reportMissing(context, sourceCode, logger, node, null);
+    reportMissing(context, sourceCode, logger, node, undefined);
     return;
   }
   const hasEnter = loggerHasEnter(block, logger);
@@ -368,22 +369,22 @@ const requireLoggerRule = createRule<Options, MessageIds>({
       return {};
     }
     let option: NonNullable<Options[0]> = {};
-    if (context.options[0] != null) {
+    if (context.options[0] !== undefined) {
       option = context.options[0];
     }
     let policyPath = path.resolve(process.cwd(), 'policy.json');
-    if (option.policyPath != null) {
+    if (option.policyPath !== undefined) {
       policyPath = option.policyPath;
     }
     let policyExclude: string[] = [];
     let ruleTargets: PolicyRuleTargetContext[] = [];
-    if (option.ruleTargets != null) {
+    if (option.ruleTargets !== undefined) {
       ruleTargets = option.ruleTargets;
-      if (option.policyExclude != null) {
+      if (option.policyExclude !== undefined) {
         policyExclude = option.policyExclude;
       }
     }
-    let policyFile: PolicyFile | null = null;
+    let policyFile: PolicyFile | undefined = undefined;
     if (ruleTargets.length === 0) {
       policyFile = policyFileGet(policyPath);
       policyExclude = policyFile.exclude ?? [];
@@ -405,7 +406,7 @@ const requireLoggerRule = createRule<Options, MessageIds>({
     // BUT `PolicyRuleTargetContext` doesn't have `ruleIdPlugin`.
     // We need to look it up in `policyFile`.
     
-    if (policyFile == null) {
+    if (policyFile === undefined) {
       policyFile = policyFileGet(policyPath);
     }
     
@@ -438,15 +439,15 @@ const requireLoggerRule = createRule<Options, MessageIds>({
 
     return {
       FunctionDeclaration(node) {
-        let body: TSESTree.BlockStatement | null = null;
-        if (node.body != null) {
+        let body: TSESTree.BlockStatement | undefined = undefined;
+        if (node.body !== undefined) {
           body = node.body;
         }
         checkBlock(context, sourceCode, logger, node, body);
       },
       FunctionExpression(node) {
-        let body: TSESTree.BlockStatement | null = null;
-        if (node.body != null) {
+        let body: TSESTree.BlockStatement | undefined = undefined;
+        if (node.body !== undefined) {
           body = node.body;
         }
         checkBlock(context, sourceCode, logger, node, body);
@@ -455,13 +456,13 @@ const requireLoggerRule = createRule<Options, MessageIds>({
         if (node.body.type === TSESTree.AST_NODE_TYPES.BlockStatement) {
           checkBlock(context, sourceCode, logger, node, node.body);
         } else {
-          reportMissing(context, sourceCode, logger, node, null);
+          reportMissing(context, sourceCode, logger, node, undefined);
         }
       },
       MethodDefinition(node) {
         if (node.value && node.value.type === TSESTree.AST_NODE_TYPES.FunctionExpression) {
-          let body: TSESTree.BlockStatement | null = null;
-          if (node.value.body != null) {
+          let body: TSESTree.BlockStatement | undefined = undefined;
+          if (node.value.body !== undefined) {
             body = node.value.body;
           }
           checkBlock(context, sourceCode, logger, node.value, body);
@@ -501,12 +502,12 @@ export const loggerLintProvider: LintProvider = {
   config: eslintProviderConfig,
 };
 
-export const loggerEnterExitRule: CodepolRulePlugin = {
+export const loggerEnterExitRule: CodepolRulePlugin = rulePluginCreate({
   id: loggerRuleId,
   capabilities: {
     lintProviders: [loggerLintProvider],
     treeCheckProvider: loggerTreeCheckProvider,
   },
-};
+});
 
 export default [loggerEnterExitRule];
