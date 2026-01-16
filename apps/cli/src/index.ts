@@ -16,8 +16,8 @@
  *   --version      Show version
  */
 
+import fs from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import chokidar from 'chokidar';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
@@ -29,16 +29,12 @@ import {
   ruleMatchesGet,
   policyViolationsGetFromDir,
   policyViolationsGetOutputPretty,
-  defaultPluginType,
   policyPluginsGet,
   rulePluginLanguagesGet,
-  type CodepolRulePlugin,
   type LintProvider,
   type EslintProviderConfig,
   type FixProvider,
   type PolicyFile,
-  type PolicyPluginDeclaration,
-  type PolicyPluginRuleDeclaration,
   type PolicyViolation,
   type PolicyRuleTargetContext,
 } from '@codepol/core';
@@ -59,26 +55,37 @@ type PolicyCheckResult = {
   violations: PolicyViolation[];
 };
 
-type RulePluginEntry = {
-  rulePlugin: CodepolRulePlugin;
-  args?: unknown;
-  sourceLabel: string;
-};
-
 type LintProviderEntry = {
   provider: LintProvider;
   ruleId: string;
   ruleArgs?: unknown;
 };
 
+const ESLINT_CONFIG_EXTENSIONS = ['.js', '.mjs', '.cjs', '.ts', '.mts', '.cts'];
+
+/**
+ * Detects the ESLint config file by checking for common file names.
+ * Returns the first existing config file path, or falls back to 'eslint.config.js'.
+ */
+function eslintConfigPathDetect(cwd: string): string {
+  for (const ext of ESLINT_CONFIG_EXTENSIONS) {
+    const configPath = path.join(cwd, `eslint.config${ext}`);
+    if (fs.existsSync(configPath)) {
+      return configPath;
+    }
+  }
+  // Fall back to default if none found
+  return path.join(cwd, 'eslint.config.js');
+}
 
 function policyRuleTargetsGet(policy: PolicyFile): PolicyRuleTargetContext[] {
   const targets: PolicyRuleTargetContext[] = [];
   for (const rule of policy.rules) {
     for (const target of rule.targets) {
       targets.push({
-        ruleId: rule.id,
-        semantics: rule.semantics,
+        ruleId: rule.id || rule.ruleId,
+        description: rule.description,
+        args: rule.args,
         target,
       });
     }
@@ -86,150 +93,34 @@ function policyRuleTargetsGet(policy: PolicyFile): PolicyRuleTargetContext[] {
   return targets;
 }
 
-function rulePluginsNormalize(
-  exported: unknown,
-  sourceLabel: string
-): CodepolRulePlugin[] {
-  if (!exported) {
-    throw new Error(`No rule plugins exported by ${sourceLabel}.`);
-  }
-  if (Array.isArray(exported)) {
-    return exported as CodepolRulePlugin[];
-  }
-  if (typeof exported === 'object' && exported !== undefined) {
-    const candidate = exported as { rulePlugins?: unknown };
-    if (Array.isArray(candidate.rulePlugins)) {
-      return candidate.rulePlugins as CodepolRulePlugin[];
-    }
-    return [exported as CodepolRulePlugin];
-  }
-  throw new Error(`Invalid rule plugin export from ${sourceLabel}.`);
-}
-
-function rulePluginValidate(rulePlugin: CodepolRulePlugin, sourceLabel: string): void {
-  if (!rulePlugin || typeof rulePlugin !== 'object') {
-    throw new Error(`Invalid rule plugin exported by ${sourceLabel}.`);
-  }
-  if (!rulePlugin.id || typeof rulePlugin.id !== 'string') {
-    throw new Error(`Rule plugin from ${sourceLabel} must declare an id.`);
-  }
-  const capabilities = rulePlugin.capabilities;
-  const hasLintProviders = capabilities.lintProviders && capabilities.lintProviders.length > 0;
-  if (!hasLintProviders && !capabilities.treeCheckProvider && !capabilities.fixProvider) {
-    throw new Error(`Rule plugin ${rulePlugin.id} must declare at least one capability.`);
-  }
-  const languages = rulePluginLanguagesGet(rulePlugin);
-  if (languages.length === 0) {
-    throw new Error(`Rule plugin ${rulePlugin.id} must support at least one language via its providers.`);
-  }
-}
-
-async function policyRulePluginsGet(
-  policy: PolicyFile,
-  cwd: string
-): Promise<RulePluginEntry[]> {
-  const declarations = policy.plugins ?? [];
-  const rulePlugins: RulePluginEntry[] = [];
-  const rulePluginIds = new Set<string>();
-
-  for (const declaration of declarations) {
-    const moduleSpecifier = declaration.module;
-    const moduleSource =
-      moduleSpecifier.startsWith('.') || moduleSpecifier.startsWith('/')
-        ? pathToFileURL(path.resolve(cwd, moduleSpecifier)).href
-        : moduleSpecifier;
-    const moduleLoaded = await import(moduleSource);
-    const pluginExported = moduleLoaded[declaration.export];
-    if (!pluginExported) {
-      throw new Error(`Module ${moduleSpecifier} does not export "${declaration.export}".`);
-    }
-
-    const normalizedRules = rulePluginsNormalize(pluginExported, moduleSpecifier);
-    const ruleOverrides = new Map<string, PolicyPluginRuleDeclaration>();
-    if (declaration.rules != undefined) {
-      for (const rule of declaration.rules) {
-        ruleOverrides.set(rule.id, rule);
-      }
-    }
-    const ruleIdsSeen = new Set<string>();
-
-    for (const rulePlugin of normalizedRules) {
-      rulePluginValidate(rulePlugin, moduleSpecifier);
-      if (ruleIdsSeen.has(rulePlugin.id)) {
-        throw new Error(`Duplicate rule id ${rulePlugin.id} exported by ${moduleSpecifier}.`);
-      }
-      ruleIdsSeen.add(rulePlugin.id);
-      const override = ruleOverrides.get(rulePlugin.id);
-      if (override?.enabled === false) {
-        continue;
-      }
-      if (rulePluginIds.has(rulePlugin.id)) {
-        throw new Error(`Duplicate rule id detected: ${rulePlugin.id}.`);
-      }
-      rulePluginIds.add(rulePlugin.id);
-      rulePlugins.push({
-        rulePlugin,
-        args: override?.args,
-        sourceLabel: moduleSpecifier,
-      });
-    }
-
-    for (const ruleId of ruleOverrides.keys()) {
-      if (!ruleIdsSeen.has(ruleId)) {
-        throw new Error(`Plugin ${moduleSpecifier} does not export rule ${ruleId}.`);
-      }
-    }
-  }
-
-  return rulePlugins;
-}
-
+/**
+ * Generates ESLint rule configurations from lint providers.
+ * Note: Only returns rules, not plugins. The user's eslint config is expected
+ * to have the codepol plugin already registered via eslintPluginCreate().
+ * Adding plugins here would cause "Cannot redefine plugin" errors.
+ */
 function eslintConfigGet(
   providers: LintProviderEntry[],
   context: { policy: PolicyFile; policyPath: string; cwd: string; ruleTargets: PolicyRuleTargetContext[] }
 ): ESLint.Options['overrideConfig'] {
-  const plugins: Record<string, ESLint.Plugin> = {};
   const rules: Record<string, unknown> = {};
-  const pluginRules: Record<string, Record<string, unknown>> = {};
-  const pluginConfigs: Record<string, Record<string, unknown>> = {};
 
   for (const entry of providers) {
     if (entry.provider.platform !== 'eslint') {
       continue;
     }
     const eslintConfig = entry.provider.config as EslintProviderConfig;
-    const ruleName = entry.ruleId;
-    if (!pluginRules[eslintConfig.pluginName]) {
-      pluginRules[eslintConfig.pluginName] = {};
-    }
-    const ruleSet = eslintConfig.rules as Record<string, unknown>;
-    const ruleDefinition = ruleSet[ruleName];
-    if (!ruleDefinition) {
-      throw new Error(
-        `ESLint provider ${eslintConfig.pluginName} did not export rule ${ruleName}.`
-      );
-    }
-    if (pluginRules[eslintConfig.pluginName][ruleName]) {
-      throw new Error(`Duplicate ESLint rule detected: ${eslintConfig.pluginName}/${ruleName}.`);
-    }
-    pluginRules[eslintConfig.pluginName][ruleName] = ruleDefinition;
-    if (eslintConfig.configs) {
-      if (!pluginConfigs[eslintConfig.pluginName]) {
-        pluginConfigs[eslintConfig.pluginName] = {};
-      }
-      for (const [configName, configValue] of Object.entries(eslintConfig.configs)) {
-        if (pluginConfigs[eslintConfig.pluginName][configName]) {
-          throw new Error(`Duplicate ESLint config detected: ${eslintConfig.pluginName}/${configName}.`);
-        }
-        pluginConfigs[eslintConfig.pluginName][configName] = configValue;
-      }
-    }
+    // Extract short rule name from namespaced ID (e.g., "@codepol/plugin/require-logger-enter-exit" -> "require-logger-enter-exit")
+    const ruleNameFull = entry.ruleId;
+    const lastSlashIndex = ruleNameFull.lastIndexOf('/');
+    const ruleNameShort = lastSlashIndex !== -1 ? ruleNameFull.slice(lastSlashIndex + 1) : ruleNameFull;
+
     const ruleConfig = eslintConfig.rulesConfigGet({
       ...context,
       ruleId: entry.ruleId,
       ruleArgs: entry.ruleArgs,
     });
-    const configKey = `${eslintConfig.pluginName}/${ruleName}`;
+    const configKey = `${eslintConfig.pluginName}/${ruleNameShort}`;
     if (!(configKey in ruleConfig)) {
       throw new Error(
         `ESLint provider ${eslintConfig.pluginName} did not return config for ${configKey}.`
@@ -241,19 +132,7 @@ function eslintConfigGet(
     rules[configKey] = ruleConfig[configKey];
   }
 
-  for (const [pluginName, ruleSet] of Object.entries(pluginRules)) {
-    plugins[pluginName] = {
-      rules: ruleSet as ESLint.Plugin['rules'],
-      ...(pluginConfigs[pluginName]
-        ? { configs: pluginConfigs[pluginName] as ESLint.Plugin['configs'] }
-        : {}),
-    };
-  }
-
-  return {
-    plugins,
-    rules,
-  } as ESLint.Options['overrideConfig'];
+  return { rules } as ESLint.Options['overrideConfig'];
 }
 
 async function fixProvidersApply(
@@ -274,18 +153,30 @@ async function policyCheck(options: {
   const { policyPath, eslintConfigPath, fix, cwd } = options;
 
   const policy = policyFileGet(policyPath);
-  const rulePlugins = await policyRulePluginsGet(policy, cwd);
+  // Use core policyPluginsGet instead of local implementation
+  const rulePluginsResult = await policyPluginsGet(policy, cwd);
+  if ('Err' in rulePluginsResult) {
+    throw new Error(rulePluginsResult.Err);
+  }
+  const rulePluginsMap = rulePluginsResult.Ok;
+  const rulePlugins = Array.from(rulePluginsMap.values());
   const ruleTargets = policyRuleTargetsGet(policy);
 
   // Collect lint providers from all rule plugins
+  // Args are now on policy rules, not plugins - they're passed via ruleTargets
   const lintProviderEntries: LintProviderEntry[] = [];
   for (const entry of rulePlugins) {
     const lintProviders = entry.rulePlugin.capabilities.lintProviders ?? [];
     for (const provider of lintProviders) {
+      // Find the policy rule that uses this plugin to get its args
+      const matchingRule = policy.rules.find(r => 
+        r.ruleId === entry.rulePlugin.id || 
+        entry.rulePlugin.id.endsWith(`/${r.ruleId}`)
+      );
       lintProviderEntries.push({
         provider,
         ruleId: entry.rulePlugin.id,
-        ruleArgs: entry.args,
+        ruleArgs: matchingRule?.args,
       });
     }
   }
@@ -376,12 +267,11 @@ async function policyPluginsValidateAndPrint(options: CliOptions): Promise<void>
   if ('Err' in policyPluginsResult) {
     throw new Error(policyPluginsResult.Err);
   }
-  const policyPlugins = Array.from(policyPluginsResult.Ok.values()).map(plugin => plugin.id).sort();
-  const rulePlugins = await policyRulePluginsGet(policy, cwd);
-  const rulePluginIds = rulePlugins.map(entry => entry.rulePlugin.id).sort();
+  
+  // policyPluginsGet now returns RulePlugin map, which includes ruleId directly
+  const rulePluginIds = Array.from(policyPluginsResult.Ok.keys()).sort();
 
   console.log('✔ Plugins validated');
-  console.log(`Policy plugins (${policyPlugins.length}): ${policyPlugins.join(', ') || 'none'}`);
   console.log(`Rule plugins (${rulePluginIds.length}): ${rulePluginIds.join(', ') || 'none'}`);
 }
 
@@ -449,8 +339,8 @@ async function main(): Promise<void> {
     })
     .option('eslint-config', {
       type: 'string',
-      default: path.resolve('eslint.config.js'),
-      describe: 'Path to the ESLint config file',
+      default: eslintConfigPathDetect(process.cwd()),
+      describe: 'Path to the ESLint config file (auto-detects .js, .mjs, .cjs, .ts, .mts, .cts)',
     })
     .option('check-plugins', {
       type: 'boolean',

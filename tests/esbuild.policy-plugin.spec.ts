@@ -17,39 +17,29 @@ describe('esbuild policy plugin', () => {
       policyPath,
       JSON.stringify(
         {
+          plugins: [
+            { module: '@codepol/plugin' },
+          ],
           rules: [
             {
               id: 'function-logging',
-              semantics: {
-                description: 'Ensure functions include logger enter/exit',
-                type: 'logger',
+              ruleId: '@codepol/plugin/require-logger-enter-exit',
+              description: 'Ensure functions include logger enter/exit',
+              args: {
+                logger: {
+                  identifier: 'logger',
+                  enterMethod: 'enter',
+                  exitMethod: 'exit',
+                  import: {
+                    module: './logger',
+                    named: 'logger',
+                  },
+                },
               },
               targets: [
                 {
                   language: 'typescript',
                   files: ['index.ts'],
-                },
-              ],
-            },
-          ],
-          plugins: [
-            {
-              module: '@codepol/plugin',
-              export: 'policyPluginLogger',
-              rules: [
-                {
-                  id: 'require-logger-enter-exit',
-                  args: {
-                    logger: {
-                      identifier: 'logger',
-                      enterMethod: 'enter',
-                      exitMethod: 'exit',
-                      import: {
-                        module: './logger',
-                        named: 'logger',
-                      },
-                    },
-                  },
                 },
               ],
             },

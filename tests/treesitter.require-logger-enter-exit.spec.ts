@@ -14,13 +14,8 @@ describe('tree-sitter policy check', () => {
   it('finds missing logger instrumentation while ignoring already instrumented files', async () => {
     const policy: PolicyFile = {
       ...basePolicy,
-      // For tree-sitter checking, export the PolicyPlugin (policyPluginLogger)
       plugins: [
-        {
-          module: '@codepol/plugin',
-          export: 'policyPluginLogger',
-          rules: basePolicy.plugins[0].rules,
-        },
+        { module: '@codepol/plugin' },
       ],
       exclude: [],
       rules: basePolicy.rules.map((rule): PolicyRule => ({
@@ -34,6 +29,9 @@ describe('tree-sitter policy check', () => {
     };
 
     const violationsResult = await policyViolationsGetFromDir(policy, process.cwd());
+    if ('Err' in violationsResult) {
+      console.error(violationsResult.Err);
+    }
     expect('Err' in violationsResult).toBe(false);
     const violations = violationsResult.Ok!;
     const violationFiles = violations.map(violation => path.relative(process.cwd(), violation.filePath));

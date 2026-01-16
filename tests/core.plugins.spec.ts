@@ -1,23 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import {
   policyViolationsGetForFile,
-  policyViolationsGetFromDir,
   type PolicyFile,
-  type PolicyPlugin,
+  type ResolvedRulePlugin,
   type PolicyRule,
-  type PolicyRuleTarget,
 } from '@codepol/core';
 import { Ok } from '@codepol/core';
-import { writeFileSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 
 describe('plugin capability validation', () => {
   it('returns Err when plugin is missing treeCheckProvider capability', async () => {
     // Create a mock plugin without treeCheckProvider
-    const mockPlugin: PolicyPlugin = {
-      id: 'mock-plugin',
-      version: '1.0.0',
-      capabilities: {}, // Empty capabilities
+    const mockPlugin: ResolvedRulePlugin = {
+      rulePlugin: {
+        id: 'mock-plugin',
+        capabilities: {}, // Empty capabilities
+      }
     };
 
     const pluginsMap = new Map();
@@ -25,7 +23,8 @@ describe('plugin capability validation', () => {
 
     const rule: PolicyRule = {
       id: 'test-rule',
-      semantics: { description: 'test', type: 'mock-plugin' },
+      ruleId: 'mock-plugin',
+      description: 'test',
       targets: [
         { language: 'typescript', files: ['**/*.ts'] }
       ],
@@ -35,7 +34,6 @@ describe('plugin capability validation', () => {
     const policy: PolicyFile = { rules: [rule] };
 
     // Use dummy file path since we expect failure before file access
-    // But to be safe, let's satisfy the read logic if it gets there (it shouldn't)
     const filePath = path.join(process.cwd(), 'dummy.ts');
     
     // Test policyViolationsGetForFile
@@ -56,15 +54,16 @@ describe('plugin capability validation', () => {
 
   it('returns Err when plugin does not support target language', () => {
       // Create a mock plugin with treeCheckProvider but wrong language
-      const mockPlugin: PolicyPlugin = {
-        id: 'mock-plugin-lang',
-        version: '1.0.0',
-        capabilities: {
-          treeCheckProvider: {
-            languages: ['python'],
-            check: () => Ok([]),
-          }
-        },
+      const mockPlugin: ResolvedRulePlugin = {
+        rulePlugin: {
+          id: 'mock-plugin-lang',
+          capabilities: {
+            treeCheckProvider: {
+              languages: ['python'],
+              check: () => Ok([]),
+            }
+          },
+        }
       };
   
       const pluginsMap = new Map();
@@ -72,7 +71,8 @@ describe('plugin capability validation', () => {
   
       const rule: PolicyRule = {
         id: 'test-rule',
-        semantics: { description: 'test', type: 'mock-plugin-lang' },
+        ruleId: 'mock-plugin-lang',
+        description: 'test',
         targets: [
           { language: 'typescript', files: ['**/*.ts'] }
         ],

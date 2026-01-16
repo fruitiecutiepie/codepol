@@ -45,55 +45,19 @@ export type LoggerConfig = {
 
 /**
  * Declaration for loading a policy plugin.
- * Requires explicit module specifier and export name.
- */
-export type PolicyPluginDeclaration = {
-  /** Module specifier or path to import */
-  module: string;
-  /** Named export to load from the module */
-  export: string;
-  /** Optional rule-level configuration overrides */
-  rules?: PolicyPluginRuleDeclaration[];
-};
-
-/**
- * Optional rule-level configuration for a plugin.
- */
-export type PolicyPluginRuleDeclaration<TArgs = unknown> = {
-  /** Rule identifier exported by the plugin */
-  id: string;
-  /** Enable or disable the rule (default: true) */
-  enabled?: boolean;
-  /** Rule-specific arguments passed to the rule provider */
-  args?: TArgs;
-};
-
-/**
- * A single policy rule that defines which files to check and how.
+ * Accepts either a module string directly or an object with a module property.
+ * Plugins must use a default export containing an array of CodepolRulePlugin objects.
  *
  * @example
  * ```json
- * {
- *   "id": "function-logging",
- *   "semantics": {
- *     "description": "Ensure all exported functions have logger instrumentation"
- *   },
- *   "targets": [
- *     {
- *       "language": "typescript",
- *       "files": ["src/**\/*.ts"],
- *       "exclude": ["**\/*.spec.ts"]
- *     }
- *   ]
- * }
+ * // String shorthand
+ * "plugins": ["@codepol/plugin"]
+ *
+ * // Object format
+ * "plugins": [{ "module": "@codepol/plugin" }]
  * ```
  */
-export type PolicyRuleSemantics = {
-  /** Human-readable description of what this rule enforces */
-  description: string;
-  /** Plugin type to handle this rule (defaults to 'logger') */
-  type?: string;
-};
+export type PolicyPluginDeclaration = string | { module: string };
 
 export type PolicyRuleTarget = {
   /** Target language adapter or parser identifier */
@@ -106,11 +70,18 @@ export type PolicyRuleTarget = {
   exclude?: string[];
 };
 
+/**
+ * A single policy rule that defines which files to check and how.
+ */
 export type PolicyRule = {
-  /** Unique identifier for this rule */
-  id: string;
-  /** Semantic meaning for this rule */
-  semantics: PolicyRuleSemantics;
+  /** Unique identifier for this rule (optional, defaults to ruleId) */
+  id?: string;
+  /** The plugin rule identifier (namespaced, e.g. @org/plugin/rule-id) */
+  ruleId: string;
+  /** Human-readable description of what this rule enforces */
+  description?: string;
+  /** Rule-specific arguments passed to the rule provider */
+  args?: unknown;
   /** Language-specific targets this rule should enforce */
   targets: PolicyRuleTarget[];
 };
@@ -118,34 +89,6 @@ export type PolicyRule = {
 /**
  * The complete policy file structure.
  * This is the schema for policy.json files.
- *
- * @example
- * ```json
- * {
- *   "$schema": "./policy.schema.json",
- *   "rules": [...],
- *   "exclude": ["dist/**"],
- *   "plugins": [
- *     {
- *       "module": "@codepol/plugin",
- *       "export": "rulePlugins",
- *       "rules": [
- *         {
- *           "id": "require-logger-enter-exit",
- *           "args": {
- *             "logger": {
- *               "identifier": "logger",
- *               "enterMethod": "enter",
- *               "exitMethod": "exit",
- *               "import": { "module": "@org/logger", "named": "logger" }
- *             }
- *           }
- *         }
- *       ]
- *     }
- *   ]
- * }
- * ```
  */
 export type PolicyFile = {
   /** Optional JSON schema reference */
@@ -156,16 +99,6 @@ export type PolicyFile = {
   exclude?: string[];
   /** Plugin declarations used by this policy */
   plugins?: PolicyPluginDeclaration[];
-};
-
-/**
- * Context provided to plugin initialization hooks.
- */
-export type PolicyPluginInitContext = {
-  /** Current working directory used for resolution */
-  cwd: string;
-  /** Loaded policy definition */
-  policy: PolicyFile;
 };
 
 /**
@@ -182,6 +115,8 @@ export type PolicyCheckContext = {
   dir: string;
   /** Target definition used to resolve this check */
   target: PolicyRuleTarget;
+  /** Resolved arguments for the rule */
+  ruleArgs?: unknown;
 };
 
 /**
@@ -276,24 +211,21 @@ export type PolicyPluginCapabilities = {
 };
 
 /**
- * Codepol plugin definition.
+ * Stable per-rule plugin interface for Codepol capabilities.
  */
-export type PolicyPlugin = {
-  /** Stable plugin identifier */
+export type CodepolRulePlugin = {
+  /** Rule identifier (namespaced) */
   id: string;
-  /** Plugin version */
-  version: string;
-  /** Capability providers */
+  /** Capability bundle for this rule */
   capabilities: PolicyPluginCapabilities;
-  /** Optional initialization hook */
-  init?: (context: PolicyPluginInitContext) => void | Promise<void>;
 };
 
 /**
- * Deprecated alias for PolicyPlugin
- * @deprecated Use PolicyPlugin instead
+ * A resolved rule plugin.
  */
-export type CodepolPlugin = PolicyPlugin;
+export type RulePlugin = {
+  rulePlugin: CodepolRulePlugin;
+};
 
 /**
  * Represents a single policy violation found during checking.
@@ -329,8 +261,10 @@ export type RuleMatch = {
 export type PolicyRuleTargetContext = {
   /** Rule identifier */
   ruleId: string;
-  /** Semantic definition for the rule */
-  semantics: PolicyRuleSemantics;
+  /** Description for the rule */
+  description?: string;
+  /** Rule-specific arguments */
+  args?: unknown;
   /** Target definition */
   target: PolicyRuleTarget;
 };
@@ -384,5 +318,5 @@ export type TreeCheckLintAdapter<TRule> = {
   /** Platform identifier (e.g., 'eslint', 'biome', 'ruff') */
   platform: string;
   /** Adapt a TreeCheckProvider to a platform-specific lint rule */
-  adapt: (provider: PolicyPlugin, options?: TreeCheckAdapterOptions) => TRule;
+  adapt: (provider: CodepolRulePlugin, options?: TreeCheckAdapterOptions) => TRule;
 };

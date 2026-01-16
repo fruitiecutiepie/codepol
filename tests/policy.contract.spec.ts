@@ -13,8 +13,9 @@ describe('policy contract', () => {
     }
   });
 
-  it('rule ids are unique', () => {
-    const ids = policy.rules.map(rule => rule.id);
+  it('rule identifiers are unique', () => {
+    // Check that resolved IDs (id or ruleId fallback) are unique within the policy
+    const ids = policy.rules.map(rule => rule.id ?? rule.ruleId);
     expect(new Set(ids).size).toBe(ids.length);
   });
 

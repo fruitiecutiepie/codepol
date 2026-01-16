@@ -14,18 +14,15 @@ import type {
   EslintProviderConfig,
   LoggerConfig,
   PolicyFile,
-  PolicyRuleSemantics,
   PolicyRuleTargetContext,
 } from '@codepol/core';
 import {
-  defaultPluginType,
   policyFileGet,
   policyCacheClear,
   globPatternsGetMatchAny,
   ruleTargetMatchesLanguage,
 } from '@codepol/core';
-import { policyLoggerConfigGet } from './policyLoggerConfig';
-import { policyPluginLogger, loggerTreeCheckProvider } from './policyPluginLogger';
+import { loggerTreeCheckProvider } from './policyPluginLogger';
 
 // Re-export cache clear for backwards compatibility
 export { policyCacheClear };
@@ -41,6 +38,8 @@ type Options = [
     ruleTargets?: PolicyRuleTargetContext[];
     /** Global exclude patterns from the policy */
     policyExclude?: string[];
+    /** Logger configuration */
+    logger?: LoggerConfig;
   }?
 ];
 
@@ -49,17 +48,16 @@ const RULE_URL =
 
 const createRule = ESLintUtils.RuleCreator(() => RULE_URL);
 
-function ruleTypeGet(semantics: PolicyRuleSemantics): string {
-  return semantics.type ?? defaultPluginType;
-}
+const loggerRuleId = 'require-logger-enter-exit';
 
 function policyRuleTargetsGet(policy: PolicyFile): PolicyRuleTargetContext[] {
   const targets: PolicyRuleTargetContext[] = [];
   for (const rule of policy.rules) {
     for (const target of rule.targets) {
       targets.push({
-        ruleId: rule.id,
-        semantics: rule.semantics,
+        ruleId: rule.id || rule.ruleId,
+        description: rule.description,
+        args: rule.args,
         target,
       });
     }
@@ -67,14 +65,14 @@ function policyRuleTargetsGet(policy: PolicyFile): PolicyRuleTargetContext[] {
   return targets;
 }
 
-function policyFileGetChecked(
+function policyFileGetMatch(
   ruleTargets: PolicyRuleTargetContext[],
   policyExclude: string[],
   filePath: string
-): boolean {
+): PolicyRuleTargetContext | null {
   const relative = path.relative(process.cwd(), filePath);
   if (globPatternsGetMatchAny(policyExclude, relative)) {
-    return false;
+    return null;
   }
   for (const ruleTarget of ruleTargets) {
     const target = ruleTarget.target;
@@ -85,12 +83,13 @@ function policyFileGetChecked(
       if (!ruleTargetMatchesLanguage(target, relative)) {
         continue;
       }
-      return true;
+      return ruleTarget;
     }
   }
-  return false;
+  return null;
 }
 
+// ... logger AST helpers (same as before) ...
 function loggerIsMemberExpression(
   node: TSESTree.Expression,
   logger: LoggerConfig,
@@ -314,14 +313,8 @@ const requireLoggerRule = createRule<Options, MessageIds>({
               type: 'object',
               properties: {
                 ruleId: { type: 'string' },
-                semantics: {
-                  type: 'object',
-                  properties: {
-                    description: { type: 'string' },
-                    type: { type: 'string' },
-                  },
-                  additionalProperties: false,
-                },
+                description: { type: 'string' },
+                args: { type: 'object' },
                 target: {
                   type: 'object',
                   properties: {
@@ -345,6 +338,23 @@ const requireLoggerRule = createRule<Options, MessageIds>({
           policyExclude: {
             type: 'array',
             items: { type: 'string' },
+          },
+          logger: {
+            type: 'object',
+            properties: {
+              identifier: { type: 'string' },
+              enterMethod: { type: 'string' },
+              exitMethod: { type: 'string' },
+              import: {
+                type: 'object',
+                properties: {
+                  module: { type: 'string' },
+                  named: { type: 'string' },
+                },
+                required: ['module', 'named'],
+              },
+            },
+            required: ['identifier', 'enterMethod', 'exitMethod', 'import'],
           },
         },
         additionalProperties: false,
@@ -379,21 +389,51 @@ const requireLoggerRule = createRule<Options, MessageIds>({
       policyExclude = policyFile.exclude ?? [];
       ruleTargets = policyRuleTargetsGet(policyFile);
     }
-    const loggerRuleTargets = ruleTargets.filter(
-      ruleTarget => ruleTypeGet(ruleTarget.semantics) === defaultPluginType
-    );
-    if (!policyFileGetChecked(loggerRuleTargets, policyExclude, filename)) {
-      return {};
-    }
+    
+    // We only care about rule targets that map to THIS plugin rule.
+    // In strict sense, we should filter by ruleId matching this plugin's ID (or what the policy says).
+    // But here we rely on the policy saying "for this ruleId use this plugin".
+    // For ESLint, we are inside a rule execution, so we are checking "is this file targeted by any rule that maps to ME?"
+    // However, ESLint config (eslintProviderConfig) already filters ruleTargets per rule? 
+    // No, it passes ctx.ruleTargets which contains ALL rules.
+    // We should filter targets where the rule definition points to this plugin rule.
+    // BUT, we don't have the rule definition (PolicyRule) here easily to know which one maps to us, unless we look at policy.rules.
+    // Wait, context.options contains ruleTargets which has { ruleId, target }.
+    // We also need to know which policy rules map to this ESLint rule.
+    // The policy.json says: rule "function-logging" -> ruleId "@codepol/plugin/require-logger-enter-exit".
+    // So we should filter ruleTargets where rule.ruleId == loggerRuleId.
+    // BUT `PolicyRuleTargetContext` doesn't have `ruleIdPlugin`.
+    // We need to look it up in `policyFile`.
+    
     if (policyFile == null) {
       policyFile = policyFileGet(policyPath);
     }
-    const loggerMaybe = policyLoggerConfigGet(policyFile);
-    if (!loggerMaybe) {
-      console.error('Logger configuration missing. Configure @codepol/plugin with rule args.logger.');
+    
+    // Filter ruleTargets that are relevant to this plugin rule
+    // Support both short IDs (e.g., "require-logger-enter-exit") and
+    // namespaced IDs (e.g., "@codepol/plugin/require-logger-enter-exit")
+    const relevantRuleTargets = ruleTargets.filter(rt => {
+      // Find the rule in the policy
+      const policyRule = policyFile!.rules.find(r => (r.id || r.ruleId) === rt.ruleId);
+      if (!policyRule) return false;
+      const policyRuleId = policyRule.ruleId;
+      // Match if exact or if namespaced version ends with our short ID
+      return policyRuleId === loggerRuleId || policyRuleId.endsWith(`/${loggerRuleId}`);
+    });
+
+    const matchedTarget = policyFileGetMatch(relevantRuleTargets, policyExclude, filename);
+    if (!matchedTarget) {
       return {};
     }
-    const logger = loggerMaybe;
+
+    // Fallback to policy args if not provided via ESLint options
+    const argsFromPolicy = matchedTarget.args as { logger?: LoggerConfig } | undefined;
+    const logger = option.logger ?? argsFromPolicy?.logger;
+    if (!logger) {
+      console.error('Logger configuration missing. Configure @codepol/plugin with rule args.logger in policy.json or ESLint options.');
+      return {};
+    }
+    
     const sourceCode = context.sourceCode;
 
     return {
@@ -462,12 +502,11 @@ export const loggerLintProvider: LintProvider = {
 };
 
 export const loggerEnterExitRule: CodepolRulePlugin = {
-  id: 'require-logger-enter-exit',
+  id: loggerRuleId,
   capabilities: {
     lintProviders: [loggerLintProvider],
     treeCheckProvider: loggerTreeCheckProvider,
   },
 };
 
-export const rulePlugins = [loggerEnterExitRule];
-export { policyPluginLogger };
+export default [loggerEnterExitRule];

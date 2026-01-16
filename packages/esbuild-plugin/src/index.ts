@@ -38,7 +38,7 @@ import {
   type PolicyViolation,
 } from '@codepol/core';
 import { eslintPluginCreate } from '@codepol/eslint-plugin';
-import { rulePlugins } from '@codepol/plugin';
+import rulePlugins from '@codepol/plugin';
 
 /**
  * Options for the esbuild policy plugin.
@@ -203,8 +203,5 @@ export function esbuildPluginCreate(options: PolicyPluginOptions = {}): Plugin {
     },
   };
 }
-
-/** @deprecated Use esbuildPluginCreate instead */
-export const esbuildPluginNew = esbuildPluginCreate;
 
 export default esbuildPluginCreate;

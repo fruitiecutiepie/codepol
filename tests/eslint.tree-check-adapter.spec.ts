@@ -1,9 +1,9 @@
 import path from 'node:path';
 import { RuleTester } from 'eslint';
-import tsParser from '@typescript-eslint/parser';
+import tseslint from 'typescript-eslint';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { eslintAdapter, clearPolicyCache, clearProviderInitState } from '@codepol/eslint-plugin';
-import { policyPluginLogger } from '@codepol/plugin';
+import { eslintAdapter, policyCacheClear, providerInitStateClear } from '@codepol/eslint-plugin';
+import { loggerEnterExitRule } from '@codepol/plugin';
 import { langAdd, parserInit } from '@codepol/core';
 
 // Initialize tree-sitter parser before tests
@@ -11,14 +11,14 @@ beforeAll(async () => {
   langAdd({ langId: 'typescript', fileExtensions: ['.ts'] });
   langAdd({ langId: 'tsx', fileExtensions: ['.tsx'] });
   await parserInit();
-  clearPolicyCache();
-  clearProviderInitState();
+  policyCacheClear();
+  providerInitStateClear();
 });
 
 // RuleTester must be run at module level, not inside vitest it() blocks
 const ruleTester = new RuleTester({
   languageOptions: {
-    parser: tsParser,
+    parser: tseslint.parser as any,
     parserOptions: {
       ecmaVersion: 2022,
       sourceType: 'module',
@@ -26,11 +26,27 @@ const ruleTester = new RuleTester({
   },
 });
 
-const adaptedRule = eslintAdapter.adapt(policyPluginLogger, {
+const adaptedRule = eslintAdapter.adapt(loggerEnterExitRule, {
   ruleName: 'adapted-logger-check',
 });
 
 const filename = path.join(process.cwd(), 'src/example.ts');
+
+const loggerConfig = {
+  identifier: 'logger',
+  enterMethod: 'enter',
+  exitMethod: 'exit',
+  import: {
+    module: '@org/logger',
+    named: 'logger',
+  },
+};
+
+const options = [
+  {
+    logger: loggerConfig,
+  },
+];
 
 // Run the ESLint RuleTester at module level
 ruleTester.run('adapted-logger-check', adaptedRule as any, {
@@ -38,6 +54,7 @@ ruleTester.run('adapted-logger-check', adaptedRule as any, {
     {
       name: 'already instrumented function passes tree-check',
       filename,
+      options,
       code: `import { logger } from '@org/logger';
 export function instrumented() {
   logger.enter({});
@@ -51,6 +68,7 @@ export function instrumented() {
     {
       name: 'excluded file is skipped',
       filename: path.join(process.cwd(), 'src/example.spec.ts'),
+      options,
       code: 'export function skip() { return 1; }',
     },
   ],
@@ -58,6 +76,7 @@ export function instrumented() {
     {
       name: 'missing logger instrumentation is reported',
       filename,
+      options,
       code: `function f() {
   doStuff();
 }`,
@@ -66,6 +85,7 @@ export function instrumented() {
     {
       name: 'arrow function without instrumentation is reported',
       filename,
+      options,
       code: 'const add = (a: number, b: number) => a + b;',
       errors: [{ messageId: 'treeCheckViolation' }],
     },
@@ -81,7 +101,7 @@ describe('eslint tree-check adapter', () => {
   });
 
   it('uses custom severity from options', () => {
-    const warningRule = eslintAdapter.adapt(policyPluginLogger, {
+    const warningRule = eslintAdapter.adapt(loggerEnterExitRule, {
       ruleName: 'adapted-logger-warning',
       severity: 'warning',
     });

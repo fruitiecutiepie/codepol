@@ -29,7 +29,6 @@ Create `src/index.ts`:
 ```ts
 import type {
   PolicyCheckContext,
-  PolicyPlugin,
   PolicyRule,
   PolicyViolation,
   CodepolRulePlugin,
@@ -38,7 +37,7 @@ import type {
   TreeCheckProvider,
   Result,
 } from '@codepol/core';
-import { Ok, parserInit } from '@codepol/core';
+import { Ok } from '@codepol/core';
 import { eslintAdapter } from '@codepol/eslint-plugin';
 
 // Define the check logic once
@@ -46,11 +45,14 @@ function noTodoCheck(rule: PolicyRule, context: PolicyCheckContext): Result<Poli
   const violations: PolicyViolation[] = [];
   const lines = context.source.split('\n');
 
+  // Resolved args from policy.json are available in context.ruleArgs
+  // const args = context.ruleArgs; 
+
   lines.forEach((line, index) => {
     const todoIndex = line.indexOf('TODO');
     if (todoIndex !== -1) {
       violations.push({
-        ruleId: rule.id,
+        ruleId: rule.id || rule.ruleId,
         filePath: context.filePath,
         message: 'TODO comments are not allowed',
         line: index + 1,
@@ -68,18 +70,20 @@ export const noTodoTreeCheckProvider: TreeCheckProvider = {
   check: noTodoCheck,
 };
 
-// Create the PolicyPlugin container
-export const noTodoPlugin: PolicyPlugin = {
-  id: 'no-todo',
-  version: '1.0.0',
-  init: parserInit,
+// Adapt to ESLint (no need to rewrite the logic)
+// The rule name must match the plugin's ID structure
+// NOTE: Rule ID should be descriptive. If not namespaced (no '/'), codepol will prepend the package name.
+const ruleId = 'no-todo-comments';
+
+// Create rule plugin capability structure
+const rulePluginBase: CodepolRulePlugin = {
+  id: ruleId,
   capabilities: {
     treeCheckProvider: noTodoTreeCheckProvider,
-  },
+  }
 };
 
-// Adapt to ESLint (no need to rewrite the logic)
-const eslintRule = eslintAdapter.adapt(noTodoTreeCheckProvider, {
+const eslintRule = eslintAdapter.adapt(rulePluginBase, {
   ruleName: 'no-todo-comments',
 });
 
@@ -97,16 +101,15 @@ const lintProvider: LintProvider = {
 
 // Export the rule plugin
 export const noTodoRulePlugin: CodepolRulePlugin = {
-  id: 'no-todo-comments',
+  id: ruleId,
   capabilities: {
     lintProviders: [lintProvider],
     treeCheckProvider: noTodoTreeCheckProvider,
   },
 };
 
-export const rulePlugins = [noTodoRulePlugin];
-export const plugin = noTodoPlugin;
-export default noTodoPlugin;
+// Default export is required for codepol to load the plugin
+export default [noTodoRulePlugin];
 ```
 
 ### 3. Configure policy.json
@@ -114,19 +117,13 @@ export default noTodoPlugin;
 ```json
 {
   "plugins": [
-    {
-      "module": "./path/to/codepol-plugin-no-todo",
-      "export": "rulePlugins",
-      "rules": [{ "id": "no-todo-comments" }]
-    }
+    { "module": "./path/to/codepol-plugin-no-todo" }
   ],
   "rules": [
     {
       "id": "no-todo-comments",
-      "semantics": {
-        "description": "Disallow TODO comments",
-        "type": "no-todo"
-      },
+      "ruleId": "codepol-plugin-no-todo/no-todo-comments",
+      "description": "Disallow TODO comments",
       "targets": [
         {
           "language": "typescript",
@@ -138,7 +135,7 @@ export default noTodoPlugin;
 }
 ```
 
-The `semantics.type` must match the plugin's `id` (`no-todo`).
+Codepol automatically resolves the `ruleId` by combining the module name and the exported rule ID: `codepol-plugin-no-todo/no-todo-comments`.
 
 ### 4. Test It
 
@@ -146,39 +143,83 @@ The `semantics.type` must match the plugin's `id` (`no-todo`).
 pnpm codepol --policy ./policy.json
 ```
 
+## Exporting Your Plugin
+
+Plugins must use a **default export** containing an array of `CodepolRulePlugin` objects. This is the only export convention codepol uses—consumers never need to specify an export name.
+
+```typescript
+// src/index.ts
+export const myRule: CodepolRulePlugin = { /* ... */ };
+export const anotherRule: CodepolRulePlugin = { /* ... */ };
+
+// Default export is required for codepol to load the plugin
+export default [myRule, anotherRule];
+```
+
+Consumers reference your plugin by module path only:
+
+```json
+{ "module": "@your-org/codepol-plugin-foo" }
+```
+
+### Multiple Plugin Collections
+
+For packages with multiple distinct plugin collections, use Node.js subpath exports in your `package.json`:
+
+```json
+{
+  "exports": {
+    ".": "./dist/index.js",
+    "./security": "./dist/security.js",
+    "./logging": "./dist/logging.js"
+  }
+}
+```
+
+Each subpath module should have its own default export:
+
+```typescript
+// src/security.ts
+export default [xssRule, csrfRule];
+
+// src/logging.ts
+export default [loggerRule, auditRule];
+```
+
+Consumers reference specific collections via the subpath:
+
+```json
+{ "module": "@your-org/plugin/security" }
+{ "module": "@your-org/plugin/logging" }
+```
+
 ## Policy Configuration
 
 ### Plugin Declaration
 
-Register your plugin in `policy.json`:
+Register your plugin in `policy.json`. Plugins are simple module declarations:
 
 ```json
 {
   "plugins": [
-    {
-      "module": "@your-org/codepol-plugin-foo",
-      "export": "rulePlugins",
-      "rules": [
-        { "id": "rule-one" },
-        { "id": "rule-two", "enabled": false }
-      ]
-    }
+    { "module": "@your-org/codepol-plugin-foo" }
   ]
 }
 ```
 
 ### Rule Definition
 
-Each rule needs a matching entry in `rules`:
+Each rule needs a matching entry in `rules`. The `ruleId` must match the resolved ID (module name + rule ID). Rule-specific arguments are passed via `args`.
 
 ```json
 {
   "rules": [
     {
       "id": "rule-one",
-      "semantics": {
-        "description": "What this rule enforces",
-        "type": "plugin-id"
+      "ruleId": "@your-org/codepol-plugin-foo/rule-one",
+      "description": "What this rule enforces",
+      "args": {
+        "option1": "value1"
       },
       "targets": [
         {
@@ -198,3 +239,4 @@ If you need full control over the ESLint rule (e.g., for auto-fix support), you 
 
 ```ts
 import type { CodepolRulePlugin, LintProvider, EslintProviderConfig } from '@codepol/core';
+```

@@ -14,8 +14,8 @@ pnpm add -D @codepol/plugin
 
 ## Exports
 
+- **Default export**: an array of rule plugins (currently `[loggerEnterExitRule]`).
 - `loggerEnterExitRule`: the rule plugin definition for `require-logger-enter-exit`.
-- `rulePlugins`: an array of rule plugins exported by this package (currently `loggerEnterExitRule`).
 
 ## Basic policy configuration
 
@@ -28,7 +28,6 @@ Use `semantics` and `targets` in your policy rules, then wire the logger rule pl
   "plugins": [
     {
       "module": "@codepol/plugin",
-      "export": "rulePlugins",
       "config": {
         "identifier": "logger",
         "enterMethod": "enter",

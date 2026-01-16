@@ -1,7 +1,6 @@
 import type { SyntaxNode } from 'web-tree-sitter';
-import type { LoggerConfig, PolicyCheckContext, PolicyPlugin, PolicyRule, PolicyViolation, TreeCheckProvider } from '@codepol/core';
-import { parserInit, parserGetForFile, Result, Ok, Err, isErr } from '@codepol/core';
-import { policyLoggerConfigGet } from './policyLoggerConfig';
+import type { LoggerConfig, PolicyCheckContext, PolicyRule, PolicyViolation, TreeCheckProvider } from '@codepol/core';
+import { parserGetForFile, Result, Ok, Err, isErr } from '@codepol/core';
 
 const blockNodeTypes = new Set(['statement_block', 'block', 'function_body']);
 
@@ -170,7 +169,10 @@ function loggerRuleCheck(
   const parser = parserResult.Ok;
   const tree = parser.parse(context.source);
   const violations: PolicyViolation[] = [];
-  const logger = policyLoggerConfigGet(context.policy);
+  
+  const args = context.ruleArgs as { logger?: LoggerConfig } | undefined;
+  const logger = args?.logger;
+
   if (!logger) {
     return Err('Logger configuration missing. Configure @codepol/plugin with rule args.logger.');
   }
@@ -189,7 +191,7 @@ function loggerRuleCheck(
       const firstMissing = missing.join(' & ');
       const { row: row, column: column } = fnNode.startPosition;
       violations.push({
-        ruleId: rule.id,
+        ruleId: rule.id || rule.ruleId,
         filePath: context.filePath,
         message: `Function ${name} is missing ${firstMissing}`,
         line: row + 1,
@@ -204,13 +206,4 @@ function loggerRuleCheck(
 export const loggerTreeCheckProvider: TreeCheckProvider = {
   languages: ['typescript', 'tsx'],
   check: loggerRuleCheck,
-};
-
-export const policyPluginLogger: PolicyPlugin = {
-  id: 'logger',
-  version: '1.0.0',
-  init: parserInit,
-  capabilities: {
-    treeCheckProvider: loggerTreeCheckProvider,
-  },
 };

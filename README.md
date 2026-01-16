@@ -62,7 +62,6 @@ Create `policy.json` in your project root:
   "plugins": [
     {
       "module": "@codepol/plugin",
-      "export": "rulePlugins",
       "rules": [
         {
           "id": "require-logger-enter-exit",
@@ -115,7 +114,7 @@ Add to your `eslint.config.js`:
 
 ```javascript
 import { eslintPluginCreate } from '@codepol/eslint-plugin';
-import { rulePlugins } from '@codepol/plugin';
+import rulePlugins from '@codepol/plugin';
 
 export default [
   {

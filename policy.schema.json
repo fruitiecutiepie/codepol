@@ -9,44 +9,29 @@
     "plugins": {
       "type": "array",
       "items": {
-        "type": "object",
-        "required": ["module", "export"],
-        "properties": {
-          "module": { "type": "string" },
-          "export": { "type": "string" },
-          "rules": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "required": ["id"],
-              "properties": {
-                "id": { "type": "string" },
-                "enabled": { "type": "boolean", "default": true },
-                "args": {}
-              },
-              "additionalProperties": false
-            }
+        "oneOf": [
+          { "type": "string" },
+          {
+            "type": "object",
+            "required": ["module"],
+            "properties": {
+              "module": { "type": "string" }
+            },
+            "additionalProperties": false
           }
-        },
-        "additionalProperties": false
+        ]
       }
     },
     "rules": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["id", "semantics", "targets"],
+        "required": ["ruleId", "targets"],
         "properties": {
           "id": { "type": "string" },
-          "semantics": {
-            "type": "object",
-            "required": ["description"],
-            "properties": {
-              "description": { "type": "string" },
-              "type": { "type": "string", "default": "logger" }
-            },
-            "additionalProperties": false
-          },
+          "ruleId": { "type": "string" },
+          "description": { "type": "string" },
+          "args": {},
           "targets": {
             "type": "array",
             "minItems": 1,

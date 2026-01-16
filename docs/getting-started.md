@@ -38,34 +38,22 @@ Create `policy.json` in your project root:
 ```json
 {
   "$schema": "https://raw.githubusercontent.com/fruitiecutiepie/codepol/master/policy.schema.json",
-  "plugins": [
-    {
-      "module": "@codepol/plugin",
-      "export": "rulePlugins",
-      "rules": [
-        {
-          "id": "require-logger-enter-exit",
-          "args": {
-            "logger": {
-              "identifier": "logger",
-              "enterMethod": "enter",
-              "exitMethod": "exit",
-              "import": {
-                "module": "@your-org/logger",
-                "named": "logger"
-              }
-            }
-          }
-        }
-      ]
-    }
-  ],
+  "plugins": ["@codepol/plugin"],
   "rules": [
     {
       "id": "function-logging",
-      "semantics": {
-        "description": "Ensure all functions have logger.enter/exit instrumentation",
-        "type": "logger"
+      "ruleId": "@codepol/plugin/require-logger-enter-exit",
+      "description": "Ensure all functions have logger.enter/exit instrumentation",
+      "args": {
+        "logger": {
+          "identifier": "logger",
+          "enterMethod": "enter",
+          "exitMethod": "exit",
+          "import": {
+            "module": "@your-org/logger",
+            "named": "logger"
+          }
+        }
       },
       "targets": [
         {
@@ -95,21 +83,21 @@ Create `policy.json` in your project root:
 
 ```javascript
 import { eslintPluginCreate } from '@codepol/eslint-plugin';
-import { rulePlugins } from '@codepol/plugin';
-import tsParser from '@typescript-eslint/parser';
+import codepolPlugin from '@codepol/plugin';
+import tseslint from 'typescript-eslint';
 
 export default [
   {
     files: ['**/*.ts', '**/*.tsx'],
     languageOptions: {
-      parser: tsParser,
+      parser: tseslint.parser,
       parserOptions: {
         ecmaVersion: 2022,
         sourceType: 'module',
       },
     },
     plugins: {
-      codepol: eslintPluginCreate(rulePlugins),
+      codepol: eslintPluginCreate(codepolPlugin),
     },
     rules: {
       'codepol/require-logger-enter-exit': 'error',
@@ -123,12 +111,13 @@ export default [
 
 ```javascript
 const { eslintPluginCreate } = require('@codepol/eslint-plugin');
-const { rulePlugins } = require('@codepol/plugin');
+const codepolPlugin = require('@codepol/plugin').default;
+const tseslint = require('typescript-eslint');
 
 module.exports = {
-  parser: '@typescript-eslint/parser',
+  parser: tseslint.parser,
   plugins: {
-    codepol: eslintPluginCreate(rulePlugins),
+    codepol: eslintPluginCreate(codepolPlugin),
   },
   rules: {
     'codepol/require-logger-enter-exit': 'error',
@@ -159,25 +148,23 @@ Update your `policy.json` to reference it:
 
 ```json
 {
-  "plugins": [
+  "plugins": ["@codepol/plugin"],
+  "rules": [
     {
-      "module": "@codepol/plugin",
-      "export": "rulePlugins",
-      "rules": [
-        {
-          "id": "require-logger-enter-exit",
-          "args": {
-            "logger": {
-              "identifier": "logger",
-              "enterMethod": "enter",
-              "exitMethod": "exit",
-              "import": {
-                "module": "./logger",
-                "named": "logger"
-              }
-            }
+      "ruleId": "@codepol/plugin/require-logger-enter-exit",
+      "args": {
+        "logger": {
+          "identifier": "logger",
+          "enterMethod": "enter",
+          "exitMethod": "exit",
+          "import": {
+            "module": "./logger",
+            "named": "logger"
           }
         }
+      },
+      "targets": [
+        { "language": "typescript", "files": ["src/**/*.ts"] }
       ]
     }
   ]
@@ -253,14 +240,14 @@ If you use esbuild, add build-time enforcement:
 ```typescript
 // build.ts
 import { build } from 'esbuild';
-import { policyPlugin } from '@codepol/esbuild-plugin';
+import { esbuildPluginCreate } from '@codepol/esbuild-plugin';
 
 await build({
   entryPoints: ['src/index.ts'],
   bundle: true,
   outdir: 'dist',
   plugins: [
-    policyPlugin({
+    esbuildPluginCreate({
       policyPath: './policy.json',
     }),
   ],

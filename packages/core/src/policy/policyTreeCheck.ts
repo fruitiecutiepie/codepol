@@ -1,32 +1,30 @@
 import fs from 'node:fs';
-import type { PolicyFile, PolicyRule, PolicyRuleTarget, PolicyViolation, PolicyPlugin } from './policyTypes';
+import type { PolicyFile, PolicyRule, PolicyRuleTarget, PolicyViolation, RulePlugin } from './policyTypes';
 import { ruleMatchesGet } from './policyGet';
-import { policyPluginsGet, defaultPluginType, type PolicyPluginsMap } from './policyPluginsGet';
+import { policyPluginsGet, pluginGetForRule, type PolicyPluginsMap } from './policyPluginsGet';
 import { Result, Ok, Err, isErr } from '../result/result';
 
 function policyPluginGet(
   pluginsMap: PolicyPluginsMap,
   rule: PolicyRule,
   target: PolicyRuleTarget
-): Result<PolicyPlugin, string> {
-  let ruleType = defaultPluginType;
-  if (rule.semantics.type != null) {
-    ruleType = rule.semantics.type;
-  }
-  const plugin = pluginsMap.get(ruleType);
-  if (!plugin) {
-    const error = `No plugin registered for rule type ${ruleType}.`;
+): Result<RulePlugin, string> {
+  const ruleId = rule.ruleId;
+  const lookup = pluginGetForRule(pluginsMap, ruleId);
+  if (!lookup) {
+    const error = `No plugin registered for rule type ${ruleId}.`;
     return Err(error);
   }
+  const { plugin, resolvedId } = lookup;
 
-  const treeCheckProvider = plugin.capabilities.treeCheckProvider;
+  const treeCheckProvider = plugin.rulePlugin.capabilities.treeCheckProvider;
   if (!treeCheckProvider) {
-    const error = `Plugin ${plugin.id} does not support tree checks (missing treeCheckProvider).`;
+    const error = `Plugin ${resolvedId} does not support tree checks (missing treeCheckProvider).`;
     return Err(error);
   }
 
   if (!treeCheckProvider.languages.includes(target.language)) {
-    const error = `Plugin ${plugin.id} does not support language ${target.language} for rule ${rule.id}.`;
+    const error = `Plugin ${resolvedId} does not support language ${target.language} for rule ${rule.id || rule.ruleId}.`;
     return Err(error);
   }
   return Ok(plugin);
@@ -49,7 +47,7 @@ export function policyViolationsGetForFile(
     return pluginResult;
   }
   const plugin = pluginResult.Ok;
-  const treeCheckProvider = plugin.capabilities.treeCheckProvider!;
+  const treeCheckProvider = plugin.rulePlugin.capabilities.treeCheckProvider!;
 
   const source = fs.readFileSync(filePath, 'utf8');
   
@@ -59,6 +57,7 @@ export function policyViolationsGetForFile(
     policy: policy,
     dir: dir,
     target: target,
+    ruleArgs: rule.args,
   });
 
   return checkResult;

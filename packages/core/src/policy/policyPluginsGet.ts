@@ -1,42 +1,62 @@
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type {
   PolicyFile,
-  PolicyPlugin,
   PolicyPluginDeclaration,
+  CodepolRulePlugin,
+  RulePlugin,
 } from './policyTypes';
 import { Result, Ok, Err, isErr } from '../result/result';
 
-export const defaultPluginType = 'logger';
+export type PolicyPluginsMap = Map<string, RulePlugin>;
 
-export type PolicyPluginsMap = Map<string, PolicyPlugin>;
-
-async function policyPluginGet(
-  declaration: PolicyPluginDeclaration,
-  cwd: string
-): Promise<Result<PolicyPlugin, string>> {
-  const moduleSpecifier = declaration.module;
-  const moduleSource = moduleSpecifier.startsWith('.') || moduleSpecifier.startsWith('/')
-    ? pathToFileURL(path.resolve(cwd, moduleSpecifier)).href
-    : moduleSpecifier;
-  const moduleLoaded = await import(moduleSource);
-  const pluginExported = moduleLoaded[declaration.export];
-  if (!pluginExported) {
-    const error = `Module ${moduleSpecifier} does not export "${declaration.export}".`;
-    return Err(error);
-  }
-  const plugin = pluginExported as PolicyPlugin;
-
-  if (!plugin.id || !plugin.version || !plugin.capabilities) {
-    const error = `Invalid plugin exported by ${moduleSpecifier}.`;
-    return Err(error);
-  }
-
-  return Ok(plugin);
+/**
+ * Resolves a rule ID by prefixing with module specifier if not already namespaced.
+ * Plugin authors can define short IDs (e.g., "require-logger-enter-exit") and
+ * codepol will namespace them (e.g., "@codepol/plugin/require-logger-enter-exit").
+ */
+function ruleIDGetWithNamespace(id: string, moduleSpecifier: string): string {
+  if (id.includes('/')) return id;
+  return `${moduleSpecifier}/${id}`;
 }
 
 /**
- * Loads plugins declared in the policy into a map keyed by plugin id.
+ * Looks up a plugin by rule ID, supporting both full and short IDs.
+ * Short IDs are matched by suffix (e.g., "require-logger-enter-exit" matches
+ * "@codepol/plugin/require-logger-enter-exit").
+ * @returns The plugin and resolved ID, or undefined if not found or ambiguous
+ */
+export function pluginGetForRule(
+  pluginsMap: PolicyPluginsMap,
+  ruleId: string
+): { plugin: RulePlugin; resolvedId: string } | undefined {
+  // Try exact match first
+  const exactMatch = pluginsMap.get(ruleId);
+  if (exactMatch) {
+    return { plugin: exactMatch, resolvedId: ruleId };
+  }
+
+  // If the ID doesn't contain '/', try suffix matching
+  if (!ruleId.includes('/')) {
+    const suffix = `/${ruleId}`;
+    const matches: { plugin: RulePlugin; resolvedId: string }[] = [];
+    for (const [key, plugin] of pluginsMap) {
+      if (key.endsWith(suffix)) {
+        matches.push({ plugin, resolvedId: key });
+      }
+    }
+    if (matches.length === 1) {
+      return matches[0];
+    }
+    // Ambiguous or no match - return undefined
+  }
+
+  return undefined;
+}
+
+/**
+ * Loads plugins declared in the policy into a map keyed by plugin rule id.
  * @returns Result containing the plugins map or an error message
  */
 export async function policyPluginsGet(
@@ -44,55 +64,122 @@ export async function policyPluginsGet(
   cwd: string
 ): Promise<Result<PolicyPluginsMap, string>> {
   let declarations: PolicyPluginDeclaration[] = [];
-  if (policy.plugins != null) {
+  if (policy.plugins !== undefined) {
     declarations = policy.plugins;
   }
-  const pluginsMapGet = new Map<string, PolicyPlugin>();
+  const pluginsMapGet = new Map<string, RulePlugin>();
+
+  // Create a require function that resolves from consumer's project context
+  const requireFromCwd = createRequire(path.join(cwd, 'package.json'));
 
   for (const declaration of declarations) {
-    const pluginResult = await policyPluginGet(declaration, cwd);
-    if (isErr(pluginResult)) {
-      return pluginResult;
+    const moduleSpecifier = typeof declaration === 'string' ? declaration : declaration.module;
+    
+    let moduleSource: string;
+    if (moduleSpecifier.startsWith('.') || moduleSpecifier.startsWith('/')) {
+      // Relative or absolute paths resolve from cwd
+      moduleSource = pathToFileURL(path.resolve(cwd, moduleSpecifier)).href;
+    } else {
+      // Bare package specifiers resolve from consumer's node_modules
+      try {
+        moduleSource = pathToFileURL(requireFromCwd.resolve(moduleSpecifier)).href;
+      } catch (e) {
+        return Err(`Failed to resolve plugin module ${moduleSpecifier}: ${e}`);
+      }
     }
-    const plugin = pluginResult.Ok;
-    if (pluginsMapGet.has(plugin.id)) {
-      const error = `Duplicate plugin id detected: ${plugin.id}.`;
-      return Err(error);
+    
+    let moduleLoaded;
+    try {
+      moduleLoaded = await import(moduleSource);
+    } catch (e) {
+      return Err(`Failed to load plugin module ${moduleSpecifier}: ${e}`);
     }
-    pluginsMapGet.set(plugin.id, plugin);
+
+    // Handle CommonJS/ESM interop: when dynamically importing a CommonJS module
+    // that uses TypeScript's `export default`, Node.js wraps the entire `exports`
+    // object as the default. Check for nested `default` in __esModule modules.
+    //
+    // TODO: Remove this workaround by publishing @codepol/plugin as dual ESM+CJS package.
+    let pluginExported = moduleLoaded.default;
+    if (
+      pluginExported &&
+      typeof pluginExported === 'object' &&
+      pluginExported.__esModule &&
+      'default' in pluginExported
+    ) {
+      pluginExported = pluginExported.default;
+    }
+    if (!pluginExported) {
+      return Err(`Module ${moduleSpecifier} does not have a default export.`);
+    }
+
+    let rulePlugins: CodepolRulePlugin[];
+    try {
+      // rulePluginsNormalize
+      const exported = pluginExported;
+      if (!exported) {
+        throw new Error(`No rule plugins exported by ${moduleSpecifier}.`);
+      }
+      if (Array.isArray(exported)) {
+        rulePlugins = exported as CodepolRulePlugin[];
+      } else if (typeof exported === 'object' && exported !== undefined) {
+        const candidate = exported as { rulePlugins?: unknown };
+        if (Array.isArray(candidate.rulePlugins)) {
+          rulePlugins = candidate.rulePlugins as CodepolRulePlugin[];
+        } else {
+          throw new Error(`Invalid rule plugin export from ${moduleSpecifier}. Expected an array of rule plugins.`);
+        }
+      } else {
+        throw new Error(`Invalid rule plugin export from ${moduleSpecifier}.`);
+      }
+    } catch (e: any) {
+      return Err(e.message);
+    }
+
+    for (const rulePlugin of rulePlugins) {
+      if (!rulePlugin.id) {
+         return Err(`Rule plugin from ${moduleSpecifier} missing id.`);
+      }
+      
+      const resolvedId = ruleIDGetWithNamespace(rulePlugin.id, moduleSpecifier);
+
+      if (pluginsMapGet.has(resolvedId)) {
+        return Err(`Duplicate plugin rule id detected: ${resolvedId}.`);
+      }
+
+      const namespacedRulePlugin = {
+        ...rulePlugin,
+        id: resolvedId
+      };
+
+      pluginsMapGet.set(resolvedId, {
+        rulePlugin: namespacedRulePlugin
+      });
+    }
   }
 
-  for (const plugin of pluginsMapGet.values()) {
-    if (plugin.init) {
-      await plugin.init({ cwd: cwd, policy: policy });
-    }
-  }
-
+  // Validate that all policy rules have a matching plugin
   for (const rule of policy.rules) {
-    let ruleType = defaultPluginType;
-    if (rule.semantics.type != null) {
-      ruleType = rule.semantics.type;
+    const ruleId = rule.ruleId;
+    if (!ruleId) {
+        return Err(`Policy rule missing 'ruleId'.`);
     }
-    const plugin = pluginsMapGet.get(ruleType);
-    if (!plugin) {
-      const error = `No plugin registered for rule type ${ruleType}.`;
-      return Err(error);
+
+    const lookup = pluginGetForRule(pluginsMapGet, ruleId);
+    if (!lookup) {
+      return Err(`No plugin registered for rule type ${ruleId}.`);
     }
+    const { plugin, resolvedId } = lookup;
 
     // For tree checks, we need the treeCheckProvider
-    const treeCheckProvider = plugin.capabilities.treeCheckProvider;
+    const treeCheckProvider = plugin.rulePlugin.capabilities.treeCheckProvider;
     if (!treeCheckProvider) {
-       // If the rule is strictly for other providers (e.g. lint), we might not fail here?
-       // But this function seems to prepare for policyTreeCheck.
-       // Let's assume strictness for now.
-       const error = `Plugin ${plugin.id} does not support tree checks (missing treeCheckProvider) for rule ${rule.id}.`;
-       return Err(error);
+       return Err(`Plugin ${resolvedId} does not support tree checks (missing treeCheckProvider) for rule ${rule.id || ruleId}.`);
     }
 
     for (const target of rule.targets) {
       if (!treeCheckProvider.languages.includes(target.language)) {
-        const error = `Plugin ${plugin.id} does not support language ${target.language} for rule ${rule.id}.`;
-        return Err(error);
+        return Err(`Plugin ${resolvedId} does not support language ${target.language} for rule ${rule.id || ruleId}.`);
       }
     }
   }

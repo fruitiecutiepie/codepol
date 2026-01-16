@@ -18,7 +18,6 @@ pnpm add @codepol/core
 import type {
   PolicyFile,
   PolicyRule,
-  PolicyRuleSemantics,
   PolicyRuleTarget,
   PolicyRuleTargetContext,
   LoggerConfig,
@@ -27,9 +26,10 @@ import type {
   TreeCheckProvider,
   PolicyPluginCapabilities,
   CodepolRulePlugin,
-  CodepolPlugin,
-  PolicyPlugin,
-  PolicyPluginsMap,
+  RulePlugin,
+  PolicyPluginDeclaration,
+  PolicyPluginRuleDeclaration,
+  PolicyCheckContext,
   LintProvider,
   LintProviderContext,
   EslintProviderConfig,
@@ -37,7 +37,6 @@ import type {
   RuleMatch,
   PolicyCheckOptions,
   PolicyCheckResult,
-  PolicyPluginRuleDeclaration,
   // Adapter types
   LintDiagnostic,
   TreeCheckAdapterOptions,
@@ -47,8 +46,7 @@ import type {
 } from '@codepol/core';
 ```
 
-Policy rules split semantics (meaning) from language targets. `PolicyRuleSemantics` defines the shared intent
-(description and plugin type), while `PolicyRuleTarget` declares the language adapter or parser plus its file globs.
+Policy rules split semantics (meaning) from language targets. `PolicyRule` defines the rule metadata and plugin reference (`ruleId`), while `PolicyRuleTarget` declares the language adapter or parser plus its file globs.
 This lets a single rule id apply across multiple languages without duplicating the rule meaning.
 
 ---
@@ -380,7 +378,7 @@ Adapter contract for converting `TreeCheckProvider` to lint provider rules.
 ```typescript
 type TreeCheckLintAdapter<TRule> = {
   platform: string;  // Platform identifier (e.g., 'eslint', 'biome')
-  adapt: (provider: TreeCheckProvider, options?: TreeCheckAdapterOptions) => TRule;
+  adapt: (provider: CodepolRulePlugin, options?: TreeCheckAdapterOptions) => TRule;
 };
 ```
 
@@ -449,7 +447,7 @@ function violationsToLintDiagnostics(
 
 ```typescript
 import { eslintPluginCreate } from '@codepol/eslint-plugin';
-import { rulePlugins } from '@codepol/plugin';
+import rulePlugins from '@codepol/plugin';
 
 const plugin = eslintPluginCreate(rulePlugins);
 // plugin.rules['require-logger-enter-exit']
@@ -473,16 +471,16 @@ const eslintAdapter: TreeCheckLintAdapter<TSESLint.RuleModule<string, unknown[]>
 **Properties:**
 
 - `platform`: `'eslint'`
-- `adapt(provider, options?)`: Converts a `TreeCheckProvider` to an ESLint rule
+- `adapt(provider, options?)`: Converts a `CodepolRulePlugin` to an ESLint rule
 
 **Example:**
 
 ```typescript
 import { eslintAdapter } from '@codepol/eslint-plugin';
-import { loggerTreeCheckProvider } from '@codepol/plugin';
+import { loggerEnterExitRule } from '@codepol/plugin';
 
 // Convert tree-check provider to ESLint rule
-const eslintRule = eslintAdapter.adapt(loggerTreeCheckProvider, {
+const eslintRule = eslintAdapter.adapt(loggerEnterExitRule, {
   ruleName: 'require-logger-enter-exit',
 });
 
@@ -508,7 +506,7 @@ to ensure async initialization completes (e.g., loading Tree-sitter WASM parsers
 
 ```typescript
 async function eslintAdapterInit(
-  provider: TreeCheckProvider,
+  provider: CodepolRulePlugin,
   policy: PolicyFile,
   cwd: string
 ): Promise<void>
@@ -516,7 +514,7 @@ async function eslintAdapterInit(
 
 **Parameters:**
 
-- `provider`: The `TreeCheckProvider` to initialize
+- `provider`: The `CodepolRulePlugin` to initialize
 - `policy`: The loaded policy file
 - `cwd`: Current working directory
 
@@ -525,7 +523,7 @@ async function eslintAdapterInit(
 ```typescript
 import { eslintAdapterInit, eslintAdapter } from '@codepol/eslint-plugin';
 import { policyFileGet, parserInit, langAdd } from '@codepol/core';
-import { loggerTreeCheckProvider } from '@codepol/plugin';
+import { loggerEnterExitRule } from '@codepol/plugin';
 
 // Initialize tree-sitter languages
 langAdd({ langId: 'typescript', fileExtensions: ['.ts'] });
@@ -533,10 +531,10 @@ await parserInit();
 
 // Initialize the provider
 const policy = policyFileGet('./policy.json');
-await eslintAdapterInit(loggerTreeCheckProvider, policy, process.cwd());
+await eslintAdapterInit(loggerEnterExitRule, policy, process.cwd());
 
 // Now the adapted rule will work without async init warnings
-const rule = eslintAdapter.adapt(loggerTreeCheckProvider);
+const rule = eslintAdapter.adapt(loggerEnterExitRule);
 ```
 
 ---
@@ -564,9 +562,9 @@ Note: The old names `clearPolicyCache` and `clearProviderInitState` are still av
 ### Rule Plugins
 
 ```typescript
-import { loggerEnterExitRule, loggerLintProvider, rulePlugins } from '@codepol/plugin';
+import rulePlugins, { loggerEnterExitRule, loggerLintProvider } from '@codepol/plugin';
 
-// loggerEnterExitRule.id === 'require-logger-enter-exit'
+// loggerEnterExitRule.id === '@codepol/plugin/require-logger-enter-exit'
 // loggerEnterExitRule.capabilities.lintProviders contains loggerLintProvider
 // loggerLintProvider.platform === 'eslint'
 // loggerLintProvider.languages === ['typescript', 'tsx']
@@ -593,10 +591,9 @@ policyCacheClear();
   "plugins": [
     {
       "module": "@codepol/plugin",
-      "export": "rulePlugins",
       "rules": [
         {
-          "id": "require-logger-enter-exit",
+          "id": "@codepol/plugin/require-logger-enter-exit",
           "enabled": true,
           "args": {
             "policyPath": "./policy.json",
@@ -621,12 +618,12 @@ policyCacheClear();
 
 ## @codepol/esbuild-plugin
 
-### policyPlugin
+### esbuildPluginCreate
 
 Creates an esbuild plugin for policy enforcement.
 
 ```typescript
-function policyPlugin(options?: PolicyPluginOptions): Plugin
+function esbuildPluginCreate(options?: PolicyPluginOptions): Plugin
 ```
 
 **Parameters:**
@@ -646,14 +643,14 @@ type PolicyPluginOptions = {
 
 ```typescript
 import { build } from 'esbuild';
-import { policyPlugin } from '@codepol/esbuild-plugin';
+import { esbuildPluginCreate } from '@codepol/esbuild-plugin';
 
 await build({
   entryPoints: ['src/index.ts'],
   bundle: true,
   outdir: 'dist',
   plugins: [
-    policyPlugin({
+    esbuildPluginCreate({
       policyPath: './policy.json',
       fix: false,
     }),

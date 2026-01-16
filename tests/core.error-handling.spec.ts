@@ -7,7 +7,7 @@ import {
   type PolicyRule,
   type PolicyRuleTarget,
 } from '@codepol/core';
-import { policyPluginLogger } from '@codepol/plugin';
+import { loggerEnterExitRule } from '@codepol/plugin';
 import { writeFileSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 
@@ -27,7 +27,8 @@ describe('core error handling', () => {
 
     const rule: PolicyRule = {
       id: 'test-rule',
-      semantics: { description: 'test', type: 'logger' },
+      ruleId: loggerEnterExitRule.id,
+      description: 'test',
       targets: [],
     };
 
@@ -36,9 +37,9 @@ describe('core error handling', () => {
       files: [],
     };
 
-    // Construct a plugins map manually
+    // Construct a plugins map manually (args are now on rules, not plugins)
     const pluginsMap = new Map();
-    pluginsMap.set('logger', policyPluginLogger);
+    pluginsMap.set(loggerEnterExitRule.id, { rulePlugin: loggerEnterExitRule });
 
     try {
       const result = policyViolationsGetForFile(

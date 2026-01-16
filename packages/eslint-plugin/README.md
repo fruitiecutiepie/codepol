@@ -22,7 +22,7 @@ pnpm add -D @codepol/eslint-plugin @codepol/core @codepol/plugin eslint @typescr
 
 ```javascript
 import { eslintPluginCreate } from '@codepol/eslint-plugin';
-import { rulePlugins } from '@codepol/plugin';
+import rulePlugins from '@codepol/plugin';
 
 export default [
   {
@@ -41,7 +41,7 @@ export default [
 
 ```javascript
 import { eslintPluginCreate } from '@codepol/eslint-plugin';
-import { rulePlugins } from '@codepol/plugin';
+import rulePlugins from '@codepol/plugin';
 
 export default [
   {
@@ -61,7 +61,7 @@ export default [
 
 ```javascript
 const { eslintPluginCreate } = require('@codepol/eslint-plugin');
-const { rulePlugins } = require('@codepol/plugin');
+const rulePlugins = require('@codepol/plugin').default;
 
 module.exports = {
   plugins: {
@@ -129,8 +129,20 @@ The auto-fix will:
 type RuleOptions = {
   /** Path to the policy.json file (default: './policy.json') */
   policyPath?: string;
+  /** Logger configuration (default to policy.json args if not provided) */
+  logger?: {
+    identifier: string;
+    enterMethod: string;
+    exitMethod: string;
+    import: {
+      module: string;
+      named: string;
+    };
+  };
 };
 ```
+
+The rule automatically reads logger configuration from your `policy.json` rule args. You only need to specify `logger` in ESLint options if you want to override the policy configuration.
 
 ## Policy Integration
 
@@ -163,7 +175,6 @@ Example `policy.json`:
   "plugins": [
     {
       "module": "@codepol/plugin",
-      "export": "rulePlugins",
       "rules": [
         {
           "id": "require-logger-enter-exit",

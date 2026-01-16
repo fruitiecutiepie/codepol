@@ -35,7 +35,6 @@ export type {
   LoggerImportConfig,
   LoggerConfig,
   PolicyRule,
-  PolicyRuleSemantics,
   PolicyRuleTarget,
   PolicyRuleTargetContext,
   PolicyFile,
@@ -47,11 +46,8 @@ export type {
   FixProvider,
   PolicyPluginCapabilities,
   CodepolRulePlugin,
-  CodepolPlugin,
-  PolicyPlugin,
+  RulePlugin,
   PolicyPluginDeclaration,
-  PolicyPluginRuleDeclaration,
-  PolicyPluginInitContext,
   PolicyCheckContext,
   PolicyViolation,
   RuleMatch,
@@ -90,9 +86,6 @@ export function eslintProviderCreate(config: {
     config: eslintConfig,
   };
 }
-
-/** @deprecated Use eslintProviderCreate instead */
-export const eslintProvider = eslintProviderCreate;
 
 /**
  * Derive supported languages from all providers in a rule plugin.
@@ -138,8 +131,8 @@ export { langAdd, langsGet, wasmPathGet } from './parser/parserLangs';
 // Plugins
 export type { PolicyPluginsMap } from './policy/policyPluginsGet';
 export {
-  defaultPluginType,
   policyPluginsGet,
+  pluginGetForRule,
 } from './policy/policyPluginsGet';
 
 // Runner
