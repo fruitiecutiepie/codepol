@@ -65,7 +65,22 @@ import type {
   LintProvider,
   LintProviderContext,
   EslintProviderConfig,
+  TreeCheckProvider,
+  PolicyRule,
+  PolicyCheckContext,
+  PolicyViolation,
 } from './types';
+
+import { resultFrom } from './result/result';
+
+/**
+ * Consumer-facing check function type.
+ * Returns plain violations array; errors are thrown as exceptions.
+ */
+export type TreeCheckFn = (
+  rule: PolicyRule,
+  context: PolicyCheckContext
+) => PolicyViolation[];
 
 /**
  * Factory for creating ESLint lint providers.
@@ -87,6 +102,34 @@ export function eslintProviderCreate(config: {
     platform: 'eslint',
     languages: config.languages,
     config: eslintConfig,
+  };
+}
+
+/**
+ * Factory for creating TreeCheckProvider from a plain check function.
+ * Wraps the check function with resultFrom to convert exceptions to Result.Err.
+ *
+ * @example
+ * ```typescript
+ * function myCheck(rule: PolicyRule, context: PolicyCheckContext): PolicyViolation[] {
+ *   const violations: PolicyViolation[] = [];
+ *   // ... check logic ...
+ *   return violations;
+ * }
+ *
+ * export const myProvider = treeCheckProviderNew({
+ *   languages: ['typescript', 'tsx'],
+ *   check: myCheck,
+ * });
+ * ```
+ */
+export function treeCheckProviderNew(config: {
+  languages: string[];
+  check: TreeCheckFn;
+}): TreeCheckProvider {
+  return {
+    languages: config.languages,
+    check: (rule, ctx) => resultFrom(() => config.check(rule, ctx)),
   };
 }
 
