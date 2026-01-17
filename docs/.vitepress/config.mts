@@ -1,6 +1,6 @@
-import { defineConfig } from 'vitepress'
+import { withMermaid } from 'vitepress-plugin-mermaid'
 
-export default defineConfig({
+export default withMermaid({
   base: '/codepol/',
   title: 'Codepol',
   description: 'Policy-driven code enforcement for TypeScript projects',
