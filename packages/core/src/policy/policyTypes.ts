@@ -71,7 +71,14 @@ export type PolicyRuleTarget = {
 };
 
 /**
+ * Named target definitions that rules can reference.
+ * Keys are target names, values are target definitions.
+ */
+export type PolicyTargetMap = Record<string, PolicyRuleTarget>;
+
+/**
  * A single policy rule that defines which files to check and how.
+ * Must specify either `target` (reference to named target) or `targets` (inline).
  */
 export type PolicyRule = {
   /** Unique identifier for this rule (optional, defaults to ruleId) */
@@ -82,8 +89,10 @@ export type PolicyRule = {
   description?: string;
   /** Rule-specific arguments passed to the rule provider */
   args?: unknown;
-  /** Language-specific targets this rule should enforce */
-  targets: PolicyRuleTarget[];
+  /** Reference to a named target defined in top-level targets */
+  target?: string;
+  /** Inline target definitions (use 'target' to reference named targets instead) */
+  targets?: PolicyRuleTarget[];
 };
 
 /**
@@ -93,6 +102,8 @@ export type PolicyRule = {
 export type PolicyFile = {
   /** Optional JSON schema reference */
   $schema?: string;
+  /** Named target definitions that rules can reference */
+  targets?: PolicyTargetMap;
   /** Array of policy rules to enforce */
   rules: PolicyRule[];
   /** Global exclusion patterns applied to all rules */

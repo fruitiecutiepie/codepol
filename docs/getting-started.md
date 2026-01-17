@@ -77,6 +77,8 @@ Create `policy.json` in your project root:
 }
 ```
 
+> **Tip:** For projects with multiple rules sharing the same file patterns, you can define [named targets](./policy-schema.md#named-targets) at the top level and reference them across rules to reduce repetition.
+
 ## Step 3: Configure ESLint
 
 ### Flat Config (eslint.config.js) - Recommended

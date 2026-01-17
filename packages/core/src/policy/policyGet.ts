@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import fg from 'fast-glob';
 import { minimatch } from 'minimatch';
-import type { PolicyFile, PolicyRuleTarget, RuleMatch } from './policyTypes';
+import type { PolicyFile, PolicyRule, PolicyRuleTarget, RuleMatch } from './policyTypes';
 
 const policyCacheStore = new Map<string, PolicyFile>();
 
@@ -43,6 +43,43 @@ export function policyCacheClear(): void {
 }
 
 /**
+ * Resolves the targets for a policy rule.
+ * If the rule uses a `target` reference, looks it up in the policy's named targets.
+ * Otherwise returns the inline `targets` array.
+ *
+ * @param rule - The policy rule to resolve targets for
+ * @param policy - The policy file containing named targets
+ * @returns Array of resolved PolicyRuleTarget objects
+ * @throws If `target` reference doesn't exist in policy.targets
+ *
+ * @example
+ * ```typescript
+ * const targets = policyRuleTargetsResolve(rule, policy);
+ * for (const target of targets) {
+ *   // process target
+ * }
+ * ```
+ */
+export function policyRuleTargetsResolve(rule: PolicyRule, policy: PolicyFile): PolicyRuleTarget[] {
+  if (rule.target !== undefined) {
+    const namedTarget = policy.targets?.[rule.target];
+    if (!namedTarget) {
+      throw new Error(
+        `Rule "${rule.id ?? rule.ruleId}" references target "${rule.target}" ` +
+        `which is not defined in policy.targets`
+      );
+    }
+    return [namedTarget];
+  }
+  if (rule.targets !== undefined) {
+    return rule.targets;
+  }
+  throw new Error(
+    `Rule "${rule.id ?? rule.ruleId}" must specify either "target" or "targets"`
+  );
+}
+
+/**
  * Checks if any pattern in the list matches the given file path.
  *
  * @param patterns - Array of glob patterns to match against
@@ -74,7 +111,8 @@ export function policyFileGetChecked(
     return false;
   }
   for (const rule of policy.rules) {
-    for (const target of rule.targets) {
+    const targets = policyRuleTargetsResolve(rule, policy);
+    for (const target of targets) {
       if (globPatternsGetMatchAny(target.files, relative)) {
         if (globPatternsGetMatchAny(target.exclude, relative)) {
           continue;
@@ -133,7 +171,8 @@ export async function ruleMatchesGet(policy: PolicyFile, cwd: string): Promise<R
     globalExclude = policy.exclude;
   }
   for (const rule of policy.rules) {
-    for (const target of rule.targets) {
+    const targets = policyRuleTargetsResolve(rule, policy);
+    for (const target of targets) {
       const ignore = [...globalExclude, ...(target.exclude ?? [])];
       const files = await fg(target.files, {
         cwd: cwd,

@@ -17,13 +17,89 @@ You can enable IDE autocompletion by adding the `$schema` property:
 | Property | Type | Required | Description |
 | -------- | ---- | -------- | ----------- |
 | `$schema` | string | No | JSON schema URL for IDE support |
+| `targets` | PolicyTargetMap | No | Named target definitions that rules can reference |
 | `rules` | PolicyRule[] | Yes | Array of enforcement rules |
 | `exclude` | string[] | No | Global file patterns to exclude |
 | `plugins` | PolicyPluginDeclaration[] | No | Plugins available to policy rules |
 
+## Named Targets
+
+Named targets let you define file patterns once and reference them across multiple rules. This reduces repetition when several rules apply to the same files.
+
+### Defining Named Targets
+
+Define targets at the top level using `targets` (an object mapping names to target definitions):
+
+```json
+{
+  "targets": {
+    "typescript-src": {
+      "language": "typescript",
+      "files": ["src/**/*.ts", "src/**/*.tsx"],
+      "exclude": ["**/*.spec.ts", "**/*.test.ts"]
+    },
+    "api-handlers": {
+      "language": "typescript",
+      "files": ["src/api/**/*.ts"]
+    }
+  }
+}
+```
+
+### Referencing Named Targets
+
+Rules can reference a named target using the `target` property:
+
+```json
+{
+  "rules": [
+    { "ruleId": "no-console", "target": "typescript-src" },
+    { "ruleId": "require-auth", "target": "api-handlers" }
+  ]
+}
+```
+
+### Inline Targets (Alternative)
+
+Rules can also define targets inline using the `targets` array (useful for one-off configurations):
+
+```json
+{
+  "rules": [
+    {
+      "ruleId": "special-rule",
+      "targets": [{ "language": "typescript", "files": ["scripts/**/*.ts"] }]
+    }
+  ]
+}
+```
+
+Each rule must specify either `target` (reference) or `targets` (inline), but not both.
+
 ## PolicyRule
 
 Defines which files to check, how, and with what configuration.
+
+### Using Named Target Reference
+
+```json
+{
+  "id": "function-logging",
+  "ruleId": "@codepol/plugin/require-logger-enter-exit",
+  "description": "Ensure all functions have logger instrumentation",
+  "args": {
+    "logger": {
+      "identifier": "logger",
+      "enterMethod": "enter",
+      "exitMethod": "exit",
+      "import": { "module": "@org/logger", "named": "logger" }
+    }
+  },
+  "target": "typescript-src"
+}
+```
+
+### Using Inline Targets
 
 ```json
 {
@@ -56,7 +132,10 @@ Defines which files to check, how, and with what configuration.
 | `ruleId` | string | Yes | The plugin rule identifier (namespaced, e.g. `@org/plugin/rule-name`) |
 | `description` | string | No | Human-readable description |
 | `args` | object | No | Rule-specific arguments passed to the plugin |
-| `targets` | PolicyRuleTarget[] | Yes | Language adapter or parser targets |
+| `target` | string | * | Reference to a named target (mutually exclusive with `targets`) |
+| `targets` | PolicyRuleTarget[] | * | Inline target definitions (mutually exclusive with `target`) |
+
+*One of `target` or `targets` is required.
 
 ### PolicyRuleTarget Properties
 
@@ -171,6 +250,78 @@ Codepol uses [fast-glob](https://github.com/mrmlnc/fast-glob) for file matching.
 
 ## Complete Example
 
+This example uses named targets to avoid repeating file patterns:
+
+```json
+{
+  "$schema": "https://raw.githubusercontent.com/fruitiecutiepie/codepol/master/policy.schema.json",
+  "plugins": ["@codepol/plugin"],
+  "targets": {
+    "typescript-src": {
+      "language": "typescript",
+      "files": ["src/**/*.ts", "src/**/*.tsx"],
+      "exclude": [
+        "**/*.spec.ts",
+        "**/*.test.ts",
+        "**/*.d.ts",
+        "**/__mocks__/**",
+        "**/__tests__/**"
+      ]
+    },
+    "api-handlers": {
+      "language": "typescript",
+      "files": ["src/api/**/*.ts"]
+    }
+  },
+  "rules": [
+    {
+      "id": "function-logging",
+      "ruleId": "@codepol/plugin/require-logger-enter-exit",
+      "description": "Ensure all exported functions have logger instrumentation",
+      "args": {
+        "logger": {
+          "identifier": "logger",
+          "enterMethod": "enter",
+          "exitMethod": "exit",
+          "import": {
+            "module": "@myorg/observability",
+            "named": "logger"
+          }
+        }
+      },
+      "target": "typescript-src"
+    },
+    {
+      "id": "api-logging",
+      "ruleId": "@codepol/plugin/require-logger-enter-exit",
+      "description": "Ensure API handlers have logging",
+      "args": {
+        "logger": {
+          "identifier": "apiLogger",
+          "enterMethod": "enter",
+          "exitMethod": "exit",
+          "import": {
+            "module": "@myorg/observability",
+            "named": "apiLogger"
+          }
+        }
+      },
+      "target": "api-handlers"
+    }
+  ],
+  "exclude": [
+    "dist/**",
+    "node_modules/**",
+    "**/*.config.ts",
+    "**/*.config.js"
+  ]
+}
+```
+
+### Inline Targets Example
+
+You can also use inline targets directly on rules (useful when a target is only used once):
+
 ```json
 {
   "$schema": "https://raw.githubusercontent.com/fruitiecutiepie/codepol/master/policy.schema.json",
@@ -194,40 +345,13 @@ Codepol uses [fast-glob](https://github.com/mrmlnc/fast-glob) for file matching.
       "targets": [
         {
           "language": "typescript",
-          "files": [
-            "src/**/*.ts",
-            "src/**/*.tsx"
-          ],
+          "files": ["src/**/*.ts", "src/**/*.tsx"],
           "exclude": [
             "**/*.spec.ts",
             "**/*.test.ts",
             "**/*.d.ts",
             "**/__mocks__/**",
             "**/__tests__/**"
-          ]
-        }
-      ]
-    },
-    {
-      "id": "api-logging",
-      "ruleId": "@codepol/plugin/require-logger-enter-exit",
-      "description": "Ensure API handlers have logging",
-      "args": {
-        "logger": {
-          "identifier": "apiLogger",
-          "enterMethod": "enter",
-          "exitMethod": "exit",
-          "import": {
-            "module": "@myorg/observability",
-            "named": "apiLogger"
-          }
-        }
-      },
-      "targets": [
-        {
-          "language": "typescript",
-          "files": [
-            "src/api/**/*.ts"
           ]
         }
       ]
@@ -343,13 +467,38 @@ The types are available from `@codepol/core`:
 import type {
   PolicyFile,
   PolicyRule,
+  PolicyRuleTarget,
+  PolicyTargetMap,
   CodepolPluginRule,
   PolicyPluginDeclaration,
   LoggerConfig,
   LoggerImportConfig,
 } from '@codepol/core';
 
-const policy: PolicyFile = {
+// Using named targets
+const policyWithNamedTargets: PolicyFile = {
+  plugins: ['@codepol/plugin'],
+  targets: {
+    'typescript-src': { language: 'typescript', files: ['src/**/*.ts'] },
+  },
+  rules: [
+    {
+      ruleId: '@codepol/plugin/require-logger-enter-exit',
+      args: {
+        logger: {
+          identifier: 'logger',
+          enterMethod: 'enter',
+          exitMethod: 'exit',
+          import: { module: '@org/logger', named: 'logger' },
+        },
+      },
+      target: 'typescript-src',
+    },
+  ],
+};
+
+// Using inline targets
+const policyWithInlineTargets: PolicyFile = {
   plugins: ['@codepol/plugin'],
   rules: [
     {

@@ -19,6 +19,7 @@ import type {
   PolicyFile,
   PolicyRule,
   PolicyRuleTarget,
+  PolicyTargetMap,
   PolicyRuleTargetContext,
   LoggerConfig,
   LoggerImportConfig,
@@ -47,6 +48,7 @@ import type {
 ```
 
 Policy rules split semantics (meaning) from language targets. `PolicyRule` defines the rule metadata and plugin reference (`ruleId`), while `PolicyRuleTarget` declares the language adapter or parser plus its file globs.
+Rules can either reference a named target from `PolicyFile.targets` using `rule.target`, or define targets inline using `rule.targets`.
 This lets a single rule id apply across multiple languages without duplicating the rule meaning.
 
 ---
@@ -73,6 +75,44 @@ import { policyFileGet } from '@codepol/core';
 const policy = policyFileGet('./policy.json');
 console.log(policy.rules.length);
 console.log(policy.plugins?.length ?? 0);
+```
+
+---
+
+### policyRuleTargetsResolve
+
+Resolves the targets for a policy rule. If the rule uses a `target` reference, looks it up in the policy's named targets. Otherwise returns the inline `targets` array.
+
+```typescript
+function policyRuleTargetsResolve(
+  rule: PolicyRule,
+  policy: PolicyFile
+): PolicyRuleTarget[]
+```
+
+**Parameters:**
+
+- `rule`: The policy rule to resolve targets for
+- `policy`: The policy file containing named targets
+
+**Returns:** Array of resolved PolicyRuleTarget objects
+
+**Throws:** If `target` reference doesn't exist in `policy.targets`, or if neither `target` nor `targets` is specified
+
+**Example:**
+
+```typescript
+import { policyFileGet, policyRuleTargetsResolve } from '@codepol/core';
+
+const policy = policyFileGet('./policy.json');
+
+for (const rule of policy.rules) {
+  const targets = policyRuleTargetsResolve(rule, policy);
+  console.log(`Rule ${rule.id} has ${targets.length} target(s)`);
+  for (const target of targets) {
+    console.log(`  - ${target.language}: ${target.files.join(', ')}`);
+  }
+}
 ```
 
 ---
@@ -187,6 +227,7 @@ function policyViolationsGetForFile(
 import {
   policyFileGet,
   policyPluginsGet,
+  policyRuleTargetsResolve,
   policyViolationsGetForFile,
 } from '@codepol/core';
 
@@ -197,7 +238,8 @@ if ('Err' in pluginsResult) {
 }
 
 const rule = policy.rules[0];
-const target = rule.targets[0];
+const targets = policyRuleTargetsResolve(rule, policy);
+const target = targets[0];
 const violationsResult = policyViolationsGetForFile(
   '/path/to/file.ts',
   rule,

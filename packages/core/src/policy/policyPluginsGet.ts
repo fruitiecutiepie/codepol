@@ -8,6 +8,7 @@ import type {
   PluginRule,
 } from './policyTypes';
 import { Result, Ok, Err, isErr } from '../result/result';
+import { policyRuleTargetsResolve } from './policyGet';
 
 export type PolicyPluginsMap = Map<string, PluginRule>;
 
@@ -183,7 +184,8 @@ export async function policyPluginsGet(
        return Err(`Plugin ${resolvedId} does not support tree checks (missing treeCheckProvider) for rule ${rule.id || ruleId}.`);
     }
 
-    for (const target of rule.targets) {
+    const targets = policyRuleTargetsResolve(rule, policy);
+    for (const target of targets) {
       if (!treeCheckProvider.languages.includes(target.language)) {
         return Err(`Plugin ${resolvedId} does not support language ${target.language} for rule ${rule.id || ruleId}.`);
       }

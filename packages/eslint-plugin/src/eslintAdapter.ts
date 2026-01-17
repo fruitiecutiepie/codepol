@@ -22,6 +22,7 @@ import {
   violationToLintDiagnostic,
   policyFileGet,
   policyCacheClear,
+  policyRuleTargetsResolve,
   globPatternsGetMatchAny,
   ruleTargetMatchesLanguage,
   isErr,
@@ -51,7 +52,8 @@ type MessageIds = 'treeCheckViolation';
 function policyRuleTargetsGet(policy: PolicyFile): PolicyRuleTargetContext[] {
   const targets: PolicyRuleTargetContext[] = [];
   for (const rule of policy.rules) {
-    for (const target of rule.targets) {
+    const resolvedTargets = policyRuleTargetsResolve(rule, policy);
+    for (const target of resolvedTargets) {
       targets.push({
         ruleId: rule.id || rule.ruleId,
         description: rule.description,

@@ -36,6 +36,7 @@ export type {
   LoggerConfig,
   PolicyRule,
   PolicyRuleTarget,
+  PolicyTargetMap,
   PolicyRuleTargetContext,
   PolicyFile,
   TreeCheckProvider,
@@ -157,6 +158,7 @@ export function rulePluginLanguagesGet(plugin: CodepolPluginRule): string[] {
 export {
   policyFileGet,
   policyCacheClear,
+  policyRuleTargetsResolve,
   globPatternsGetMatchAny,
   policyFileGetChecked,
   ruleTargetMatchesLanguage,

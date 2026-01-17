@@ -2,6 +2,7 @@ import Ajv from 'ajv';
 import { describe, expect, it } from 'vitest';
 import schema from '../policy.schema.json';
 import policy from '../policy.json';
+import { policyRuleTargetsResolve, type PolicyFile } from '@codepol/core';
 
 describe('policy contract', () => {
   it('policy.json matches schema', () => {
@@ -20,10 +21,12 @@ describe('policy contract', () => {
   });
 
   it('each rule defines at least one target glob', () => {
-    for (const rule of policy.rules) {
-      expect(Array.isArray(rule.targets)).toBe(true);
-      expect(rule.targets.length).toBeGreaterThan(0);
-      for (const target of rule.targets) {
+    const policyTyped = policy as PolicyFile;
+    for (const rule of policyTyped.rules) {
+      const targets = policyRuleTargetsResolve(rule, policyTyped);
+      expect(Array.isArray(targets)).toBe(true);
+      expect(targets.length).toBeGreaterThan(0);
+      for (const target of targets) {
         expect(Array.isArray(target.files)).toBe(true);
         expect(target.files.length).toBeGreaterThan(0);
       }

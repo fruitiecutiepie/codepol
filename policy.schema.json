@@ -3,7 +3,26 @@
   "title": "Logging Policy",
   "type": "object",
   "required": ["rules"],
-  "definitions": {},
+  "definitions": {
+    "target": {
+      "type": "object",
+      "required": ["language", "files"],
+      "properties": {
+        "language": { "type": "string" },
+        "parser": { "type": "string" },
+        "files": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1
+        },
+        "exclude": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
   "properties": {
     "$schema": { "type": "string" },
     "plugins": {
@@ -22,40 +41,37 @@
         ]
       }
     },
+    "targets": {
+      "type": "object",
+      "description": "Named target definitions that rules can reference",
+      "additionalProperties": { "$ref": "#/definitions/target" }
+    },
     "rules": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["ruleId", "targets"],
+        "required": ["ruleId"],
         "properties": {
           "id": { "type": "string" },
           "ruleId": { "type": "string" },
           "description": { "type": "string" },
           "args": {},
+          "target": {
+            "type": "string",
+            "description": "Reference to a named target defined in top-level targets"
+          },
           "targets": {
             "type": "array",
+            "description": "Inline target definitions (use 'target' to reference named targets instead)",
             "minItems": 1,
-            "items": {
-              "type": "object",
-              "required": ["language", "files"],
-              "properties": {
-                "language": { "type": "string" },
-                "parser": { "type": "string" },
-                "files": {
-                  "type": "array",
-                  "items": { "type": "string" },
-                  "minItems": 1
-                },
-                "exclude": {
-                  "type": "array",
-                  "items": { "type": "string" }
-                }
-              },
-              "additionalProperties": false
-            }
+            "items": { "$ref": "#/definitions/target" }
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "oneOf": [
+          { "required": ["target"] },
+          { "required": ["targets"] }
+        ]
       }
     },
     "exclude": {

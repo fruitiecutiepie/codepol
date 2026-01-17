@@ -26,6 +26,7 @@ import {
   langAdd,
   parserInit,
   policyFileGet,
+  policyRuleTargetsResolve,
   ruleMatchesGet,
   policyViolationsGetFromDir,
   policyViolationsGetOutputPretty,
@@ -81,7 +82,8 @@ function eslintConfigPathDetect(cwd: string): string {
 function policyRuleTargetsGet(policy: PolicyFile): PolicyRuleTargetContext[] {
   const targets: PolicyRuleTargetContext[] = [];
   for (const rule of policy.rules) {
-    for (const target of rule.targets) {
+    const resolvedTargets = policyRuleTargetsResolve(rule, policy);
+    for (const target of resolvedTargets) {
       targets.push({
         ruleId: rule.id || rule.ruleId,
         description: rule.description,
@@ -385,7 +387,9 @@ async function main(): Promise<void> {
   const matches = await ruleMatchesGet(policy, process.cwd());
   const files = Array.from(new Set(matches.flatMap(match => match.files)));
   const patterns = Array.from(
-    new Set(policy.rules.flatMap(rule => rule.targets.flatMap(target => target.files)))
+    new Set(policy.rules.flatMap(rule => 
+      policyRuleTargetsResolve(rule, policy).flatMap(target => target.files)
+    ))
   );
 
   if (options.watch) {
