@@ -154,28 +154,28 @@ async function policyCheck(options: {
 
   const policy = policyFileGet(policyPath);
   // Use core policyPluginsGet instead of local implementation
-  const rulePluginsResult = await policyPluginsGet(policy, cwd);
-  if ('Err' in rulePluginsResult) {
-    throw new Error(rulePluginsResult.Err);
+  const pluginRulesResult = await policyPluginsGet(policy, cwd);
+  if ('Err' in pluginRulesResult) {
+    throw new Error(pluginRulesResult.Err);
   }
-  const rulePluginsMap = rulePluginsResult.Ok;
-  const rulePlugins = Array.from(rulePluginsMap.values());
+  const pluginRulesMap = pluginRulesResult.Ok;
+  const pluginRules = Array.from(pluginRulesMap.values());
   const ruleTargets = policyRuleTargetsGet(policy);
 
   // Collect lint providers from all rule plugins
   // Args are now on policy rules, not plugins - they're passed via ruleTargets
   const lintProviderEntries: LintProviderEntry[] = [];
-  for (const entry of rulePlugins) {
-    const lintProviders = entry.rulePlugin.capabilities.lintProviders ?? [];
+  for (const entry of pluginRules) {
+    const lintProviders = entry.pluginRule.capabilities.lintProviders ?? [];
     for (const provider of lintProviders) {
       // Find the policy rule that uses this plugin to get its args
       const matchingRule = policy.rules.find(r => 
-        r.ruleId === entry.rulePlugin.id || 
-        entry.rulePlugin.id.endsWith(`/${r.ruleId}`)
+        r.ruleId === entry.pluginRule.id || 
+        entry.pluginRule.id.endsWith(`/${r.ruleId}`)
       );
       lintProviderEntries.push({
         provider,
-        ruleId: entry.rulePlugin.id,
+        ruleId: entry.pluginRule.id,
         ruleArgs: matchingRule?.args,
       });
     }
@@ -186,8 +186,8 @@ async function policyCheck(options: {
     entry => entry.provider.platform === 'eslint'
   );
 
-  const fixProviders = rulePlugins
-    .map(entry => entry.rulePlugin.capabilities.fixProvider)
+  const fixProviders = pluginRules
+    .map(entry => entry.pluginRule.capabilities.fixProvider)
     .filter((provider): provider is FixProvider => provider !== undefined);
 
   const matches = await ruleMatchesGet(policy, cwd);
@@ -268,7 +268,7 @@ async function policyPluginsValidateAndPrint(options: CliOptions): Promise<void>
     throw new Error(policyPluginsResult.Err);
   }
   
-  // policyPluginsGet now returns RulePlugin map, which includes ruleId directly
+  // policyPluginsGet now returns PluginRule map, which includes ruleId directly
   const rulePluginIds = Array.from(policyPluginsResult.Ok.keys()).sort();
 
   console.log('✔ Plugins validated');

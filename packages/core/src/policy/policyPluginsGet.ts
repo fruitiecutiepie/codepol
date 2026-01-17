@@ -4,12 +4,12 @@ import { pathToFileURL } from 'node:url';
 import type {
   PolicyFile,
   PolicyPluginDeclaration,
-  CodepolRulePlugin,
-  RulePlugin,
+  CodepolPluginRule,
+  PluginRule,
 } from './policyTypes';
 import { Result, Ok, Err, isErr } from '../result/result';
 
-export type PolicyPluginsMap = Map<string, RulePlugin>;
+export type PolicyPluginsMap = Map<string, PluginRule>;
 
 /**
  * Resolves a rule ID by prefixing with module specifier if not already namespaced.
@@ -30,7 +30,7 @@ function ruleIDGetWithNamespace(id: string, moduleSpecifier: string): string {
 export function pluginGetForRule(
   pluginsMap: PolicyPluginsMap,
   ruleId: string
-): { plugin: RulePlugin; resolvedId: string } | undefined {
+): { plugin: PluginRule; resolvedId: string } | undefined {
   // Try exact match first
   const exactMatch = pluginsMap.get(ruleId);
   if (exactMatch) {
@@ -40,7 +40,7 @@ export function pluginGetForRule(
   // If the ID doesn't contain '/', try suffix matching
   if (!ruleId.includes('/')) {
     const suffix = `/${ruleId}`;
-    const matches: { plugin: RulePlugin; resolvedId: string }[] = [];
+    const matches: { plugin: PluginRule; resolvedId: string }[] = [];
     for (const [key, plugin] of pluginsMap) {
       if (key.endsWith(suffix)) {
         matches.push({ plugin, resolvedId: key });
@@ -67,7 +67,7 @@ export async function policyPluginsGet(
   if (policy.plugins !== undefined) {
     declarations = policy.plugins;
   }
-  const pluginsMapGet = new Map<string, RulePlugin>();
+  const pluginsMapGet = new Map<string, PluginRule>();
 
   // Create a require function that resolves from consumer's project context
   const requireFromCwd = createRequire(path.join(cwd, 'package.json'));
@@ -113,19 +113,19 @@ export async function policyPluginsGet(
       return Err(`Module ${moduleSpecifier} does not have a default export.`);
     }
 
-    let rulePlugins: CodepolRulePlugin[];
+    let pluginRules: CodepolPluginRule[];
     try {
-      // rulePluginsNormalize
+      // pluginRulesNormalize
       const exported = pluginExported;
       if (!exported) {
         throw new Error(`No rule plugins exported by ${moduleSpecifier}.`);
       }
       if (Array.isArray(exported)) {
-        rulePlugins = exported as CodepolRulePlugin[];
+        pluginRules = exported as CodepolPluginRule[];
       } else if (typeof exported === 'object' && exported !== undefined) {
-        const candidate = exported as { rulePlugins?: unknown };
-        if (Array.isArray(candidate.rulePlugins)) {
-          rulePlugins = candidate.rulePlugins as CodepolRulePlugin[];
+        const candidate = exported as { pluginRules?: unknown };
+        if (Array.isArray(candidate.pluginRules)) {
+          pluginRules = candidate.pluginRules as CodepolPluginRule[];
         } else {
           throw new Error(`Invalid rule plugin export from ${moduleSpecifier}. Expected an array of rule plugins.`);
         }
@@ -136,30 +136,30 @@ export async function policyPluginsGet(
       return Err(e.message);
     }
 
-    for (const rulePlugin of rulePlugins) {
-      if (!rulePlugin.id) {
+    for (const pluginRule of pluginRules) {
+      if (!pluginRule.id) {
          return Err(`Rule plugin from ${moduleSpecifier} missing id.`);
       }
-      if (rulePlugin.id.includes('/')) {
+      if (pluginRule.id.includes('/')) {
         return Err(
-          `Rule plugin id "${rulePlugin.id}" from ${moduleSpecifier} must not contain '/'. ` +
+          `Rule plugin id "${pluginRule.id}" from ${moduleSpecifier} must not contain '/'. ` +
           `The '/' character is reserved for namespacing (e.g., "@scope/plugin/rule-id").`
         );
       }
       
-      const resolvedId = ruleIDGetWithNamespace(rulePlugin.id, moduleSpecifier);
+      const resolvedId = ruleIDGetWithNamespace(pluginRule.id, moduleSpecifier);
 
       if (pluginsMapGet.has(resolvedId)) {
         return Err(`Duplicate plugin rule id detected: ${resolvedId}.`);
       }
 
-      const namespacedRulePlugin = {
-        ...rulePlugin,
+      const namespacedPluginRule = {
+        ...pluginRule,
         id: resolvedId
       };
 
       pluginsMapGet.set(resolvedId, {
-        rulePlugin: namespacedRulePlugin
+        pluginRule: namespacedPluginRule
       });
     }
   }
@@ -178,7 +178,7 @@ export async function policyPluginsGet(
     const { plugin, resolvedId } = lookup;
 
     // For tree checks, we need the treeCheckProvider
-    const treeCheckProvider = plugin.rulePlugin.capabilities.treeCheckProvider;
+    const treeCheckProvider = plugin.pluginRule.capabilities.treeCheckProvider;
     if (!treeCheckProvider) {
        return Err(`Plugin ${resolvedId} does not support tree checks (missing treeCheckProvider) for rule ${rule.id || ruleId}.`);
     }

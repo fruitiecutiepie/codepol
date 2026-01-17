@@ -343,7 +343,7 @@ The types are available from `@codepol/core`:
 import type {
   PolicyFile,
   PolicyRule,
-  CodepolRulePlugin,
+  CodepolPluginRule,
   PolicyPluginDeclaration,
   LoggerConfig,
   LoggerImportConfig,

@@ -38,7 +38,7 @@ import {
   type PolicyViolation,
 } from '@codepol/core';
 import { eslintPluginCreate } from '@codepol/eslint-plugin';
-import rulePlugins from '@codepol/plugin';
+import pluginRules from '@codepol/plugin';
 
 /**
  * Options for the esbuild policy plugin.
@@ -96,7 +96,7 @@ async function policyCheck(options: {
   const eslint = new ESLint({
     overrideConfigFile: eslintConfigPath,
     plugins: {
-      codepol: eslintPluginCreate(rulePlugins) as unknown as ESLint.Plugin,
+      codepol: eslintPluginCreate(pluginRules) as unknown as ESLint.Plugin,
     },
     fix: fixEnabled,
     cwd: cwd,

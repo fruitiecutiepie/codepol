@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import type { PolicyFile, PolicyRule, PolicyRuleTarget, PolicyViolation, RulePlugin } from './policyTypes';
+import type { PolicyFile, PolicyRule, PolicyRuleTarget, PolicyViolation, PluginRule } from './policyTypes';
 import { ruleMatchesGet } from './policyGet';
 import { policyPluginsGet, pluginGetForRule, type PolicyPluginsMap } from './policyPluginsGet';
 import { Result, Ok, Err, isErr } from '../result/result';
@@ -8,7 +8,7 @@ function policyPluginGet(
   pluginsMap: PolicyPluginsMap,
   rule: PolicyRule,
   target: PolicyRuleTarget
-): Result<RulePlugin, string> {
+): Result<PluginRule, string> {
   const ruleId = rule.ruleId;
   const lookup = pluginGetForRule(pluginsMap, ruleId);
   if (!lookup) {
@@ -17,7 +17,7 @@ function policyPluginGet(
   }
   const { plugin, resolvedId } = lookup;
 
-  const treeCheckProvider = plugin.rulePlugin.capabilities.treeCheckProvider;
+  const treeCheckProvider = plugin.pluginRule.capabilities.treeCheckProvider;
   if (!treeCheckProvider) {
     const error = `Plugin ${resolvedId} does not support tree checks (missing treeCheckProvider).`;
     return Err(error);
@@ -47,7 +47,7 @@ export function policyViolationsGetForFile(
     return pluginResult;
   }
   const plugin = pluginResult.Ok;
-  const treeCheckProvider = plugin.rulePlugin.capabilities.treeCheckProvider!;
+  const treeCheckProvider = plugin.pluginRule.capabilities.treeCheckProvider!;
 
   const source = fs.readFileSync(filePath, 'utf8');
   

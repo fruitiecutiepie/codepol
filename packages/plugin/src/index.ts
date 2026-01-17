@@ -8,7 +8,7 @@
 import path from 'path';
 import { ESLintUtils, TSESLint, TSESTree } from '@typescript-eslint/utils';
 import type {
-  CodepolRulePlugin,
+  CodepolPluginRule,
   LintProvider,
   LintProviderContext,
   EslintProviderConfig,
@@ -21,7 +21,7 @@ import {
   policyCacheClear,
   globPatternsGetMatchAny,
   ruleTargetMatchesLanguage,
-  rulePluginCreate,
+  pluginRuleNew,
 } from '@codepol/core';
 import { loggerTreeCheckProvider } from './policyPluginLogger';
 
@@ -502,7 +502,7 @@ export const loggerLintProvider: LintProvider = {
   config: eslintProviderConfig,
 };
 
-export const loggerEnterExitRule: CodepolRulePlugin = rulePluginCreate({
+export const loggerEnterExitRule: CodepolPluginRule = pluginRuleNew({
   id: loggerRuleId,
   capabilities: {
     lintProviders: [loggerLintProvider],

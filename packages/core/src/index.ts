@@ -45,9 +45,9 @@ export type {
   FixProviderContext,
   FixProvider,
   PolicyPluginCapabilities,
-  RulePluginConfig,
-  CodepolRulePlugin,
-  RulePlugin,
+  PluginRuleConfig,
+  CodepolPluginRule,
+  PluginRule,
   PolicyPluginDeclaration,
   PolicyCheckContext,
   PolicyViolation,
@@ -58,10 +58,10 @@ export type {
   TreeCheckLintAdapter,
 } from './types';
 
-export { rulePluginCreate } from './types';
+export { pluginRuleNew } from './types';
 
 import type {
-  CodepolRulePlugin,
+  CodepolPluginRule,
   LintProvider,
   LintProviderContext,
   EslintProviderConfig,
@@ -93,7 +93,7 @@ export function eslintProviderCreate(config: {
 /**
  * Derive supported languages from all providers in a rule plugin.
  */
-export function rulePluginLanguagesGet(plugin: CodepolRulePlugin): string[] {
+export function rulePluginLanguagesGet(plugin: CodepolPluginRule): string[] {
   const languages = new Set<string>();
   const lintProviders = plugin.capabilities.lintProviders ?? [];
   for (const provider of lintProviders) {

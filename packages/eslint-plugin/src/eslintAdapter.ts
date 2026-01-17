@@ -16,7 +16,7 @@ import type {
   PolicyCheckContext,
   PolicyRuleTargetContext,
   LintDiagnostic,
-  CodepolRulePlugin,
+  CodepolPluginRule,
 } from '@codepol/core';
 import {
   violationToLintDiagnostic,
@@ -111,7 +111,7 @@ const providerInitState = new Map<string, Promise<void> | true>();
  * Ensures a provider is initialized (handles async init).
  */
 async function ensureProviderInit(
-  provider: CodepolRulePlugin,
+  provider: CodepolPluginRule,
   policy: PolicyFile,
   cwd: string
 ): Promise<void> {
@@ -127,8 +127,8 @@ async function ensureProviderInit(
     return;
   }
   
-  // Note: CodepolRulePlugin does not have init method currently in type definition?
-  // I removed init from PolicyPlugin and CodepolRulePlugin in core/policyTypes.ts?
+  // Note: CodepolPluginRule does not have init method currently in type definition?
+  // I removed init from PolicyPlugin and CodepolPluginRule in core/policyTypes.ts?
   // Let's check.
   // If removed, then this logic is obsolete.
   // But wait, WASM parser init is global. Plugin specific init?
@@ -150,7 +150,7 @@ async function ensureProviderInit(
  * Creates an ESLint rule from a TreeCheckProvider.
  */
 function createAdaptedRule(
-  plugin: CodepolRulePlugin,
+  plugin: CodepolPluginRule,
   options?: TreeCheckAdapterOptions
 ): TSESLint.RuleModule<MessageIds, AdaptedRuleOptions> {
   const ruleName = options?.ruleName ?? `tree-check-${plugin.id}`;
@@ -313,7 +313,7 @@ export const eslintAdapter: TreeCheckLintAdapter<TSESLint.RuleModule<string, unk
  * @param cwd - Current working directory
  */
 export async function eslintAdapterInit(
-  provider: CodepolRulePlugin,
+  provider: CodepolPluginRule,
   policy: PolicyFile,
   cwd: string
 ): Promise<void> {

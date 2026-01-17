@@ -25,8 +25,8 @@ import type {
   PolicyViolation,
   TreeCheckProvider,
   PolicyPluginCapabilities,
-  CodepolRulePlugin,
-  RulePlugin,
+  CodepolPluginRule,
+  PluginRule,
   PolicyPluginDeclaration,
   PolicyPluginRuleDeclaration,
   PolicyCheckContext,
@@ -378,7 +378,7 @@ Adapter contract for converting `TreeCheckProvider` to lint provider rules.
 ```typescript
 type TreeCheckLintAdapter<TRule> = {
   platform: string;  // Platform identifier (e.g., 'eslint', 'biome')
-  adapt: (provider: CodepolRulePlugin, options?: TreeCheckAdapterOptions) => TRule;
+  adapt: (provider: CodepolPluginRule, options?: TreeCheckAdapterOptions) => TRule;
 };
 ```
 
@@ -447,9 +447,9 @@ function violationsToLintDiagnostics(
 
 ```typescript
 import { eslintPluginCreate } from '@codepol/eslint-plugin';
-import rulePlugins from '@codepol/plugin';
+import pluginRules from '@codepol/plugin';
 
-const plugin = eslintPluginCreate(rulePlugins);
+const plugin = eslintPluginCreate(pluginRules);
 // plugin.rules['require-logger-enter-exit']
 ```
 
@@ -471,7 +471,7 @@ const eslintAdapter: TreeCheckLintAdapter<TSESLint.RuleModule<string, unknown[]>
 **Properties:**
 
 - `platform`: `'eslint'`
-- `adapt(provider, options?)`: Converts a `CodepolRulePlugin` to an ESLint rule
+- `adapt(provider, options?)`: Converts a `CodepolPluginRule` to an ESLint rule
 
 **Example:**
 
@@ -506,7 +506,7 @@ to ensure async initialization completes (e.g., loading Tree-sitter WASM parsers
 
 ```typescript
 async function eslintAdapterInit(
-  provider: CodepolRulePlugin,
+  provider: CodepolPluginRule,
   policy: PolicyFile,
   cwd: string
 ): Promise<void>
@@ -514,7 +514,7 @@ async function eslintAdapterInit(
 
 **Parameters:**
 
-- `provider`: The `CodepolRulePlugin` to initialize
+- `provider`: The `CodepolPluginRule` to initialize
 - `policy`: The loaded policy file
 - `cwd`: Current working directory
 
@@ -562,13 +562,13 @@ Note: The old names `clearPolicyCache` and `clearProviderInitState` are still av
 ### Rule Plugins
 
 ```typescript
-import rulePlugins, { loggerEnterExitRule, loggerLintProvider } from '@codepol/plugin';
+import pluginRules, { loggerEnterExitRule, loggerLintProvider } from '@codepol/plugin';
 
 // loggerEnterExitRule.id === '@codepol/plugin/require-logger-enter-exit'
 // loggerEnterExitRule.capabilities.lintProviders contains loggerLintProvider
 // loggerLintProvider.platform === 'eslint'
 // loggerLintProvider.languages === ['typescript', 'tsx']
-// rulePlugins (array for convenience)
+// pluginRules (array for convenience)
 ```
 
 Use `(lintProvider.config as EslintProviderConfig).rulesConfigGet({ policy, policyPath, cwd, ruleId, ruleArgs })`

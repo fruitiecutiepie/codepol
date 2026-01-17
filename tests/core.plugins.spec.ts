@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   policyViolationsGetForFile,
   type PolicyFile,
-  type ResolvedRulePlugin,
+  type ResolvedPluginRule,
   type PolicyRule,
 } from '@codepol/core';
 import { Ok } from '@codepol/core';
@@ -11,8 +11,8 @@ import path from 'node:path';
 describe('plugin capability validation', () => {
   it('returns Err when plugin is missing treeCheckProvider capability', async () => {
     // Create a mock plugin without treeCheckProvider
-    const mockPlugin: ResolvedRulePlugin = {
-      rulePlugin: {
+    const mockPlugin: ResolvedPluginRule = {
+      pluginRule: {
         id: 'mock-plugin',
         capabilities: {}, // Empty capabilities
       }
@@ -54,8 +54,8 @@ describe('plugin capability validation', () => {
 
   it('returns Err when plugin does not support target language', () => {
       // Create a mock plugin with treeCheckProvider but wrong language
-      const mockPlugin: ResolvedRulePlugin = {
-        rulePlugin: {
+      const mockPlugin: ResolvedPluginRule = {
+        pluginRule: {
           id: 'mock-plugin-lang',
           capabilities: {
             treeCheckProvider: {

@@ -114,12 +114,12 @@ Add to your `eslint.config.js`:
 
 ```javascript
 import { eslintPluginCreate } from '@codepol/eslint-plugin';
-import rulePlugins from '@codepol/plugin';
+import pluginRules from '@codepol/plugin';
 
 export default [
   {
     plugins: {
-      codepol: eslintPluginCreate(rulePlugins),
+      codepol: eslintPluginCreate(pluginRules),
     },
     rules: {
       'codepol/require-logger-enter-exit': 'error',
@@ -135,8 +135,8 @@ to decide which ESLint rules and fix providers to run, while Tree-sitter checkin
 and their associated tree check providers.
 
 The `@codepol/eslint-plugin` package is a thin adapter that aggregates rules from capability plugins such as
-`@codepol/plugin`. Use `eslintPluginCreate(rulePlugins)` to assemble the ESLint adapter from any set of
-`CodepolRulePlugin` instances.
+`@codepol/plugin`. Use `eslintPluginCreate(pluginRules)` to assemble the ESLint adapter from any set of
+`CodepolPluginRule` instances.
 
 ### Run Checks
 

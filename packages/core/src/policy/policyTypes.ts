@@ -46,7 +46,7 @@ export type LoggerConfig = {
 /**
  * Declaration for loading a policy plugin.
  * Accepts either a module string directly or an object with a module property.
- * Plugins must use a default export containing an array of CodepolRulePlugin objects.
+ * Plugins must use a default export containing an array of CodepolPluginRule objects.
  *
  * @example
  * ```json
@@ -211,16 +211,16 @@ export type PolicyPluginCapabilities = {
 };
 
 /**
- * Brand symbol for CodepolRulePlugin - ensures plugins are created via rulePluginCreate().
+ * Brand symbol for CodepolPluginRule - ensures plugins are created via pluginRuleNew().
  * @internal
  */
-declare const RulePluginBrand: unique symbol;
+declare const PluginRuleBrand: unique symbol;
 
 /**
  * Input configuration for creating a rule plugin.
- * Use rulePluginCreate() to convert this to a CodepolRulePlugin.
+ * Use pluginRuleNew() to convert this to a CodepolPluginRule.
  */
-export type RulePluginConfig = {
+export type PluginRuleConfig = {
   /**
    * Rule identifier. Must NOT contain '/' - this character is reserved for namespacing.
    * Codepol will automatically namespace your ID (e.g., "my-rule" becomes "@scope/plugin/my-rule").
@@ -232,26 +232,26 @@ export type RulePluginConfig = {
 
 /**
  * Stable per-rule plugin interface for Codepol capabilities.
- * Must be created using rulePluginCreate() to ensure valid rule IDs.
+ * Must be created using pluginRuleNew() to ensure valid rule IDs.
  */
-export type CodepolRulePlugin = RulePluginConfig & {
-  /** @internal Brand to enforce creation via rulePluginCreate() */
-  readonly [RulePluginBrand]: true;
+export type CodepolPluginRule = PluginRuleConfig & {
+  /** @internal Brand to enforce creation via pluginRuleNew() */
+  readonly [PluginRuleBrand]: true;
 };
 
 /**
- * Creates a validated CodepolRulePlugin.
+ * Creates a validated CodepolPluginRule.
  * This is the only way to create a rule plugin - direct object literals won't type-check.
  *
  * @param config - Rule plugin configuration
- * @returns A branded CodepolRulePlugin
+ * @returns A branded CodepolPluginRule
  * @throws Error if the rule ID contains '/'
  *
  * @example
  * ```typescript
- * import { rulePluginCreate } from '@codepol/core';
+ * import { pluginRuleNew } from '@codepol/core';
  *
- * export const myRule = rulePluginCreate({
+ * export const myRule = pluginRuleNew({
  *   id: 'no-todo-comments',  // ✓ Valid - no '/'
  *   capabilities: {
  *     treeCheckProvider: myTreeCheckProvider,
@@ -261,21 +261,21 @@ export type CodepolRulePlugin = RulePluginConfig & {
  * export default [myRule];
  * ```
  */
-export function rulePluginCreate(config: RulePluginConfig): CodepolRulePlugin {
+export function pluginRuleNew(config: PluginRuleConfig): CodepolPluginRule {
   if (config.id.includes('/')) {
     throw new Error(
       `Rule plugin id "${config.id}" must not contain '/'. ` +
       `The '/' character is reserved for namespacing (e.g., "@scope/plugin/rule-id").`
     );
   }
-  return config as CodepolRulePlugin;
+  return config as CodepolPluginRule;
 }
 
 /**
  * A resolved rule plugin.
  */
-export type RulePlugin = {
-  rulePlugin: CodepolRulePlugin;
+export type PluginRule = {
+  pluginRule: CodepolPluginRule;
 };
 
 /**
@@ -369,5 +369,5 @@ export type TreeCheckLintAdapter<TRule> = {
   /** Platform identifier (e.g., 'eslint', 'biome', 'ruff') */
   platform: string;
   /** Adapt a TreeCheckProvider to a platform-specific lint rule */
-  adapt: (provider: CodepolRulePlugin, options?: TreeCheckAdapterOptions) => TRule;
+  adapt: (provider: CodepolPluginRule, options?: TreeCheckAdapterOptions) => TRule;
 };

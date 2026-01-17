@@ -39,7 +39,7 @@ describe('core error handling', () => {
 
     // Construct a plugins map manually (args are now on rules, not plugins)
     const pluginsMap = new Map();
-    pluginsMap.set(loggerEnterExitRule.id, { rulePlugin: loggerEnterExitRule });
+    pluginsMap.set(loggerEnterExitRule.id, { pluginRule: loggerEnterExitRule });
 
     try {
       const result = policyViolationsGetForFile(

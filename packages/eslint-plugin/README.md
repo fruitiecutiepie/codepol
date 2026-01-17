@@ -22,13 +22,13 @@ pnpm add -D @codepol/eslint-plugin @codepol/core @codepol/plugin eslint @typescr
 
 ```javascript
 import { eslintPluginCreate } from '@codepol/eslint-plugin';
-import rulePlugins from '@codepol/plugin';
+import pluginRules from '@codepol/plugin';
 
 export default [
   {
     files: ['**/*.ts', '**/*.tsx'],
     plugins: {
-      codepol: eslintPluginCreate(rulePlugins),
+      codepol: eslintPluginCreate(pluginRules),
     },
     rules: {
       'codepol/require-logger-enter-exit': 'error',
@@ -41,12 +41,12 @@ export default [
 
 ```javascript
 import { eslintPluginCreate } from '@codepol/eslint-plugin';
-import rulePlugins from '@codepol/plugin';
+import pluginRules from '@codepol/plugin';
 
 export default [
   {
     plugins: {
-      codepol: eslintPluginCreate(rulePlugins),
+      codepol: eslintPluginCreate(pluginRules),
     },
     rules: {
       'codepol/require-logger-enter-exit': ['error', {
@@ -61,11 +61,11 @@ export default [
 
 ```javascript
 const { eslintPluginCreate } = require('@codepol/eslint-plugin');
-const rulePlugins = require('@codepol/plugin').default;
+const pluginRules = require('@codepol/plugin').default;
 
 module.exports = {
   plugins: {
-    codepol: eslintPluginCreate(rulePlugins),
+    codepol: eslintPluginCreate(pluginRules),
   },
   rules: {
     'codepol/require-logger-enter-exit': 'error',
