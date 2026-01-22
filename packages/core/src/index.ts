@@ -34,6 +34,7 @@
 export type {
   LoggerImportConfig,
   LoggerConfig,
+  LintSeverity,
   PolicyRule,
   PolicyRuleTarget,
   PolicyTargetMap,
@@ -52,6 +53,7 @@ export type {
   PolicyPluginDeclaration,
   PolicyCheckContext,
   PolicyViolation,
+  PolicyViolationFix,
   RuleMatch,
   // Adapter types
   LintDiagnostic,
@@ -60,6 +62,9 @@ export type {
 } from './types';
 
 export { pluginRuleNew } from './types';
+
+/** Default ESLint plugin name for codepol rules */
+export const ESLINT_PLUGIN_NAME_DEFAULT = 'codepol';
 
 import type {
   CodepolPluginRule,
@@ -70,9 +75,15 @@ import type {
   PolicyRule,
   PolicyCheckContext,
   PolicyViolation,
+  PolicyFile,
+  PolicyRuleTargetContext,
+  LintSeverity,
 } from './types';
 
-import { resultFrom } from './result/result';
+import { resultFrom, isErr } from './result/result';
+import { policyRuleTargetsResolve } from './policy/policyGet';
+import { policyPluginsGet, pluginGetForRule } from './policy/policyPluginsGet';
+import { configGet, configGetFromPath } from './config/configDiscover';
 
 /**
  * Consumer-facing check function type.
@@ -88,16 +99,16 @@ export type TreeCheckFn = (
  */
 export function eslintProviderCreate(config: {
   languages: string[];
-  pluginName: string;
+  pluginName?: string;
   rules: Record<string, unknown>;
   configs?: Record<string, unknown>;
-  rulesConfigGet: (ctx: LintProviderContext) => Record<string, unknown>;
+  ruleOptions?: (ctx: LintProviderContext) => unknown;
 }): LintProvider {
   const eslintConfig: EslintProviderConfig = {
-    pluginName: config.pluginName,
+    pluginName: config.pluginName ?? ESLINT_PLUGIN_NAME_DEFAULT,
     rules: config.rules,
     configs: config.configs,
-    rulesConfigGet: config.rulesConfigGet,
+    ruleOptions: config.ruleOptions,
   };
   return {
     platform: 'eslint',
@@ -152,6 +163,111 @@ export function rulePluginLanguagesGet(plugin: CodepolPluginRule): string[] {
     }
   }
   return Array.from(languages);
+}
+
+/**
+ * Generates lint provider rules config from codepol config.
+ * Users spread this into their lint config (e.g., eslint.config.js).
+ *
+ * @param provider - The lint provider platform ('eslint')
+ * @param configPath - Path to config file (auto-discovered if not specified)
+ * @returns Rules config for the lint provider
+ *
+ * @example
+ * ```javascript
+ * // eslint.config.js
+ * import { providerRulesConfigGet } from '@codepol/core';
+ *
+ * export default [{
+ *   plugins: { codepol },
+ *   rules: {
+ *     ...await providerRulesConfigGet('eslint'),
+ *   },
+ * }];
+ * ```
+ */
+export async function providerRulesConfigGet(
+  provider: 'eslint',
+  configPath?: string
+): Promise<Record<string, unknown>> {
+  const cwd = process.cwd();
+  
+  // Load config: explicit path or auto-discover
+  const { config, configPath: resolvedConfigPath } = configPath
+    ? await configGetFromPath(configPath)
+    : await configGet(cwd);
+  const policy = config;
+  
+  const pluginsResult = await policyPluginsGet(policy, cwd);
+  if (isErr(pluginsResult)) {
+    throw new Error(pluginsResult.Err);
+  }
+  const pluginsMap = pluginsResult.Ok;
+
+  // Build rule targets context
+  const ruleTargets: PolicyRuleTargetContext[] = [];
+  for (const rule of policy.rules) {
+    const resolvedTargets = policyRuleTargetsResolve(rule, policy);
+    for (const target of resolvedTargets) {
+      ruleTargets.push({
+        ruleId: rule.ruleId,
+        description: rule.description,
+        args: rule.args,
+        target,
+      });
+    }
+  }
+
+  const rules: Record<string, unknown> = {};
+
+  for (const rule of policy.rules) {
+    // Skip if rule specifies providers and this provider is not included
+    if (rule.providers && rule.providers.length > 0 && !rule.providers.includes(provider)) {
+      continue;
+    }
+
+    const lookup = pluginGetForRule(pluginsMap, rule.ruleId);
+    if (!lookup) {
+      throw new Error(`No plugin registered for rule ${rule.ruleId}`);
+    }
+    const { plugin, resolvedId } = lookup;
+
+    // Find ESLint lint provider
+    const lintProviders = plugin.pluginRule.capabilities.lintProviders ?? [];
+    const eslintProvider = lintProviders.find(p => p.platform === provider);
+    if (!eslintProvider) {
+      continue; // Rule doesn't have this provider, skip
+    }
+
+    const eslintConfig = eslintProvider.config as EslintProviderConfig;
+    
+    // Extract short rule name
+    const lastSlashIndex = resolvedId.lastIndexOf('/');
+    const ruleNameShort = lastSlashIndex !== -1 ? resolvedId.slice(lastSlashIndex + 1) : resolvedId;
+    
+    const pluginName = eslintConfig.pluginName ?? ESLINT_PLUGIN_NAME_DEFAULT;
+    const configKey = `${pluginName}/${ruleNameShort}`;
+
+    if (rules[configKey]) {
+      throw new Error(`Duplicate rule configuration: ${configKey}`);
+    }
+
+    // Get options from provider
+    const options = eslintConfig.ruleOptions?.({
+      cwd,
+      policy,
+      configPath: resolvedConfigPath,
+      ruleId: resolvedId,
+      ruleArgs: rule.args,
+      ruleTargets,
+    }) ?? {};
+
+    // Use severity from policy.json, default to 'error'
+    const severity: LintSeverity = rule.severity ?? 'error';
+    rules[configKey] = [severity, options];
+  }
+
+  return rules;
 }
 
 // Policy loading
@@ -212,3 +328,19 @@ export {
   resultFromAsync,
   resFromAsync,
 } from './result/result';
+
+// Config (unified config file support)
+export type {
+  CodepolConfig,
+  CodepolConfigOptions,
+  ConfigFileResult,
+} from './config/configTypes';
+export { defineConfig } from './config/defineConfig';
+export {
+  configGet,
+  configGetSync,
+  configGetFromPath,
+  configGetFromPathSync,
+  configFileDiscover,
+  configCacheClear,
+} from './config/configDiscover';

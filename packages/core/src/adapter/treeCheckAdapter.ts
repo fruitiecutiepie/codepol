@@ -39,6 +39,7 @@ export function violationToLintDiagnostic(
     column: violation.column,
     ruleId: violation.ruleId,
     severity,
+    fix: violation.fix,
   };
 }
 

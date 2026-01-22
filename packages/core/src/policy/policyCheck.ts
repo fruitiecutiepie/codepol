@@ -1,11 +1,13 @@
 import path from 'node:path';
 import type { PolicyFile, PolicyViolation } from './policyTypes';
-import { ruleMatchesGet, policyFileGet } from './policyGet';
+import { ruleMatchesGet } from './policyGet';
 import { policyViolationsGetFromDir } from './policyTreeCheck';
-import { Result, Ok, isErr } from '../result/result';
+import { Result, Ok, Err, isErr } from '../result/result';
+import { configGet, configGetFromPath } from '../config/configDiscover';
 
 export type PolicyCheckOptions = {
-  policyPath: string;
+  /** Path to config file (auto-discovered if not specified) */
+  configPath?: string;
   cwd?: string;
 };
 
@@ -16,7 +18,7 @@ export type PolicyCheckResult = {
 };
 
 /**
- * Runs policy checks (Tree-sitter checking) for a policy file.
+ * Runs policy checks (Tree-sitter checking) for a config file.
  * @returns Result containing the check result or an error message
  */
 export async function policyCheck(options: PolicyCheckOptions): Promise<Result<PolicyCheckResult, string>> {
@@ -24,8 +26,25 @@ export async function policyCheck(options: PolicyCheckOptions): Promise<Result<P
   if (options.cwd != null) {
     cwd = options.cwd;
   }
-  const policyPath = path.resolve(cwd, options.policyPath);
-  const policy = policyFileGet(policyPath);
+  
+  // Load config: explicit path or auto-discover
+  let config;
+  try {
+    if (options.configPath) {
+      const resolvedPath = path.isAbsolute(options.configPath)
+        ? options.configPath
+        : path.resolve(cwd, options.configPath);
+      const result = await configGetFromPath(resolvedPath);
+      config = result.config;
+    } else {
+      const result = await configGet(cwd);
+      config = result.config;
+    }
+  } catch (error) {
+    return Err(error instanceof Error ? error.message : String(error));
+  }
+  
+  const policy = config as PolicyFile;
   const matches = await ruleMatchesGet(policy, cwd);
   const files = Array.from(new Set(matches.flatMap(match => match.files)));
   const treeViolationsResult = await policyViolationsGetFromDir(policy, cwd);

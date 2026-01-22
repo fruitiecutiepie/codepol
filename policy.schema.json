@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Logging Policy",
   "type": "object",
-  "required": ["rules"],
+  "required": ["targets", "rules"],
   "definitions": {
     "target": {
       "type": "object",
@@ -43,35 +43,39 @@
     },
     "targets": {
       "type": "object",
-      "description": "Named target definitions that rules can reference",
-      "additionalProperties": { "$ref": "#/definitions/target" }
+      "description": "Named target definitions that rules reference by name",
+      "additionalProperties": { "$ref": "#/definitions/target" },
+      "minProperties": 1
     },
     "rules": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["ruleId"],
+        "required": ["ruleId", "targets"],
         "properties": {
           "id": { "type": "string" },
           "ruleId": { "type": "string" },
           "description": { "type": "string" },
-          "args": {},
-          "target": {
+          "severity": {
             "type": "string",
-            "description": "Reference to a named target defined in top-level targets"
+            "enum": ["error", "warn", "off"],
+            "default": "error",
+            "description": "Lint severity level"
           },
+          "providers": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Providers to apply this rule to (default: all providers). e.g., ['eslint', 'tree-sitter']"
+          },
+          "args": {},
           "targets": {
             "type": "array",
-            "description": "Inline target definitions (use 'target' to reference named targets instead)",
+            "description": "Array of target names referencing entries in top-level targets",
             "minItems": 1,
-            "items": { "$ref": "#/definitions/target" }
+            "items": { "type": "string" }
           }
         },
-        "additionalProperties": false,
-        "oneOf": [
-          { "required": ["target"] },
-          { "required": ["targets"] }
-        ]
+        "additionalProperties": false
       }
     },
     "exclude": {

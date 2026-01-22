@@ -18,13 +18,15 @@ describe('tree-sitter policy check', () => {
         { module: '@codepol/plugin' },
       ],
       exclude: [],
+      targets: {
+        'test-fixtures': {
+          language: 'typescript',
+          files: ['tests/fixtures/ts/**/*.ts'],
+        },
+      },
       rules: basePolicy.rules.map((rule): PolicyRule => ({
         ...rule,
-        targets: rule.targets.map(target => ({
-          ...target,
-          files: ['tests/fixtures/ts/**/*.ts'],
-          exclude: [],
-        })),
+        targets: ['test-fixtures'],
       })),
     };
 

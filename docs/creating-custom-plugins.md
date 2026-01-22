@@ -148,9 +148,8 @@ const eslintRule = eslintAdapter.adapt(ruleBase, {
 });
 
 const eslintConfig: EslintProviderConfig = {
-  pluginName: 'codepol',
   rules: { 'no-todo-comments': eslintRule },
-  rulesConfigGet: () => ({ 'codepol/no-todo-comments': 'error' }),
+  // severity and ruleOptions are optional
 };
 
 const lintProvider: LintProvider = {
@@ -168,6 +167,55 @@ export const noTodoRule: CodepolPluginRule = pluginRuleNew({
   },
 });
 ```
+
+#### Understanding ruleOptions
+
+`ruleOptions` is an **optional** field on `EslintProviderConfig`.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `ruleOptions` | `(ctx: LintProviderContext) => unknown` | `{}` | Options to pass to the ESLint rule |
+
+**When is ruleOptions needed?**
+
+- **Simple rules:** Omit entirely — defaults to `{}`
+- **Rules using eslintAdapter:** Pass policy context so the adapted rule can filter files
+- **Rules with custom arguments:** Forward `ctx.ruleArgs` from policy.json
+
+**Common options for eslintAdapter rules:**
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `configPath` | `string` | Path to the config file |
+| `ruleTargets` | `PolicyRuleTargetContext[]` | Resolved rule targets from the policy |
+| `policyExclude` | `string[]` | Global exclude patterns from the policy |
+
+**Example (with ruleOptions):**
+
+```typescript
+const eslintConfig: EslintProviderConfig = {
+  rules: { 'my-rule': eslintRule },
+  ruleOptions: (ctx: LintProviderContext) => ({
+    policyPath: ctx.configPath,  // ESLint option key (for rule schema compat)
+    ruleTargets: ctx.ruleTargets,
+    policyExclude: ctx.policy.exclude,
+    ...(ctx.ruleArgs as Record<string, unknown>),
+  }),
+};
+```
+
+**Example (simple rule, defaults only):**
+
+```typescript
+const eslintConfig: EslintProviderConfig = {
+  rules: { 'simple-rule': eslintRule },
+  // ruleOptions defaults to {}
+};
+```
+
+::: tip Severity in policy.json
+Severity is controlled by users in `policy.json`, not by plugins. This allows teams to customize enforcement per rule. See [Configuring Severity](#configuring-severity).
+:::
 
 ### 5. Create the Entry Point
 
@@ -196,6 +244,7 @@ For the complete schema reference, see [Policy Schema Reference](./policy-schema
     {
       "ruleId": "your-plugin/no-todo-comments",
       "description": "Disallow TODO comments",
+      "severity": "warn",
       "targets": [
         {
           "language": "typescript",
@@ -206,6 +255,47 @@ For the complete schema reference, see [Policy Schema Reference](./policy-schema
   ]
 }
 ```
+
+#### Configuring Severity
+
+The `severity` field controls how violations are reported:
+
+| Value | Description |
+|-------|-------------|
+| `'error'` | (default) Violations cause CLI exit code 1 |
+| `'warn'` | Violations are reported but don't fail the build |
+| `'off'` | Rule is disabled |
+
+::: tip Manual ESLint Configuration
+Users can also configure rules directly in their eslint.config.js instead of using policy.json:
+
+```javascript
+rules: {
+  'codepol/require-logger-enter-exit': ['error', { /* options */ }],
+}
+```
+
+This works when running ESLint directly. However, when using `codepol check`, severity from policy.json takes precedence via ESLint's `overrideConfig`.
+:::
+
+#### Filtering Providers
+
+The `providers` field controls which providers a rule applies to. If omitted, the rule applies to all providers.
+
+```json
+{
+  "ruleId": "@codepol/plugin/require-logger-enter-exit",
+  "providers": ["tree-sitter"],
+  "targets": ["typescript"]
+}
+```
+
+| Value | Description |
+|-------|-------------|
+| `undefined` or `[]` | (default) Rule applies to all providers |
+| `['eslint']` | Rule only applies to ESLint |
+| `['tree-sitter']` | Rule only applies to tree-sitter checks |
+| `['eslint', 'tree-sitter']` | Rule applies to both |
 
 Codepol automatically resolves the `ruleId` by combining the module name and the exported rule ID: `your-plugin/no-todo-comments`.
 
@@ -367,8 +457,8 @@ await build({
   bundle: true,
   outfile: 'dist/bundle.js',
   plugins: [
+    // Auto-discovers codepol.config.ts
     esbuildPluginCreate({
-      policyPath: './policy.json',
       fix: false, // Set to true to auto-fix violations
     }),
   ],
@@ -423,3 +513,63 @@ function astCheck(rule: PolicyRule, context: PolicyCheckContext): PolicyViolatio
 ```
 
 See [`packages/plugin/src/policyPluginLogger.ts`](https://github.com/fruitiecutiepie/codepol/blob/master/packages/plugin/src/policyPluginLogger.ts) for a complete Tree-sitter example.
+
+### Adding Fix Capabilities
+
+Plugins can provide automated fixes via the `fixProvider` capability. Fix providers run when users pass the `--fix` flag to the CLI.
+
+#### FixProvider Interface
+
+```typescript
+type FixProvider = {
+  apply: (context: FixProviderContext) => void | Promise<void>;
+};
+
+type FixProviderContext = {
+  cwd: string;                              // Current working directory
+  policy: PolicyFile;                       // Loaded policy definition
+  configPath: string;                       // Path to config file
+  files: string[];                          // Files matched by policy rules
+  ruleTargets?: PolicyRuleTargetContext[];  // Rule targets with args
+};
+```
+
+#### Example Implementation
+
+```typescript
+import { pluginRuleNew, type FixProvider, type FixProviderContext } from '@codepol/core';
+import fs from 'fs';
+
+const myFixProvider: FixProvider = {
+  apply: async (context: FixProviderContext) => {
+    for (const filePath of context.files) {
+      const source = fs.readFileSync(filePath, 'utf8');
+      // Apply your fix transformation
+      const fixed = source.replace(/TODO/g, 'DONE');
+      fs.writeFileSync(filePath, fixed);
+    }
+  },
+};
+
+export const myRule = pluginRuleNew({
+  id: 'my-fixer-rule',
+  capabilities: {
+    treeCheckProvider: myTreeCheck,
+    fixProvider: myFixProvider,
+  },
+});
+
+export default [myRule];
+```
+
+#### Execution Order
+
+Fix providers run **before** linting, so the linted output reflects the fixed state. To trigger fixes:
+
+```bash
+codepol --policy ./policy.json --fix
+```
+
+::: tip
+For ESLint-based autofix (inline fixes with AST context), write a manual ESLint rule with `fix` or `suggest` functions instead. See the [Manual ESLint Rule](#b-manual-eslint-rule-for-autofix) section.
+:::

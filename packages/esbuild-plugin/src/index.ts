@@ -15,38 +15,55 @@
  *   bundle: true,
  *   outfile: 'dist/bundle.js',
  *   plugins: [
- *     esbuildPluginCreate({
- *       policyPath: './policy.json',
- *       fix: false, // Set to true to auto-fix violations
- *     }),
+ *     // Zero-config: auto-discovers codepol.config.ts
+ *     esbuildPluginCreate(),
  *   ],
  * });
  * ```
  */
 
+import fs from 'node:fs';
 import path from 'path';
 import type { Plugin } from 'esbuild';
 import { ESLint } from 'eslint';
 import {
   langAdd,
   parserInit,
-  policyFileGet,
   ruleMatchesGet,
   policyViolationsGetFromDir,
   policyViolationsGetOutputPretty,
+  configGet,
+  configGetFromPath,
   type PolicyFile,
   type PolicyViolation,
+  type CodepolConfig,
 } from '@codepol/core';
 import { eslintPluginCreate } from '@codepol/eslint-plugin';
 import pluginRules from '@codepol/plugin';
+
+const ESLINT_CONFIG_EXTENSIONS = ['.js', '.mjs', '.cjs', '.ts', '.mts', '.cts'];
+
+/**
+ * Detects the ESLint config file by checking for common file names.
+ */
+function eslintConfigPathDetect(cwd: string): string {
+  for (const ext of ESLINT_CONFIG_EXTENSIONS) {
+    const configPath = path.join(cwd, `eslint.config${ext}`);
+    if (fs.existsSync(configPath)) {
+      return configPath;
+    }
+  }
+  // Fall back to default if none found
+  return path.join(cwd, 'eslint.config.js');
+}
 
 /**
  * Options for the esbuild policy plugin.
  */
 export type PolicyPluginOptions = {
-  /** Path to the policy.json file (default: './policy.json') */
-  policyPath?: string;
-  /** Path to the ESLint config file (default: './.eslintrc.cjs') */
+  /** Path to config file (auto-discovered if not specified) */
+  configPath?: string;
+  /** Path to the ESLint config file (uses config value or auto-detects) */
   eslintConfigPath?: string;
   /** Whether to apply ESLint fixes (default: false) */
   fix?: boolean;
@@ -62,30 +79,20 @@ type PolicyCheckResult = {
   treeViolations: PolicyViolation[];
 };
 
-function pathResolve(valueGet: string | undefined, cwd: string, fallback: string): string {
-  if (valueGet === undefined) {
-    return path.resolve(cwd, fallback);
-  }
-  return path.isAbsolute(valueGet) ? valueGet : path.resolve(cwd, valueGet);
-}
-
 async function policyCheck(options: {
-  policyPath: string;
+  config: CodepolConfig;
   eslintConfigPath: string;
   fix?: boolean;
   cwd: string;
 }): Promise<PolicyCheckResult> {
-  const policyPath = options.policyPath;
-  const eslintConfigPath = options.eslintConfigPath;
-  const fix = options.fix;
-  const cwd = options.cwd;
+  const { config, eslintConfigPath, fix, cwd } = options;
 
   // Register languages and initialize web-tree-sitter WASM parser
   langAdd({ langId: 'typescript', fileExtensions: ['.ts'] });
   langAdd({ langId: 'tsx', fileExtensions: ['.tsx'] });
   await parserInit();
 
-  const policy = policyFileGet(policyPath);
+  const policy = config as PolicyFile;
   const matches = await ruleMatchesGet(policy, cwd);
   const files = Array.from(new Set(matches.flatMap(matchGet => matchGet.files)));
 
@@ -136,19 +143,18 @@ async function policyCheck(options: {
  * @param options - Plugin configuration options
  * @returns An esbuild Plugin instance
  *
- * @example Basic usage
+ * @example Basic usage (auto-discovers config)
  * ```typescript
  * import { esbuildPluginCreate } from '@codepol/esbuild-plugin';
  *
  * plugins: [esbuildPluginCreate()]
  * ```
  *
- * @example With custom paths
+ * @example With custom config path
  * ```typescript
  * plugins: [
  *   esbuildPluginCreate({
- *     policyPath: './config/policy.json',
- *     eslintConfigPath: './config/eslint.config.js',
+ *     configPath: './config/codepol.config.ts',
  *   })
  * ]
  * ```
@@ -171,14 +177,31 @@ export function esbuildPluginCreate(options: PolicyPluginOptions = {}): Plugin {
             ? path.resolve(build.initialOptions.absWorkingDir)
             : process.cwd();
 
-        const policyPath = pathResolve(options.policyPath, cwd, 'policy.json');
-        const eslintConfigPath = pathResolve(options.eslintConfigPath, cwd, '.eslintrc.cjs');
+        // Load config: explicit path or auto-discover
+        let configResult;
+        if (options.configPath) {
+          // Resolve relative to cwd (which comes from absWorkingDir or process.cwd())
+          const resolvedConfigPath = path.isAbsolute(options.configPath)
+            ? options.configPath
+            : path.resolve(cwd, options.configPath);
+          configResult = await configGetFromPath(resolvedConfigPath);
+        } else {
+          configResult = await configGet(cwd);
+        }
+        const { config, configPath } = configResult;
+
+        // Resolve ESLint config: option > config file > auto-detect
+        const eslintConfigPath = options.eslintConfigPath
+          ? path.resolve(cwd, options.eslintConfigPath)
+          : config.eslintConfigPath
+            ? path.resolve(path.dirname(configPath), config.eslintConfigPath)
+            : eslintConfigPathDetect(cwd);
 
         const result = await policyCheck({
-          policyPath: policyPath,
-          eslintConfigPath: eslintConfigPath,
+          config,
+          eslintConfigPath,
           fix: options.fix,
-          cwd: cwd,
+          cwd,
         });
 
         const output: string[] = [];

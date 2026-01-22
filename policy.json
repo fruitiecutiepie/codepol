@@ -1,6 +1,13 @@
 {
   "$schema": "./policy.schema.json",
   "plugins": ["@codepol/plugin"],
+  "targets": {
+    "typescript-src": {
+      "language": "typescript",
+      "files": ["src/**/*.ts", "src/**/*.tsx"],
+      "exclude": ["**/*.spec.ts", "**/*.test.ts", "**/__mocks__/**"]
+    }
+  },
   "rules": [
     {
       "id": "function-logging",
@@ -17,13 +24,7 @@
           }
         }
       },
-      "targets": [
-        {
-          "language": "typescript",
-          "files": ["src/**/*.ts", "src/**/*.tsx"],
-          "exclude": ["**/*.spec.ts", "**/*.test.ts", "**/__mocks__/**"]
-        }
-      ]
+      "targets": ["typescript-src"]
     }
   ],
   "exclude": ["dist/**"]

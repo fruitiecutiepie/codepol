@@ -44,13 +44,12 @@ export function policyCacheClear(): void {
 
 /**
  * Resolves the targets for a policy rule.
- * If the rule uses a `target` reference, looks it up in the policy's named targets.
- * Otherwise returns the inline `targets` array.
+ * Looks up each target name in the policy's named targets map.
  *
  * @param rule - The policy rule to resolve targets for
  * @param policy - The policy file containing named targets
  * @returns Array of resolved PolicyRuleTarget objects
- * @throws If `target` reference doesn't exist in policy.targets
+ * @throws If any target reference doesn't exist in policy.targets
  *
  * @example
  * ```typescript
@@ -61,22 +60,18 @@ export function policyCacheClear(): void {
  * ```
  */
 export function policyRuleTargetsResolve(rule: PolicyRule, policy: PolicyFile): PolicyRuleTarget[] {
-  if (rule.target !== undefined) {
-    const namedTarget = policy.targets?.[rule.target];
+  const resolved: PolicyRuleTarget[] = [];
+  for (const targetName of rule.targets) {
+    const namedTarget = policy.targets[targetName];
     if (!namedTarget) {
       throw new Error(
-        `Rule "${rule.id ?? rule.ruleId}" references target "${rule.target}" ` +
+        `Rule "${rule.id ?? rule.ruleId}" references target "${targetName}" ` +
         `which is not defined in policy.targets`
       );
     }
-    return [namedTarget];
+    resolved.push(namedTarget);
   }
-  if (rule.targets !== undefined) {
-    return rule.targets;
-  }
-  throw new Error(
-    `Rule "${rule.id ?? rule.ruleId}" must specify either "target" or "targets"`
-  );
+  return resolved;
 }
 
 /**

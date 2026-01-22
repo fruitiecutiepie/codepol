@@ -31,53 +31,62 @@ pnpm add -D @codepol/esbuild-plugin esbuild
 pnpm add -D @codepol/eslint-plugin @codepol/core @codepol/plugin
 ```
 
-## Step 2: Create a Policy File
+## Step 2: Create a Config File
 
-Create `policy.json` in your project root:
+Create `codepol.config.ts` in your project root:
 
-```json
-{
-  "$schema": "https://raw.githubusercontent.com/fruitiecutiepie/codepol/master/policy.schema.json",
-  "plugins": ["@codepol/plugin"],
-  "rules": [
+```typescript
+// codepol.config.ts
+import { defineConfig } from '@codepol/core';
+
+export default defineConfig({
+  // Optional: specify ESLint config path (auto-detected if not specified)
+  // eslintConfigPath: './eslint.config.ts',
+
+  plugins: ['@codepol/plugin'],
+  targets: {
+    'typescript-src': {
+      language: 'typescript',
+      files: ['src/**/*.ts', 'src/**/*.tsx'],
+      exclude: [
+        '**/*.spec.ts',
+        '**/*.test.ts',
+        '**/__mocks__/**',
+        '**/__tests__/**',
+      ],
+    },
+  },
+  rules: [
     {
-      "id": "function-logging",
-      "ruleId": "@codepol/plugin/require-logger-enter-exit",
-      "description": "Ensure all functions have logger.enter/exit instrumentation",
-      "args": {
-        "logger": {
-          "identifier": "logger",
-          "enterMethod": "enter",
-          "exitMethod": "exit",
-          "import": {
-            "module": "@your-org/logger",
-            "named": "logger"
-          }
-        }
+      id: 'function-logging',
+      ruleId: '@codepol/plugin/require-logger-enter-exit',
+      description: 'Ensure all functions have logger.enter/exit instrumentation',
+      args: {
+        logger: {
+          identifier: 'logger',
+          enterMethod: 'enter',
+          exitMethod: 'exit',
+          import: {
+            module: '@your-org/logger',
+            named: 'logger',
+          },
+        },
       },
-      "targets": [
-        {
-          "language": "typescript",
-          "files": ["src/**/*.ts", "src/**/*.tsx"],
-          "exclude": [
-            "**/*.spec.ts",
-            "**/*.test.ts",
-            "**/__mocks__/**",
-            "**/__tests__/**"
-          ]
-        }
-      ]
-    }
+      targets: ['typescript-src'],
+    },
   ],
-  "exclude": [
-    "dist/**",
-    "node_modules/**",
-    "*.config.ts"
-  ]
-}
+  exclude: ['dist/**', 'node_modules/**', '*.config.ts'],
+});
 ```
 
-> **Tip:** For projects with multiple rules sharing the same file patterns, you can define [named targets](./policy-schema.md#named-targets) at the top level and reference them across rules to reduce repetition.
+The config file is auto-discovered from your project root. Supported formats:
+- `codepol.config.ts` (recommended)
+- `codepol.config.js`, `.mjs`, `.cjs`
+- `policy.json` (for backward compatibility)
+
+> **Tip:** Using TypeScript config gives you autocomplete and type checking via `defineConfig()`.
+
+> **Tip:** Multiple rules can reference the same target. See [Policy Schema Reference](./policy-schema.md) for more details.
 
 ## Step 3: Configure ESLint
 
@@ -130,6 +139,12 @@ module.exports = {
 
 Rule keys use the ESLint plugin name `codepol` (for example, `codepol/require-logger-enter-exit`) even when the package is scoped.
 
+::: tip Severity Precedence
+When running ESLint directly (`eslint .`), your eslint.config.js rules apply.
+
+When running `codepol check`, severity is read from `policy.json` and passed via ESLint's `overrideConfig`, which takes precedence over your eslint.config.js for codepol rules.
+:::
+
 ## Step 4: Create Your Logger
 
 Create a logger module that matches your policy configuration:
@@ -146,31 +161,34 @@ export const logger = {
 };
 ```
 
-Update your `policy.json` to reference it:
+Update your `codepol.config.ts` to reference it:
 
-```json
-{
-  "plugins": ["@codepol/plugin"],
-  "rules": [
+```typescript
+import { defineConfig } from '@codepol/core';
+
+export default defineConfig({
+  plugins: ['@codepol/plugin'],
+  targets: {
+    src: { language: 'typescript', files: ['src/**/*.ts'] },
+  },
+  rules: [
     {
-      "ruleId": "@codepol/plugin/require-logger-enter-exit",
-      "args": {
-        "logger": {
-          "identifier": "logger",
-          "enterMethod": "enter",
-          "exitMethod": "exit",
-          "import": {
-            "module": "./logger",
-            "named": "logger"
-          }
-        }
+      ruleId: '@codepol/plugin/require-logger-enter-exit',
+      args: {
+        logger: {
+          identifier: 'logger',
+          enterMethod: 'enter',
+          exitMethod: 'exit',
+          import: {
+            module: './logger',
+            named: 'logger',
+          },
+        },
       },
-      "targets": [
-        { "language": "typescript", "files": ["src/**/*.ts"] }
-      ]
-    }
-  ]
-}
+      targets: ['src'],
+    },
+  ],
+});
 ```
 
 ## Step 5: Add NPM Scripts
@@ -249,11 +267,20 @@ await build({
   bundle: true,
   outdir: 'dist',
   plugins: [
-    esbuildPluginCreate({
-      policyPath: './policy.json',
-    }),
+    // Zero-config: auto-discovers codepol.config.ts
+    esbuildPluginCreate(),
   ],
 });
+```
+
+Or with explicit config path:
+
+```typescript
+plugins: [
+  esbuildPluginCreate({
+    configPath: './config/codepol.config.ts',
+  }),
+]
 ```
 
 ## Optional: CI Integration

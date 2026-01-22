@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { esbuildPluginNew } from '@codepol/esbuild-plugin';
+import { esbuildPluginCreate } from '@codepol/esbuild-plugin';
 
 describe('esbuild policy plugin', () => {
   it('fails the build when policy violations are present and succeeds after fixes', async () => {
@@ -20,6 +20,12 @@ describe('esbuild policy plugin', () => {
           plugins: [
             { module: '@codepol/plugin' },
           ],
+          targets: {
+            'ts-entry': {
+              language: 'typescript',
+              files: ['index.ts'],
+            },
+          },
           rules: [
             {
               id: 'function-logging',
@@ -36,12 +42,7 @@ describe('esbuild policy plugin', () => {
                   },
                 },
               },
-              targets: [
-                {
-                  language: 'typescript',
-                  files: ['index.ts'],
-                },
-              ],
+              targets: ['ts-entry'],
             },
           ],
         },
@@ -67,7 +68,7 @@ describe('esbuild policy plugin', () => {
       outfile,
       bundle: false,
       logLevel: 'silent',
-      plugins: [esbuildPluginNew({ policyPath: 'policy.json', eslintConfigPath: path.resolve('.eslintrc.cjs') })],
+      plugins: [esbuildPluginCreate({ configPath: 'policy.json', eslintConfigPath: path.resolve('.eslintrc.cjs') })],
     }).catch(error => error);
 
     expect(failure).toBeInstanceOf(Error);
@@ -92,7 +93,7 @@ export const f = () => {
       outfile,
       bundle: false,
       logLevel: 'silent',
-      plugins: [esbuildPluginNew({ policyPath: 'policy.json', eslintConfigPath: path.resolve('.eslintrc.cjs') })],
+      plugins: [esbuildPluginCreate({ configPath: 'policy.json', eslintConfigPath: path.resolve('.eslintrc.cjs') })],
     });
 
     expect(result.errors.length).toBe(0);

@@ -76,9 +76,12 @@ export type PolicyRuleTarget = {
  */
 export type PolicyTargetMap = Record<string, PolicyRuleTarget>;
 
+/** Lint severity level */
+export type LintSeverity = 'error' | 'warn' | 'off';
+
 /**
  * A single policy rule that defines which files to check and how.
- * Must specify either `target` (reference to named target) or `targets` (inline).
+ * References named targets defined in the top-level `targets` map.
  */
 export type PolicyRule = {
   /** Unique identifier for this rule (optional, defaults to ruleId) */
@@ -87,12 +90,14 @@ export type PolicyRule = {
   ruleId: string;
   /** Human-readable description of what this rule enforces */
   description?: string;
+  /** Lint severity level (default: 'error') */
+  severity?: LintSeverity;
+  /** Providers to apply this rule to (default: all providers). e.g., ['eslint', 'tree-sitter'] */
+  providers?: string[];
   /** Rule-specific arguments passed to the rule provider */
   args?: unknown;
-  /** Reference to a named target defined in top-level targets */
-  target?: string;
-  /** Inline target definitions (use 'target' to reference named targets instead) */
-  targets?: PolicyRuleTarget[];
+  /** Array of target names referencing entries in top-level targets */
+  targets: string[];
 };
 
 /**
@@ -102,8 +107,8 @@ export type PolicyRule = {
 export type PolicyFile = {
   /** Optional JSON schema reference */
   $schema?: string;
-  /** Named target definitions that rules can reference */
-  targets?: PolicyTargetMap;
+  /** Named target definitions that rules reference by name */
+  targets: PolicyTargetMap;
   /** Array of policy rules to enforce */
   rules: PolicyRule[];
   /** Global exclusion patterns applied to all rules */
@@ -148,8 +153,8 @@ export type LintProviderContext = {
   cwd: string;
   /** Loaded policy definition */
   policy: PolicyFile;
-  /** Policy path used for loading */
-  policyPath: string;
+  /** Path to the config file that was loaded */
+  configPath: string;
   /** Rule id associated with the provider (for rule-level plugins) */
   ruleId: string;
   /** Rule-level arguments passed from the policy */
@@ -175,14 +180,14 @@ export type LintProvider<TConfig = unknown> = {
  * ESLint-specific provider configuration.
  */
 export type EslintProviderConfig = {
-  /** ESLint plugin name to register under */
-  pluginName: string;
+  /** ESLint plugin name to register under (default: 'codepol') */
+  pluginName?: string;
   /** ESLint rule map */
   rules: Record<string, unknown>;
   /** Optional ESLint config presets */
   configs?: Record<string, unknown>;
-  /** Build ESLint rule configuration */
-  rulesConfigGet: (context: LintProviderContext) => Record<string, unknown>;
+  /** Options to pass to the ESLint rule. If not provided, defaults to {}. */
+  ruleOptions?: (context: LintProviderContext) => unknown;
 };
 
 /**
@@ -193,8 +198,8 @@ export type FixProviderContext = {
   cwd: string;
   /** Loaded policy definition */
   policy: PolicyFile;
-  /** Policy path used for loading */
-  policyPath: string;
+  /** Path to the config file that was loaded */
+  configPath: string;
   /** Files matched by policy rules */
   files: string[];
   /** Rule targets resolved from the policy */
@@ -290,6 +295,17 @@ export type PluginRule = {
 };
 
 /**
+ * Fix data for an auto-fixable violation.
+ * Provides the byte range and replacement text for ESLint/IDE inline fixes.
+ */
+export type PolicyViolationFix = {
+  /** Byte offset range [start, end) in the source text to replace */
+  range: [number, number];
+  /** Replacement text (can be empty to delete the range) */
+  text: string;
+};
+
+/**
  * Represents a single policy violation found during checking.
  */
 export type PolicyViolation = {
@@ -303,6 +319,8 @@ export type PolicyViolation = {
   line: number;
   /** 1-based column number where the violation occurs */
   column: number;
+  /** Optional fix data for auto-fixable violations (inline ESLint/IDE fixes) */
+  fix?: PolicyViolationFix;
 };
 
 /**
@@ -354,6 +372,8 @@ export type LintDiagnostic = {
   ruleId: string;
   /** Severity level of the diagnostic */
   severity: 'error' | 'warning' | 'info';
+  /** Optional fix data for auto-fixable diagnostics */
+  fix?: PolicyViolationFix;
 };
 
 /**
@@ -366,8 +386,6 @@ export type TreeCheckAdapterOptions = {
   ruleUrl?: string;
   /** Default severity for violations (default: 'error') */
   severity?: 'error' | 'warning';
-  /** Path to the policy.json file */
-  policyPath?: string;
 };
 
 /**

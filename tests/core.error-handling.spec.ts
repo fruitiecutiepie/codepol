@@ -21,20 +21,21 @@ describe('core error handling', () => {
     const filePath = path.join(process.cwd(), 'temp-test.ts');
     writeFileSync(filePath, 'function test() {}');
 
-    const policy: PolicyFile = {
-      rules: [],
+    const target: PolicyRuleTarget = {
+      language: 'typescript',
+      files: [],
     };
 
     const rule: PolicyRule = {
       id: 'test-rule',
       ruleId: loggerEnterExitRule.id,
       description: 'test',
-      targets: [],
+      targets: ['test-target'],
     };
 
-    const target: PolicyRuleTarget = {
-      language: 'typescript',
-      files: [],
+    const policy: PolicyFile = {
+      targets: { 'test-target': target },
+      rules: [rule],
     };
 
     // Construct a plugins map manually (args are now on rules, not plugins)

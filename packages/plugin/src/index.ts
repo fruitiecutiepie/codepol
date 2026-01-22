@@ -17,12 +17,13 @@ import type {
   PolicyRuleTargetContext,
 } from '@codepol/core';
 import {
-  policyFileGet,
   policyCacheClear,
   policyRuleTargetsResolve,
   globPatternsGetMatchAny,
   ruleTargetMatchesLanguage,
   pluginRuleNew,
+  configGetSync,
+  configGetFromPathSync,
 } from '@codepol/core';
 import { loggerTreeCheckProvider } from './policyPluginLogger';
 
@@ -34,7 +35,7 @@ export { policyCacheClear };
  */
 type Options = [
   {
-    /** Path to the policy.json file */
+    /** Path to the config file (auto-discovered if not specified) */
     policyPath?: string;
     /** Resolved rule targets passed from the CLI */
     ruleTargets?: PolicyRuleTargetContext[];
@@ -308,7 +309,7 @@ const requireLoggerRule = createRule<Options, MessageIds>({
         properties: {
           policyPath: {
             type: 'string',
-            description: 'Path to the policy.json file',
+            description: 'Path to the config file (auto-discovered if not specified)',
           },
           ruleTargets: {
             type: 'array',
@@ -374,10 +375,26 @@ const requireLoggerRule = createRule<Options, MessageIds>({
     if (context.options[0] !== undefined) {
       option = context.options[0];
     }
-    let policyPath = path.resolve(process.cwd(), 'policy.json');
-    if (option.policyPath !== undefined) {
-      policyPath = option.policyPath;
+    
+    // Config loading: explicit path > auto-discover
+    // Uses sync loading since ESLint's create() must be synchronous
+    let configPath: string;
+    let loadedConfig: PolicyFile | undefined;
+    try {
+      if (option.policyPath) {
+        const result = configGetFromPathSync(option.policyPath);
+        loadedConfig = result.config;
+        configPath = result.configPath;
+      } else {
+        const result = configGetSync(process.cwd());
+        loadedConfig = result.config;
+        configPath = result.configPath;
+      }
+    } catch {
+      // No config found, skip checking
+      return {};
     }
+    
     let policyExclude: string[] = [];
     let ruleTargets: PolicyRuleTargetContext[] = [];
     if (option.ruleTargets !== undefined) {
@@ -388,9 +405,9 @@ const requireLoggerRule = createRule<Options, MessageIds>({
     }
     let policyFile: PolicyFile | undefined = undefined;
     if (ruleTargets.length === 0) {
-      policyFile = policyFileGet(policyPath);
-      policyExclude = policyFile.exclude ?? [];
-      ruleTargets = policyRuleTargetsGet(policyFile);
+      policyFile = loadedConfig;
+      policyExclude = policyFile?.exclude ?? [];
+      ruleTargets = policyRuleTargetsGet(policyFile!);
     }
     
     // We only care about rule targets that map to THIS plugin rule.
@@ -409,7 +426,7 @@ const requireLoggerRule = createRule<Options, MessageIds>({
     // We need to look it up in `policyFile`.
     
     if (policyFile === undefined) {
-      policyFile = policyFileGet(policyPath);
+      policyFile = loadedConfig;
     }
     
     // Filter ruleTargets that are relevant to this plugin rule
@@ -479,21 +496,15 @@ const eslintRules = {
 };
 
 const eslintProviderConfig: EslintProviderConfig = {
-  pluginName: 'codepol',
   rules: eslintRules,
-  rulesConfigGet: (ctx: LintProviderContext) => {
+  ruleOptions: (ctx: LintProviderContext) => {
     const ruleArgs =
       ctx.ruleArgs && typeof ctx.ruleArgs === 'object' ? ctx.ruleArgs : {};
     return {
-      'codepol/require-logger-enter-exit': [
-        'error',
-        {
-          policyPath: ctx.policyPath,
-          ruleTargets: ctx.ruleTargets,
-          policyExclude: ctx.policy.exclude,
-          ...(ruleArgs as Record<string, unknown>),
-        },
-      ],
+      policyPath: ctx.configPath,  // Pass config path to rule options (kept as policyPath for ESLint schema compat)
+      ruleTargets: ctx.ruleTargets,
+      policyExclude: ctx.policy.exclude,
+      ...(ruleArgs as Record<string, unknown>),
     };
   },
 };

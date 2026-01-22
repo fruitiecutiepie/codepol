@@ -20,11 +20,12 @@ import type {
 } from '@codepol/core';
 import {
   violationToLintDiagnostic,
-  policyFileGet,
   policyCacheClear,
   policyRuleTargetsResolve,
   globPatternsGetMatchAny,
   ruleTargetMatchesLanguage,
+  configGetSync,
+  configGetFromPathSync,
   isErr,
 } from '@codepol/core';
 
@@ -36,7 +37,7 @@ export { policyCacheClear };
  */
 type AdaptedRuleOptions = [
   {
-    /** Path to the policy.json file */
+    /** Path to the config file (auto-discovered if not specified) */
     policyPath?: string;
     /** Resolved rule targets passed from the CLI */
     ruleTargets?: PolicyRuleTargetContext[];
@@ -55,7 +56,7 @@ function policyRuleTargetsGet(policy: PolicyFile): PolicyRuleTargetContext[] {
     const resolvedTargets = policyRuleTargetsResolve(rule, policy);
     for (const target of resolvedTargets) {
       targets.push({
-        ruleId: rule.id || rule.ruleId,
+        ruleId: rule.ruleId,  // Use plugin rule ID for matching, not user-defined rule.id
         description: rule.description,
         args: rule.args,
         target,
@@ -65,16 +66,38 @@ function policyRuleTargetsGet(policy: PolicyFile): PolicyRuleTargetContext[] {
   return targets;
 }
 
+/**
+ * Checks if a rule ID matches a target's rule ID.
+ * Supports both exact matches and suffix matches for namespaced IDs.
+ * E.g., plugin "forbidden-words" matches target "@scope/plugin/forbidden-words"
+ */
+function ruleIdMatches(pluginRuleId: string, targetRuleId: string): boolean {
+  if (pluginRuleId === targetRuleId) {
+    return true;
+  }
+  // Support suffix matching: target "@scope/plugin/rule-id" matches plugin "rule-id"
+  if (targetRuleId.endsWith(`/${pluginRuleId}`)) {
+    return true;
+  }
+  return false;
+}
+
 function fileMatchesPolicy(
   ruleTargets: PolicyRuleTargetContext[],
   policyExclude: string[],
-  filePath: string
+  filePath: string,
+  pluginRuleId: string
 ): PolicyRuleTargetContext | null {
   const relative = path.relative(process.cwd(), filePath);
   if (globPatternsGetMatchAny(policyExclude, relative)) {
     return null;
   }
   for (const ruleTarget of ruleTargets) {
+    // Only match targets for THIS plugin's rule
+    if (!ruleIdMatches(pluginRuleId, ruleTarget.ruleId)) {
+      continue;
+    }
+
     const target = ruleTarget.target;
     if (globPatternsGetMatchAny(target.files, relative)) {
       if (globPatternsGetMatchAny(target.exclude, relative)) {
@@ -167,6 +190,7 @@ function createAdaptedRule(
     name: ruleName,
     meta: {
       type: 'problem',
+      fixable: 'code',
       docs: {
         description: `Tree-check rule adapted from ${plugin.id}`,
       },
@@ -179,7 +203,7 @@ function createAdaptedRule(
           properties: {
             policyPath: {
               type: 'string',
-              description: 'Path to the policy.json file',
+              description: 'Path to the config file (auto-discovered if not specified)',
             },
             ruleTargets: {
               type: 'array',
@@ -207,21 +231,31 @@ function createAdaptedRule(
 
       // Resolve options
       const ruleOptions = context.options[0] ?? {};
-      const policyPath = ruleOptions.policyPath ?? options?.policyPath ?? path.resolve(process.cwd(), 'policy.json');
       
+      // Config loading: explicit path > auto-discover
+      // Uses sync loading since ESLint's create() must be synchronous
       let policy: PolicyFile;
+      let configPath: string;
       try {
-        policy = policyFileGet(policyPath);
+        if (ruleOptions.policyPath) {
+          const result = configGetFromPathSync(ruleOptions.policyPath);
+          policy = result.config;
+          configPath = result.configPath;
+        } else {
+          const result = configGetSync(process.cwd());
+          policy = result.config;
+          configPath = result.configPath;
+        }
       } catch {
-        // Policy file not found, skip checking
+        // Config file not found or invalid, skip checking
         return {};
       }
 
       const policyExclude = ruleOptions.policyExclude ?? policy.exclude ?? [];
       const ruleTargets = ruleOptions.ruleTargets ?? policyRuleTargetsGet(policy);
 
-      // Check if file matches any rule target
-      const matchedTarget = fileMatchesPolicy(ruleTargets, policyExclude, filename);
+      // Check if file matches any rule target FOR THIS PLUGIN
+      const matchedTarget = fileMatchesPolicy(ruleTargets, policyExclude, filename, plugin.id);
       if (!matchedTarget) {
         return {};
       }
@@ -247,12 +281,13 @@ function createAdaptedRule(
           };
 
           // Build a synthetic PolicyRule for the provider
+          // Note: targets is a string[] of target names; the actual target is in checkContext
           const syntheticRule: PolicyRule = {
             id: matchedTarget.ruleId,
             ruleId: plugin.id,
             description: matchedTarget.description,
             args: matchedTarget.args,
-            targets: [matchedTarget.target],
+            targets: ['_synthetic'],
           };
 
           // Ensure provider is initialized (blocking for ESLint sync context)
@@ -288,6 +323,9 @@ function createAdaptedRule(
               data: {
                 message: diagnostic.message,
               },
+              fix: diagnostic.fix
+                ? (fixer) => fixer.replaceTextRange(diagnostic.fix!.range, diagnostic.fix!.text)
+                : undefined,
             });
           }
         },

@@ -6,7 +6,7 @@
   "scripts": {
     "build:wasm": "node scripts/build-wasm.mjs",
     "build": "pnpm run build:wasm && pnpm -r build",
-    "test": "vitest run",
+    "test": "pnpm build && vitest run",
     "test:watch": "vitest",
     "clean": "pnpm -r exec rm -rf dist && rm -rf packages/core/wasm/*.wasm",
     "typecheck": "pnpm -r typecheck",
@@ -15,6 +15,10 @@
     "docs:preview": "vitepress preview docs"
   },
   "devDependencies": {
+    "@codepol/core": "workspace:*",
+    "@codepol/eslint-plugin": "workspace:*",
+    "@codepol/esbuild-plugin": "workspace:*",
+    "@codepol/plugin": "workspace:*",
     "@types/node": "25.0.3",
     "@types/yargs": "17.0.35",
     "@typescript-eslint/eslint-plugin": "8.53.0",
@@ -59,5 +63,8 @@
       "esbuild",
       "tree-sitter-cli"
     ]
+  },
+  "dependencies": {
+    "jiti": "^2.6.1"
   }
 }
