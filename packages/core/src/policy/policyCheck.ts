@@ -80,10 +80,9 @@ export function policyViolationsGetOutputPretty(violations: PolicyViolation[], c
 
   const lines: string[] = [];
   for (const [file, fileViolations] of grouped.entries()) {
-    lines.push(`${file}:`);
     for (const violation of fileViolations) {
       lines.push(
-        `  - [${violation.ruleId}] ${violation.message} (${violation.line}:${violation.column})`
+        `${file}:${violation.line}:${violation.column}: error [${violation.ruleId}] ${violation.message}`
       );
     }
   }

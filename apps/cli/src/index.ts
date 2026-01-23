@@ -58,8 +58,6 @@ type CliOptions = {
 type PolicyCheckResult = {
   policy: PolicyFile;
   files: string[];
-  eslintOutput: string;
-  eslintHasErrors: boolean;
   violations: PolicyViolation[];
 };
 
@@ -217,8 +215,7 @@ async function policyCheck(options: {
     await fixProvidersApply(fixProviders, { policy, configPath, cwd, files, ruleTargets });
   }
 
-  let eslintOutput = '';
-  let eslintHasErrors = false;
+  const eslintViolations: PolicyViolation[] = [];
   if (eslintProviders.length > 0) {
     const eslint = new ESLint({
       overrideConfigFile: eslintConfigPath,
@@ -231,9 +228,17 @@ async function policyCheck(options: {
     if (fix) {
       await ESLint.outputFixes(lintResults);
     }
-    const formatter = await eslint.loadFormatter('stylish');
-    eslintOutput = lintResults.length > 0 ? (await formatter.format(lintResults)).trim() : '';
-    eslintHasErrors = lintResults.some(result => result.errorCount > 0);
+    for (const result of lintResults) {
+      for (const msg of result.messages) {
+        eslintViolations.push({
+          ruleId: msg.ruleId ?? 'unknown',
+          filePath: result.filePath,
+          message: msg.message,
+          line: msg.line,
+          column: msg.column,
+        });
+      }
+    }
   }
 
   const violationsResult = await policyViolationsGetFromDir(policy, cwd);
@@ -246,9 +251,7 @@ async function policyCheck(options: {
   return {
     policy,
     files,
-    eslintOutput,
-    eslintHasErrors,
-    violations: violationsResult.Ok!,
+    violations: [...eslintViolations, ...violationsResult.Ok],
   };
 }
 
@@ -262,23 +265,14 @@ async function policyCheckAndPrintOutput(options: CliOptions): Promise<boolean> 
     cwd,
   });
 
-  const outputs: string[] = [];
-  if (result.eslintOutput.length > 0) {
-    outputs.push(result.eslintOutput);
-  }
-  const treeOutput = policyViolationsGetOutputPretty(result.violations, cwd);
-  if (treeOutput) {
-    outputs.push('Tree-sitter policy violations:');
-    outputs.push(treeOutput);
-  }
-
-  if (outputs.length > 0) {
-    console.log(outputs.join('\n\n'));
+  const output = policyViolationsGetOutputPretty(result.violations, cwd);
+  if (output) {
+    console.log(output);
   } else {
     console.log('✔ Policy checks passed');
   }
 
-  return !result.eslintHasErrors && result.violations.length === 0;
+  return result.violations.length === 0;
 }
 
 async function policyPluginsValidateAndPrint(options: CliOptions): Promise<void> {
