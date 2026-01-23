@@ -17,61 +17,40 @@ pnpm add -D @codepol/plugin
 - **Default export**: an array of rule plugins (currently `[loggerEnterExitRule]`).
 - `loggerEnterExitRule`: the rule plugin definition for `require-logger-enter-exit`.
 
-## Basic policy configuration
+## Basic Configuration
 
-Use `semantics` and `targets` in your policy rules, then wire the logger rule plugin under
-`plugins`:
+Create `codepol.config.ts` in your project root:
 
-```json
-{
-  "$schema": "https://raw.githubusercontent.com/fruitiecutiepie/codepol/master/policy.schema.json",
-  "plugins": [
+```typescript
+import { defineConfig } from '@codepol/core';
+
+export default defineConfig({
+  plugins: ['@codepol/plugin'],
+  targets: {
+    typescript: {
+      language: 'typescript',
+      files: ['src/**/*.ts', 'src/**/*.tsx'],
+      exclude: ['**/*.spec.ts', '**/*.test.ts'],
+    },
+  },
+  rules: [
     {
-      "module": "@codepol/plugin",
-      "config": {
-        "identifier": "logger",
-        "enterMethod": "enter",
-        "exitMethod": "exit",
-        "import": {
-          "module": "@org/logger",
-          "named": "logger"
-        }
+      id: 'function-logging',
+      ruleId: '@codepol/plugin/require-logger-enter-exit',
+      description: 'Ensure functions log enter/exit',
+      args: {
+        logger: {
+          identifier: 'logger',
+          enterMethod: 'enter',
+          exitMethod: 'exit',
+          import: {
+            module: '@org/logger',
+            named: 'logger',
+          },
+        },
       },
-      "rules": [
-        {
-          "id": "require-logger-enter-exit",
-          "enabled": true,
-          "args": {
-            "policyPath": "./policy.json",
-            "logger": {
-              "identifier": "logger",
-              "enterMethod": "enter",
-              "exitMethod": "exit",
-              "import": {
-                "module": "@org/logger",
-                "named": "logger"
-              }
-            }
-          }
-        }
-      ]
-    }
+      targets: ['typescript'],
+    },
   ],
-  "rules": [
-    {
-      "id": "function-logging",
-      "semantics": {
-        "description": "Ensure functions log enter/exit",
-        "type": "logger"
-      },
-      "targets": [
-        {
-          "language": "typescript",
-          "files": ["src/**/*.ts", "src/**/*.tsx"],
-          "exclude": ["**/*.spec.ts", "**/*.test.ts"]
-        }
-      ]
-    }
-  ]
-}
+});
 ```

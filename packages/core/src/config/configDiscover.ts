@@ -12,7 +12,6 @@ const CONFIG_FILENAMES = [
   'codepol.config.js',
   'codepol.config.mjs',
   'codepol.config.cjs',
-  'policy.json', // backward compatibility
 ] as const;
 
 /**
@@ -108,16 +107,8 @@ function loadJsConfigSync(configPath: string): CodepolConfig {
 }
 
 /**
- * Loads a JSON config file.
- */
-function loadJsonConfig(configPath: string): CodepolConfig {
-  const raw = fs.readFileSync(configPath, 'utf8');
-  return JSON.parse(raw) as CodepolConfig;
-}
-
-/**
  * Loads and parses a config file (async version).
- * Handles both JSON and JS/TS formats.
+ * Handles JS/TS formats.
  *
  * @param configPath - Absolute path to the config file
  * @returns The parsed config object
@@ -128,22 +119,14 @@ async function configFileLoadAsync(configPath: string): Promise<CodepolConfig> {
     return cached;
   }
 
-  const ext = path.extname(configPath);
-  let config: CodepolConfig;
-
-  if (ext === '.json') {
-    config = loadJsonConfig(configPath);
-  } else {
-    config = await loadJsConfigAsync(configPath);
-  }
-
+  const config = await loadJsConfigAsync(configPath);
   configCache.set(configPath, config);
   return config;
 }
 
 /**
  * Loads and parses a config file synchronously.
- * Handles both JSON and JS/TS formats.
+ * Handles JS/TS formats.
  * Used by ESLint adapter which requires sync execution.
  *
  * @param configPath - Absolute path to the config file
@@ -155,15 +138,7 @@ function configFileLoadSync(configPath: string): CodepolConfig {
     return cached;
   }
 
-  const ext = path.extname(configPath);
-  let config: CodepolConfig;
-
-  if (ext === '.json') {
-    config = loadJsonConfig(configPath);
-  } else {
-    config = loadJsConfigSync(configPath);
-  }
-
+  const config = loadJsConfigSync(configPath);
   configCache.set(configPath, config);
   return config;
 }

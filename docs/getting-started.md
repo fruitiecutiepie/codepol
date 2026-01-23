@@ -82,7 +82,6 @@ export default defineConfig({
 The config file is auto-discovered from your project root. Supported formats:
 - `codepol.config.ts` (recommended)
 - `codepol.config.js`, `.mjs`, `.cjs`
-- `policy.json` (for backward compatibility)
 
 > **Tip:** Using TypeScript config gives you autocomplete and type checking via `defineConfig()`.
 
@@ -142,7 +141,7 @@ Rule keys use the ESLint plugin name `codepol` (for example, `codepol/require-lo
 ::: tip Severity Precedence
 When running ESLint directly (`eslint .`), your eslint.config.js rules apply.
 
-When running `codepol check`, severity is read from `policy.json` and passed via ESLint's `overrideConfig`, which takes precedence over your eslint.config.js for codepol rules.
+When running `codepol check`, severity is read from `codepol.config.ts` and passed via ESLint's `overrideConfig`, which takes precedence over your eslint.config.js for codepol rules.
 :::
 
 ## Step 4: Create Your Logger
@@ -317,6 +316,6 @@ echo "pnpm lint:policy" > .husky/pre-commit
 
 ## Next Steps
 
-- [Policy Schema Reference](./policy-schema.md) - All configuration options for policy.json
+- [Policy Schema Reference](./policy-schema.md) - All configuration options
 - [Creating Custom Plugins](./creating-custom-plugins.md) - Build your own rule plugins
 - [API Reference](./api-reference.md) - Programmatic usage and type definitions

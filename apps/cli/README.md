@@ -38,10 +38,10 @@ codepol --watch
 
 Watches for file changes and re-runs checks automatically.
 
-### Custom Policy Path
+### Custom Config Path
 
 ```bash
-codepol --policy ./config/policy.json
+codepol --config ./config/codepol.config.ts
 ```
 
 ### Custom ESLint Config
@@ -56,22 +56,26 @@ codepol --eslint-config ./config/eslint.config.js
 | ------ | ----------- | ------- |
 | `--fix` | Apply ESLint fixes where possible | `false` |
 | `--watch` | Run in watch mode | `false` |
-| `--policy` | Path to the policy file | `./policy.json` |
-| `--eslint-config` | Path to ESLint config | `./.eslintrc.cjs` |
+| `--config` | Path to config file | auto-discovered |
+| `--eslint-config` | Path to ESLint config | auto-detected |
+| `--check-plugins` | Validate plugins and exit | `false` |
 | `--help` | Show help | |
 | `--version` | Show version | |
 
 ## Examples
 
 ```bash
-# Run checks with default settings
+# Run checks (auto-discovers codepol.config.ts)
 codepol
 
 # Fix violations and watch for changes
 codepol --fix --watch
 
 # Use custom configuration
-codepol --policy ./config/policy.json --eslint-config ./eslint.config.js
+codepol --config ./config/codepol.config.ts --eslint-config ./eslint.config.js
+
+# Validate plugins
+codepol --check-plugins
 
 # Show help
 codepol --help

@@ -36,7 +36,7 @@ export { policyCacheClear };
 type Options = [
   {
     /** Path to the config file (auto-discovered if not specified) */
-    policyPath?: string;
+    configPath?: string;
     /** Resolved rule targets passed from the CLI */
     ruleTargets?: PolicyRuleTargetContext[];
     /** Global exclude patterns from the policy */
@@ -307,7 +307,7 @@ const requireLoggerRule = createRule<Options, MessageIds>({
       {
         type: 'object',
         properties: {
-          policyPath: {
+          configPath: {
             type: 'string',
             description: 'Path to the config file (auto-discovered if not specified)',
           },
@@ -381,8 +381,8 @@ const requireLoggerRule = createRule<Options, MessageIds>({
     let configPath: string;
     let loadedConfig: PolicyFile | undefined;
     try {
-      if (option.policyPath) {
-        const result = configGetFromPathSync(option.policyPath);
+      if (option.configPath) {
+        const result = configGetFromPathSync(option.configPath);
         loadedConfig = result.config;
         configPath = result.configPath;
       } else {
@@ -420,7 +420,7 @@ const requireLoggerRule = createRule<Options, MessageIds>({
     // BUT, we don't have the rule definition (PolicyRule) here easily to know which one maps to us, unless we look at policy.rules.
     // Wait, context.options contains ruleTargets which has { ruleId, target }.
     // We also need to know which policy rules map to this ESLint rule.
-    // The policy.json says: rule "function-logging" -> ruleId "@codepol/plugin/require-logger-enter-exit".
+    // The config says: rule "function-logging" -> ruleId "@codepol/plugin/require-logger-enter-exit".
     // So we should filter ruleTargets where rule.ruleId == loggerRuleId.
     // BUT `PolicyRuleTargetContext` doesn't have `ruleIdPlugin`.
     // We need to look it up in `policyFile`.
@@ -450,7 +450,7 @@ const requireLoggerRule = createRule<Options, MessageIds>({
     const argsFromPolicy = matchedTarget.args as { logger?: LoggerConfig } | undefined;
     const logger = option.logger ?? argsFromPolicy?.logger;
     if (!logger) {
-      console.error('Logger configuration missing. Configure @codepol/plugin with rule args.logger in policy.json or ESLint options.');
+      console.error('Logger configuration missing. Configure @codepol/plugin with rule args.logger in codepol.config.ts or ESLint options.');
       return {};
     }
     
@@ -501,7 +501,7 @@ const eslintProviderConfig: EslintProviderConfig = {
     const ruleArgs =
       ctx.ruleArgs && typeof ctx.ruleArgs === 'object' ? ctx.ruleArgs : {};
     return {
-      policyPath: ctx.configPath,  // Pass config path to rule options (kept as policyPath for ESLint schema compat)
+      configPath: ctx.configPath,  // Pass config path to rule options
       ruleTargets: ctx.ruleTargets,
       policyExclude: ctx.policy.exclude,
       ...(ruleArgs as Record<string, unknown>),

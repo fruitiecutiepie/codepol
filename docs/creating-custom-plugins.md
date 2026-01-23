@@ -20,7 +20,7 @@ flowchart TD
     D -->|No| F[Export Rule]
     E --> F
     F --> G[Add Default Export Array]
-    G --> H[Configure policy.json]
+    G --> H[Configure codepol.config.ts]
 ```
 
 ## Quick Start
@@ -92,7 +92,7 @@ export function noTodoCheck(
   const violations: PolicyViolation[] = [];
   const lines = context.source.split('\n');
 
-  // Resolved args from policy.json are available in context.ruleArgs
+  // Resolved args from codepol.config.ts are available in context.ruleArgs
   // const args = context.ruleArgs;
 
   lines.forEach((line, index) => {
@@ -180,7 +180,7 @@ export const noTodoRule: CodepolPluginRule = pluginRuleNew({
 
 - **Simple rules:** Omit entirely — defaults to `{}`
 - **Rules using eslintAdapter:** Pass policy context so the adapted rule can filter files
-- **Rules with custom arguments:** Forward `ctx.ruleArgs` from policy.json
+- **Rules with custom arguments:** Forward `ctx.ruleArgs` from config
 
 **Common options for eslintAdapter rules:**
 
@@ -196,7 +196,7 @@ export const noTodoRule: CodepolPluginRule = pluginRuleNew({
 const eslintConfig: EslintProviderConfig = {
   rules: { 'my-rule': eslintRule },
   ruleOptions: (ctx: LintProviderContext) => ({
-    policyPath: ctx.configPath,  // ESLint option key (for rule schema compat)
+    configPath: ctx.configPath,  // Pass config path to the ESLint rule
     ruleTargets: ctx.ruleTargets,
     policyExclude: ctx.policy.exclude,
     ...(ctx.ruleArgs as Record<string, unknown>),
@@ -213,8 +213,8 @@ const eslintConfig: EslintProviderConfig = {
 };
 ```
 
-::: tip Severity in policy.json
-Severity is controlled by users in `policy.json`, not by plugins. This allows teams to customize enforcement per rule. See [Configuring Severity](#configuring-severity).
+::: tip Severity in config
+Severity is controlled by users in `codepol.config.ts`, not by plugins. This allows teams to customize enforcement per rule. See [Configuring Severity](#configuring-severity).
 :::
 
 ### 5. Create the Entry Point
@@ -228,32 +228,35 @@ export { noTodoRule } from './rules/noTodoRule';
 export default [noTodoRule];
 ```
 
-### 6. Configure policy.json
+### 6. Configure codepol.config.ts
 
-Create `policy.json` in your project root. This file declares which plugins to load and how rules apply to your codebase.
+Create `codepol.config.ts` in your project root. This file declares which plugins to load and how rules apply to your codebase.
 
 For the complete schema reference, see [Policy Schema Reference](./policy-schema.md).
 
 **Minimal example:**
 
-```json
-{
-  "$schema": "https://raw.githubusercontent.com/fruitiecutiepie/codepol/master/policy.schema.json",
-  "plugins": ["./path/to/your-plugin"],
-  "rules": [
+```typescript
+// codepol.config.ts
+import { defineConfig } from '@codepol/core';
+
+export default defineConfig({
+  plugins: ['./path/to/your-plugin'],
+  targets: {
+    typescript: {
+      language: 'typescript',
+      files: ['src/**/*.ts'],
+    },
+  },
+  rules: [
     {
-      "ruleId": "your-plugin/no-todo-comments",
-      "description": "Disallow TODO comments",
-      "severity": "warn",
-      "targets": [
-        {
-          "language": "typescript",
-          "files": ["src/**/*.ts"]
-        }
-      ]
-    }
-  ]
-}
+      ruleId: 'your-plugin/no-todo-comments',
+      description: 'Disallow TODO comments',
+      severity: 'warn',
+      targets: ['typescript'],
+    },
+  ],
+});
 ```
 
 #### Configuring Severity
@@ -267,7 +270,7 @@ The `severity` field controls how violations are reported:
 | `'off'` | Rule is disabled |
 
 ::: tip Manual ESLint Configuration
-Users can also configure rules directly in their eslint.config.js instead of using policy.json:
+Users can also configure rules directly in their eslint.config.js instead of using codepol.config.ts:
 
 ```javascript
 rules: {
@@ -275,7 +278,7 @@ rules: {
 }
 ```
 
-This works when running ESLint directly. However, when using `codepol check`, severity from policy.json takes precedence via ESLint's `overrideConfig`.
+This works when running ESLint directly. However, when using `codepol check`, severity from codepol.config.ts takes precedence via ESLint's `overrideConfig`.
 :::
 
 #### Filtering Providers
@@ -304,22 +307,28 @@ Codepol automatically resolves the `ruleId` by combining the module name and the
 ::: code-group
 
 ```bash [pnpm]
-pnpm codepol --policy ./policy.json
+pnpm codepol
 ```
 
 ```bash [npm]
-npx codepol --policy ./policy.json
+npx codepol
 ```
 
 ```bash [yarn]
-yarn codepol --policy ./policy.json
+yarn codepol
 ```
 
 ```bash [bun]
-bunx codepol --policy ./policy.json
+bunx codepol
 ```
 
 :::
+
+The CLI auto-discovers `codepol.config.ts` from your project root. You can also specify a custom config path:
+
+```bash
+npx codepol --config ./config/codepol.config.ts
+```
 
 ## Exporting Your Plugin
 
@@ -481,7 +490,7 @@ To create an adapter for another platform, implement the `TreeCheckLintAdapter` 
 
 ### Accessing Rule Arguments
 
-Rule-specific arguments from `policy.json` are passed via `context.ruleArgs`:
+Rule-specific arguments from `codepol.config.ts` are passed via `context.ruleArgs`:
 
 ```typescript
 function myCheck(rule: PolicyRule, context: PolicyCheckContext): PolicyViolation[] {
@@ -567,7 +576,7 @@ export default [myRule];
 Fix providers run **before** linting, so the linted output reflects the fixed state. To trigger fixes:
 
 ```bash
-codepol --policy ./policy.json --fix
+codepol --fix
 ```
 
 ::: tip

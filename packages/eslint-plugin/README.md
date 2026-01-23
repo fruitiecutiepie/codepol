@@ -37,7 +37,7 @@ export default [
 ];
 ```
 
-### With Custom Policy Path
+### With Custom Config Path
 
 ```javascript
 import { eslintPluginCreate } from '@codepol/eslint-plugin';
@@ -50,7 +50,7 @@ export default [
     },
     rules: {
       'codepol/require-logger-enter-exit': ['error', {
-        policyPath: './config/policy.json',
+        configPath: './config/codepol.config.ts',
       }],
     },
   },
@@ -127,9 +127,9 @@ The auto-fix will:
 
 ```typescript
 type RuleOptions = {
-  /** Path to the policy.json file (default: './policy.json') */
-  policyPath?: string;
-  /** Logger configuration (default to policy.json args if not provided) */
+  /** Path to config file (auto-discovered if not specified) */
+  configPath?: string;
+  /** Logger configuration (defaults to config args if not provided) */
   logger?: {
     identifier: string;
     enterMethod: string;
@@ -142,58 +142,50 @@ type RuleOptions = {
 };
 ```
 
-The rule automatically reads logger configuration from your `policy.json` rule args. You only need to specify `logger` in ESLint options if you want to override the policy configuration.
+The rule automatically reads logger configuration from your `codepol.config.ts` rule args. You only need to specify `logger` in ESLint options if you want to override the config.
 
-## Policy Integration
+## Config Integration
 
-The rule reads your `policy.json` to determine:
+The rule reads your `codepol.config.ts` to determine:
 
 - Which files to check (via `files` patterns)
 - Which files to exclude (via `exclude` patterns)
 - Logger configuration (identifier, methods, import) via rule args
 
-Example `policy.json`:
+Example `codepol.config.ts`:
 
-```json
-{
-  "rules": [
+```typescript
+import { defineConfig } from '@codepol/core';
+
+export default defineConfig({
+  plugins: ['@codepol/plugin'],
+  targets: {
+    typescript: {
+      language: 'typescript',
+      files: ['src/**/*.ts'],
+      exclude: ['**/*.spec.ts'],
+    },
+  },
+  rules: [
     {
-      "id": "function-logging",
-      "semantics": {
-        "description": "Ensure functions have logger instrumentation",
-        "type": "logger"
+      id: 'function-logging',
+      ruleId: '@codepol/plugin/require-logger-enter-exit',
+      description: 'Ensure functions have logger instrumentation',
+      args: {
+        logger: {
+          identifier: 'logger',
+          enterMethod: 'enter',
+          exitMethod: 'exit',
+          import: {
+            module: '@org/logger',
+            named: 'logger',
+          },
+        },
       },
-      "targets": [
-        {
-          "language": "typescript",
-          "files": ["src/**/*.ts"],
-          "exclude": ["**/*.spec.ts"]
-        }
-      ]
-    }
+      targets: ['typescript'],
+    },
   ],
-  "plugins": [
-    {
-      "module": "@codepol/plugin",
-      "rules": [
-        {
-          "id": "require-logger-enter-exit",
-          "args": {
-            "logger": {
-              "identifier": "logger",
-              "enterMethod": "enter",
-              "exitMethod": "exit",
-              "import": {
-                "module": "@org/logger",
-                "named": "logger"
-              }
-            }
-          }
-        }
-      ]
-    }
-  ]
-}
+});
 ```
 
 ## License

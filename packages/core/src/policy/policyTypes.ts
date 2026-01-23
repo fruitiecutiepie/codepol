@@ -102,11 +102,9 @@ export type PolicyRule = {
 
 /**
  * The complete policy file structure.
- * This is the schema for policy.json files.
+ * This is the schema for codepol.config.ts files.
  */
 export type PolicyFile = {
-  /** Optional JSON schema reference */
-  $schema?: string;
   /** Named target definitions that rules reference by name */
   targets: PolicyTargetMap;
   /** Array of policy rules to enforce */

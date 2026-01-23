@@ -38,7 +38,7 @@ export { policyCacheClear };
 type AdaptedRuleOptions = [
   {
     /** Path to the config file (auto-discovered if not specified) */
-    policyPath?: string;
+    configPath?: string;
     /** Resolved rule targets passed from the CLI */
     ruleTargets?: PolicyRuleTargetContext[];
     /** Global exclude patterns from the policy */
@@ -201,7 +201,7 @@ function createAdaptedRule(
         {
           type: 'object',
           properties: {
-            policyPath: {
+            configPath: {
               type: 'string',
               description: 'Path to the config file (auto-discovered if not specified)',
             },
@@ -237,8 +237,8 @@ function createAdaptedRule(
       let policy: PolicyFile;
       let configPath: string;
       try {
-        if (ruleOptions.policyPath) {
-          const result = configGetFromPathSync(ruleOptions.policyPath);
+        if (ruleOptions.configPath) {
+          const result = configGetFromPathSync(ruleOptions.configPath);
           policy = result.config;
           configPath = result.configPath;
         } else {
@@ -262,7 +262,7 @@ function createAdaptedRule(
 
       // Get args from matched target (policy rule args)
       // Fall back to extra options for backward compatibility
-      const { policyPath: _p, ruleTargets: _rt, policyExclude: _pe, ...extraArgs } = ruleOptions;
+      const { configPath: _p, ruleTargets: _rt, policyExclude: _pe, ...extraArgs } = ruleOptions;
       const ruleArgs = matchedTarget.args ?? extraArgs;
 
       return {

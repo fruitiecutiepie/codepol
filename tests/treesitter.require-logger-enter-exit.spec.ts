@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
-import basePolicy from '../policy.json';
+import baseConfig from '../codepol.config';
 import type { PolicyFile, PolicyRule } from '@codepol/core';
 import { langAdd, parserInit, policyViolationsGetFromDir } from '@codepol/core';
 
@@ -13,7 +13,7 @@ describe('tree-sitter policy check', () => {
 
   it('finds missing logger instrumentation while ignoring already instrumented files', async () => {
     const policy: PolicyFile = {
-      ...basePolicy,
+      ...baseConfig,
       plugins: [
         { module: '@codepol/plugin' },
       ],
@@ -24,7 +24,7 @@ describe('tree-sitter policy check', () => {
           files: ['tests/fixtures/ts/**/*.ts'],
         },
       },
-      rules: basePolicy.rules.map((rule): PolicyRule => ({
+      rules: baseConfig.rules.map((rule): PolicyRule => ({
         ...rule,
         targets: ['test-fixtures'],
       })),

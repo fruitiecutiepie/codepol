@@ -7,19 +7,26 @@ import type { PolicyFile, PolicyRule, PolicyRuleTarget, RuleMatch } from './poli
 const policyCacheStore = new Map<string, PolicyFile>();
 
 /**
- * Loads and parses a policy file from the filesystem.
+ * Loads and parses a JSON policy file from the filesystem.
  * Results are cached by absolute path for performance.
  *
- * @param policyPath - Path to the policy.json file (absolute or relative)
+ * @deprecated Use `configGet()` or `configGetFromPath()` instead, which support
+ * TypeScript config files (codepol.config.ts). This function is kept for
+ * backward compatibility with JSON config files.
+ *
+ * @param policyPath - Path to the JSON config file (absolute or relative)
  * @returns The parsed PolicyFile object
  * @throws If the file cannot be read or parsed
  *
  * @example
  * ```typescript
- * import { policyFileGet } from '@codepol/core';
+ * // Prefer configGet() for new code:
+ * import { configGet } from '@codepol/core';
+ * const { config } = await configGet();
  *
- * const policy = policyFileGet('./policy.json');
- * console.log(policy.rules.length);
+ * // Legacy JSON support:
+ * import { policyFileGet } from '@codepol/core';
+ * const policy = policyFileGet('./legacy-config.json');
  * ```
  */
 export function policyFileGet(policyPath: string): PolicyFile {
@@ -143,16 +150,16 @@ export function ruleTargetMatchesLanguage(target: PolicyRuleTarget, filePath: st
  * Collects all files matching each policy rule.
  * Uses fast-glob for efficient file system traversal.
  *
- * @param policy - The loaded policy file
+ * @param policy - The loaded config/policy object
  * @param cwd - Working directory to resolve patterns from
  * @returns Array of RuleMatch objects mapping rules to their matched files
  *
  * @example
  * ```typescript
- * import { policyFileGet, ruleMatchesGet } from '@codepol/core';
+ * import { configGet, ruleMatchesGet } from '@codepol/core';
  *
- * const policy = policyFileGet('./policy.json');
- * const matches = await ruleMatchesGet(policy, process.cwd());
+ * const { config } = await configGet();
+ * const matches = await ruleMatchesGet(config, process.cwd());
  *
  * for (const match of matches) {
  *   console.log(`Rule ${match.rule.id}: ${match.files.length} files`);

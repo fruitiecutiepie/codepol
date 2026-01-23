@@ -1,26 +1,31 @@
-# Policy Schema Reference
+# Configuration Reference
 
-Complete reference for the `policy.json` configuration file.
+Complete reference for the `codepol.config.ts` configuration file.
 
-## Schema
+## Overview
 
-You can enable IDE autocompletion by adding the `$schema` property:
+Codepol uses TypeScript configuration files for type-safe policy definitions. The `defineConfig()` helper provides autocomplete and compile-time validation.
 
-```json
-{
-  "$schema": "https://raw.githubusercontent.com/fruitiecutiepie/codepol/master/policy.schema.json"
-}
+```typescript
+import { defineConfig } from '@codepol/core';
+
+export default defineConfig({
+  plugins: ['@codepol/plugin'],
+  targets: { /* ... */ },
+  rules: [ /* ... */ ],
+  exclude: ['dist/**'],
+});
 ```
 
 ## Top-Level Properties
 
 | Property | Type | Required | Description |
 | -------- | ---- | -------- | ----------- |
-| `$schema` | string | No | JSON schema URL for IDE support |
 | `targets` | PolicyTargetMap | Yes | Named target definitions that rules reference |
 | `rules` | PolicyRule[] | Yes | Array of enforcement rules |
 | `exclude` | string[] | No | Global file patterns to exclude |
 | `plugins` | PolicyPluginDeclaration[] | No | Plugins available to policy rules |
+| `eslintConfigPath` | string | No | Path to ESLint config file (auto-detected if not specified) |
 
 ## Targets
 
@@ -30,20 +35,21 @@ Targets define which files to check. They are defined at the top level and refer
 
 Define targets using `targets` (an object mapping names to target definitions):
 
-```json
-{
-  "targets": {
-    "typescript-src": {
-      "language": "typescript",
-      "files": ["src/**/*.ts", "src/**/*.tsx"],
-      "exclude": ["**/*.spec.ts", "**/*.test.ts"]
+```typescript
+export default defineConfig({
+  targets: {
+    'typescript-src': {
+      language: 'typescript',
+      files: ['src/**/*.ts', 'src/**/*.tsx'],
+      exclude: ['**/*.spec.ts', '**/*.test.ts'],
     },
-    "api-handlers": {
-      "language": "typescript",
-      "files": ["src/api/**/*.ts"]
-    }
-  }
-}
+    'api-handlers': {
+      language: 'typescript',
+      files: ['src/api/**/*.ts'],
+    },
+  },
+  rules: [],
+});
 ```
 
 ### Target Properties
@@ -64,20 +70,20 @@ Define targets using `targets` (an object mapping names to target definitions):
 
 Rules define what to check and reference which targets to apply to.
 
-```json
+```typescript
 {
-  "id": "function-logging",
-  "ruleId": "@codepol/plugin/require-logger-enter-exit",
-  "description": "Ensure all functions have logger instrumentation",
-  "args": {
-    "logger": {
-      "identifier": "logger",
-      "enterMethod": "enter",
-      "exitMethod": "exit",
-      "import": { "module": "@org/logger", "named": "logger" }
-    }
+  id: 'function-logging',
+  ruleId: '@codepol/plugin/require-logger-enter-exit',
+  description: 'Ensure all functions have logger instrumentation',
+  args: {
+    logger: {
+      identifier: 'logger',
+      enterMethod: 'enter',
+      exitMethod: 'exit',
+      import: { module: '@org/logger', named: 'logger' },
+    },
   },
-  "targets": ["typescript-src"]
+  targets: ['typescript-src'],
 }
 ```
 
@@ -88,6 +94,8 @@ Rules define what to check and reference which targets to apply to.
 | `id` | string | No | Unique identifier for this rule (defaults to `ruleId`) |
 | `ruleId` | string | Yes | The plugin rule identifier (namespaced, e.g. `@org/plugin/rule-name`) |
 | `description` | string | No | Human-readable description |
+| `severity` | 'error' \| 'warn' \| 'off' | No | Lint severity level (default: 'error') |
+| `providers` | string[] | No | Providers to apply this rule to (default: all) |
 | `args` | object | No | Rule-specific arguments passed to the plugin |
 | `targets` | string[] | Yes | Array of target names referencing entries in top-level `targets` |
 
@@ -95,19 +103,19 @@ Rules define what to check and reference which targets to apply to.
 
 A rule can reference multiple targets:
 
-```json
-{
-  "targets": {
-    "frontend": { "language": "typescript", "files": ["src/frontend/**/*.ts"] },
-    "backend": { "language": "typescript", "files": ["src/backend/**/*.ts"] }
+```typescript
+export default defineConfig({
+  targets: {
+    frontend: { language: 'typescript', files: ['src/frontend/**/*.ts'] },
+    backend: { language: 'typescript', files: ['src/backend/**/*.ts'] },
   },
-  "rules": [
+  rules: [
     {
-      "ruleId": "require-logger-enter-exit",
-      "targets": ["frontend", "backend"]
-    }
-  ]
-}
+      ruleId: 'require-logger-enter-exit',
+      targets: ['frontend', 'backend'],
+    },
+  ],
+});
 ```
 
 ## LoggerConfig
@@ -115,15 +123,17 @@ A rule can reference multiple targets:
 Configures the logger instrumentation pattern. Provide this under
 `rules[].args.logger` for the logger rule.
 
-```json
+```typescript
 {
-  "identifier": "logger",
-  "enterMethod": "enter",
-  "exitMethod": "exit",
-  "import": {
-    "module": "@org/logger",
-    "named": "logger"
-  }
+  logger: {
+    identifier: 'logger',
+    enterMethod: 'enter',
+    exitMethod: 'exit',
+    import: {
+      module: '@org/logger',
+      named: 'logger',
+    },
+  },
 }
 ```
 
@@ -149,21 +159,23 @@ Declares a plugin module that provides rule capabilities. Accepts either a strin
 
 ### String Format (Recommended)
 
-```json
-{
-  "plugins": ["@codepol/plugin", "./plugins/custom-plugin.js"]
-}
+```typescript
+export default defineConfig({
+  plugins: ['@codepol/plugin', './plugins/custom-plugin.js'],
+  // ...
+});
 ```
 
 ### Object Format
 
-```json
-{
-  "plugins": [
-    { "module": "@codepol/plugin" },
-    { "module": "./plugins/custom-plugin.js" }
-  ]
-}
+```typescript
+export default defineConfig({
+  plugins: [
+    { module: '@codepol/plugin' },
+    { module: './plugins/custom-plugin.js' },
+  ],
+  // ...
+});
 ```
 
 ### PolicyPluginDeclaration Type
@@ -179,21 +191,21 @@ Codepol uses [fast-glob](https://github.com/mrmlnc/fast-glob) for file matching.
 
 ### Examples
 
-```json
+```typescript
 {
-  "files": [
-    "src/**/*.ts",           // All .ts files in src
-    "src/**/*.tsx",          // All .tsx files in src
-    "lib/**/*.ts",           // All .ts files in lib
-    "!**/*.d.ts"             // Exclude declaration files
+  files: [
+    'src/**/*.ts',           // All .ts files in src
+    'src/**/*.tsx',          // All .tsx files in src
+    'lib/**/*.ts',           // All .ts files in lib
+    '!**/*.d.ts',            // Exclude declaration files
   ],
-  "exclude": [
-    "**/*.spec.ts",          // Exclude test files
-    "**/*.test.ts",          // Exclude test files
-    "**/__mocks__/**",       // Exclude mock directories
-    "**/__tests__/**",       // Exclude test directories
-    "**/fixtures/**"         // Exclude fixture directories
-  ]
+  exclude: [
+    '**/*.spec.ts',          // Exclude test files
+    '**/*.test.ts',          // Exclude test files
+    '**/__mocks__/**',       // Exclude mock directories
+    '**/__tests__/**',       // Exclude test directories
+    '**/fixtures/**',        // Exclude fixture directories
+  ],
 }
 ```
 
@@ -209,172 +221,184 @@ Codepol uses [fast-glob](https://github.com/mrmlnc/fast-glob) for file matching.
 
 ## Complete Example
 
-```json
-{
-  "$schema": "https://raw.githubusercontent.com/fruitiecutiepie/codepol/master/policy.schema.json",
-  "plugins": ["@codepol/plugin"],
-  "targets": {
-    "typescript-src": {
-      "language": "typescript",
-      "files": ["src/**/*.ts", "src/**/*.tsx"],
-      "exclude": [
-        "**/*.spec.ts",
-        "**/*.test.ts",
-        "**/*.d.ts",
-        "**/__mocks__/**",
-        "**/__tests__/**"
-      ]
+```typescript
+import { defineConfig } from '@codepol/core';
+
+export default defineConfig({
+  plugins: ['@codepol/plugin'],
+  targets: {
+    'typescript-src': {
+      language: 'typescript',
+      files: ['src/**/*.ts', 'src/**/*.tsx'],
+      exclude: [
+        '**/*.spec.ts',
+        '**/*.test.ts',
+        '**/*.d.ts',
+        '**/__mocks__/**',
+        '**/__tests__/**',
+      ],
     },
-    "api-handlers": {
-      "language": "typescript",
-      "files": ["src/api/**/*.ts"]
-    }
+    'api-handlers': {
+      language: 'typescript',
+      files: ['src/api/**/*.ts'],
+    },
   },
-  "rules": [
+  rules: [
     {
-      "id": "function-logging",
-      "ruleId": "@codepol/plugin/require-logger-enter-exit",
-      "description": "Ensure all exported functions have logger instrumentation",
-      "args": {
-        "logger": {
-          "identifier": "logger",
-          "enterMethod": "enter",
-          "exitMethod": "exit",
-          "import": {
-            "module": "@myorg/observability",
-            "named": "logger"
-          }
-        }
+      id: 'function-logging',
+      ruleId: '@codepol/plugin/require-logger-enter-exit',
+      description: 'Ensure all exported functions have logger instrumentation',
+      args: {
+        logger: {
+          identifier: 'logger',
+          enterMethod: 'enter',
+          exitMethod: 'exit',
+          import: {
+            module: '@myorg/observability',
+            named: 'logger',
+          },
+        },
       },
-      "targets": ["typescript-src"]
+      targets: ['typescript-src'],
     },
     {
-      "id": "api-logging",
-      "ruleId": "@codepol/plugin/require-logger-enter-exit",
-      "description": "Ensure API handlers have logging",
-      "args": {
-        "logger": {
-          "identifier": "apiLogger",
-          "enterMethod": "enter",
-          "exitMethod": "exit",
-          "import": {
-            "module": "@myorg/observability",
-            "named": "apiLogger"
-          }
-        }
+      id: 'api-logging',
+      ruleId: '@codepol/plugin/require-logger-enter-exit',
+      description: 'Ensure API handlers have logging',
+      args: {
+        logger: {
+          identifier: 'apiLogger',
+          enterMethod: 'enter',
+          exitMethod: 'exit',
+          import: {
+            module: '@myorg/observability',
+            named: 'apiLogger',
+          },
+        },
       },
-      "targets": ["api-handlers"]
-    }
+      targets: ['api-handlers'],
+    },
   ],
-  "exclude": [
-    "dist/**",
-    "node_modules/**",
-    "**/*.config.ts",
-    "**/*.config.js"
-  ]
-}
+  exclude: [
+    'dist/**',
+    'node_modules/**',
+    '**/*.config.ts',
+    '**/*.config.js',
+  ],
+});
 ```
 
 ## Custom Logger Examples
 
 ### Winston
 
-```json
-{
-  "plugins": ["@codepol/plugin"],
-  "targets": {
-    "src": { "language": "typescript", "files": ["src/**/*.ts"] }
+```typescript
+import { defineConfig } from '@codepol/core';
+
+export default defineConfig({
+  plugins: ['@codepol/plugin'],
+  targets: {
+    src: { language: 'typescript', files: ['src/**/*.ts'] },
   },
-  "rules": [
+  rules: [
     {
-      "ruleId": "@codepol/plugin/require-logger-enter-exit",
-      "args": {
-        "logger": {
-          "identifier": "log",
-          "enterMethod": "info",
-          "exitMethod": "info",
-          "import": { "module": "./logger", "named": "log" }
-        }
+      ruleId: '@codepol/plugin/require-logger-enter-exit',
+      args: {
+        logger: {
+          identifier: 'log',
+          enterMethod: 'info',
+          exitMethod: 'info',
+          import: { module: './logger', named: 'log' },
+        },
       },
-      "targets": ["src"]
-    }
-  ]
-}
+      targets: ['src'],
+    },
+  ],
+});
 ```
 
 ### Pino
 
-```json
-{
-  "plugins": ["@codepol/plugin"],
-  "targets": {
-    "src": { "language": "typescript", "files": ["src/**/*.ts"] }
+```typescript
+import { defineConfig } from '@codepol/core';
+
+export default defineConfig({
+  plugins: ['@codepol/plugin'],
+  targets: {
+    src: { language: 'typescript', files: ['src/**/*.ts'] },
   },
-  "rules": [
+  rules: [
     {
-      "ruleId": "@codepol/plugin/require-logger-enter-exit",
-      "args": {
-        "logger": {
-          "identifier": "pino",
-          "enterMethod": "trace",
-          "exitMethod": "trace",
-          "import": { "module": "./pino-logger", "named": "pino" }
-        }
+      ruleId: '@codepol/plugin/require-logger-enter-exit',
+      args: {
+        logger: {
+          identifier: 'pino',
+          enterMethod: 'trace',
+          exitMethod: 'trace',
+          import: { module: './pino-logger', named: 'pino' },
+        },
       },
-      "targets": ["src"]
-    }
-  ]
-}
+      targets: ['src'],
+    },
+  ],
+});
 ```
 
 ### OpenTelemetry Tracing
 
-```json
-{
-  "plugins": ["@codepol/plugin"],
-  "targets": {
-    "src": { "language": "typescript", "files": ["src/**/*.ts"] }
+```typescript
+import { defineConfig } from '@codepol/core';
+
+export default defineConfig({
+  plugins: ['@codepol/plugin'],
+  targets: {
+    src: { language: 'typescript', files: ['src/**/*.ts'] },
   },
-  "rules": [
+  rules: [
     {
-      "ruleId": "@codepol/plugin/require-logger-enter-exit",
-      "args": {
-        "logger": {
-          "identifier": "tracer",
-          "enterMethod": "startSpan",
-          "exitMethod": "endSpan",
-          "import": { "module": "@opentelemetry/api", "named": "tracer" }
-        }
+      ruleId: '@codepol/plugin/require-logger-enter-exit',
+      args: {
+        logger: {
+          identifier: 'tracer',
+          enterMethod: 'startSpan',
+          exitMethod: 'endSpan',
+          import: { module: '@opentelemetry/api', named: 'tracer' },
+        },
       },
-      "targets": ["src"]
-    }
-  ]
-}
+      targets: ['src'],
+    },
+  ],
+});
 ```
 
 ## Validation
 
-The policy file is validated against the JSON schema. Common errors:
+TypeScript provides compile-time validation through the `defineConfig()` helper.
 
-### Missing Required Fields
+### Common Errors
+
+#### Missing Required Fields
+
+TypeScript will report errors for missing required properties:
 
 ```text
-Error: policy.json validation failed
-- targets: is required
-- rules: is required
+Property 'targets' is missing in type '{ rules: never[]; }'
 ```
 
-### Invalid Target Reference
+#### Invalid Target Reference
+
+Runtime error when a rule references a non-existent target:
 
 ```text
 Error: Rule "function-logging" references target "unknown-target" which is not defined in policy.targets
 ```
 
-### Empty Targets Array
+#### Empty Targets Array
+
+TypeScript will catch this at compile time, and runtime validation will report:
 
 ```text
-Error: policy.json validation failed
-- rules[0].targets: must have at least 1 item
+Error: rules[0].targets: must have at least 1 item
 ```
 
 ## TypeScript Types
@@ -383,6 +407,7 @@ The types are available from `@codepol/core`:
 
 ```typescript
 import type {
+  CodepolConfig,
   PolicyFile,
   PolicyRule,
   PolicyRuleTarget,
@@ -393,7 +418,10 @@ import type {
   LoggerImportConfig,
 } from '@codepol/core';
 
-const policy: PolicyFile = {
+import { defineConfig } from '@codepol/core';
+
+// Using defineConfig for type-safe configuration
+export default defineConfig({
   plugins: ['@codepol/plugin'],
   targets: {
     'typescript-src': { language: 'typescript', files: ['src/**/*.ts'] },
@@ -412,5 +440,5 @@ const policy: PolicyFile = {
       targets: ['typescript-src'],
     },
   ],
-};
+});
 ```

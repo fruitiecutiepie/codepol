@@ -7,22 +7,22 @@ Codepol provides a comprehensive enforcement pipeline that ensures functions are
 ## Architecture
 
 ```text
-┌──────────────────────────────────────┐
-│          Consumer Codebase           │
-│  ┌─────────────┐  ┌─────────────┐    │
-│  │ policy.json │  │ src/**/*.ts │    │
-│  └──────┬──────┘  └─────────────┘    │
-└─────────┼───────────────────────────-┘
-          │
-          ▼
+┌───────────────────────────────────────────┐
+│            Consumer Codebase              │
+│  ┌──────────────────┐  ┌─────────────┐    │
+│  │ codepol.config.ts│  │ src/**/*.ts │    │
+│  └────────┬─────────┘  └─────────────┘    │
+└───────────┼───────────────────────────────┘
+            │
+            ▼
 ┌────────────────────────────────────────────┐
 │               @codepol/core                │
-│  • Load and parse policy.json              │
+│  • Load and parse codepol.config.ts        │
 │  • Tree-sitter structural analysis         │
 │  • Violation detection and formatting      │
 └─────────────────────┬──────────────────────┘
                       │
-          ┌─────────-─┼──────────┐
+          ┌───────────┼──────────┐
           ▼           ▼          ▼
     ┌──────────┐ ┌──────────┐ ┌──────────┐
     │ ESLint   │ │ esbuild  │ │   CLI    │
@@ -52,53 +52,43 @@ pnpm add -D @codepol/cli
 pnpm add -D @codepol/core @codepol/eslint-plugin @codepol/plugin
 ```
 
-### Create a Policy File
+### Create a Config File
 
-Create `policy.json` in your project root:
+Create `codepol.config.ts` in your project root:
 
-```json
-{
-  "$schema": "https://raw.githubusercontent.com/fruitiecutiepie/codepol/master/policy.schema.json",
-  "plugins": [
+```typescript
+import { defineConfig } from '@codepol/core';
+
+export default defineConfig({
+  plugins: ['@codepol/plugin'],
+  targets: {
+    'typescript-src': {
+      language: 'typescript',
+      files: ['src/**/*.ts', 'src/**/*.tsx'],
+      exclude: ['**/*.spec.ts', '**/*.test.ts'],
+    },
+  },
+  rules: [
     {
-      "module": "@codepol/plugin",
-      "rules": [
-        {
-          "id": "require-logger-enter-exit",
-          "enabled": true,
-          "args": {
-            "policyPath": "./policy.json",
-            "logger": {
-              "identifier": "logger",
-              "enterMethod": "enter",
-              "exitMethod": "exit",
-              "import": {
-                "module": "@your-org/logger",
-                "named": "logger"
-              }
-            }
-          }
-        }
-      ]
-    }
-  ],
-  "rules": [
-    {
-      "id": "function-logging",
-      "semantics": {
-        "description": "Ensure all functions have logger instrumentation"
+      id: 'function-logging',
+      ruleId: '@codepol/plugin/require-logger-enter-exit',
+      description: 'Ensure all functions have logger instrumentation',
+      args: {
+        logger: {
+          identifier: 'logger',
+          enterMethod: 'enter',
+          exitMethod: 'exit',
+          import: {
+            module: '@your-org/logger',
+            named: 'logger',
+          },
+        },
       },
-      "targets": [
-        {
-          "language": "typescript",
-          "files": ["src/**/*.ts", "src/**/*.tsx"],
-          "exclude": ["**/*.spec.ts", "**/*.test.ts"]
-        }
-      ]
-    }
+      targets: ['typescript-src'],
+    },
   ],
-  "exclude": ["dist/**"]
-}
+  exclude: ['dist/**'],
+});
 ```
 
 ### Semantics vs. Language Targets
@@ -130,7 +120,7 @@ export default [
 
 ### Plugin Loading
 
-Codepol loads rule-level plugin capabilities from `policy.json` declarations. The CLI uses the enabled rule plugins
+Codepol loads rule-level plugin capabilities from `codepol.config.ts` declarations. The CLI uses the enabled rule plugins
 to decide which ESLint rules and fix providers to run, while Tree-sitter checking continues to use the policy rules
 and their associated tree check providers.
 
@@ -174,7 +164,7 @@ The ESLint plugin can automatically transform functions to add this instrumentat
 
 - [Getting Started](./docs/getting-started.md) - Step-by-step setup guide
 - [Creating Custom Plugins](./docs/creating-custom-plugins.md) - Build custom Codepol plugins
-- [Policy Schema](./docs/policy-schema.md) - Complete policy.json reference
+- [Policy Schema](./docs/policy-schema.md) - Complete configuration reference
 - [API Reference](./docs/api-reference.md) - Programmatic usage guide
 
 ## Development

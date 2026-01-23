@@ -17,34 +17,40 @@ The rule checks for:
 
 ## Configuration
 
-This rule requires configuration in `policy.json` to specify the logger module and method names.
+This rule requires configuration in `codepol.config.ts` to specify the logger module and method names.
 
 ### Example
 
-```json
-{
-  "plugins": [
+```typescript
+// codepol.config.ts
+import { defineConfig } from '@codepol/core';
+
+export default defineConfig({
+  plugins: ['@codepol/plugin'],
+  targets: {
+    typescript: {
+      language: 'typescript',
+      files: ['src/**/*.ts'],
+    },
+  },
+  rules: [
     {
-      "module": "@codepol/plugin",
-      "rules": [
-        {
-          "id": "@codepol/plugin/require-logger-enter-exit",
-          "args": {
-            "logger": {
-              "identifier": "logger",
-              "enterMethod": "enter",
-              "exitMethod": "exit",
-              "import": {
-                "module": "@your-org/logger",
-                "named": "logger"
-              }
-            }
-          }
-        }
-      ]
-    }
-  ]
-}
+      ruleId: '@codepol/plugin/require-logger-enter-exit',
+      args: {
+        logger: {
+          identifier: 'logger',
+          enterMethod: 'enter',
+          exitMethod: 'exit',
+          import: {
+            module: '@your-org/logger',
+            named: 'logger',
+          },
+        },
+      },
+      targets: ['typescript'],
+    },
+  ],
+});
 ```
 
 ## Valid Code

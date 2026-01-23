@@ -10,7 +10,7 @@ pnpm add @codepol/core
 
 ## Features
 
-- Load and parse `policy.json` configuration files
+- Load and parse codepol config files (`codepol.config.ts`)
 - Check TypeScript files using web-tree-sitter (WASM) for structural analysis
 - No native dependencies - works across all platforms
 - Detect missing logger instrumentation patterns
@@ -56,16 +56,16 @@ langAdd({
 await parserInit();
 ```
 
-### Loading a Policy
+### Loading Config
 
 ```typescript
-import { policyFileGet, ruleMatchesGet } from '@codepol/core';
+import { configGet, ruleMatchesGet } from '@codepol/core';
 
-// Load the policy file
-const policy = policyFileGet('./policy.json');
+// Load the config file (auto-discovers codepol.config.ts)
+const { config } = await configGet();
 
 // Get files matching each rule
-const matches = await ruleMatchesGet(policy, process.cwd());
+const matches = await ruleMatchesGet(config, process.cwd());
 for (const match of matches) {
   console.log(`Rule ${match.rule.id}: ${match.files.length} files`);
 }
@@ -77,7 +77,7 @@ for (const match of matches) {
 import {
   langAdd,
   parserInit,
-  policyFileGet,
+  configGet,
   policyViolationsGetFromDir,
   policyViolationsGetOutputPretty,
 } from '@codepol/core';
@@ -86,8 +86,8 @@ langAdd({ langId: 'typescript', fileExtensions: ['.ts'] });
 langAdd({ langId: 'tsx', fileExtensions: ['.tsx'] });
 await parserInit();
 
-const policy = policyFileGet('./policy.json');
-const result = await policyViolationsGetFromDir(policy, process.cwd());
+const { config } = await configGet();
+const result = await policyViolationsGetFromDir(config, process.cwd());
 
 if ('Err' in result) {
   console.error(result.Err);
@@ -114,10 +114,11 @@ langAdd({ langId: 'typescript', fileExtensions: ['.ts'] });
 langAdd({ langId: 'tsx', fileExtensions: ['.tsx'] });
 await parserInit();
 
-const result = await policyCheck({
-  policyPath: './policy.json',
-  cwd: process.cwd(),
-});
+// Auto-discovers codepol.config.ts
+const result = await policyCheck({});
+
+// Or with explicit config path
+// const result = await policyCheck({ configPath: './config/codepol.config.ts' });
 
 if ('Err' in result) {
   console.error(result.Err);
@@ -205,7 +206,9 @@ type PolicyViolation = {
 | `langsGet()` | Get all registered languages |
 | `wasmPathGet(grammarName)` | Get path to bundled WASM file |
 | `parserInit()` | Initialize the WASM parser (must be called after registering languages) |
-| `policyFileGet(path)` | Load and parse a policy.json file |
+| `configGet(cwd?)` | Auto-discover and load codepol.config.ts |
+| `configGetFromPath(path)` | Load config from explicit path |
+| `policyFileGet(path)` | (deprecated) Load JSON config file |
 | `policyFileGetChecked(policy, filePath, cwd)` | Check if a file is covered by the policy |
 | `ruleMatchesGet(policy, cwd)` | Get files matching each rule |
 | `globPatternsGetMatchAny(patterns, path)` | Check if path matches any glob pattern |

@@ -34,11 +34,11 @@ await build({
 ### With Options
 
 ```typescript
-import { policyPlugin } from '@codepol/esbuild-plugin';
+import { esbuildPluginCreate } from '@codepol/esbuild-plugin';
 
 plugins: [
-  policyPlugin({
-    policyPath: './config/policy.json',
+  esbuildPluginCreate({
+    configPath: './config/codepol.config.ts',
     eslintConfigPath: './config/eslint.config.js',
     fix: false,
     cwd: process.cwd(),
@@ -79,10 +79,10 @@ main();
 
 ```typescript
 type PolicyPluginOptions = {
-  /** Path to the policy.json file (default: './policy.json') */
-  policyPath?: string;
+  /** Path to config file (auto-discovered if not specified) */
+  configPath?: string;
 
-  /** Path to the ESLint config file (default: './.eslintrc.cjs') */
+  /** Path to ESLint config file (uses config value or auto-detects) */
   eslintConfigPath?: string;
 
   /** Whether to apply ESLint fixes (default: false) */
@@ -96,7 +96,7 @@ type PolicyPluginOptions = {
 ## How It Works
 
 1. The plugin runs during esbuild's `onStart` phase
-2. It loads your `policy.json` configuration
+2. It loads your `codepol.config.ts` configuration (auto-discovers or uses explicit path)
 3. Collects all files matching the policy rules
 4. Runs ESLint checks with the codepol ESLint rule
 5. Runs Tree-sitter structural analysis

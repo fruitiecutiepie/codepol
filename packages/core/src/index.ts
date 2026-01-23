@@ -3,7 +3,7 @@
  * @codepol/core - Core policy loading, checking, and enforcement for codepol.
  *
  * This package provides the foundation for policy-driven code enforcement:
- * - Load and parse policy.json files
+ * - Load and parse codepol config files (codepol.config.ts)
  * - Check TypeScript files using web-tree-sitter (WASM) for structural analysis
  * - Detect missing logger instrumentation
  * - Format and report violations
@@ -12,7 +12,7 @@
  * ```typescript
  * import {
  *   parserInit,
- *   policyFileGet,
+ *   configGet,
  *   policyViolationsGetFromDir,
  *   policyViolationsGetOutputPretty
  * } from '@codepol/core';
@@ -20,8 +20,8 @@
  * // Initialize the WASM parser before checking
  * await parserInit();
  *
- * const policy = policyFileGet('./policy.json');
- * const violations = await policyViolationsGetFromDir(policy, process.cwd());
+ * const { config } = await configGet();
+ * const violations = await policyViolationsGetFromDir(config, process.cwd());
  *
  * if (violations.length > 0) {
  *   console.log(policyViolationsGetOutputPretty(violations, process.cwd()));
@@ -262,7 +262,7 @@ export async function providerRulesConfigGet(
       ruleTargets,
     }) ?? {};
 
-    // Use severity from policy.json, default to 'error'
+    // Use severity from config, default to 'error'
     const severity: LintSeverity = rule.severity ?? 'error';
     rules[configKey] = [severity, options];
   }

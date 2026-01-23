@@ -134,7 +134,7 @@ function eslintConfigGet(
       ruleId: entry.ruleId,
       ruleArgs: entry.ruleArgs,
     }) ?? {};
-    // Construct [severity, options] - severity from policy.json, defaults to 'error'
+    // Construct [severity, options] - severity from config, defaults to 'error'
     const severity = entry.severity ?? 'error';
     rules[configKey] = [severity, options];
   }

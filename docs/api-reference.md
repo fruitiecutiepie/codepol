@@ -113,7 +113,6 @@ console.log(`Rules: ${config.rules.length}`);
 3. `codepol.config.js`
 4. `codepol.config.mjs`
 5. `codepol.config.cjs`
-6. `policy.json` (backward compatibility)
 
 ---
 
@@ -172,9 +171,9 @@ type CodepolConfigOptions = {
 
 ---
 
-### policyFileGet
+### policyFileGet (deprecated)
 
-Loads and parses a policy.json file. For new code, prefer `configGet()` which supports both JSON and TypeScript configs.
+Loads and parses a JSON config file. **Deprecated:** Use `configGet()` or `configGetFromPath()` instead, which support TypeScript config files (`codepol.config.ts`).
 
 ```typescript
 function policyFileGet(policyPath: string): PolicyFile
@@ -182,25 +181,27 @@ function policyFileGet(policyPath: string): PolicyFile
 
 **Parameters:**
 
-- `policyPath`: Path to the policy.json file (absolute or relative)
+- `policyPath`: Path to the JSON config file (absolute or relative)
 
 **Returns:** Parsed PolicyFile object
 
 **Example:**
 
 ```typescript
-import { policyFileGet } from '@codepol/core';
+// Prefer configGet() for new code:
+import { configGet } from '@codepol/core';
+const { config } = await configGet();
 
-const policy = policyFileGet('./policy.json');
-console.log(policy.rules.length);
-console.log(policy.plugins?.length ?? 0);
+// Legacy JSON support:
+import { policyFileGet } from '@codepol/core';
+const policy = policyFileGet('./legacy-config.json');
 ```
 
 ---
 
 ### providerRulesConfigGet
 
-Generates lint provider rules config from policy.json. Users spread this into their lint config (e.g., eslint.config.js).
+Generates lint provider rules config from the codepol config. Users spread this into their lint config (e.g., eslint.config.js).
 
 ```typescript
 async function providerRulesConfigGet(
@@ -233,34 +234,36 @@ export default [{
 }];
 ```
 
-Severity is read from `policy.json` per rule (default: `'error'`):
+Severity is read from the config per rule (default: `'error'`):
 
-```json
-{
-  "rules": [
+```typescript
+// codepol.config.ts
+export default defineConfig({
+  rules: [
     {
-      "ruleId": "@codepol/plugin/require-logger-enter-exit",
-      "severity": "warn",
-      "targets": ["typescript"]
-    }
-  ]
-}
+      ruleId: '@codepol/plugin/require-logger-enter-exit',
+      severity: 'warn',
+      targets: ['typescript'],
+    },
+  ],
+});
 ```
 
 #### Filtering by Provider
 
 Use `providers` to control which providers a rule applies to:
 
-```json
-{
-  "rules": [
+```typescript
+// codepol.config.ts
+export default defineConfig({
+  rules: [
     {
-      "ruleId": "@codepol/plugin/require-logger-enter-exit",
-      "providers": ["tree-sitter"],
-      "targets": ["typescript"]
-    }
-  ]
-}
+      ruleId: '@codepol/plugin/require-logger-enter-exit',
+      providers: ['tree-sitter'],
+      targets: ['typescript'],
+    },
+  ],
+});
 ```
 
 If `providers` is omitted or empty, the rule applies to all providers. This is useful when you want a rule to only run during `codepol check` (tree-sitter) but not in ESLint, or vice versa.
@@ -285,7 +288,7 @@ export default [{
 This works when running **ESLint directly** (`eslint .`).
 
 ::: warning codepol check CLI Override
-When using `codepol check`, the CLI generates rules from `policy.json` and passes them via ESLint's `overrideConfig`, which has **highest precedence**. This means rules defined in `policy.json` will use severity from `policy.json`, overriding your eslint.config.js settings for those same rules.
+When using `codepol check`, the CLI generates rules from your config and passes them via ESLint's `overrideConfig`, which has **highest precedence**. This means rules defined in `codepol.config.ts` will use severity from the config, overriding your eslint.config.js settings for those same rules.
 
 If you want full control over ESLint configuration, run ESLint directly instead of using `codepol check`.
 :::
@@ -315,12 +318,12 @@ function policyRuleTargetsResolve(
 **Example:**
 
 ```typescript
-import { policyFileGet, policyRuleTargetsResolve } from '@codepol/core';
+import { configGet, policyRuleTargetsResolve } from '@codepol/core';
 
-const policy = policyFileGet('./policy.json');
+const { config } = await configGet();
 
-for (const rule of policy.rules) {
-  const targets = policyRuleTargetsResolve(rule, policy);
+for (const rule of config.rules) {
+  const targets = policyRuleTargetsResolve(rule, config);
   console.log(`Rule ${rule.id} has ${targets.length} target(s)`);
   for (const target of targets) {
     console.log(`  - ${target.language}: ${target.files.join(', ')}`);
@@ -359,10 +362,10 @@ function ruleMatchesGet(
 **Example:**
 
 ```typescript
-import { policyFileGet, ruleMatchesGet } from '@codepol/core';
+import { configGet, ruleMatchesGet } from '@codepol/core';
 
-const policy = policyFileGet('./policy.json');
-const matches = await ruleMatchesGet(policy, process.cwd());
+const { config } = await configGet();
+const matches = await ruleMatchesGet(config, process.cwd());
 
 for (const match of matches) {
   console.log(`Rule: ${match.rule.id}`);
@@ -396,11 +399,11 @@ function policyFileGetChecked(
 **Example:**
 
 ```typescript
-import { policyFileGet, policyFileGetChecked } from '@codepol/core';
+import { configGet, policyFileGetChecked } from '@codepol/core';
 
-const policy = policyFileGet('./policy.json');
+const { config } = await configGet();
 const covered = policyFileGetChecked(
-  policy,
+  config,
   '/path/to/file.ts',
   process.cwd()
 );
@@ -438,26 +441,26 @@ function policyViolationsGetForFile(
 
 ```typescript
 import {
-  policyFileGet,
+  configGet,
   policyPluginsGet,
   policyRuleTargetsResolve,
   policyViolationsGetForFile,
 } from '@codepol/core';
 
-const policy = policyFileGet('./policy.json');
-const pluginsResult = await policyPluginsGet(policy, process.cwd());
+const { config } = await configGet();
+const pluginsResult = await policyPluginsGet(config, process.cwd());
 if ('Err' in pluginsResult) {
   throw new Error(pluginsResult.Err);
 }
 
-const rule = policy.rules[0];
-const targets = policyRuleTargetsResolve(rule, policy);
+const rule = config.rules[0];
+const targets = policyRuleTargetsResolve(rule, config);
 const target = targets[0];
 const violationsResult = policyViolationsGetForFile(
   '/path/to/file.ts',
   rule,
   target,
-  policy,
+  config,
   pluginsResult.Ok,
   process.cwd()
 );
@@ -490,10 +493,10 @@ function policyViolationsGetFromDir(
 **Example:**
 
 ```typescript
-import { policyFileGet, policyViolationsGetFromDir } from '@codepol/core';
+import { configGet, policyViolationsGetFromDir } from '@codepol/core';
 
-const policy = policyFileGet('./policy.json');
-const violationsResult = await policyViolationsGetFromDir(policy, process.cwd());
+const { config } = await configGet();
+const violationsResult = await policyViolationsGetFromDir(config, process.cwd());
 
 if ('Ok' in violationsResult) {
   for (const v of violationsResult.Ok) {
@@ -782,7 +785,7 @@ async function eslintAdapterInit(
 
 ```typescript
 import { eslintAdapterInit, eslintAdapter } from '@codepol/eslint-plugin';
-import { policyFileGet, parserInit, langAdd } from '@codepol/core';
+import { configGet, parserInit, langAdd } from '@codepol/core';
 import { loggerEnterExitRule } from '@codepol/plugin';
 
 // Initialize tree-sitter languages
@@ -790,8 +793,8 @@ langAdd({ langId: 'typescript', fileExtensions: ['.ts'] });
 await parserInit();
 
 // Initialize the provider
-const policy = policyFileGet('./policy.json');
-await eslintAdapterInit(loggerEnterExitRule, policy, process.cwd());
+const { config } = await configGet();
+await eslintAdapterInit(loggerEnterExitRule, config, process.cwd());
 
 // Now the adapted rule will work without async init warnings
 const rule = eslintAdapter.adapt(loggerEnterExitRule);
@@ -832,7 +835,7 @@ import pluginRules, { loggerEnterExitRule, loggerLintProvider } from '@codepol/p
 ```
 
 Use `(lintProvider.config as EslintProviderConfig).ruleOptions?.({ policy, configPath, cwd, ruleId, ruleArgs })`
-to get the ESLint rule options. Severity is defined in the config file per rule.
+to get the ESLint rule options. Severity is defined in `codepol.config.ts` per rule.
 
 ### policyCacheClear
 
@@ -941,22 +944,27 @@ Custom policy checker script:
 // scripts/check-policy.ts
 import {
   parserInit,
-  policyFileGet,
+  configGet,
+  configGetFromPath,
   policyViolationsGetFromDir,
   policyViolationsGetOutputPretty,
   type PolicyViolation,
 } from '@codepol/core';
 
 async function main() {
-  const policyPath = process.argv[2] || './policy.json';
-  const policy = policyFileGet(policyPath);
+  const configPath = process.argv[2];
+  
+  // Load config: explicit path or auto-discover
+  const { config } = configPath
+    ? await configGetFromPath(configPath)
+    : await configGet();
 
   await parserInit();
 
-  console.log(`Checking policy: ${policy.rules.map(r => r.id).join(', ')}`);
+  console.log(`Checking policy: ${config.rules.map(r => r.id).join(', ')}`);
 
   const violationsResult = await policyViolationsGetFromDir(
-    policy,
+    config,
     process.cwd()
   );
 
@@ -996,5 +1004,9 @@ main().catch(console.error);
 Run with:
 
 ```bash
-npx ts-node scripts/check-policy.ts ./policy.json
+# Auto-discovers codepol.config.ts
+npx ts-node scripts/check-policy.ts
+
+# Or with explicit config path
+npx ts-node scripts/check-policy.ts ./config/codepol.config.ts
 ```

@@ -7,48 +7,45 @@ import { esbuildPluginCreate } from '@codepol/esbuild-plugin';
 
 describe('esbuild policy plugin', () => {
   it('fails the build when policy violations are present and succeeds after fixes', async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'policy-'));
-    const policyPath = path.join(dir, 'policy.json');
+    const dir = mkdtempSync(path.join(tmpdir(), 'codepol-'));
+    const configPath = path.join(dir, 'codepol.config.mjs');
     const loggerPath = path.join(dir, 'logger.ts');
     const entryPath = path.join(dir, 'index.ts');
     const outfile = path.join(dir, 'out.js');
 
     writeFileSync(
-      policyPath,
-      JSON.stringify(
-        {
-          plugins: [
-            { module: '@codepol/plugin' },
-          ],
-          targets: {
-            'ts-entry': {
-              language: 'typescript',
-              files: ['index.ts'],
-            },
+      configPath,
+      `export default {
+  plugins: [
+    { module: '@codepol/plugin' },
+  ],
+  targets: {
+    'ts-entry': {
+      language: 'typescript',
+      files: ['index.ts'],
+    },
+  },
+  rules: [
+    {
+      id: 'function-logging',
+      ruleId: '@codepol/plugin/require-logger-enter-exit',
+      description: 'Ensure functions include logger enter/exit',
+      args: {
+        logger: {
+          identifier: 'logger',
+          enterMethod: 'enter',
+          exitMethod: 'exit',
+          import: {
+            module: './logger',
+            named: 'logger',
           },
-          rules: [
-            {
-              id: 'function-logging',
-              ruleId: '@codepol/plugin/require-logger-enter-exit',
-              description: 'Ensure functions include logger enter/exit',
-              args: {
-                logger: {
-                  identifier: 'logger',
-                  enterMethod: 'enter',
-                  exitMethod: 'exit',
-                  import: {
-                    module: './logger',
-                    named: 'logger',
-                  },
-                },
-              },
-              targets: ['ts-entry'],
-            },
-          ],
         },
-        null,
-        2,
-      ),
+      },
+      targets: ['ts-entry'],
+    },
+  ],
+};
+`,
     );
 
     writeFileSync(
@@ -68,7 +65,7 @@ describe('esbuild policy plugin', () => {
       outfile,
       bundle: false,
       logLevel: 'silent',
-      plugins: [esbuildPluginCreate({ configPath: 'policy.json', eslintConfigPath: path.resolve('.eslintrc.cjs') })],
+      plugins: [esbuildPluginCreate({ configPath: 'codepol.config.mjs', eslintConfigPath: path.resolve('.eslintrc.cjs') })],
     }).catch(error => error);
 
     expect(failure).toBeInstanceOf(Error);
@@ -93,7 +90,7 @@ export const f = () => {
       outfile,
       bundle: false,
       logLevel: 'silent',
-      plugins: [esbuildPluginCreate({ configPath: 'policy.json', eslintConfigPath: path.resolve('.eslintrc.cjs') })],
+      plugins: [esbuildPluginCreate({ configPath: 'codepol.config.mjs', eslintConfigPath: path.resolve('.eslintrc.cjs') })],
     });
 
     expect(result.errors.length).toBe(0);
