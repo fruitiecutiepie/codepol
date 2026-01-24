@@ -68,15 +68,15 @@ your-plugin/
 ├── src/
 │   ├── index.ts              # Entry point: exports plugin rules
 │   └── rules/
-│       ├── noTodoCheck.ts    # TreeCheckProvider check logic
-│       └── noTodoRule.ts     # Rule definition + ESLint config
+│       ├── noDuplicateExportsCheck.ts    # TreeCheckProvider check logic
+│       └── noDuplicateExportsRule.ts     # Rule definition + ESLint config
 ├── package.json
 └── tsconfig.json
 ```
 
 ### 3. Write the Check Logic
 
-Create `src/rules/noTodoCheck.ts` with the pure check function:
+Create `src/rules/noDuplicateExportsCheck.ts` with the pure check function:
 
 ```typescript
 import type {
@@ -85,26 +85,34 @@ import type {
   PolicyViolation,
 } from '@codepol/core';
 
-export function noTodoCheck(
+export function noDuplicateExportsCheck(
   rule: PolicyRule,
   context: PolicyCheckContext
 ): PolicyViolation[] {
   const violations: PolicyViolation[] = [];
   const lines = context.source.split('\n');
+  const exportedNames = new Map<string, number>();
 
   // Resolved args from codepol.config.ts are available in context.ruleArgs
   // const args = context.ruleArgs;
 
+  const exportRegex = /export\s+(?:const|let|var|function|class|type|interface)\s+(\w+)/;
+
   lines.forEach((line, index) => {
-    const todoIndex = line.indexOf('TODO');
-    if (todoIndex !== -1) {
-      violations.push({
-        ruleId: rule.id || rule.ruleId,
-        filePath: context.filePath,
-        message: 'TODO comments are not allowed',
-        line: index + 1,
-        column: todoIndex + 1,
-      });
+    const match = line.match(exportRegex);
+    if (match) {
+      const name = match[1];
+      if (exportedNames.has(name)) {
+        violations.push({
+          ruleId: rule.id || rule.ruleId,
+          filePath: context.filePath,
+          message: `Duplicate export '${name}' (first exported on line ${exportedNames.get(name)})`,
+          line: index + 1,
+          column: match.index! + 1,
+        });
+      } else {
+        exportedNames.set(name, index + 1);
+      }
     }
   });
 
@@ -114,7 +122,7 @@ export function noTodoCheck(
 
 ### 4. Create the Rule Definition
 
-Create `src/rules/noTodoRule.ts` with the rule and ESLint configuration:
+Create `src/rules/noDuplicateExportsRule.ts` with the rule and ESLint configuration:
 
 ```typescript
 import type {
@@ -124,31 +132,31 @@ import type {
 } from '@codepol/core';
 import { pluginRuleNew, treeCheckProviderNew } from '@codepol/core';
 import { eslintAdapter } from '@codepol/eslint-plugin';
-import { noTodoCheck } from './noTodoCheck';
+import { noDuplicateExportsCheck } from './noDuplicateExportsCheck';
 
 // Create the TreeCheckProvider using the factory
-export const noTodoTreeCheck = treeCheckProviderNew({
+export const noDuplicateExportsTreeCheck = treeCheckProviderNew({
   languages: ['typescript', 'tsx'],
-  check: noTodoCheck,
+  check: noDuplicateExportsCheck,
 });
 
 // Rule ID must NOT contain '/' - codepol uses '/' for namespacing.
-// Your ID will be auto-prefixed: "no-todo-comments" → "@scope/plugin/no-todo-comments"
-const ruleId = 'no-todo-comments';
+// Your ID will be auto-prefixed: "no-duplicate-exports" → "@scope/plugin/no-duplicate-exports"
+const ruleId = 'no-duplicate-exports';
 
 // Create rule plugin base for the adapter
 const ruleBase = pluginRuleNew({
   id: ruleId,
-  capabilities: { treeCheckProvider: noTodoTreeCheck },
+  capabilities: { treeCheckProvider: noDuplicateExportsTreeCheck },
 });
 
 // Generate ESLint rule from TreeCheckProvider
 const eslintRule = eslintAdapter.adapt(ruleBase, {
-  ruleName: 'no-todo-comments',
+  ruleName: 'no-duplicate-exports',
 });
 
 const eslintConfig: EslintProviderConfig = {
-  rules: { 'no-todo-comments': eslintRule },
+  rules: { 'no-duplicate-exports': eslintRule },
   // severity and ruleOptions are optional
 };
 
@@ -159,10 +167,10 @@ const lintProvider: LintProvider = {
 };
 
 // Export the complete rule plugin
-export const noTodoRule: CodepolPluginRule = pluginRuleNew({
+export const noDuplicateExportsRule: CodepolPluginRule = pluginRuleNew({
   id: ruleId,
   capabilities: {
-    treeCheckProvider: noTodoTreeCheck,
+    treeCheckProvider: noDuplicateExportsTreeCheck,
     lintProviders: [lintProvider],
   },
 });
@@ -222,10 +230,10 @@ Severity is controlled by users in `codepol.config.ts`, not by plugins. This all
 Create `src/index.ts` as the clean entry point:
 
 ```typescript
-export { noTodoRule } from './rules/noTodoRule';
+export { noDuplicateExportsRule } from './rules/noDuplicateExportsRule';
 
 // Default export is required for codepol to load the plugin
-export default [noTodoRule];
+export default [noDuplicateExportsRule];
 ```
 
 ### 6. Configure codepol.config.ts
@@ -250,8 +258,8 @@ export default defineConfig({
   },
   rules: [
     {
-      ruleId: 'your-plugin/no-todo-comments',
-      description: 'Disallow TODO comments',
+      ruleId: 'your-plugin/no-duplicate-exports',
+      description: 'Disallow duplicate exports',
       severity: 'warn',
       targets: ['typescript'],
     },
@@ -300,7 +308,7 @@ The `providers` field controls which providers a rule applies to. If omitted, th
 | `['tree-sitter']` | Rule only applies to tree-sitter checks |
 | `['eslint', 'tree-sitter']` | Rule applies to both |
 
-Codepol automatically resolves the `ruleId` by combining the module name and the exported rule ID: `your-plugin/no-todo-comments`.
+Codepol automatically resolves the `ruleId` by combining the module name and the exported rule ID: `your-plugin/no-duplicate-exports`.
 
 ### 7. Test It
 
@@ -410,8 +418,8 @@ For simple rules without autofix, use the adapter to automatically convert your 
 import { eslintAdapter } from '@codepol/eslint-plugin';
 
 const eslintRule = eslintAdapter.adapt(rulePlugin, {
-  ruleName: 'no-todo-comments',
-  ruleUrl: 'https://your-docs/rules/no-todo-comments',
+  ruleName: 'no-duplicate-exports',
+  ruleUrl: 'https://your-docs/rules/no-duplicate-exports',
   severity: 'error', // or 'warning'
 });
 ```
@@ -447,7 +455,7 @@ export default [
     },
     rules: {
       'codepol/require-logger-enter-exit': 'error',
-      'codepol/no-todo-comments': 'error',
+      'codepol/no-duplicate-exports': 'error',
     },
   },
 ];

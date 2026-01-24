@@ -2,31 +2,31 @@
 
 **Policy-driven code enforcement for TypeScript projects.**
 
-Codepol provides a comprehensive enforcement pipeline that ensures functions are wrapped with configurable logger instrumentation using ESLint rules, Tree-sitter structural checks, and build-time enforcement.
+Codepol is a policy enforcement framework for TypeScript that combines ESLint rules, Tree-sitter structural checks, and build-time enforcement. Define custom rules once, enforce them everywhere.
 
 ## Architecture
 
 ```text
-┌───────────────────────────────────────────┐
-│            Consumer Codebase              │
-│  ┌──────────────────┐  ┌─────────────┐    │
-│  │ codepol.config.ts│  │ src/**/*.ts │    │
-│  └────────┬─────────┘  └─────────────┘    │
-└───────────┼───────────────────────────────┘
-            │
-            ▼
+┌────────────────────────────────────────────┐
+│             Consumer Codebase              │
+│   ┌───────────────────┐  ┌─────────────┐   │
+│   │ codepol.config.ts │  │ src/**/*.ts │   │
+│   └─────────┬─────────┘  └─────────────┘   │
+└─────────────┼──────────────────────────────┘
+              │
+              ▼
 ┌────────────────────────────────────────────┐
 │               @codepol/core                │
-│  • Load and parse codepol.config.ts        │
-│  • Tree-sitter structural analysis         │
-│  • Violation detection and formatting      │
+│   • Load and parse codepol.config.ts       │
+│   • Tree-sitter structural analysis        │
+│   • Violation detection and formatting     │
 └─────────────────────┬──────────────────────┘
                       │
-          ┌───────────┼──────────┐
-          ▼           ▼          ▼
+          ┌───────────┼───────────┐
+          ▼           ▼           ▼
     ┌──────────┐ ┌──────────┐ ┌──────────┐
-    │ ESLint   │ │ esbuild  │ │   CLI    │
-    │ Plugin   │ │ Plugin   │ │          │
+    │  ESLint  │ │ esbuild  │ │   CLI    │
+    │  Plugin  │ │  Plugin  │ │          │
     └──────────┘ └──────────┘ └──────────┘
 ```
 
@@ -91,13 +91,6 @@ export default defineConfig({
 });
 ```
 
-### Semantics vs. Language Targets
-
-Each policy rule carries a shared semantic meaning (what you want to enforce) and one or more language targets
-(which files and adapters to apply). The `semantics` block describes the rule intent and plugin type, while each
-entry in `targets` specifies the language adapter or parser plus file globs. This lets contributors add new
-languages without redefining rule meaning or rule ids.
-
 ### Configure ESLint
 
 Add to your `eslint.config.js`:
@@ -143,22 +136,35 @@ npx codepol --watch
 
 ## What It Enforces
 
-Codepol ensures all functions follow this pattern:
+Codepol enforces custom policy rules defined by plugins. For example, a `no-duplicate-exports` rule that prevents naming collisions across your codebase:
 
 ```typescript
-import { logger } from '@your-org/logger';
-
-export function myFunction(args) {
-  logger.enter();  // ← Required as first statement
-  try {
-    // ... function body ...
-  } finally {
-    logger.exit();  // ← Required in finally block
-  }
-}
+// codepol.config.ts
+export default defineConfig({
+  plugins: ['@your-org/plugin'],
+  targets: {
+    src: { language: 'typescript', files: ['src/**/*.ts'] },
+  },
+  rules: [
+    {
+      ruleId: '@your-org/plugin/no-duplicate-exports',
+      args: {
+        // Opt-in: which export kinds to check
+        include: ['function', 'class', 'type'],
+      },
+      targets: ['src'],
+    },
+  ],
+});
 ```
 
-The ESLint plugin can automatically transform functions to add this instrumentation.
+This rule uses Tree-sitter to scan all files for exported identifiers, then reports conflicts:
+
+```
+src/auth/UserService.ts:5 - Duplicate export 'UserService' (also in src/legacy/UserService.ts:12)
+```
+
+The built-in `@codepol/plugin` includes a `require-logger-enter-exit` rule, but you can create plugins for any structural pattern. See [Creating Custom Plugins](./docs/creating-custom-plugins.md).
 
 ## Documentation
 
