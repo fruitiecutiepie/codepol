@@ -42,8 +42,23 @@ const loggerConfig = {
   },
 };
 
+const ruleTargets = [
+  {
+    ruleId: '@codepol/plugin/require-logger-enter-exit',
+    description: 'Ensure functions include logger enter/exit',
+    args: { logger: loggerConfig },
+    target: {
+      language: 'typescript',
+      files: ['src/**/*.ts'],
+      exclude: ['**/*.spec.ts'],
+    },
+  },
+];
+
 const options = [
   {
+    ruleTargets,
+    policyExclude: [] as string[],
     logger: loggerConfig,
   },
 ];

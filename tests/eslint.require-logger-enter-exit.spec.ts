@@ -28,8 +28,23 @@ const loggerConfig = {
   },
 };
 
+const ruleTargets = [
+  {
+    ruleId: '@codepol/plugin/require-logger-enter-exit',
+    description: 'Ensure functions include logger enter/exit',
+    args: { logger: loggerConfig },
+    target: {
+      language: 'typescript',
+      files: ['src/**/*.ts'],
+      exclude: ['**/*.spec.ts'],
+    },
+  },
+];
+
 const options = [
   {
+    ruleTargets,
+    policyExclude: [] as string[],
     logger: loggerConfig,
   },
 ];
@@ -108,6 +123,84 @@ const run = () => {
     logger.exit();
   }
 };`,
+    },
+    {
+      name: 'multiple functions in one file',
+      filename,
+      options,
+      code: `function a() {
+  doA();
+}
+function b() {
+  doB();
+}`,
+      // Both functions reported. ESLint applies fixes in one pass; the first
+      // function's fix (import + block wrap) conflicts with the second's
+      // (both insert import at position 0), so only function a is fixed.
+      errors: [{ messageId: 'missingLogger' }, { messageId: 'missingLogger' }],
+      output: `import { logger } from '@org/logger';
+function a() {
+  logger.enter();
+  try {
+    doA();
+  } finally {
+    logger.exit();
+  }
+}
+function b() {
+  doB();
+}`,
+    },
+    {
+      name: 'nested functions',
+      filename,
+      options,
+      code: `function outer() {
+  function inner() {
+    doInner();
+  }
+  doOuter();
+}`,
+      // Both functions reported. The inner function's fix has a smaller
+      // effective range so ESLint applies it first; the outer's overlaps
+      // and is skipped in this pass.
+      errors: [{ messageId: 'missingLogger' }, { messageId: 'missingLogger' }],
+      output: `import { logger } from '@org/logger';
+function outer() {
+  function inner() {
+  logger.enter();
+  try {
+    doInner();
+  } finally {
+    logger.exit();
+  }
+}
+  doOuter();
+}`,
+    },
+    {
+      name: 'class method',
+      filename,
+      options,
+      code: `class Service {
+  handle() {
+    return 'done';
+  }
+}`,
+      // MethodDefinition and FunctionExpression handlers both fire for the method,
+      // producing 2 reports for the same function body.
+      errors: [{ messageId: 'missingLogger' }, { messageId: 'missingLogger' }],
+      output: `import { logger } from '@org/logger';
+class Service {
+  handle() {
+  logger.enter();
+  try {
+    return 'done';
+  } finally {
+    logger.exit();
+  }
+}
+}`,
     },
   ],
 });

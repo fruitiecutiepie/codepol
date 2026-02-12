@@ -381,7 +381,10 @@ const requireLoggerRule = createRule<Options, MessageIds>({
     if (context.options[0] !== undefined) {
       option = context.options[0];
     }
-    
+    // When ruleTargets and logger are both provided explicitly,
+    // config loading is optional (enables standalone / test usage).
+    const hasExplicitContext = option.ruleTargets !== undefined && option.logger !== undefined;
+
     // Config loading: explicit path > auto-discover
     // Uses sync loading since ESLint's create() must be synchronous
     let loadedConfig: PolicyFile | undefined;
@@ -394,8 +397,10 @@ const requireLoggerRule = createRule<Options, MessageIds>({
         loadedConfig = result.config;
       }
     } catch {
-      // No config found, skip checking
-      return {};
+      // No config found — only fatal if we need config to resolve targets/logger
+      if (!hasExplicitContext) {
+        return {};
+      }
     }
     
     let policyExclude: string[] = [];
@@ -406,41 +411,28 @@ const requireLoggerRule = createRule<Options, MessageIds>({
         policyExclude = option.policyExclude;
       }
     }
-    let policyFile: PolicyFile | undefined = undefined;
+    const policyFile: PolicyFile | undefined = loadedConfig;
     if (ruleTargets.length === 0) {
-      policyFile = loadedConfig;
-      policyExclude = policyFile?.exclude ?? [];
-      ruleTargets = policyRuleTargetsGet(policyFile!);
+      if (!policyFile) {
+        return {};
+      }
+      policyExclude = policyFile.exclude ?? [];
+      ruleTargets = policyRuleTargetsGet(policyFile);
     }
     
-    // We only care about rule targets that map to THIS plugin rule.
-    // In strict sense, we should filter by ruleId matching this plugin's ID (or what the policy says).
-    // But here we rely on the policy saying "for this ruleId use this plugin".
-    // For ESLint, we are inside a rule execution, so we are checking "is this file targeted by any rule that maps to ME?"
-    // However, ESLint config (eslintProviderConfig) already filters ruleTargets per rule? 
-    // No, it passes ctx.ruleTargets which contains ALL rules.
-    // We should filter targets where the rule definition points to this plugin rule.
-    // BUT, we don't have the rule definition (PolicyRule) here easily to know which one maps to us, unless we look at policy.rules.
-    // Wait, context.options contains ruleTargets which has { ruleId, target }.
-    // We also need to know which policy rules map to this ESLint rule.
-    // The config says: rule "function-logging" -> ruleId "@codepol/plugin/require-logger-enter-exit".
-    // So we should filter ruleTargets where rule.ruleId == loggerRuleId.
-    // BUT `PolicyRuleTargetContext` doesn't have `ruleIdPlugin`.
-    // We need to look it up in `policyFile`.
-    
-    if (policyFile === undefined) {
-      policyFile = loadedConfig;
-    }
-    
-    // Filter ruleTargets that are relevant to this plugin rule
-    // Support both short IDs (e.g., "require-logger-enter-exit") and
-    // namespaced IDs (e.g., "@codepol/plugin/require-logger-enter-exit")
+    // Filter ruleTargets that are relevant to this plugin rule.
+    // Two matching strategies:
+    //   1. Direct ruleId match (handles pre-resolved targets from explicit options / tests)
+    //   2. Policy lookup (handles user-defined IDs that map to this plugin via policyFile.rules)
     const relevantRuleTargets = ruleTargets.filter(rt => {
-      // Find the rule in the policy
-      const policyRule = policyFile!.rules.find(r => (r.id || r.ruleId) === rt.ruleId);
+      // Direct match: ruleId is already the plugin rule ID (short or namespaced)
+      if (rt.ruleId === loggerRuleId || rt.ruleId.endsWith(`/${loggerRuleId}`)) {
+        return true;
+      }
+      // Policy lookup: ruleId is a user-defined ID; resolve via policyFile.rules
+      const policyRule = policyFile?.rules.find(r => (r.id || r.ruleId) === rt.ruleId);
       if (!policyRule) return false;
       const policyRuleId = policyRule.ruleId;
-      // Match if exact or if namespaced version ends with our short ID
       return policyRuleId === loggerRuleId || policyRuleId.endsWith(`/${loggerRuleId}`);
     });
 

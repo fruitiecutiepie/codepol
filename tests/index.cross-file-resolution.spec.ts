@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeAll } from 'vitest';
+import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import {
   langAdd,
   parserInit,
@@ -13,199 +13,91 @@ describe('cross-file resolution', () => {
   let testDir: string;
   
   beforeAll(async () => {
-    // Register languages BEFORE initializing
     langAdd({ langId: 'typescript', fileExtensions: ['.ts'] });
     langAdd({ langId: 'tsx', fileExtensions: ['.tsx'] });
-    
-    // Initialize the parser
     await parserInit();
-    
-    // Create a temp directory for test files
     testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-test-'));
   });
 
+  afterAll(() => {
+    fs.rmSync(testDir, { recursive: true, force: true });
+  });
+
+  // ==========================================================================
+  // Existing: Named imports, default imports, external references, capabilities
+  // ==========================================================================
+
   it('should resolve named import references to exported symbols', () => {
-    // Create file A: exports foo
     const fileA = path.join(testDir, 'moduleA.ts');
-    const fileAContent = `
+    fs.writeFileSync(fileA, `
 export function foo() {
   return 'hello';
 }
 
 export const bar = 42;
-`;
-    fs.writeFileSync(fileA, fileAContent);
+`);
 
-    // Create file B: imports and uses foo from A
     const fileB = path.join(testDir, 'moduleB.ts');
-    const fileBContent = `
+    fs.writeFileSync(fileB, `
 import { foo, bar } from './moduleA';
 
 const result = foo();
-console.log(bar);
-`;
-    fs.writeFileSync(fileB, fileBContent);
+const x = bar;
+`);
 
-    // Build the index
-    const { index, stats } = projectIndexBuildSync({
+    const { index } = projectIndexBuildSync({
       files: [fileA, fileB],
       dir: testDir,
     });
 
-    console.log('\n=== Index Stats ===');
-    console.log('Files indexed:', stats.filesIndexed);
-    console.log('Files skipped:', stats.filesSkipped);
-    console.log('Errors:', stats.errors);
-    console.log('Index stats:', index.getStats());
-
-    // Debug: List all symbols
-    console.log('\n=== All Symbols ===');
-    const allSymbols = index.getSymbols();
-    for (const sym of allSymbols) {
-      const isExported = (sym.flags & SymbolFlags.Exported) !== 0;
-      console.log(`  ${sym.name} (${sym.kind}) in ${path.basename(sym.file)} - exported: ${isExported}`);
-    }
-
-    // Get the exported 'foo' function from file A
     const exportedSymbols = index.getExportedSymbols({ file: fileA });
-    console.log('\n=== Exported Symbols from moduleA ===');
-    for (const sym of exportedSymbols) {
-      console.log(`  ${sym.name} (${sym.kind}) - id: ${sym.id.slice(0, 12)}...`);
-    }
-
     const fooSymbol = exportedSymbols.find(s => s.name === 'foo');
     expect(fooSymbol).toBeDefined();
-    console.log('\n=== foo symbol ===');
-    console.log('  id:', fooSymbol?.id);
-    console.log('  kind:', fooSymbol?.kind);
-    console.log('  file:', fooSymbol?.file);
 
-    // Debug: Check import bindings in file B
-    console.log('\n=== Import Bindings in moduleB ===');
     const importBindings = index.getImportBindings(fileB);
-    for (const binding of importBindings) {
-      console.log(`  localSymbolId: ${binding.localSymbolId.slice(0, 12)}...`);
-      console.log(`  importedName: ${binding.importedName}`);
-      console.log(`  moduleSpec: ${binding.moduleSpec}`);
-      console.log(`  isDefault: ${binding.isDefault}`);
-      console.log(`  resolvedModulePath: ${binding.resolvedModulePath ?? 'undefined'}`);
-      console.log(`  resolvedExportId: ${binding.resolvedExportId ?? 'undefined'}`);
-      console.log('  ---');
-    }
+    const fooBinding = importBindings.find(b => b.importedName === 'foo');
+    expect(fooBinding).toBeDefined();
+    expect(fooBinding!.resolvedExportId).toBeDefined();
 
-    // Debug: Check all references in file B
-    console.log('\n=== References in moduleB ===');
-    const refsInB = index.getReferencesInFile(fileB);
-    for (const ref of refsInB) {
-      console.log(`  name: ${ref.name}`);
-      console.log(`  resolvedSymbolId: ${ref.resolvedSymbolId?.slice(0, 12) ?? 'undefined'}...`);
-      console.log(`  range: ${ref.range.start}-${ref.range.end}`);
-      console.log('  ---');
-    }
-
-    // Get references to the exported foo symbol
-    console.log('\n=== References to foo (exported symbol) ===');
     const fooRefs = index.getReferences(fooSymbol!.id);
-    console.log('Number of references:', fooRefs.length);
-    for (const ref of fooRefs) {
-      const scope = index.getScope(ref.scopeId);
-      console.log(`  ref in ${scope?.file ? path.basename(scope.file) : 'unknown'}: ${ref.name}`);
-    }
-
-    // Check if we have external references (from file B)
     const externalRefs = fooRefs.filter(ref => {
       const scope = index.getScope(ref.scopeId);
       return scope && scope.file !== fileA;
     });
-
-    console.log('\n=== External References ===');
-    console.log('Number of external references:', externalRefs.length);
-    for (const ref of externalRefs) {
-      const scope = index.getScope(ref.scopeId);
-      console.log(`  from ${scope?.file ? path.basename(scope.file) : 'unknown'}`);
-    }
-
-    // The test: we expect at least one reference from file B
     expect(externalRefs.length).toBeGreaterThan(0);
   });
 
   it('should resolve default import references', () => {
-    // Create file C: default export
     const fileC = path.join(testDir, 'moduleC.ts');
-    const fileCContent = `
+    fs.writeFileSync(fileC, `
 function myDefault() {
   return 'default';
 }
 
 export default myDefault;
-`;
-    fs.writeFileSync(fileC, fileCContent);
+`);
 
-    // Create file D: default import
     const fileD = path.join(testDir, 'moduleD.ts');
-    const fileDContent = `
+    fs.writeFileSync(fileD, `
 import myFunc from './moduleC';
 
 const result = myFunc();
-`;
-    fs.writeFileSync(fileD, fileDContent);
+`);
 
-    // Build the index
-    const { index, stats } = projectIndexBuildSync({
+    const { index } = projectIndexBuildSync({
       files: [fileC, fileD],
       dir: testDir,
     });
 
-    console.log('\n=== Default Import Test ===');
-    console.log('Files indexed:', stats.filesIndexed);
-
-    // Debug: List all symbols in both files
-    console.log('\n=== Symbols in moduleC ===');
-    const symbolsC = index.getSymbolsInFile(fileC);
-    for (const sym of symbolsC) {
-      const isExported = (sym.flags & SymbolFlags.Exported) !== 0;
-      console.log(`  ${sym.name} (${sym.kind}) - exported: ${isExported}`);
-    }
-
-    console.log('\n=== Symbols in moduleD ===');
-    const symbolsD = index.getSymbolsInFile(fileD);
-    for (const sym of symbolsD) {
-      console.log(`  ${sym.name} (${sym.kind})`);
-    }
-
-    // Check import bindings
-    console.log('\n=== Import Bindings in moduleD ===');
     const importBindings = index.getImportBindings(fileD);
-    for (const binding of importBindings) {
-      console.log(`  localSymbolId: ${binding.localSymbolId.slice(0, 12)}...`);
-      console.log(`  importedName: ${binding.importedName}`);
-      console.log(`  moduleSpec: ${binding.moduleSpec}`);
-      console.log(`  isDefault: ${binding.isDefault}`);
-      console.log(`  resolvedExportId: ${binding.resolvedExportId ?? 'undefined'}`);
-    }
-
-    // Check exports from moduleC
-    console.log('\n=== Exports from moduleC ===');
-    const exportsC = index.getFileExports(fileC);
-    for (const exp of exportsC) {
-      console.log(`  exportedName: ${exp.exportedName}`);
-      console.log(`  symbolId: ${exp.symbolId?.slice(0, 12) ?? 'undefined'}...`);
-      console.log(`  isDefault: ${exp.isDefault}`);
-    }
-
-    // Check if default import binding exists
     const defaultBinding = importBindings.find(b => b.isDefault);
-    console.log('\n=== Default Import Binding Found ===');
-    console.log(defaultBinding ? 'YES' : 'NO - This is the bug!');
-    
     expect(defaultBinding).toBeDefined();
     expect(defaultBinding!.resolvedExportId).toBeDefined();
   });
 
   it('should find external references via getReferences API', () => {
-    // Create file with exports
     const fileExporter = path.join(testDir, 'exporter.ts');
-    const exporterContent = `
+    fs.writeFileSync(fileExporter, `
 export function usedFunction() {
   return 'used';
 }
@@ -213,49 +105,31 @@ export function usedFunction() {
 export function unusedFunction() {
   return 'unused';
 }
-`;
-    fs.writeFileSync(fileExporter, exporterContent);
+`);
 
-    // Create file that imports one function
     const fileUser = path.join(testDir, 'user.ts');
-    const userContent = `
+    fs.writeFileSync(fileUser, `
 import { usedFunction } from './exporter';
 
 const result = usedFunction();
-`;
-    fs.writeFileSync(fileUser, userContent);
+`);
 
-    // Build the index
-    const { index, stats } = projectIndexBuildSync({
+    const { index } = projectIndexBuildSync({
       files: [fileExporter, fileUser],
       dir: testDir,
     });
 
-    console.log('\n=== External References Test ===');
-    console.log('Files indexed:', stats.filesIndexed);
-
-    // Get all exported symbols from the exporter
     const exportedSymbols = index.getExportedSymbols({ file: fileExporter });
-    console.log('\n=== Exported Symbols ===');
-    for (const sym of exportedSymbols) {
-      console.log(`  ${sym.name} (${sym.kind})`);
-    }
-
-    // For each exported symbol, check if it's referenced in other files
     const unusedExports: string[] = [];
     const usedExports: string[] = [];
 
     for (const symbol of exportedSymbols) {
       const references = index.getReferences(symbol.id);
-      
-      // Filter to only references in OTHER files
       const externalReferences = references.filter(ref => {
         const scope = index.getScope(ref.scopeId);
         return scope && scope.file !== fileExporter;
       });
 
-      console.log(`\n  ${symbol.name}: ${externalReferences.length} external references`);
-      
       if (externalReferences.length === 0) {
         unusedExports.push(symbol.name);
       } else {
@@ -263,11 +137,6 @@ const result = usedFunction();
       }
     }
 
-    console.log('\n=== Results ===');
-    console.log('Used exports:', usedExports);
-    console.log('Unused exports:', unusedExports);
-
-    // Verify the results
     expect(usedExports).toContain('usedFunction');
     expect(unusedExports).toContain('unusedFunction');
   });
@@ -281,11 +150,457 @@ const result = usedFunction();
       dir: testDir,
     });
 
-    console.log('\n=== Index Capabilities ===');
-    console.log('crossFileResolution:', index.capabilities.crossFileResolution);
-    console.log('callGraph:', index.capabilities.callGraph);
-    console.log('supportedLanguages:', index.capabilities.supportedLanguages);
-
     expect(index.capabilities.crossFileResolution).toBe(true);
+  });
+
+  // ==========================================================================
+  // Cross-file topologies
+  // ==========================================================================
+
+  it('should resolve namespace imports (import * as X)', () => {
+    const nsExporter = path.join(testDir, 'ns_exporter.ts');
+    fs.writeFileSync(nsExporter, `
+export function alpha() { return 1; }
+export const beta = 2;
+`);
+
+    const nsImporter = path.join(testDir, 'ns_importer.ts');
+    fs.writeFileSync(nsImporter, `
+import * as utils from './ns_exporter';
+
+const a = utils.alpha();
+const b = utils.beta;
+`);
+
+    const { index, stats } = projectIndexBuildSync({
+      files: [nsExporter, nsImporter],
+      dir: testDir,
+    });
+
+    expect(stats.filesIndexed).toBe(2);
+
+    // Namespace import produces a single binding with isNamespace: true
+    const bindings = index.getImportBindings(nsImporter);
+    expect(bindings).toHaveLength(1);
+
+    const nsBinding = bindings[0];
+    expect(nsBinding.isNamespace).toBe(true);
+    expect(nsBinding.importedName).toBe('*');
+    expect(nsBinding.moduleSpec).toBe('./ns_exporter');
+
+  });
+
+  // TODO: remove .skip once namespace import resolution is implemented
+  it.skip('should resolve namespace import module path and member accesses', () => {
+    const nsExporter = path.join(testDir, 'ns_full_exporter.ts');
+    fs.writeFileSync(nsExporter, `
+export function alpha() { return 1; }
+export const beta = 2;
+`);
+
+    const nsImporter = path.join(testDir, 'ns_full_importer.ts');
+    fs.writeFileSync(nsImporter, `
+import * as utils from './ns_full_exporter';
+
+const a = utils.alpha();
+const b = utils.beta;
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [nsExporter, nsImporter],
+      dir: testDir,
+    });
+
+    const bindings = index.getImportBindings(nsImporter);
+    const nsBinding = bindings.find(b => b.isNamespace);
+    expect(nsBinding).toBeDefined();
+    expect(nsBinding!.resolvedModulePath).toBe(nsExporter);
+
+    // Member accesses (utils.alpha, utils.beta) should resolve to exporter symbols
+    const exportedSymbols = index.getExportedSymbols({ file: nsExporter });
+    const alphaSym = exportedSymbols.find(s => s.name === 'alpha');
+    expect(alphaSym).toBeDefined();
+
+    const alphaRefs = index.getReferences(alphaSym!.id);
+    const externalRefs = alphaRefs.filter(ref => {
+      const scope = index.getScope(ref.scopeId);
+      return scope && scope.file !== nsExporter;
+    });
+    expect(externalRefs.length).toBeGreaterThan(0);
+  });
+
+  it('should resolve aliased imports (import { a as b })', () => {
+    const aliasExporter = path.join(testDir, 'alias_exporter.ts');
+    fs.writeFileSync(aliasExporter, `
+export function originalName() { return 'original'; }
+`);
+
+    const aliasImporter = path.join(testDir, 'alias_importer.ts');
+    fs.writeFileSync(aliasImporter, `
+import { originalName as renamedFn } from './alias_exporter';
+
+const result = renamedFn();
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [aliasExporter, aliasImporter],
+      dir: testDir,
+    });
+
+    const bindings = index.getImportBindings(aliasImporter);
+    expect(bindings.length).toBeGreaterThan(0);
+
+    // The binding should reference the original exported name
+    const aliasBinding = bindings.find(
+      b => b.importedName === 'originalName' || b.importedName === 'renamedFn'
+    );
+    expect(aliasBinding).toBeDefined();
+    expect(aliasBinding!.resolvedModulePath).toBe(aliasExporter);
+    expect(aliasBinding!.resolvedExportId).toBeDefined();
+
+    // The resolved export should be the 'originalName' symbol from the exporter
+    const exportedSymbols = index.getExportedSymbols({ file: aliasExporter });
+    const originalSymbol = exportedSymbols.find(s => s.name === 'originalName');
+    expect(originalSymbol).toBeDefined();
+    expect(aliasBinding!.resolvedExportId).toBe(originalSymbol!.id);
+  });
+
+  it('should resolve re-exports (export { x } from "./y")', () => {
+    const reexportOrigin = path.join(testDir, 'reexport_origin.ts');
+    fs.writeFileSync(reexportOrigin, `
+export function innerFn() { return 'inner'; }
+`);
+
+    const reexportProxy = path.join(testDir, 'reexport_proxy.ts');
+    fs.writeFileSync(reexportProxy, `
+export { innerFn } from './reexport_origin';
+`);
+
+    const reexportConsumer = path.join(testDir, 'reexport_consumer.ts');
+    fs.writeFileSync(reexportConsumer, `
+import { innerFn } from './reexport_proxy';
+
+const val = innerFn();
+`);
+
+    const { index, stats } = projectIndexBuildSync({
+      files: [reexportOrigin, reexportProxy, reexportConsumer],
+      dir: testDir,
+    });
+
+    expect(stats.filesIndexed).toBe(3);
+    expect(stats.errors).toHaveLength(0);
+
+    // The origin file should have the exported symbol
+    const originExports = index.getExportedSymbols({ file: reexportOrigin });
+    expect(originExports.find(s => s.name === 'innerFn')).toBeDefined();
+
+    // The consumer should have an import binding for 'innerFn'
+    const consumerBindings = index.getImportBindings(reexportConsumer);
+    const innerBinding = consumerBindings.find(b => b.importedName === 'innerFn');
+    expect(innerBinding).toBeDefined();
+    expect(innerBinding!.moduleSpec).toBe('./reexport_proxy');
+
+  });
+
+  // TODO: remove .skip once named re-export chain resolution is implemented
+  it.skip('should resolve imports through re-export chains to the origin symbol', () => {
+    const reOrigin = path.join(testDir, 'rechain_origin.ts');
+    fs.writeFileSync(reOrigin, `
+export function innerFn() { return 'inner'; }
+`);
+
+    const reProxy = path.join(testDir, 'rechain_proxy.ts');
+    fs.writeFileSync(reProxy, `
+export { innerFn } from './rechain_origin';
+`);
+
+    const reConsumer = path.join(testDir, 'rechain_consumer.ts');
+    fs.writeFileSync(reConsumer, `
+import { innerFn } from './rechain_proxy';
+
+const val = innerFn();
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [reOrigin, reProxy, reConsumer],
+      dir: testDir,
+    });
+
+    // Proxy should surface re-exported symbols in getFileExports
+    const proxyExports = index.getFileExports(reProxy);
+    const innerExport = proxyExports.find(e => e.exportedName === 'innerFn');
+    expect(innerExport).toBeDefined();
+
+    // Consumer binding should resolve through the proxy to the origin
+    const consumerBindings = index.getImportBindings(reConsumer);
+    const innerBinding = consumerBindings.find(b => b.importedName === 'innerFn');
+    expect(innerBinding).toBeDefined();
+    expect(innerBinding!.resolvedModulePath).toBe(reProxy);
+    expect(innerBinding!.resolvedExportId).toBeDefined();
+
+    // The resolvedExportId should ultimately trace back to the origin symbol
+    const originExports = index.getExportedSymbols({ file: reOrigin });
+    const originSym = originExports.find(s => s.name === 'innerFn');
+    expect(originSym).toBeDefined();
+  });
+
+  it('should handle circular imports (A imports B, B imports A)', () => {
+    const circA = path.join(testDir, 'circ_a.ts');
+    const circB = path.join(testDir, 'circ_b.ts');
+
+    fs.writeFileSync(circA, `
+import { fromB } from './circ_b';
+
+export function fromA() { return 'A'; }
+const useB = fromB();
+`);
+
+    fs.writeFileSync(circB, `
+import { fromA } from './circ_a';
+
+export function fromB() { return 'B'; }
+const useA = fromA();
+`);
+
+    // Must not throw or hang
+    const { index, stats } = projectIndexBuildSync({
+      files: [circA, circB],
+      dir: testDir,
+    });
+
+    expect(stats.filesIndexed).toBe(2);
+    expect(stats.errors).toHaveLength(0);
+
+    // Both files should have their exports indexed
+    const exportsA = index.getExportedSymbols({ file: circA });
+    const exportsB = index.getExportedSymbols({ file: circB });
+    expect(exportsA.find(s => s.name === 'fromA')).toBeDefined();
+    expect(exportsB.find(s => s.name === 'fromB')).toBeDefined();
+
+    // Import bindings should resolve in both directions
+    const bindingsA = index.getImportBindings(circA);
+    const bindingsB = index.getImportBindings(circB);
+    const bBindingInA = bindingsA.find(b => b.importedName === 'fromB');
+    const aBindingInB = bindingsB.find(b => b.importedName === 'fromA');
+    expect(bBindingInA).toBeDefined();
+    expect(aBindingInB).toBeDefined();
+    expect(bBindingInA!.resolvedExportId).toBeDefined();
+    expect(aBindingInB!.resolvedExportId).toBeDefined();
+  });
+
+  it('should handle diamond dependency (A->B+C, B->D, C->D)', () => {
+    const diamondD = path.join(testDir, 'diamond_d.ts');
+    fs.writeFileSync(diamondD, `
+export function shared() { return 'shared'; }
+`);
+
+    const diamondB = path.join(testDir, 'diamond_b.ts');
+    fs.writeFileSync(diamondB, `
+import { shared } from './diamond_d';
+export function fromB() { return shared(); }
+`);
+
+    const diamondC = path.join(testDir, 'diamond_c.ts');
+    fs.writeFileSync(diamondC, `
+import { shared } from './diamond_d';
+export function fromC() { return shared(); }
+`);
+
+    const diamondA = path.join(testDir, 'diamond_a.ts');
+    fs.writeFileSync(diamondA, `
+import { fromB } from './diamond_b';
+import { fromC } from './diamond_c';
+
+const b = fromB();
+const c = fromC();
+`);
+
+    const { index, stats } = projectIndexBuildSync({
+      files: [diamondD, diamondB, diamondC, diamondA],
+      dir: testDir,
+    });
+
+    expect(stats.filesIndexed).toBe(4);
+    expect(stats.errors).toHaveLength(0);
+
+    // D's 'shared' export should be referenced from both B and C
+    const dExports = index.getExportedSymbols({ file: diamondD });
+    const sharedSym = dExports.find(s => s.name === 'shared');
+    expect(sharedSym).toBeDefined();
+
+    const sharedRefs = index.getReferences(sharedSym!.id);
+    const refFiles = new Set(
+      sharedRefs.map(ref => {
+        const scope = index.getScope(ref.scopeId);
+        return scope?.file;
+      }).filter(Boolean)
+    );
+    // 'shared' is referenced from at least B and C (and possibly D itself)
+    expect(refFiles.has(diamondB)).toBe(true);
+    expect(refFiles.has(diamondC)).toBe(true);
+
+    // A's imports from B and C should resolve
+    const aBindings = index.getImportBindings(diamondA);
+    const fromBBinding = aBindings.find(b => b.importedName === 'fromB');
+    const fromCBinding = aBindings.find(b => b.importedName === 'fromC');
+    expect(fromBBinding).toBeDefined();
+    expect(fromCBinding).toBeDefined();
+    expect(fromBBinding!.resolvedExportId).toBeDefined();
+    expect(fromCBinding!.resolvedExportId).toBeDefined();
+  });
+
+  it('should handle star exports (export * from "./x")', () => {
+    const starOrigin = path.join(testDir, 'star_origin.ts');
+    fs.writeFileSync(starOrigin, `
+export function starFn() { return 'star'; }
+export const starConst = 42;
+`);
+
+    const starProxy = path.join(testDir, 'star_proxy.ts');
+    fs.writeFileSync(starProxy, `
+export * from './star_origin';
+`);
+
+    const starConsumer = path.join(testDir, 'star_consumer.ts');
+    fs.writeFileSync(starConsumer, `
+import { starFn, starConst } from './star_proxy';
+
+const a = starFn();
+const b = starConst;
+`);
+
+    const { index, stats } = projectIndexBuildSync({
+      files: [starOrigin, starProxy, starConsumer],
+      dir: testDir,
+    });
+
+    expect(stats.filesIndexed).toBe(3);
+    expect(stats.errors).toHaveLength(0);
+
+    // The proxy file should have a wildcard export entry
+    const proxyExports = index.getFileExports(starProxy);
+    const wildcardExport = proxyExports.find(e => e.exportedName === '*');
+    expect(wildcardExport).toBeDefined();
+    expect(wildcardExport!.sourceModule).toBe('./star_origin');
+
+    // Consumer should have import bindings referencing the proxy
+    const consumerBindings = index.getImportBindings(starConsumer);
+    expect(consumerBindings).toHaveLength(2);
+
+    const starFnBinding = consumerBindings.find(b => b.importedName === 'starFn');
+    const starConstBinding = consumerBindings.find(b => b.importedName === 'starConst');
+    expect(starFnBinding).toBeDefined();
+    expect(starConstBinding).toBeDefined();
+    expect(starFnBinding!.moduleSpec).toBe('./star_proxy');
+
+  });
+
+  // TODO: remove .skip once star export expansion is implemented in crossFileResolve
+  it.skip('should resolve imports through star exports to the origin symbols', () => {
+    const starSrc = path.join(testDir, 'starfull_origin.ts');
+    fs.writeFileSync(starSrc, `
+export function starFn() { return 'star'; }
+export const starConst = 42;
+`);
+
+    const starMid = path.join(testDir, 'starfull_proxy.ts');
+    fs.writeFileSync(starMid, `
+export * from './starfull_origin';
+`);
+
+    const starDest = path.join(testDir, 'starfull_consumer.ts');
+    fs.writeFileSync(starDest, `
+import { starFn, starConst } from './starfull_proxy';
+
+const a = starFn();
+const b = starConst;
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [starSrc, starMid, starDest],
+      dir: testDir,
+    });
+
+    // Consumer bindings should resolve through the star-export proxy
+    const consumerBindings = index.getImportBindings(starDest);
+    const starFnBinding = consumerBindings.find(b => b.importedName === 'starFn');
+    expect(starFnBinding).toBeDefined();
+    expect(starFnBinding!.resolvedModulePath).toBe(starMid);
+    expect(starFnBinding!.resolvedExportId).toBeDefined();
+
+    // The origin symbol should be reachable
+    const originExports = index.getExportedSymbols({ file: starSrc });
+    const originFn = originExports.find(s => s.name === 'starFn');
+    expect(originFn).toBeDefined();
+
+    // References to the origin symbol should include the consumer file
+    const refs = index.getReferences(originFn!.id);
+    const externalRefs = refs.filter(ref => {
+      const scope = index.getScope(ref.scopeId);
+      return scope && scope.file === starDest;
+    });
+    expect(externalRefs.length).toBeGreaterThan(0);
+  });
+
+  it('should handle missing file imports gracefully', () => {
+    const missingImporter = path.join(testDir, 'missing_importer.ts');
+    fs.writeFileSync(missingImporter, `
+import { ghost } from './nonexistent_module';
+
+const x = ghost();
+`);
+
+    // Must not throw
+    const { index, stats } = projectIndexBuildSync({
+      files: [missingImporter],
+      dir: testDir,
+    });
+
+    expect(stats.filesIndexed).toBe(1);
+
+    // Import binding exists but cannot be resolved
+    const bindings = index.getImportBindings(missingImporter);
+    const ghostBinding = bindings.find(b => b.importedName === 'ghost');
+    expect(ghostBinding).toBeDefined();
+    // Module path should be undefined since the target doesn't exist
+    expect(ghostBinding!.resolvedModulePath).toBeUndefined();
+  });
+
+  it('should handle empty files without crashing', () => {
+    const emptyFile = path.join(testDir, 'empty_file.ts');
+    fs.writeFileSync(emptyFile, '');
+
+    // Must not throw
+    const { index, stats } = projectIndexBuildSync({
+      files: [emptyFile],
+      dir: testDir,
+    });
+
+    expect(stats.filesIndexed).toBe(1);
+    expect(stats.errors).toHaveLength(0);
+
+    const symbols = index.getSymbolsInFile(emptyFile);
+    expect(symbols).toHaveLength(0);
+  });
+
+  it('should handle files with parse errors gracefully', () => {
+    const badFile = path.join(testDir, 'parse_error.ts');
+    fs.writeFileSync(badFile, `
+export function valid() { return 1; }
+
+// Intentionally malformed syntax
+const x = {{{{{;
+function (((( {
+`);
+
+    // Must not throw — the builder should either skip or partially index
+    const { stats } = projectIndexBuildSync({
+      files: [badFile],
+      dir: testDir,
+    });
+
+    // File was processed (indexed or skipped) without crashing
+    expect(stats.filesIndexed + stats.filesSkipped).toBeGreaterThan(0);
   });
 });
