@@ -265,7 +265,7 @@ function getOrBuildProjectIndex(
 
   // Build index synchronously using a new store
   const store = indexStoreNew();
-  const { index, stats } = projectIndexBuildSync({ files, dir: cwd, store });
+  const { index } = projectIndexBuildSync({ files, dir: cwd, store });
 
   // Determine capabilities
   const capabilities: IndexCapabilities = {
@@ -298,8 +298,8 @@ export function projectIndexCacheClear(): void {
  */
 async function ensureProviderInit(
   provider: CodepolPluginRule,
-  policy: PolicyFile,
-  cwd: string
+  _policy: PolicyFile,
+  _cwd: string
 ): Promise<void> {
   const key = provider.id;
   const state = providerInitState.get(key);
@@ -423,7 +423,7 @@ function createAdaptedRule(
 
       // Get args from matched target (policy rule args)
       // Fall back to extra options for backward compatibility
-      const { configPath: _p, ruleTargets: _rt, policyExclude: _pe, ...extraArgs } = ruleOptions;
+      const { configPath: _configPath, ruleTargets: _ruleTargets, policyExclude: _policyExclude, ...extraArgs } = ruleOptions;
       const ruleArgs = matchedTarget.args ?? extraArgs;
 
       // Check if this plugin requires project index (used in Program:exit)

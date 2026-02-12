@@ -384,17 +384,14 @@ const requireLoggerRule = createRule<Options, MessageIds>({
     
     // Config loading: explicit path > auto-discover
     // Uses sync loading since ESLint's create() must be synchronous
-    let configPath: string;
     let loadedConfig: PolicyFile | undefined;
     try {
       if (option.configPath) {
         const result = configGetFromPathSync(option.configPath);
         loadedConfig = result.config;
-        configPath = result.configPath;
       } else {
         const result = configGetSync(process.cwd());
         loadedConfig = result.config;
-        configPath = result.configPath;
       }
     } catch {
       // No config found, skip checking

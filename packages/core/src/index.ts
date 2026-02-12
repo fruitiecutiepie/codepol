@@ -77,7 +77,6 @@ import type {
   PolicyRule,
   PolicyCheckContext,
   PolicyViolation,
-  PolicyFile,
   PolicyRuleTargetContext,
   LintSeverity,
 } from './types';

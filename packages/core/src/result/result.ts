@@ -20,8 +20,8 @@ export function isOk<T, E>(
 export function resultFrom<T, E>(fn: () => T): Result<T, E> {
   try {
     return { Ok: fn() };
-  } catch (err: any) {
-    return { Err: err };
+  } catch (err: unknown) {
+    return { Err: err as E };
   }
 }
 export const resFrom = resultFrom;
@@ -31,8 +31,8 @@ export async function resultFromAsync<T, E>(
 ): Promise<Result<T, E>> {
   try {
     return { Ok: await fn() } as Result<T, E>;
-  } catch (err: any) {
-    return { Err: err };
+  } catch (err: unknown) {
+    return { Err: err as E };
   }
 }
 export const resFromAsync = resultFromAsync;

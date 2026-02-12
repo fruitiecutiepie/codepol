@@ -10,13 +10,12 @@
  */
 
 import fs from 'node:fs';
-import path from 'node:path';
 import { createHash } from 'node:crypto';
 import type { Language } from 'web-tree-sitter';
 import type { IndexCapabilities, ImportBindingRelation, ReferencesRelation } from './indexTypes';
 import { IndexStore, indexStoreNew } from './indexStore';
 import { projectIndexCreate, type ProjectIndex } from './indexQuery';
-import type { LangConfig, IndexAdapter } from '../adapters/treeSitter/adapterTypes';
+import type { IndexAdapter } from '../adapters/treeSitter/adapterTypes';
 import { indexAdapterCreate } from '../adapters/treeSitter/adapterCore';
 import { typescriptConfigCreate } from '../adapters/treeSitter/languages/typescript/config';
 import { pythonConfigCreate } from '../adapters/treeSitter/languages/python/config';

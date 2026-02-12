@@ -296,7 +296,7 @@ function refsExtract(
   scopes: ScopeRecord[],
   symbols: SymbolRecord[],
   declRanges: Set<string>,
-  diags: AdapterDiagnostic[]
+  _diags: AdapterDiagnostic[]
 ): ReferencesRelation[] {
   const refs: ReferencesRelation[] = [];
 
@@ -402,7 +402,7 @@ function callsExtract(
   source: Uint8Array,
   scopes: ScopeRecord[],
   symbols: SymbolRecord[],
-  diags: AdapterDiagnostic[]
+  _diags: AdapterDiagnostic[]
 ): CallsRelation[] {
   if (!cfg.queries.calls) return [];
 
@@ -488,7 +488,7 @@ function importsExtract(
   file: string,
   source: Uint8Array,
   scopes: ScopeRecord[],
-  diags: AdapterDiagnostic[]
+  _diags: AdapterDiagnostic[]
 ): ImportsRelation[] {
   if (!cfg.queries.imports) return [];
 
@@ -538,7 +538,7 @@ function importBindingsExtract(
   source: Uint8Array,
   scopes: ScopeRecord[],
   symbols: SymbolRecord[],
-  diags: AdapterDiagnostic[]
+  _diags: AdapterDiagnostic[]
 ): ImportBindingRelation[] {
   if (!cfg.queries.imports) return [];
 
@@ -744,7 +744,7 @@ function exportsExtract(
   source: Uint8Array,
   scopes: ScopeRecord[],
   symbols: SymbolRecord[],
-  diags: AdapterDiagnostic[]
+  _diags: AdapterDiagnostic[]
 ): ExportsRelation[] {
   if (!cfg.queries.exports) return [];
 

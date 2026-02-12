@@ -11,7 +11,6 @@ import type {
   ScopeId,
   SymbolRecord,
   ScopeRecord,
-  SymbolKind,
   SymbolFilter,
   IndexCapabilities,
   ReferencesRelation,

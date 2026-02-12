@@ -7,7 +7,7 @@ import type {
   CodepolPluginRule,
   PluginRule,
 } from './policyTypes';
-import { Result, Ok, Err, isErr } from '../result/result';
+import { Result, Ok, Err } from '../result/result';
 import { policyRuleTargetsResolve } from './policyGet';
 
 export type PolicyPluginsMap = Map<string, PluginRule>;
@@ -133,8 +133,8 @@ export async function policyPluginsGet(
       } else {
         throw new Error(`Invalid rule plugin export from ${moduleSpecifier}.`);
       }
-    } catch (e: any) {
-      return Err(e.message);
+    } catch (e: unknown) {
+      return Err(e instanceof Error ? e.message : String(e));
     }
 
     for (const pluginRule of pluginRules) {
