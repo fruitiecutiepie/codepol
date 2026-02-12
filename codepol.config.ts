@@ -3,30 +3,22 @@ import { defineConfig } from '@codepol/core';
 export default defineConfig({
   plugins: ['@codepol/plugin'],
   targets: {
-    'typescript-src': {
+    'codepol-src': {
       language: 'typescript',
-      files: ['src/**/*.ts', 'src/**/*.tsx'],
+      files: ['packages/*/src/**/*.ts'],
       exclude: ['**/*.spec.ts', '**/*.test.ts', '**/__mocks__/**'],
     },
   },
   rules: [
     {
-      id: 'function-logging',
-      ruleId: 'require-logger-enter-exit',
-      description: 'Ensure all exported TypeScript functions are wrapped with logger enter/exit',
+      id: 'no-unused-exports',
+      ruleId: 'no-unused-exports',
+      description: 'Detect exported symbols not imported by any other file',
       args: {
-        logger: {
-          identifier: 'logger',
-          enterMethod: 'enter',
-          exitMethod: 'exit',
-          import: {
-            module: '@org/logger',
-            named: 'logger',
-          },
-        },
+        ignoreEntryPoints: true,
       },
-      targets: ['typescript-src'],
+      targets: ['codepol-src'],
     },
   ],
-  exclude: ['dist/**'],
+  exclude: ['dist/**', 'node_modules/**'],
 });

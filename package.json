@@ -9,6 +9,7 @@
     "test": "pnpm build && vitest run",
     "test:watch": "vitest",
     "clean": "pnpm -r exec rm -rf dist && rm -rf packages/core/wasm/*.wasm",
+    "lint": "eslint 'packages/*/src/**/*.ts'",
     "typecheck": "pnpm -r typecheck",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
