@@ -7,6 +7,7 @@
  */
 
 import path from 'path';
+import fg from 'fast-glob';
 import { ESLintUtils, TSESLint } from '@typescript-eslint/utils';
 import type {
   TreeCheckLintAdapter,
@@ -17,6 +18,8 @@ import type {
   PolicyRuleTargetContext,
   LintDiagnostic,
   CodepolPluginRule,
+  ProjectIndex,
+  IndexCapabilities,
 } from '@codepol/core';
 import {
   violationToLintDiagnostic,
@@ -26,6 +29,13 @@ import {
   ruleTargetMatchesLanguage,
   configGetSync,
   configGetFromPathSync,
+  projectIndexBuildSync,
+  projectIndexUpdateFileFromSource,
+  crossFileResolveForFile,
+  projectIndexCreate,
+  IndexStore,
+  indexStoreNew,
+  DEFAULT_EXTENSIONS,
   isErr,
 } from '@codepol/core';
 
@@ -131,6 +141,157 @@ function diagnosticToEslintLoc(diagnostic: LintDiagnostic): TSESLint.ReportDescr
 
 // Singleton for provider initialization state
 const providerInitState = new Map<string, Promise<void> | true>();
+
+// ============================================================================
+// Project Index Caching for Cross-File Analysis
+// ============================================================================
+
+/**
+ * Cache entry for project index.
+ * Stores the IndexStore for incremental updates, plus cached ProjectIndex.
+ */
+type IndexCacheEntry = {
+  /** The underlying IndexStore (mutable, supports incremental updates) */
+  store: IndexStore;
+  /** Cached ProjectIndex (read-only view of the store) */
+  index: ProjectIndex;
+  /** Working directory for module resolution */
+  dir: string;
+  /** Index capabilities */
+  capabilities: IndexCapabilities;
+};
+
+/**
+ * Singleton cache for project index.
+ * Keyed by config path to handle multiple projects.
+ */
+const projectIndexCache = new Map<string, IndexCacheEntry>();
+
+/**
+ * Languages that have index adapters and can be indexed.
+ */
+const INDEXABLE_LANGUAGES = ['typescript', 'tsx', 'javascript', 'jsx', 'python'];
+
+/**
+ * File extensions that can be indexed.
+ */
+const INDEXABLE_EXTENSIONS = [
+  // Typescript
+  '.ts', '.tsx', '.mts', '.cts',
+  // JavaScript
+  '.js', '.jsx', '.mjs', '.cjs',
+  // Python
+  '.py', '.pyw',
+];
+
+/**
+ * Discovers all indexable files from policy targets (synchronous).
+ * Uses fast-glob sync for file discovery.
+ */
+function discoverIndexableFiles(policy: PolicyFile, cwd: string): string[] {
+  const filesSet = new Set<string>();
+  const globalExclude = policy.exclude ?? [];
+
+  for (const rule of policy.rules) {
+    const targets = policyRuleTargetsResolve(rule, policy);
+    for (const target of targets) {
+      // Only index if target language is indexable
+      if (target.language && !INDEXABLE_LANGUAGES.includes(target.language)) {
+        continue;
+      }
+
+      const ignore = [...globalExclude, ...(target.exclude ?? [])];
+      const files = fg.sync(target.files, {
+        cwd,
+        absolute: true,
+        ignore,
+        onlyFiles: true,
+      });
+
+      // Filter by indexable extensions
+      for (const file of files) {
+        const ext = path.extname(file).toLowerCase();
+        if (INDEXABLE_EXTENSIONS.includes(ext)) {
+          filesSet.add(file);
+        }
+      }
+    }
+  }
+
+  return Array.from(filesSet);
+}
+
+/**
+ * Gets or builds the project index for cross-file analysis.
+ * The index is cached per config path and reused across rule invocations.
+ *
+ * When a cached index exists, this function checks if the current file
+ * being linted has changed (based on content hash) and performs an
+ * incremental update if needed.
+ *
+ * @param configPath - Path to the config file (used as cache key)
+ * @param policy - The policy file
+ * @param cwd - Current working directory
+ * @param currentFile - The file currently being linted (for incremental update)
+ * @param source - The source content from ESLint (avoids reading stale content from disk)
+ */
+function getOrBuildProjectIndex(
+  configPath: string,
+  policy: PolicyFile,
+  cwd: string,
+  currentFile: string,
+  source: string
+): ProjectIndex {
+  // Check cache first
+  const cached = projectIndexCache.get(configPath);
+  if (cached) {
+    // Check if current file needs re-indexing using ESLint's source
+    // This avoids the "one step behind" issue where disk content lags editor content
+    const updated = projectIndexUpdateFileFromSource(cached.store, currentFile, source);
+    if (updated) {
+      // Re-resolve cross-file imports/exports for the updated file
+      crossFileResolveForFile(cached.store, currentFile, {
+        baseDir: cached.dir,
+        extensions: DEFAULT_EXTENSIONS,
+      });
+      // Recreate index (cheap - just wraps the store)
+      cached.index = projectIndexCreate(cached.store, cached.capabilities);
+    }
+    return cached.index;
+  }
+
+  // Discover all indexable files
+  const files = discoverIndexableFiles(policy, cwd);
+
+  // Build index synchronously using a new store
+  const store = indexStoreNew();
+  const { index, stats } = projectIndexBuildSync({ files, dir: cwd, store });
+
+  // Determine capabilities
+  const capabilities: IndexCapabilities = {
+    crossFileResolution: true,
+    callGraph: 'heuristic',
+    supportedLanguages: ['typescript', 'tsx', 'javascript', 'jsx', 'python'],
+  };
+
+  // Cache the store and index for incremental updates
+  projectIndexCache.set(configPath, {
+    store,
+    index,
+    dir: cwd,
+    capabilities,
+  });
+
+  return index;
+}
+
+/**
+ * Clears the project index cache.
+ * Useful for testing or when the project files change.
+ */
+export function projectIndexCacheClear(): void {
+  projectIndexCache.clear();
+}
 
 /**
  * Ensures a provider is initialized (handles async init).
@@ -265,19 +426,32 @@ function createAdaptedRule(
       const { configPath: _p, ruleTargets: _rt, policyExclude: _pe, ...extraArgs } = ruleOptions;
       const ruleArgs = matchedTarget.args ?? extraArgs;
 
+      // Check if this plugin requires project index (used in Program:exit)
+      const cwd = process.cwd();
+      const needsProjectIndex = plugin.capabilities.requiresProjectIndex;
+
       return {
         'Program:exit'(node) {
           const sourceCode = context.sourceCode;
           const source = sourceCode.getText();
+
+          // Get project index if this plugin requires cross-file analysis
+          // This is done here (not in create()) so we have access to the source content,
+          // which avoids the "one step behind" issue where disk content lags editor content
+          let projectIndex: ProjectIndex | undefined;
+          if (needsProjectIndex) {
+            projectIndex = getOrBuildProjectIndex(configPath, policy, cwd, filename, source);
+          }
 
           // Build PolicyCheckContext
           const checkContext: PolicyCheckContext = {
             filePath: filename,
             source,
             policy,
-            dir: process.cwd(),
+            dir: cwd,
             target: matchedTarget.target,
             ruleArgs: ruleArgs,
+            projectIndex,
           };
 
           // Build a synthetic PolicyRule for the provider

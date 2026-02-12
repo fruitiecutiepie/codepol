@@ -6,13 +6,22 @@
 import type { CodepolPluginRule, EslintProviderConfig } from '@codepol/core';
 import type { ESLint } from 'eslint';
 
-// Re-export adapter
+import {
+  eslintAdapter,
+  eslintAdapterInit,
+  policyCacheClear,
+  providerInitStateClear,
+  projectIndexCacheClear,
+} from './eslintAdapter';
+
+// Re-export adapter utilities
 export {
   eslintAdapter,
   eslintAdapterInit,
   policyCacheClear,
   providerInitStateClear,
-} from './eslintAdapter';
+  projectIndexCacheClear,
+};
 
 /**
  * ESLint rule map type.
@@ -52,9 +61,31 @@ function pluginRulesNormalize(input: unknown): CodepolPluginRule[] {
   );
 }
 
+/**
+ * Checks if a plugin rule has an ESLint lint provider.
+ */
+function hasEslintLintProvider(pluginRule: CodepolPluginRule): boolean {
+  const lintProviders = pluginRule.capabilities.lintProviders ?? [];
+  return lintProviders.some(p => p.platform === 'eslint');
+}
+
+/**
+ * Collects ESLint rules from plugin rules.
+ *
+ * For each plugin rule:
+ * 1. Collects rules from ESLint lint providers (explicit ESLint rules)
+ * 2. If no ESLint lint provider but has treeCheckProvider, auto-adapts
+ *    the tree-check to an ESLint rule using eslintAdapter
+ *
+ * This allows plugin rules to provide either:
+ * - Custom ESLint rules via lintProviders
+ * - Tree-sitter checks that get auto-adapted to ESLint
+ */
 function collectRules(pluginRules: CodepolPluginRule[]): EslintRuleMap {
   const collectedRules: EslintRuleMap = {};
+
   for (const pluginRule of pluginRules) {
+    // First, collect explicit ESLint rules from lintProviders
     const lintProviders = pluginRule.capabilities.lintProviders ?? [];
     for (const provider of lintProviders) {
       if (provider.platform === 'eslint') {
@@ -62,7 +93,14 @@ function collectRules(pluginRules: CodepolPluginRule[]): EslintRuleMap {
         Object.assign(collectedRules, eslintConfig.rules);
       }
     }
+
+    // If no ESLint lint provider but has treeCheckProvider, auto-adapt it
+    if (!hasEslintLintProvider(pluginRule) && pluginRule.capabilities.treeCheckProvider) {
+      const adaptedRule = eslintAdapter.adapt(pluginRule);
+      collectedRules[pluginRule.id] = adaptedRule;
+    }
   }
+
   return collectedRules;
 }
 
