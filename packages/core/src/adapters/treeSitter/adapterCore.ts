@@ -1,0 +1,1046 @@
+/**
+ * @packageDocumentation
+ * Core Tree-sitter adapter implementation.
+ *
+ * This module provides the shared logic for extracting semantic information
+ * from Tree-sitter parse results. Language-specific adapters provide
+ * configuration (queries, kind mappings) while this module handles execution.
+ */
+
+import Parser from 'web-tree-sitter';
+import { createHash } from 'node:crypto';
+import type {
+  SymbolId,
+  ScopeId,
+  SymbolKind,
+  ScopeKind,
+  ByteRange,
+  SymbolRecord,
+  ScopeRecord,
+  RelationRecord,
+  DefinesRelation,
+  ContainsRelation,
+  ReferencesRelation,
+  CallsRelation,
+  ImportsRelation,
+  ImportBindingRelation,
+  ExportsRelation,
+} from '../../index/indexTypes';
+import { SymbolFlags } from '../../index/indexTypes';
+import type {
+  LangConfig,
+  FileIndexDelta,
+  AdapterDiagnostic,
+  RefFilterContext,
+} from './adapterTypes';
+
+// ============================================================================
+// Stable ID Generation
+// ============================================================================
+
+/**
+ * Generate a stable hash ID from parts.
+ * Uses SHA-256, truncated to 24 hex characters.
+ */
+function hashId(...parts: string[]): string {
+  return createHash('sha256')
+    .update(parts.join('\0'))
+    .digest('hex')
+    .slice(0, 24);
+}
+
+/**
+ * Generate a stable SymbolId.
+ * ID is deterministic based on language, file, kind, qualified name, and position.
+ */
+function symbolIdCreate(
+  languageId: string,
+  file: string,
+  kind: SymbolKind,
+  qualName: string,
+  startByte: number
+): SymbolId {
+  return hashId(languageId, file, kind, qualName, String(startByte));
+}
+
+/**
+ * Generate a stable ScopeId.
+ */
+function scopeIdCreate(
+  languageId: string,
+  file: string,
+  kind: ScopeKind,
+  startByte: number,
+  endByte: number
+): ScopeId {
+  return hashId(languageId, file, `scope:${kind}`, String(startByte), String(endByte));
+}
+
+// ============================================================================
+// Scope Building
+// ============================================================================
+
+/**
+ * Build scope tree from Tree-sitter query captures.
+ */
+function scopesBuild(
+  cfg: LangConfig,
+  tree: Parser.Tree,
+  file: string
+): ScopeRecord[] {
+  // Create file-level scope
+  const fileScope: ScopeRecord = {
+    id: scopeIdCreate(cfg.languageId, file, 'file', 0, tree.rootNode.endIndex),
+    kind: 'file',
+    file,
+    range: { start: 0, end: tree.rootNode.endIndex },
+  };
+
+  const scopes: ScopeRecord[] = [fileScope];
+
+  // Parse and run scope query
+  const query = cfg.language.query(cfg.queries.scopes);
+  const captures = query.captures(tree.rootNode);
+
+  for (const capture of captures) {
+    if (capture.name !== cfg.captures.scopeNode) continue;
+
+    const node = capture.node;
+    const kind = scopeKindFromNode(cfg, node.type);
+
+    scopes.push({
+      id: scopeIdCreate(cfg.languageId, file, kind, node.startIndex, node.endIndex),
+      kind,
+      file,
+      range: { start: node.startIndex, end: node.endIndex },
+    });
+  }
+
+  // Sort by range for parent assignment (smaller ranges come after their parents)
+  scopes.sort((a, b) => {
+    const startDiff = a.range.start - b.range.start;
+    if (startDiff !== 0) return startDiff;
+    // If same start, larger range (parent) comes first
+    return b.range.end - a.range.end;
+  });
+
+  // Assign parents by finding smallest containing scope
+  for (const scope of scopes) {
+    if (scope.id === fileScope.id) continue;
+    scope.parent = findParentScope(scopes, scope);
+  }
+
+  return scopes;
+}
+
+/**
+ * Find the parent scope (smallest containing scope).
+ */
+function findParentScope(allScopes: ScopeRecord[], child: ScopeRecord): ScopeId {
+  let best: ScopeRecord | undefined;
+
+  for (const scope of allScopes) {
+    if (scope.id === child.id) continue;
+
+    // Check if scope contains child
+    if (scope.range.start <= child.range.start && scope.range.end >= child.range.end) {
+      // Pick smallest containing scope
+      if (!best || (scope.range.end - scope.range.start) < (best.range.end - best.range.start)) {
+        best = scope;
+      }
+    }
+  }
+
+  return best?.id ?? allScopes[0].id;
+}
+
+/**
+ * Map node type to ScopeKind using language config.
+ */
+function scopeKindFromNode(cfg: LangConfig, nodeType: string): ScopeKind {
+  const mapping = cfg.scopeKinds.byNodeType[nodeType];
+  if (mapping) return mapping;
+
+  // Heuristic fallback
+  if (nodeType.includes('function') || nodeType.includes('method')) return 'function';
+  if (nodeType.includes('class')) return 'class';
+  if (nodeType.includes('module') || nodeType.includes('namespace')) return 'module';
+  if (nodeType.includes('block')) return 'block';
+
+  return cfg.scopeKinds.default;
+}
+
+/**
+ * Find the innermost scope containing a range.
+ */
+function findInnermostScope(scopes: ScopeRecord[], range: ByteRange): ScopeId {
+  let best: ScopeRecord | undefined;
+
+  for (const scope of scopes) {
+    if (scope.range.start <= range.start && scope.range.end >= range.end) {
+      if (!best || (scope.range.end - scope.range.start) < (best.range.end - best.range.start)) {
+        best = scope;
+      }
+    }
+  }
+
+  return best?.id ?? scopes[0].id;
+}
+
+// ============================================================================
+// Symbol Extraction
+// ============================================================================
+
+/**
+ * Extract symbol declarations from Tree-sitter query captures.
+ */
+function symbolsExtract(
+  cfg: LangConfig,
+  tree: Parser.Tree,
+  file: string,
+  source: Uint8Array,
+  scopes: ScopeRecord[]
+): { symbols: SymbolRecord[]; declRanges: Set<string> } {
+  const symbols: SymbolRecord[] = [];
+  const declRanges = new Set<string>();
+
+  const query = cfg.language.query(cfg.queries.symbols);
+  const matches = query.matches(tree.rootNode);
+
+  for (const match of matches) {
+    const capturesByName = new Map<string, Parser.SyntaxNode>();
+    for (const capture of match.captures) {
+      capturesByName.set(capture.name, capture.node);
+    }
+
+    // Find name capture
+    const nameNode = capturesByName.get(cfg.captures.symbolName);
+    if (!nameNode) continue;
+
+    // Find kind from capture with decl prefix
+    let kind: SymbolKind = cfg.symbolKinds.default;
+    for (const capture of match.captures) {
+      if (capture.name.startsWith(cfg.captures.symbolKindPrefix + '.')) {
+        const suffix = capture.name.slice(cfg.captures.symbolKindPrefix.length + 1);
+        const mappedKind = cfg.symbolKinds.byCaptureSuffix[suffix];
+        if (mappedKind) {
+          kind = mappedKind;
+          break;
+        }
+      }
+    }
+
+    const name = sliceText(source, nameNode.startIndex, nameNode.endIndex);
+    const declRange: ByteRange = { start: nameNode.startIndex, end: nameNode.endIndex };
+    declRanges.add(`${declRange.start}:${declRange.end}`);
+
+    const scopeId = findInnermostScope(scopes, declRange);
+    const qualName = buildQualifiedName(scopes, scopeId, name);
+    const id = symbolIdCreate(cfg.languageId, file, kind, qualName, nameNode.startIndex);
+
+    // Detect flags (basic heuristics)
+    let flags = SymbolFlags.None;
+    // Check for export in ancestors
+    let current: Parser.SyntaxNode | null = nameNode.parent;
+    while (current) {
+      if (current.type.includes('export')) {
+        flags |= SymbolFlags.Exported;
+        break;
+      }
+      current = current.parent;
+    }
+
+    symbols.push({
+      id,
+      kind,
+      name,
+      file,
+      range: declRange,
+      scopeId,
+      qualName,
+      flags,
+    });
+  }
+
+  return { symbols, declRanges };
+}
+
+/**
+ * Build a qualified name from scope chain.
+ */
+function buildQualifiedName(scopes: ScopeRecord[], scopeId: ScopeId, leafName: string): string {
+  // Simple implementation: just use scope ID prefix
+  // More sophisticated: walk scope chain and collect names
+  return `${scopeId}::${leafName}`;
+}
+
+/**
+ * Slice text from source bytes.
+ */
+function sliceText(source: Uint8Array, start: number, end: number): string {
+  return Buffer.from(source.subarray(start, end)).toString('utf8');
+}
+
+// ============================================================================
+// Reference Extraction
+// ============================================================================
+
+/**
+ * Extract identifier references from Tree-sitter query captures.
+ */
+function refsExtract(
+  cfg: LangConfig,
+  tree: Parser.Tree,
+  file: string,
+  source: Uint8Array,
+  scopes: ScopeRecord[],
+  symbols: SymbolRecord[],
+  declRanges: Set<string>,
+  diags: AdapterDiagnostic[]
+): ReferencesRelation[] {
+  const refs: ReferencesRelation[] = [];
+
+  const query = cfg.language.query(cfg.queries.refs);
+  const captures = query.captures(tree.rootNode);
+
+  // Build name -> symbol map for file-local resolution
+  const symbolsByName = new Map<string, SymbolRecord[]>();
+  for (const sym of symbols) {
+    const existing = symbolsByName.get(sym.name) ?? [];
+    existing.push(sym);
+    symbolsByName.set(sym.name, existing);
+  }
+
+  for (const capture of captures) {
+    // Check for ref prefix
+    if (!capture.name.startsWith(cfg.captures.refPrefix)) continue;
+
+    const node = capture.node;
+    const name = sliceText(source, node.startIndex, node.endIndex);
+    const range: ByteRange = { start: node.startIndex, end: node.endIndex };
+
+    // Skip if this is a declaration site
+    const rangeKey = `${range.start}:${range.end}`;
+    if (declRanges.has(rangeKey)) continue;
+
+    // Apply custom filter if provided
+    if (cfg.refFilter) {
+      const ctx: RefFilterContext = {
+        name,
+        nodeType: node.type,
+        parentType: node.parent?.type ?? '',
+        grandparentType: node.parent?.parent?.type,
+        range,
+        declarationRanges: declRanges,
+      };
+      if (!cfg.refFilter(ctx)) continue;
+    }
+
+    const scopeId = findInnermostScope(scopes, range);
+
+    // Try to resolve locally
+    const resolved = resolveLocal(symbolsByName, name, scopeId, scopes);
+
+    refs.push({
+      kind: 'References',
+      scopeId,
+      name,
+      range,
+      resolvedSymbolId: resolved?.id,
+    });
+  }
+
+  return refs;
+}
+
+/**
+ * Try to resolve a reference to a symbol within the same file.
+ * Uses scope-based shadowing rules.
+ */
+function resolveLocal(
+  symbolsByName: Map<string, SymbolRecord[]>,
+  name: string,
+  scopeId: ScopeId,
+  scopes: ScopeRecord[]
+): SymbolRecord | undefined {
+  const candidates = symbolsByName.get(name);
+  if (!candidates || candidates.length === 0) return undefined;
+
+  // Prefer symbol in same scope
+  const inSameScope = candidates.find(s => s.scopeId === scopeId);
+  if (inSameScope) return inSameScope;
+
+  // Walk up scope chain
+  const scopeById = new Map(scopes.map(s => [s.id, s]));
+  let currentScopeId: ScopeId | undefined = scopeId;
+
+  while (currentScopeId) {
+    const scope = scopeById.get(currentScopeId);
+    if (!scope) break;
+
+    const inScope = candidates.find(s => s.scopeId === currentScopeId);
+    if (inScope) return inScope;
+
+    currentScopeId = scope.parent;
+  }
+
+  // Fall back to first candidate (file-level)
+  return candidates[0];
+}
+
+// ============================================================================
+// Call Extraction
+// ============================================================================
+
+/**
+ * Extract call expressions from Tree-sitter query captures.
+ */
+function callsExtract(
+  cfg: LangConfig,
+  tree: Parser.Tree,
+  file: string,
+  source: Uint8Array,
+  scopes: ScopeRecord[],
+  symbols: SymbolRecord[],
+  diags: AdapterDiagnostic[]
+): CallsRelation[] {
+  if (!cfg.queries.calls) return [];
+
+  const calls: CallsRelation[] = [];
+
+  const query = cfg.language.query(cfg.queries.calls);
+  const matches = query.matches(tree.rootNode);
+
+  // Build name -> symbol map for resolution
+  const symbolsByName = new Map<string, SymbolRecord[]>();
+  for (const sym of symbols) {
+    if (sym.kind === 'function' || sym.kind === 'method') {
+      const existing = symbolsByName.get(sym.name) ?? [];
+      existing.push(sym);
+      symbolsByName.set(sym.name, existing);
+    }
+  }
+
+  for (const match of matches) {
+    const capturesByName = new Map<string, Parser.SyntaxNode>();
+    for (const capture of match.captures) {
+      capturesByName.set(capture.name, capture.node);
+    }
+
+    // Find callee name
+    let calleeName = '';
+    let calleeNode: Parser.SyntaxNode | undefined;
+
+    // Check for simple callee (callee.id)
+    const idNode = capturesByName.get(cfg.captures.calleePrefix + '.id');
+    if (idNode) {
+      calleeName = sliceText(source, idNode.startIndex, idNode.endIndex);
+      calleeNode = idNode;
+    }
+
+    // Check for member callee (callee.obj + callee.prop/callee.attr)
+    const objNode = capturesByName.get(cfg.captures.calleePrefix + '.obj');
+    const propNode = capturesByName.get(cfg.captures.calleePrefix + '.prop') ??
+                     capturesByName.get(cfg.captures.calleePrefix + '.attr');
+    if (objNode && propNode) {
+      const objName = sliceText(source, objNode.startIndex, objNode.endIndex);
+      const propName = sliceText(source, propNode.startIndex, propNode.endIndex);
+      calleeName = `${objName}.${propName}`;
+      calleeNode = propNode;
+    }
+
+    if (!calleeName || !calleeNode) continue;
+
+    const range: ByteRange = { start: calleeNode.startIndex, end: calleeNode.endIndex };
+    const scopeId = findInnermostScope(scopes, range);
+
+    // Try to resolve simple names
+    let resolved: SymbolRecord | undefined;
+    if (!calleeName.includes('.')) {
+      const candidates = symbolsByName.get(calleeName);
+      if (candidates && candidates.length > 0) {
+        resolved = candidates[0];
+      }
+    }
+
+    calls.push({
+      kind: 'Calls',
+      scopeId,
+      calleeName,
+      range,
+      resolvedSymbolId: resolved?.id,
+    });
+  }
+
+  return calls;
+}
+
+// ============================================================================
+// Import Extraction
+// ============================================================================
+
+/**
+ * Extract import statements from Tree-sitter query captures.
+ */
+function importsExtract(
+  cfg: LangConfig,
+  tree: Parser.Tree,
+  file: string,
+  source: Uint8Array,
+  scopes: ScopeRecord[],
+  diags: AdapterDiagnostic[]
+): ImportsRelation[] {
+  if (!cfg.queries.imports) return [];
+
+  const imports: ImportsRelation[] = [];
+
+  const query = cfg.language.query(cfg.queries.imports);
+  const captures = query.captures(tree.rootNode);
+
+  for (const capture of captures) {
+    if (!capture.name.startsWith(cfg.captures.importPrefix)) continue;
+
+    const node = capture.node;
+    let spec = sliceText(source, node.startIndex, node.endIndex);
+
+    // Remove quotes from string literals
+    if ((spec.startsWith('"') && spec.endsWith('"')) ||
+        (spec.startsWith("'") && spec.endsWith("'"))) {
+      spec = spec.slice(1, -1);
+    }
+
+    const range: ByteRange = { start: node.startIndex, end: node.endIndex };
+    const scopeId = findInnermostScope(scopes, range);
+
+    imports.push({
+      kind: 'Imports',
+      scopeId,
+      spec,
+      range,
+    });
+  }
+
+  return imports;
+}
+
+// ============================================================================
+// Import Binding Extraction
+// ============================================================================
+
+/**
+ * Extract import bindings for cross-file resolution.
+ * Creates ImportBindingRelation for each imported name.
+ */
+function importBindingsExtract(
+  cfg: LangConfig,
+  tree: Parser.Tree,
+  file: string,
+  source: Uint8Array,
+  scopes: ScopeRecord[],
+  symbols: SymbolRecord[],
+  diags: AdapterDiagnostic[]
+): ImportBindingRelation[] {
+  if (!cfg.queries.imports) return [];
+
+  const bindings: ImportBindingRelation[] = [];
+  const query = cfg.language.query(cfg.queries.imports);
+  const matches = query.matches(tree.rootNode);
+
+  // Build a map of symbol names to symbol IDs for linking import bindings
+  const symbolsByNameAndRange = new Map<string, SymbolRecord>();
+  for (const sym of symbols) {
+    // Use name + range start as key for more precise matching
+    const key = `${sym.name}:${sym.range.start}`;
+    symbolsByNameAndRange.set(key, sym);
+  }
+
+  // Also by name only for fallback
+  const symbolsByName = new Map<string, SymbolRecord[]>();
+  for (const sym of symbols) {
+    const existing = symbolsByName.get(sym.name) ?? [];
+    existing.push(sym);
+    symbolsByName.set(sym.name, existing);
+  }
+
+  for (const match of matches) {
+    const capturesByName = new Map<string, Parser.SyntaxNode>();
+    for (const capture of match.captures) {
+      capturesByName.set(capture.name, capture.node);
+    }
+
+    // Get module specifier
+    let moduleSpec = '';
+    const sourceNode = capturesByName.get('import.source') ??
+                       capturesByName.get('import.require_source') ??
+                       capturesByName.get('import.from_module') ??
+                       capturesByName.get('import.relative_module');
+    if (sourceNode) {
+      moduleSpec = sliceText(source, sourceNode.startIndex, sourceNode.endIndex);
+      // Remove quotes
+      if ((moduleSpec.startsWith('"') && moduleSpec.endsWith('"')) ||
+          (moduleSpec.startsWith("'") && moduleSpec.endsWith("'"))) {
+        moduleSpec = moduleSpec.slice(1, -1);
+      }
+    }
+
+    if (!moduleSpec) continue;
+
+    // Determine range for the entire import statement
+    let importRange: ByteRange = { start: 0, end: 0 };
+    for (const capture of match.captures) {
+      if (capture.name.startsWith('import.') && 
+          (capture.name.endsWith('.named') || 
+           capture.name.endsWith('.default') || 
+           capture.name.endsWith('.namespace') ||
+           capture.name.endsWith('.module') ||
+           capture.name.endsWith('.from') ||
+           capture.name.endsWith('.relative'))) {
+        importRange = { start: capture.node.startIndex, end: capture.node.endIndex };
+        break;
+      }
+    }
+
+    // Handle named imports: import { foo, bar as baz } from "module"
+    const bindingNameNode = capturesByName.get('import.binding_name');
+    const bindingAliasNode = capturesByName.get('import.binding_alias');
+    if (bindingNameNode) {
+      const importedName = sliceText(source, bindingNameNode.startIndex, bindingNameNode.endIndex);
+      const localName = bindingAliasNode 
+        ? sliceText(source, bindingAliasNode.startIndex, bindingAliasNode.endIndex)
+        : importedName;
+
+      // Find the corresponding symbol
+      const localSymbol = findImportSymbol(symbolsByName, localName, bindingNameNode.startIndex);
+      if (localSymbol) {
+        bindings.push({
+          kind: 'ImportBinding',
+          localSymbolId: localSymbol.id,
+          importedName,
+          moduleSpec,
+          isDefault: false,
+          isNamespace: false,
+          range: importRange.end > 0 ? importRange : { start: bindingNameNode.startIndex, end: bindingNameNode.endIndex },
+        });
+      }
+    }
+
+    // Handle default imports: import foo from "module"
+    const defaultNameNode = capturesByName.get('import.default_name');
+    if (defaultNameNode) {
+      const localName = sliceText(source, defaultNameNode.startIndex, defaultNameNode.endIndex);
+      const localSymbol = findImportSymbol(symbolsByName, localName, defaultNameNode.startIndex);
+      if (localSymbol) {
+        bindings.push({
+          kind: 'ImportBinding',
+          localSymbolId: localSymbol.id,
+          importedName: 'default',
+          moduleSpec,
+          isDefault: true,
+          isNamespace: false,
+          range: importRange.end > 0 ? importRange : { start: defaultNameNode.startIndex, end: defaultNameNode.endIndex },
+        });
+      }
+    }
+
+    // Handle namespace imports: import * as foo from "module"
+    const namespaceNameNode = capturesByName.get('import.namespace_name');
+    if (namespaceNameNode) {
+      const localName = sliceText(source, namespaceNameNode.startIndex, namespaceNameNode.endIndex);
+      const localSymbol = findImportSymbol(symbolsByName, localName, namespaceNameNode.startIndex);
+      if (localSymbol) {
+        bindings.push({
+          kind: 'ImportBinding',
+          localSymbolId: localSymbol.id,
+          importedName: '*',
+          moduleSpec,
+          isDefault: false,
+          isNamespace: true,
+          range: importRange.end > 0 ? importRange : { start: namespaceNameNode.startIndex, end: namespaceNameNode.endIndex },
+        });
+      }
+    }
+
+    // Handle require imports: const foo = require("module")
+    const requireNameNode = capturesByName.get('import.require_name');
+    if (requireNameNode) {
+      const localName = sliceText(source, requireNameNode.startIndex, requireNameNode.endIndex);
+      const localSymbol = findImportSymbol(symbolsByName, localName, requireNameNode.startIndex);
+      if (localSymbol) {
+        bindings.push({
+          kind: 'ImportBinding',
+          localSymbolId: localSymbol.id,
+          importedName: 'default',
+          moduleSpec,
+          isDefault: true,
+          isNamespace: false,
+          range: importRange.end > 0 ? importRange : { start: requireNameNode.startIndex, end: requireNameNode.endIndex },
+        });
+      }
+    }
+
+    // Handle destructured require: const { foo } = require("module")
+    const requireBindingNode = capturesByName.get('import.require_binding');
+    if (requireBindingNode) {
+      const localName = sliceText(source, requireBindingNode.startIndex, requireBindingNode.endIndex);
+      const localSymbol = findImportSymbol(symbolsByName, localName, requireBindingNode.startIndex);
+      if (localSymbol) {
+        bindings.push({
+          kind: 'ImportBinding',
+          localSymbolId: localSymbol.id,
+          importedName: localName,
+          moduleSpec,
+          isDefault: false,
+          isNamespace: false,
+          range: importRange.end > 0 ? importRange : { start: requireBindingNode.startIndex, end: requireBindingNode.endIndex },
+        });
+      }
+    }
+  }
+
+  return bindings;
+}
+
+/**
+ * Find an import symbol by name, preferring symbols near the given position.
+ */
+function findImportSymbol(
+  symbolsByName: Map<string, SymbolRecord[]>,
+  name: string,
+  nearPosition: number
+): SymbolRecord | undefined {
+  const candidates = symbolsByName.get(name);
+  if (!candidates || candidates.length === 0) return undefined;
+
+  // If only one, return it
+  if (candidates.length === 1) return candidates[0];
+
+  // Find the closest one to the position
+  let closest: SymbolRecord | undefined;
+  let closestDistance = Infinity;
+
+  for (const sym of candidates) {
+    const distance = Math.abs(sym.range.start - nearPosition);
+    if (distance < closestDistance) {
+      closestDistance = distance;
+      closest = sym;
+    }
+  }
+
+  return closest;
+}
+
+// ============================================================================
+// Export Extraction
+// ============================================================================
+
+/**
+ * Extract export statements for cross-file resolution.
+ * Creates ExportsRelation for each exported symbol.
+ */
+function exportsExtract(
+  cfg: LangConfig,
+  tree: Parser.Tree,
+  file: string,
+  source: Uint8Array,
+  scopes: ScopeRecord[],
+  symbols: SymbolRecord[],
+  diags: AdapterDiagnostic[]
+): ExportsRelation[] {
+  if (!cfg.queries.exports) return [];
+
+  const exports: ExportsRelation[] = [];
+  const query = cfg.language.query(cfg.queries.exports);
+  const matches = query.matches(tree.rootNode);
+
+  // Build symbol lookup maps
+  const symbolsByName = new Map<string, SymbolRecord[]>();
+  for (const sym of symbols) {
+    const existing = symbolsByName.get(sym.name) ?? [];
+    existing.push(sym);
+    symbolsByName.set(sym.name, existing);
+  }
+
+  for (const match of matches) {
+    const capturesByName = new Map<string, Parser.SyntaxNode>();
+    for (const capture of match.captures) {
+      capturesByName.set(capture.name, capture.node);
+    }
+
+    // Determine export range
+    let exportRange: ByteRange = { start: 0, end: 0 };
+    for (const capture of match.captures) {
+      if (capture.name.startsWith('export.') && 
+          (capture.name.endsWith('.declaration') || 
+           capture.name.endsWith('.named') || 
+           capture.name.endsWith('.default') ||
+           capture.name.endsWith('.reexport') ||
+           capture.name.endsWith('.star'))) {
+        exportRange = { start: capture.node.startIndex, end: capture.node.endIndex };
+        break;
+      }
+    }
+
+    // Handle export declarations: export const/function/class foo
+    // Skip if this is a default export (export.default_name takes precedence)
+    const declNameNode = capturesByName.get('export.decl_name');
+    const defaultNameNode = capturesByName.get('export.default_name');
+    if (declNameNode && !defaultNameNode) {
+      const exportedName = sliceText(source, declNameNode.startIndex, declNameNode.endIndex);
+      const symbol = findExportSymbol(symbolsByName, exportedName, declNameNode.startIndex);
+      if (symbol) {
+        exports.push({
+          kind: 'Exports',
+          symbolId: symbol.id,
+          exportedName,
+          isDefault: false,
+          range: exportRange.end > 0 ? exportRange : { start: declNameNode.startIndex, end: declNameNode.endIndex },
+        });
+      }
+    }
+
+    // Handle named exports: export { foo } or export { foo as bar }
+    const namedNode = capturesByName.get('export.name');
+    const aliasNode = capturesByName.get('export.alias');
+    if (namedNode && !capturesByName.get('export.reexport_source')) {
+      const symbolName = sliceText(source, namedNode.startIndex, namedNode.endIndex);
+      const exportedName = aliasNode 
+        ? sliceText(source, aliasNode.startIndex, aliasNode.endIndex)
+        : symbolName;
+      const symbol = findExportSymbol(symbolsByName, symbolName, namedNode.startIndex);
+      if (symbol) {
+        exports.push({
+          kind: 'Exports',
+          symbolId: symbol.id,
+          exportedName,
+          isDefault: false,
+          range: exportRange.end > 0 ? exportRange : { start: namedNode.startIndex, end: namedNode.endIndex },
+        });
+      }
+    }
+
+    // Handle default exports: export default foo
+    if (defaultNameNode) {
+      const symbolName = sliceText(source, defaultNameNode.startIndex, defaultNameNode.endIndex);
+      const symbol = findExportSymbol(symbolsByName, symbolName, defaultNameNode.startIndex);
+      if (symbol) {
+        exports.push({
+          kind: 'Exports',
+          symbolId: symbol.id,
+          exportedName: 'default',
+          isDefault: true,
+          range: exportRange.end > 0 ? exportRange : { start: defaultNameNode.startIndex, end: defaultNameNode.endIndex },
+        });
+      }
+    }
+
+    // Handle re-exports: export { foo } from "module"
+    const reexportNameNode = capturesByName.get('export.reexport_name');
+    const reexportSourceNode = capturesByName.get('export.reexport_source');
+    const reexportAliasNode = capturesByName.get('export.reexport_alias');
+    if (reexportNameNode && reexportSourceNode) {
+      const sourceName = sliceText(source, reexportNameNode.startIndex, reexportNameNode.endIndex);
+      const exportedName = reexportAliasNode
+        ? sliceText(source, reexportAliasNode.startIndex, reexportAliasNode.endIndex)
+        : sourceName;
+      let sourceModule = sliceText(source, reexportSourceNode.startIndex, reexportSourceNode.endIndex);
+      // Remove quotes
+      if ((sourceModule.startsWith('"') && sourceModule.endsWith('"')) ||
+          (sourceModule.startsWith("'") && sourceModule.endsWith("'"))) {
+        sourceModule = sourceModule.slice(1, -1);
+      }
+
+      // For re-exports, we don't have a local symbol - create a placeholder
+      // The symbolId will be resolved during cross-file resolution
+      exports.push({
+        kind: 'Exports',
+        symbolId: '', // Will be resolved during cross-file resolution
+        exportedName,
+        isDefault: false,
+        sourceModule,
+        sourceName,
+        range: exportRange.end > 0 ? exportRange : { start: reexportNameNode.startIndex, end: reexportNameNode.endIndex },
+      });
+    }
+
+    // Handle star re-exports: export * from "module"
+    const starSourceNode = capturesByName.get('export.star_source');
+    if (starSourceNode) {
+      let sourceModule = sliceText(source, starSourceNode.startIndex, starSourceNode.endIndex);
+      if ((sourceModule.startsWith('"') && sourceModule.endsWith('"')) ||
+          (sourceModule.startsWith("'") && sourceModule.endsWith("'"))) {
+        sourceModule = sourceModule.slice(1, -1);
+      }
+
+      // Star exports are handled specially during resolution
+      exports.push({
+        kind: 'Exports',
+        symbolId: '', // Placeholder for star export
+        exportedName: '*',
+        isDefault: false,
+        sourceModule,
+        sourceName: '*',
+        range: { start: starSourceNode.startIndex, end: starSourceNode.endIndex },
+      });
+    }
+  }
+
+  // Deduplicate exports: if we have both a named export and default export for the same symbol,
+  // keep only the default export (for `export default class Foo` patterns)
+  const symbolsWithDefault = new Set<string>();
+  for (const exp of exports) {
+    if (exp.isDefault && exp.symbolId) {
+      symbolsWithDefault.add(exp.symbolId);
+    }
+  }
+  
+  const dedupedExports = exports.filter(exp => {
+    // Keep default exports
+    if (exp.isDefault) return true;
+    // Keep exports for symbols without a default export
+    if (!symbolsWithDefault.has(exp.symbolId)) return true;
+    // Skip non-default exports for symbols that have a default export
+    return false;
+  });
+
+  return dedupedExports;
+}
+
+/**
+ * Find an export symbol by name, preferring symbols near the given position.
+ */
+function findExportSymbol(
+  symbolsByName: Map<string, SymbolRecord[]>,
+  name: string,
+  nearPosition: number
+): SymbolRecord | undefined {
+  const candidates = symbolsByName.get(name);
+  if (!candidates || candidates.length === 0) return undefined;
+
+  // For exports, prefer file-scope symbols
+  const fileLevel = candidates.filter(s => s.scopeId.includes('scope:file'));
+  if (fileLevel.length === 1) return fileLevel[0];
+  if (fileLevel.length > 1) {
+    // Find closest to position
+    let closest: SymbolRecord | undefined;
+    let closestDistance = Infinity;
+    for (const sym of fileLevel) {
+      const distance = Math.abs(sym.range.start - nearPosition);
+      if (distance < closestDistance) {
+        closestDistance = distance;
+        closest = sym;
+      }
+    }
+    return closest;
+  }
+
+  // Fall back to any symbol
+  return candidates[0];
+}
+
+// ============================================================================
+// Main Indexing Function
+// ============================================================================
+
+/**
+ * Index a file using Tree-sitter and return the delta.
+ *
+ * @param cfg - Language configuration
+ * @param file - Absolute file path
+ * @param bytes - File contents as bytes
+ * @param revision - Revision identifier (e.g., content hash)
+ * @returns FileIndexDelta with symbols, scopes, and relations
+ */
+export function indexFileWithTreeSitter(
+  cfg: LangConfig,
+  file: string,
+  bytes: Uint8Array,
+  revision: string
+): FileIndexDelta {
+  const parser = new Parser();
+  parser.setLanguage(cfg.language);
+
+  // web-tree-sitter expects a string, not a Buffer
+  const sourceText = Buffer.from(bytes).toString('utf8');
+  const tree = parser.parse(sourceText);
+  const diags: AdapterDiagnostic[] = [];
+
+  // Build scopes first
+  const scopes = scopesBuild(cfg, tree, file);
+
+  // Extract symbols
+  const { symbols, declRanges } = symbolsExtract(cfg, tree, file, bytes, scopes);
+
+  // Build relations
+  const relations: RelationRecord[] = [];
+
+  // Defines relations
+  for (const symbol of symbols) {
+    relations.push({
+      kind: 'Defines',
+      scopeId: symbol.scopeId,
+      symbolId: symbol.id,
+    } satisfies DefinesRelation);
+  }
+
+  // Contains relations (scope nesting)
+  for (const scope of scopes) {
+    if (scope.parent) {
+      relations.push({
+        kind: 'Contains',
+        scopeId: scope.parent,
+        childScopeId: scope.id,
+      } satisfies ContainsRelation);
+    }
+  }
+
+  // References
+  const refs = refsExtract(cfg, tree, file, bytes, scopes, symbols, declRanges, diags);
+  relations.push(...refs);
+
+  // Calls
+  const calls = callsExtract(cfg, tree, file, bytes, scopes, symbols, diags);
+  relations.push(...calls);
+
+  // Imports (basic module specifier tracking)
+  const imports = importsExtract(cfg, tree, file, bytes, scopes, diags);
+  relations.push(...imports);
+
+  // Import bindings (for cross-file resolution)
+  const importBindings = importBindingsExtract(cfg, tree, file, bytes, scopes, symbols, diags);
+  relations.push(...importBindings);
+
+  // Exports (for cross-file resolution)
+  const exportRelations = exportsExtract(cfg, tree, file, bytes, scopes, symbols, diags);
+  relations.push(...exportRelations);
+
+  return {
+    file,
+    revision,
+    symbols,
+    scopes,
+    relations,
+    diagnostics: diags,
+  };
+}
+
+/**
+ * Create an index adapter from a language configuration.
+ */
+export function indexAdapterCreate(cfg: LangConfig) {
+  return {
+    languageId: cfg.languageId,
+    capabilities: {
+      crossFileResolution: false,
+      callGraph: 'heuristic' as const,
+      symbolKinds: new Set(Object.values(cfg.symbolKinds.byCaptureSuffix)),
+      limitations: [
+        'File-local resolution only',
+        'Call detection is heuristic (may miss indirect calls)',
+        'No type information',
+      ],
+    },
+    indexFile(file: string, bytes: Uint8Array, revision: string): FileIndexDelta {
+      return indexFileWithTreeSitter(cfg, file, bytes, revision);
+    },
+  };
+}
