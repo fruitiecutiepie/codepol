@@ -192,6 +192,9 @@ importers:
       '@codepol/core':
         specifier: workspace:*
         version: link:../core
+      '@codepol/eslint-plugin':
+        specifier: workspace:*
+        version: link:../eslint-plugin
       '@types/node':
         specifier: ^25.0.3
         version: 25.0.3

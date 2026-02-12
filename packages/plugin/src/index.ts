@@ -26,9 +26,15 @@ import {
   configGetFromPathSync,
 } from '@codepol/core';
 import { loggerTreeCheckProvider } from './policyPluginLogger';
+import { unusedExportsRule } from './unusedExportsRule';
+import { unusedExportsCheck } from './unusedExportsCheck';
 
 // Re-export cache clear for backwards compatibility
 export { policyCacheClear };
+
+// Re-export the unused exports rule and check function
+export { unusedExportsRule };
+export { unusedExportsCheck };
 
 /**
  * Rule options for require-logger-enter-exit.
@@ -523,4 +529,4 @@ export const loggerEnterExitRule: CodepolPluginRule = pluginRuleNew({
   },
 });
 
-export default [loggerEnterExitRule];
+export default [loggerEnterExitRule, unusedExportsRule];

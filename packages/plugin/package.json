@@ -24,11 +24,13 @@
   },
   "peerDependencies": {
     "@codepol/core": "^1.0.0",
+    "@codepol/eslint-plugin": "^1.0.0",
     "@typescript-eslint/utils": "^8.53.0",
     "eslint": "^9.0.0"
   },
   "devDependencies": {
     "@codepol/core": "workspace:*",
+    "@codepol/eslint-plugin": "workspace:*",
     "@types/node": "^25.0.3",
     "@typescript-eslint/utils": "^8.53.0",
     "eslint": "^9.39.2",
