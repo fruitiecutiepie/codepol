@@ -3,6 +3,8 @@ import type { PolicyFile, PolicyRule, PolicyRuleTarget, PolicyViolation, PluginR
 import { ruleMatchesGet } from './policyGet';
 import { policyPluginsGet, pluginGetForRule, type PolicyPluginsMap } from './policyPluginsGet';
 import { Result, Ok, Err, isErr } from '../result/result';
+import type { ProjectIndex } from '../index/indexQuery';
+import { projectIndexBuild } from '../index/indexBuilder';
 
 function policyPluginGet(
   pluginsMap: PolicyPluginsMap,
@@ -32,6 +34,13 @@ function policyPluginGet(
 
 /**
  * Checks a single file for policy violations using the configured plugin.
+ * @param filePath - Absolute path to the file to check
+ * @param rule - The policy rule to check against
+ * @param target - The target configuration for this check
+ * @param policy - The complete policy file
+ * @param pluginsMap - Map of loaded plugins
+ * @param dir - Working directory
+ * @param projectIndex - Optional project-wide semantic index for cross-file analysis
  * @returns Result containing violations array or an error message
  */
 export function policyViolationsGetForFile(
@@ -40,7 +49,8 @@ export function policyViolationsGetForFile(
   target: PolicyRuleTarget,
   policy: PolicyFile,
   pluginsMap: PolicyPluginsMap,
-  dir: string
+  dir: string,
+  projectIndex?: ProjectIndex
 ): Result<PolicyViolation[], string> {
   const pluginResult = policyPluginGet(pluginsMap, rule, target);
   if (isErr(pluginResult)) {
@@ -58,13 +68,28 @@ export function policyViolationsGetForFile(
     dir: dir,
     target: target,
     ruleArgs: rule.args,
+    projectIndex: projectIndex,
   });
 
   return checkResult;
 }
 
 /**
+ * Check if any plugin in the map requires a project index.
+ */
+function pluginsRequireProjectIndex(pluginsMap: PolicyPluginsMap): boolean {
+  for (const [, plugin] of pluginsMap) {
+    if (plugin.pluginRule.capabilities.requiresProjectIndex) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Checks all files matching the policy rules for violations.
+ * If any plugin requires a project-wide semantic index, it will be built
+ * before running checks.
  * @returns Result containing all violations or an error message
  */
 export async function policyViolationsGetFromDir(
@@ -77,6 +102,33 @@ export async function policyViolationsGetFromDir(
   }
   const pluginsMap = pluginsMapResult.Ok;
   const matches = await ruleMatchesGet(policy, dir);
+
+  // Collect all files to be checked
+  const allFiles = new Set<string>();
+  for (const match of matches) {
+    for (const filePath of match.files) {
+      allFiles.add(filePath);
+    }
+  }
+
+  // Build project index if any plugin requires it
+  let projectIndex: ProjectIndex | undefined;
+  if (pluginsRequireProjectIndex(pluginsMap) && allFiles.size > 0) {
+    try {
+      const indexResult = await projectIndexBuild({
+        files: Array.from(allFiles),
+        dir,
+      });
+      projectIndex = indexResult.index;
+    } catch (error) {
+      // Log but don't fail - plugins should handle missing index gracefully
+      console.warn(
+        'Failed to build project index:',
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+  }
+
   const violationsAll: PolicyViolation[] = [];
   for (const match of matches) {
     for (const filePath of match.files) {
@@ -86,7 +138,8 @@ export async function policyViolationsGetFromDir(
         match.target,
         policy,
         pluginsMap,
-        dir
+        dir,
+        projectIndex
       );
       if (isErr(violationsResult)) {
         return violationsResult;

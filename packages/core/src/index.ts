@@ -66,6 +66,8 @@ export { pluginRuleNew } from './types';
 /** Default ESLint plugin name for codepol rules */
 export const ESLINT_PLUGIN_NAME_DEFAULT = 'codepol';
 
+import { parserInit } from './parser/parserInit';
+import { langAdd } from './parser/parserLangs';
 import type {
   CodepolPluginRule,
   LintProvider,
@@ -167,29 +169,34 @@ export function rulePluginLanguagesGet(plugin: CodepolPluginRule): string[] {
 
 /**
  * Generates lint provider rules config from codepol config.
- * Users spread this into their lint config (e.g., eslint.config.js).
+ * Users spread this into their lint config (e.g., eslint.config.mts).
  *
- * @param provider - The lint provider platform ('eslint')
+ * @param provider - The lint provider platform (e.g., 'eslint')
  * @param configPath - Path to config file (auto-discovered if not specified)
  * @returns Rules config for the lint provider
  *
  * @example
  * ```javascript
- * // eslint.config.js
- * import { providerRulesConfigGet } from '@codepol/core';
+ * // eslint.config.mts
+ * import { providerRulesConfigGet, defineConfig } from '@codepol/core';
  *
- * export default [{
- *   plugins: { codepol },
+ * export default defineConfig([{
+ *   plugins: { codepol: eslintPluginCreate(codepolPlugin) },
  *   rules: {
  *     ...await providerRulesConfigGet('eslint'),
  *   },
- * }];
+ * }]);,
  * ```
  */
 export async function providerRulesConfigGet(
-  provider: 'eslint',
+  provider: string,
   configPath?: string
 ): Promise<Record<string, unknown>> {
+  // Register languages and initialize tree-sitter parser for rules that need cross-file analysis
+  langAdd({ langId: 'typescript', fileExtensions: ['.ts'] });
+  langAdd({ langId: 'tsx', fileExtensions: ['.tsx'] });
+  await parserInit();
+  
   const cwd = process.cwd();
   
   // Load config: explicit path or auto-discover
@@ -235,32 +242,51 @@ export async function providerRulesConfigGet(
     // Find ESLint lint provider
     const lintProviders = plugin.pluginRule.capabilities.lintProviders ?? [];
     const eslintProvider = lintProviders.find(p => p.platform === provider);
-    if (!eslintProvider) {
-      continue; // Rule doesn't have this provider, skip
+    
+    // Check if rule can be adapted from treeCheckProvider
+    const treeCheckProvider = plugin.pluginRule.capabilities.treeCheckProvider;
+    const canAdaptFromTreeCheck = !eslintProvider && treeCheckProvider && provider === 'eslint';
+    
+    if (!eslintProvider && !canAdaptFromTreeCheck) {
+      continue; // Rule doesn't have this provider and can't be adapted, skip
     }
 
-    const eslintConfig = eslintProvider.config as EslintProviderConfig;
-    
-    // Extract short rule name
+    // Extract short rule name (used as the rule ID for adapted rules)
     const lastSlashIndex = resolvedId.lastIndexOf('/');
     const ruleNameShort = lastSlashIndex !== -1 ? resolvedId.slice(lastSlashIndex + 1) : resolvedId;
     
-    const pluginName = eslintConfig.pluginName ?? ESLINT_PLUGIN_NAME_DEFAULT;
+    // For adapted rules, use the plugin rule ID directly
+    // For explicit lint providers, use the config from the provider
+    const pluginName = eslintProvider 
+      ? (eslintProvider.config as EslintProviderConfig).pluginName ?? ESLINT_PLUGIN_NAME_DEFAULT
+      : ESLINT_PLUGIN_NAME_DEFAULT;
     const configKey = `${pluginName}/${ruleNameShort}`;
 
     if (rules[configKey]) {
       throw new Error(`Duplicate rule configuration: ${configKey}`);
     }
 
-    // Get options from provider
-    const options = eslintConfig.ruleOptions?.({
-      cwd,
-      policy,
-      configPath: resolvedConfigPath,
-      ruleId: resolvedId,
-      ruleArgs: rule.args,
-      ruleTargets,
-    }) ?? {};
+    // Get options from provider or use default adapted options
+    let options: Record<string, unknown>;
+    if (eslintProvider) {
+      const eslintConfig = eslintProvider.config as EslintProviderConfig;
+      const providerOptions = eslintConfig.ruleOptions?.({
+        cwd,
+        policy,
+        configPath: resolvedConfigPath,
+        ruleId: resolvedId,
+        ruleArgs: rule.args,
+        ruleTargets,
+      });
+      options = (providerOptions ?? Object.create(null)) as Record<string, unknown>;
+    } else {
+      // For adapted tree-check rules, pass config path and targets
+      options = {
+        configPath: resolvedConfigPath,
+        ruleTargets,
+        policyExclude: policy.exclude,
+      } as Record<string, unknown>;
+    }
 
     // Use severity from config, default to 'error'
     const severity: LintSeverity = rule.severity ?? 'error';
@@ -344,3 +370,60 @@ export {
   configFileDiscover,
   configCacheClear,
 } from './config/configDiscover';
+
+// ============================================================================
+// Semantic Index (Cross-File Analysis)
+// ============================================================================
+
+// Core index types
+export type {
+  SymbolId,
+  ScopeId,
+  SymbolKind,
+  ScopeKind,
+  ByteRange,
+  SymbolRecord,
+  ScopeRecord,
+  RelationRecord,
+  DefinesRelation,
+  ContainsRelation,
+  ReferencesRelation,
+  ImportsRelation,
+  CallsRelation,
+  ImportBindingRelation,
+  ExportsRelation,
+  SymbolFilter,
+  IndexCapabilities,
+} from './index/indexTypes';
+
+export { SymbolFlags } from './index/indexTypes';
+
+// Module resolution
+export type { ModuleResolveOptions } from './index/moduleResolver';
+export {
+  moduleResolve,
+  isRelativeImport,
+  isExternalPackage,
+  DEFAULT_EXTENSIONS,
+} from './index/moduleResolver';
+
+// Query API
+export type { ProjectIndex } from './index/indexQuery';
+export { projectIndexCreate } from './index/indexQuery';
+
+// Index builder
+export type { IndexBuildOptions, IndexBuildResult } from './index/indexBuilder';
+export {
+  projectIndexBuild,
+  projectIndexBuildSync,
+  projectIndexUpdate,
+  projectIndexUpdateFileSync,
+  projectIndexUpdateFileFromSource,
+  projectIndexRemoveFiles,
+  crossFileResolveForFile,
+  adapterRegister,
+} from './index/indexBuilder';
+
+// Index store (advanced use)
+export type { FileIndexDelta } from './index/indexStore';
+export { IndexStore, indexStoreNew } from './index/indexStore';

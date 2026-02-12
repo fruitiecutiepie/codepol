@@ -1,4 +1,5 @@
 import { Result } from '../result/result';
+import type { ProjectIndex } from '../index/indexQuery';
 
 /**
  * Configuration for importing the logger module.
@@ -131,6 +132,12 @@ export type PolicyCheckContext = {
   target: PolicyRuleTarget;
   /** Resolved arguments for the rule */
   ruleArgs?: unknown;
+  /**
+   * Optional project-wide semantic index for cross-file analysis.
+   * Only available when at least one plugin declares `requiresProjectIndex: true`.
+   * Plugins should check for existence before using.
+   */
+  projectIndex?: ProjectIndex;
 };
 
 /**
@@ -222,6 +229,12 @@ export type PolicyPluginCapabilities = {
   treeCheckProvider?: TreeCheckProvider;
   /** Optional fix provider */
   fixProvider?: FixProvider;
+  /**
+   * Declare that this plugin requires project-wide semantic index.
+   * When true, the core will build the index before running checks
+   * and pass it via `context.projectIndex`.
+   */
+  requiresProjectIndex?: boolean;
 };
 
 /**
