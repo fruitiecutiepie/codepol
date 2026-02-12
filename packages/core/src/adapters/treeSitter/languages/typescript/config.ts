@@ -71,11 +71,14 @@ export function typescriptConfigCreate(language: Language): LangConfig {
     symbolKinds: {
       byCaptureSuffix: {
         'class': 'class' as const,
+        'abstract_class': 'class' as const,
         'interface': 'interface' as const,
         'type': 'type' as const,
         'enum': 'enum' as const,
+        'enumMember': 'enumMember' as const,
         'namespace': 'namespace' as const,
         'function': 'function' as const,
+        'generator': 'function' as const,
         'method': 'method' as const,
         'constructor': 'method' as const,
         'variable': 'variable' as const,
@@ -89,7 +92,9 @@ export function typescriptConfigCreate(language: Language): LangConfig {
     scopeKinds: {
       byNodeType: {
         'class_declaration': 'class' as const,
+        'abstract_class_declaration': 'class' as const,
         'function_declaration': 'function' as const,
+        'generator_function_declaration': 'function' as const,
         'arrow_function': 'function' as const,
         'method_definition': 'function' as const,
         'statement_block': 'block' as const,

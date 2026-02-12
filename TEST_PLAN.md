@@ -192,9 +192,9 @@ Examples:
 | Symbol extraction — variables (const, let) | Integration | `tests/index.builder.spec.ts` | Exists |
 | Symbol extraction — type aliases | Integration | `tests/index.builder.spec.ts` | Exists |
 | Symbol extraction — interfaces | Integration | `tests/index.builder.spec.ts` | Exists |
-| Symbol extraction — enums | Integration | `tests/index.builder.spec.ts` | Exists (enum members not yet extracted — skipped test) |
-| Symbol extraction — async flag | Integration | `tests/index.builder.spec.ts` | Skipped (async flag detection not yet implemented) |
-| Symbol extraction — enum members | Integration | `tests/index.builder.spec.ts` | Skipped (enum member extraction not yet in symbols query) |
+| Symbol extraction — enums | Integration | `tests/index.builder.spec.ts` | Exists |
+| Symbol extraction — async flag | Integration | `tests/index.builder.spec.ts` | Exists |
+| Symbol extraction — enum members | Integration | `tests/index.builder.spec.ts` | Exists |
 | Scope tree construction — nested functions, classes, blocks | Integration | `tests/index.builder.spec.ts` | Exists |
 | Heuristic call detection | Integration | `tests/index.builder.spec.ts` | Exists |
 | `getCallers` / `getCallees` via ProjectIndex API | Integration | `tests/index.builder.spec.ts` | Skipped (symbol ranges need full declaration span) |
@@ -334,7 +334,7 @@ Methods that are thin wrappers over `IndexStore` can be unit-tested with a pre-p
 | Handles method definitions | Integration | `tests/treesitter.require-logger-enter-exit.spec.ts` | Exists |
 | Handles function expressions | Integration | `tests/treesitter.require-logger-enter-exit.spec.ts` | Exists |
 | Handles async functions | Integration | `tests/treesitter.require-logger-enter-exit.spec.ts` | Exists |
-| Handles generator functions | Integration | `tests/treesitter.require-logger-enter-exit.spec.ts` | Skipped (`functionsVisit` does not handle `generator_function_declaration` node type) |
+| Handles generator functions | Integration | `tests/treesitter.require-logger-enter-exit.spec.ts` | Exists |
 | Empty function body | Integration | `tests/treesitter.require-logger-enter-exit.spec.ts` | Exists |
 
 #### Logger ESLint Rule (`loggerLintProvider`)
@@ -460,7 +460,7 @@ Methods that are thin wrappers over `IndexStore` can be unit-tested with a pre-p
 | Result utilities | 8 | 0 | 100% |
 | Module resolver | 9 | 0 | 100% |
 | IndexStore | 14 | 0 | 100% |
-| Index builder | 29 | 0 | 100% |
+| Index builder | 31 | 0 | 100% |
 | Index query (ProjectIndex) | 16 | 0 | 100% |
 | Policy loading | 7 | 0 | 100% |
 | Policy tree check | 7 | 0 | 100% |
@@ -468,7 +468,7 @@ Methods that are thin wrappers over `IndexStore` can be unit-tested with a pre-p
 | Parser/languages | 21 | 0 | 100% |
 | Config discovery | 11 | 0 | 100% |
 | Tree check adapter | 6 | 0 | 100% |
-| Plugin: logger tree check | 7 | 1 | 88% |
+| Plugin: logger tree check | 8 | 0 | 100% |
 | Plugin: logger ESLint rule | 8 | 0 | 100% |
 | Plugin: unused exports | 26 | 0 | 100% |
 | ESLint plugin | 15 | 1 | 94% |
@@ -486,7 +486,7 @@ Ordered by risk (silent corruption potential) and effort (lower effort = do it s
 | 2 | IndexStore | High | Medium (14 tests, need test helper for `FileIndexDelta`) | In-memory data structure that all queries depend on. Bugs here corrupt symbols, references, and exports silently. Requires building a `testDeltaCreate` helper first, which pays for itself across all store and query tests. | Done |
 | 3 | Result utilities | Low | Trivial (8 tests, ~30 min) | Low risk because the implementation is simple, but the tests validate the error-handling contract that every `Result`-returning function depends on. Quick win. | Done |
 | 4 | ProjectIndex query methods | Medium | Small (10 tests, reuse IndexStore test helper) | Thin wrappers, but untested wrappers can silently drop filters or mismap fields. Once the IndexStore helper exists, these are fast to write. | Done |
-| 5 | Index builder topologies | High | Large (17 new tests, each needs multi-file setups) | Cross-file resolution is the hardest feature. Circular imports, re-exports, star exports, diamond deps, missing files — these are the scenarios where bugs actually ship. | Done (topology tests in `cross-file-resolution.spec.ts`; symbol extraction, scopes, calls, async builder, incremental APIs, `adapterRegister` in `index.builder.spec.ts`) |
+| 5 | Index builder topologies | High | Large (17 new tests, each needs multi-file setups) | Cross-file resolution is the hardest feature. Circular imports, re-exports, star exports, diamond deps, missing files — these are the scenarios where bugs actually ship. | Done (topology tests in `cross-file-resolution.spec.ts`; symbol extraction, scopes, calls, async builder, incremental APIs, `adapterRegister` in `index.builder.spec.ts`. Async flag detection, enum member extraction, generator/abstract_class config mappings implemented — 3 previously skipped tests now pass.) |
 | 6 | Policy loading | Medium | Small (6 tests, inline policy objects) | Glob matching and target resolution are used by every rule. Bugs here cause rules to silently skip files. | Done |
 | 7 | Config discovery | Medium | Medium (6 tests, temp directories with config files) | Users hit config discovery issues first. Needs temp directory scaffolding but each test is straightforward. | Done (11 tests: discovery, precedence, walk-up, error paths, JS config loading async/sync, cache clear, defineConfig) |
 | 7b | Tree check adapter | Low | Trivial (2 tests, pure functions) | Small module but 0% coverage. Pure mapper functions, quick to test exhaustively. | Done (6 tests: field mapping, severity, fix pass-through, array mapping) |
@@ -810,7 +810,7 @@ These were added as part of closing gaps identified in this plan.
 | `packages/core/src/index/moduleResolver.spec.ts` | Unit | Path resolution, extensions, aliases, index files |
 | `packages/core/src/index/indexQuery.spec.ts` | Unit | ProjectIndex query methods: symbols, references, callers/callees, exports, scopes, resolveImport, stats, capabilities |
 | `packages/core/src/policy/policyGet.spec.ts` | Unit | Target resolution, glob matching, language matching, policyFileGetChecked, ruleMatchesGet, policy contract validation (unknown refs, empty targets map, empty targets array) |
-| `tests/index.builder.spec.ts` | Integration | Symbol extraction (functions, classes, variables, types, interfaces, enums), scope tree construction, heuristic call detection, async builder, incremental APIs (updateFromSource, removeFiles, crossFileResolveForFile) |
+| `tests/index.builder.spec.ts` | Integration | Symbol extraction (functions, classes, variables, types, interfaces, enums, enum members, async flag), scope tree construction, heuristic call detection, async builder, incremental APIs (updateFromSource, removeFiles, crossFileResolveForFile). Async flag detection and enum member extraction implemented in the TypeScript adapter; `abstract_class` and `generator` symbol kind mappings added as drive-by fixes. |
 | `packages/core/src/adapter/treeCheckAdapter.spec.ts` | Unit | violationToLintDiagnostic (field mapping, severity, fix pass-through), violationsToLintDiagnostics (empty, multi-element, custom severity) |
 | `packages/core/src/policy/policyCheck.spec.ts` | Unit | policyViolationsGetOutputPretty (empty, single violation, multi-file grouped output with relative paths) |
 | `packages/core/src/config/configDiscover.spec.ts` | Unit/Integration | configFileDiscover (direct, walk-up, not found, precedence), configGet error path, configGetFromPath/Sync (JS loading, error paths), configCacheClear, defineConfig identity |
@@ -819,12 +819,12 @@ These were added as part of closing gaps identified in this plan.
 | `tests/esbuild.policy-plugin.spec.ts` (expanded) | Integration | Added: config auto-discovery, no matching files, multiple rules, fix:true (skipped). Existing: build fail/succeed with policy plugin |
 | `packages/core/src/parser/parserLangs.spec.ts` | Unit | langAdd (register, normalize, default/custom wasmPath, error paths for empty langId, no extensions, wasmPath conflict, extension conflict, duplicate merge), langsGet, wasmPathGet, langExists, langGetForFile (known/unknown/no extension, case-insensitive, unloaded language) |
 | `packages/core/src/parser/parserInit.spec.ts` | Integration | parserInit (successful init, idempotent), parserGetForFile (Ok for known extension, Err before init, Err for unknown extension) |
-| `tests/treesitter.require-logger-enter-exit.spec.ts` (expanded) | Integration | Added: method definitions, function expressions, async functions, empty function body, generator functions (skipped — `functionsVisit` gap), target-level exclude patterns, global policy-level exclude patterns. Existing: fixture-based function declaration / arrow function / already-instrumented check |
+| `tests/treesitter.require-logger-enter-exit.spec.ts` (expanded) | Integration | Added: method definitions, function expressions, async functions, empty function body, generator functions, target-level exclude patterns, global policy-level exclude patterns. Existing: fixture-based function declaration / arrow function / already-instrumented check. Generator function support implemented by adding `generator_function_declaration` and `generator_function` node types to `functionsVisit`. |
 | `tests/core.plugins.spec.ts` (expanded) | Integration | Added: `policyViolationsGetForFile` Ok path with real logger plugin (returns violations for uninstrumented function). Existing: Err paths for missing capability and wrong language |
 | `tests/eslint.require-logger-enter-exit.spec.ts` (expanded) | Integration | Added: multiple functions in one file (2 errors, one-pass fix), nested functions (2 errors, inner fixed first), class methods (2 errors from dual MethodDefinition+FunctionExpression visit). Existing: block function, arrow expression, reuse import, valid instrumented, excluded file |
 | `tests/core.policy-check.spec.ts` | Integration | `policyCheck` full pipeline: loads config from temp dir via jiti, finds matching files, returns tree violations. Error path: config not found returns Err |
 | `tests/e2e.cli.spec.ts` | E2E | CLI subprocess tests: --help, --version, --check-plugins, no violations (exit 0), violations present (exit 1), config not found (error). 3 skipped: --fix (ESLint wiring gap), --config (lower priority), --watch (complex async lifecycle). Uses symlinked node_modules for module resolution. |
-| `tests/index.builder.spec.ts` (expanded) | Integration | Added: `adapterRegister` — registers spy adapter for 'typescript', verifies factory and indexFile calls, validates spy delta in resulting index. Documents `languageIdFromFile` hardcoded switch as known gap for custom languages. |
+| `tests/index.builder.spec.ts` (expanded) | Integration | Added: `adapterRegister` — registers spy adapter for 'typescript', verifies factory and indexFile calls, validates spy delta in resulting index. Documents `languageIdFromFile` hardcoded switch as known gap for custom languages. Un-skipped: async flag detection (adapter now checks for `async` keyword child on declaration nodes), enum member extraction (symbols query now captures `enum_assignment` nodes as `enumMember` kind). |
 
 ### Known gaps discovered during testing
 
@@ -840,13 +840,7 @@ These are implementation gaps, not test gaps. The tests document the current beh
 
 #### Adapter extraction gaps
 
-- **Async flag**: The TypeScript adapter does not detect `async` function declarations. The `SymbolFlags.Async` flag is never set. Only the `Exported` flag is detected via parent node traversal.
-- **Enum members**: The TypeScript symbols query captures `enum_declaration` but not individual enum member declarations. The `enumMember` symbol kind exists in the type system but the adapter does not extract them.
 - **getCallers/getCallees accuracy**: These query methods match calls to symbols by comparing scope ranges against symbol ranges. However, symbol ranges are the name span (e.g., the identifier `foo`), not the full declaration span. This means scope-based matching is unreliable. The underlying `CallsRelation` data is correct — calls are extracted and file-locally resolved — but the higher-level caller/callee queries need symbol ranges to be expanded to full declaration spans to work correctly.
-
-#### Logger tree check provider gap
-
-- **Generator functions**: The `functionsVisit` function in `policyPluginLogger.ts` handles `function_declaration`, `function_expression`, `arrow_function`, and `method_definition` node types. It does not handle `generator_function_declaration` or `generator_function` node types emitted by tree-sitter for `function*` syntax. Generator functions are silently skipped during the logger instrumentation check. The skipped test in `treesitter.require-logger-enter-exit.spec.ts` documents this gap.
 
 #### ESLint logger rule: fix merging and dual-visit behavior
 

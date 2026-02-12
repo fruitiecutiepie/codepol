@@ -79,6 +79,10 @@ export const SYMBOLS_QUERY = `
 (enum_declaration
   name: (identifier) @name) @decl.enum
 
+; Enum members: enum Color { Red = 'red', Green = 'green' }
+(enum_assignment
+  name: (property_identifier) @name) @decl.enumMember
+
 ; =========================
 ;  Namespaces / Modules
 ; =========================

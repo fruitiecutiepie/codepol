@@ -172,10 +172,7 @@ describe('tree-sitter policy check', () => {
       expect(violations[0].message).toContain('fetchData');
     });
 
-    // TODO: Remove .skip once functionsVisit handles generator_function_declaration
-    // and generator_function node types. Currently only function_declaration,
-    // function_expression, arrow_function, and method_definition are visited.
-    it.skip('detects missing logger in generator functions', async () => {
+    it('detects missing logger in generator functions', async () => {
       const { dir, policy } = tempProjectForLoggerCheck({
         'gen.ts': `export function* generate() {
   yield 1;

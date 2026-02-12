@@ -217,10 +217,12 @@ function symbolsExtract(
     const nameNode = capturesByName.get(cfg.captures.symbolName);
     if (!nameNode) continue;
 
-    // Find kind from capture with decl prefix
+    // Find kind and declaration node from capture with decl prefix
     let kind: SymbolKind = cfg.symbolKinds.default;
+    let declNode: Parser.SyntaxNode | undefined;
     for (const capture of match.captures) {
       if (capture.name.startsWith(cfg.captures.symbolKindPrefix + '.')) {
+        declNode = capture.node;
         const suffix = capture.name.slice(cfg.captures.symbolKindPrefix.length + 1);
         const mappedKind = cfg.symbolKinds.byCaptureSuffix[suffix];
         if (mappedKind) {
@@ -248,6 +250,20 @@ function symbolsExtract(
         break;
       }
       current = current.parent;
+    }
+    // Check for async keyword on declaration node
+    if (declNode) {
+      for (let i = 0; i < declNode.childCount; i++) {
+        const child = declNode.child(i);
+        if (child && child.type === 'async') {
+          flags |= SymbolFlags.Async;
+          break;
+        }
+      }
+      // Check for generator declaration
+      if (declNode.type.includes('generator')) {
+        flags |= SymbolFlags.Generator;
+      }
     }
 
     symbols.push({

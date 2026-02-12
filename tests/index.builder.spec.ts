@@ -73,8 +73,7 @@ export async function fetchData() {
       expect(fetchData!.flags & SymbolFlags.Exported).toBeTruthy();
     });
 
-    // TODO: remove .skip once async flag detection is implemented in the adapter
-    it.skip('should detect async flag on async function declarations', () => {
+    it('should detect async flag on async function declarations', () => {
       const file = path.join(testDir, 'sym_async_flag.ts');
       fs.writeFileSync(file, `
 export async function fetchData() {
@@ -265,8 +264,7 @@ enum InternalStatus {
 
     });
 
-    // TODO: remove .skip once enum member extraction is added to the TypeScript symbols query
-    it.skip('should extract enum members as separate symbols', () => {
+    it('should extract enum members as separate symbols', () => {
       const file = path.join(testDir, 'sym_enum_members.ts');
       fs.writeFileSync(file, `
 export enum Color {

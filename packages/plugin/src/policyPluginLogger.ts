@@ -149,7 +149,9 @@ function functionsVisit(
     node.type === 'function_declaration' ||
     node.type === 'function_expression' ||
     node.type === 'arrow_function' ||
-    node.type === 'method_definition'
+    node.type === 'method_definition' ||
+    node.type === 'generator_function_declaration' ||
+    node.type === 'generator_function'
   ) {
     visitor(node);
   }
