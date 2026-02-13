@@ -303,8 +303,7 @@ const val = innerFn();
 
   });
 
-  // TODO: remove .skip once named re-export chain resolution is implemented
-  it.skip('should resolve imports through re-export chains to the origin symbol', () => {
+  it('should resolve imports through re-export chains to the origin symbol', () => {
     const reOrigin = path.join(testDir, 'rechain_origin.ts');
     fs.writeFileSync(reOrigin, `
 export function innerFn() { return 'inner'; }
@@ -496,8 +495,7 @@ const b = starConst;
 
   });
 
-  // TODO: remove .skip once star export expansion is implemented in crossFileResolve
-  it.skip('should resolve imports through star exports to the origin symbols', () => {
+  it('should resolve imports through star exports to the origin symbols', () => {
     const starSrc = path.join(testDir, 'starfull_origin.ts');
     fs.writeFileSync(starSrc, `
 export function starFn() { return 'star'; }

@@ -26,9 +26,9 @@ Core infrastructure complete, some advanced features pending:
 - [x] Module path resolution (`moduleResolver.ts`)
 - [x] Export map building from `IndexStore`
 - [x] Basic import-to-export resolution
-- [ ] Re-export chain resolution (A re-exports from B re-exports from C)
-- [ ] Star export enumeration (`export *` should list all symbols)
-- [ ] Circular re-export detection
+- [x] Re-export chain following (A re-exports from B re-exports from C) — `exportMapAddReexportedSymbols` in `indexBuilder.ts`
+- [x] Star export enumeration (`export *` should list all symbols) — `exportMapAddReexportedSymbols` copies source module symbols into proxy's export map
+- [x] Circular re-export detection — max iteration limit in `exportMapAddReexportedSymbols` prevents infinite loops
 
 The `crossFileResolve()` function:
 1. Builds export map: `Map<filePath, Map<exportedName, SymbolId>>`
@@ -47,10 +47,10 @@ Core infrastructure complete, but TypeScript queries simplified for compatibilit
 - [x] Basic export declarations (`export const/function/class`)
 - [x] Named exports (`export { foo }`)
 - [x] Default exports (`export default foo`)
-- [ ] Export aliases (`export { foo as bar }`) - query removed
-- [ ] Re-exports (`export { foo } from "module"`) - query removed
-- [ ] Star exports (`export * from "module"`) - query removed
-- [ ] Namespace re-exports (`export * as ns`) - query removed
+- [ ] Export aliases (`export { foo as bar }`) - query not yet added
+- [x] Re-exports (`export { foo } from "module"`) — TS query captures `export.reexport_name` + `export.reexport_source`
+- [x] Star exports (`export * from "module"`) — already captured via `export.star_source`; symbols added to export map by `exportMapAddReexportedSymbols`
+- [ ] Namespace re-exports (`export * as ns`) - query exists but resolution not implemented
 - [ ] Interface/type/enum exports - query removed
 - [ ] Anonymous default exports - query removed
 
@@ -77,17 +77,17 @@ Build a module-level graph from import relations:
 - [x] Import relations stored in `IndexStore`
 - [x] Module specifier extraction
 - [ ] `ModuleGraph` type and API
-- [ ] `getImporters(file)` / `getImportees(file)`
-- [ ] Topological sort (`getDependencyOrder()`)
-- [ ] Circular dependency detection (`getCycles()`)
+- [ ] `moduleGraphImportersGet(file)` / `moduleGraphImporteesGet(file)`
+- [ ] Topological sort (`moduleGraphDependencyOrderGet()`)
+- [ ] Circular dependency detection (`moduleGraphCyclesGet()`)
 - [ ] Entry point detection
 
 ```typescript
 type ModuleGraph = {
-  getImporters(file: string): string[];
-  getImportees(file: string): string[];
-  getDependencyOrder(): string[];  // Topological sort
-  getCycles(): string[][];
+  moduleGraphImportersGet(file: string): string[];
+  moduleGraphImporteesGet(file: string): string[];
+  moduleGraphDependencyOrderGet(): string[];  // Topological sort
+  moduleGraphCyclesGet(): string[][];
 };
 ```
 
@@ -201,11 +201,11 @@ These are intentional constraints, not bugs:
 
 ## Testing Status
 
-- [ ] Unit tests for IndexStore operations
+- [x] Unit tests for IndexStore operations (`packages/core/src/index/indexStore.spec.ts`)
 - [ ] Unit tests for adapter query execution
 - [x] Integration tests for cross-file scenarios (`tests/index.cross-file-resolution.spec.ts`)
 - [ ] Performance benchmarks for large codebases
-- [ ] Edge case coverage (circular imports, re-exports, etc.)
+- [x] Edge case coverage (circular imports, re-exports, star exports, diamond deps, missing files)
 
 ## Documentation Needed
 

@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import type { Language } from 'web-tree-sitter';
-import type { IndexCapabilities, ImportBindingRelation, ReferencesRelation } from './indexTypes';
+import type { IndexCapabilities, ImportBindingRelation, ReferencesRelation, SymbolId } from './indexTypes';
 import { IndexStore, indexStoreNew } from './indexStore';
 import { projectIndexCreate, type ProjectIndex } from './indexQuery';
 import type { IndexAdapter } from '../adapters/treeSitter/adapterTypes';
@@ -430,6 +430,9 @@ export function crossFileResolveForFile(
   const exportMap = store.exportMapBuild();
   const indexedFiles = new Set(store.filesGet());
 
+  // Add re-exported symbols to the export map (follows sourceModule chains)
+  exportMapAddReexportedSymbols(store, exportMap, resolveOptions, indexedFiles);
+
   // Re-resolve import bindings FROM this file
   const bindings = store.importBindingsInFileGet(file);
   
@@ -528,6 +531,80 @@ export function crossFileResolveForFile(
 }
 
 // ============================================================================
+// Re-exported Symbol Propagation
+// ============================================================================
+
+/**
+ * Add re-exported symbols to the export map by following `sourceModule`
+ * references in `ExportsRelation` entries.
+ *
+ * Named re-exports (`export { foo } from "module"`) and star exports
+ * (`export * from "module"`) produce `ExportsRelation` with `symbolId: ''`
+ * and a `sourceModule` specifier. This function looks up each source
+ * module's export map, finds the origin symbol ID, and adds it under the
+ * proxy file's exported name.
+ *
+ * Iterates until stable to handle chains (A re-exports from B which
+ * re-exports from C). A max iteration limit prevents infinite loops from
+ * circular re-exports.
+ */
+function exportMapAddReexportedSymbols(
+  store: IndexStore,
+  exportMap: Map<string, Map<string, SymbolId>>,
+  resolveOptions: ModuleResolveOptions,
+  indexedFiles: Set<string>
+): void {
+  const MAX_ITERATIONS = 10;
+
+  for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
+    let changed = false;
+
+    for (const file of indexedFiles) {
+      const fileExportRelations = store.exportsInFileGet(file);
+
+      for (const exp of fileExportRelations) {
+        if (!exp.sourceModule) continue;
+
+        // Map the source module specifier to an absolute file path
+        const resolvedSourcePath = moduleResolve(exp.sourceModule, file, {
+          ...resolveOptions,
+          indexedFiles,
+        });
+        if (!resolvedSourcePath || !indexedFiles.has(resolvedSourcePath)) continue;
+
+        const sourceExports = exportMap.get(resolvedSourcePath);
+        if (!sourceExports) continue;
+
+        // Ensure this file has an export map entry
+        if (!exportMap.has(file)) {
+          exportMap.set(file, new Map());
+        }
+        const fileExportMap = exportMap.get(file)!;
+
+        if (exp.exportedName === '*' && exp.sourceName === '*') {
+          // Star export: copy all non-default exports from source
+          for (const [name, symbolId] of sourceExports) {
+            if (name !== 'default' && !fileExportMap.has(name)) {
+              fileExportMap.set(name, symbolId);
+              changed = true;
+            }
+          }
+        } else if (exp.symbolId === '' && exp.sourceName) {
+          // Named re-export: look up the specific name in the source module
+          const sourceSymbolId = sourceExports.get(exp.sourceName);
+          if (sourceSymbolId && !fileExportMap.has(exp.exportedName)) {
+            fileExportMap.set(exp.exportedName, sourceSymbolId);
+            changed = true;
+          }
+        }
+      }
+    }
+
+    if (!changed) break;
+  }
+}
+
+// ============================================================================
 // Cross-File Resolution
 // ============================================================================
 
@@ -535,8 +612,9 @@ export function crossFileResolveForFile(
  * Resolve cross-file symbols after all files are indexed.
  * This function:
  * 1. Builds an export map from all indexed files
- * 2. Resolves ImportBinding relations to their source exports
- * 3. Updates References relations that refer to imported symbols
+ * 2. Adds re-exported symbols to the map by following sourceModule chains
+ * 3. Resolves ImportBinding relations to their source exports
+ * 4. Updates References relations that refer to imported symbols
  */
 function crossFileResolve(
   store: IndexStore,
@@ -548,7 +626,10 @@ function crossFileResolve(
   // Build a set of indexed files for validation
   const indexedFiles = new Set(store.filesGet());
 
-  // Step 2: Resolve each ImportBinding relation
+  // Step 2: Add re-exported symbols to the export map (follows sourceModule chains)
+  exportMapAddReexportedSymbols(store, exportMap, resolveOptions, indexedFiles);
+
+  // Step 3: Resolve each ImportBinding relation
   const importBindings = store.importBindingsGet();
   
   for (const binding of importBindings) {

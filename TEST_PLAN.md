@@ -202,10 +202,10 @@ Examples:
 | `crossFileResolve` — default imports | Integration | `tests/index.cross-file-resolution.spec.ts` | Exists |
 | `crossFileResolve` — namespace imports | Integration | `tests/index.cross-file-resolution.spec.ts` | Exists (binding indexed; module path not resolved — known gap) |
 | `crossFileResolve` — aliased imports | Integration | `tests/index.cross-file-resolution.spec.ts` | Exists |
-| `crossFileResolve` — re-exports (A re-exports from B) | Integration | `tests/index.cross-file-resolution.spec.ts` | Exists (binding indexed; re-export chain not followed — known gap) |
+| `crossFileResolve` — re-exports (A re-exports from B) | Integration | `tests/index.cross-file-resolution.spec.ts` | Exists (re-export chain followed via `exportMapAddReexportedSymbols`) |
 | `crossFileResolve` — circular imports (A imports B, B imports A) | Integration | `tests/index.cross-file-resolution.spec.ts` | Exists |
 | `crossFileResolve` — diamond dependency (A imports B+C, both import D) | Integration | `tests/index.cross-file-resolution.spec.ts` | Exists |
-| `crossFileResolve` — star exports (`export *`) | Integration | `tests/index.cross-file-resolution.spec.ts` | Exists (wildcard export indexed; not expanded for resolution — known gap) |
+| `crossFileResolve` — star exports (`export *`) | Integration | `tests/index.cross-file-resolution.spec.ts` | Exists (star exports expanded via `exportMapAddReexportedSymbols`; imports traced through proxy) |
 | `crossFileResolve` — missing file (import to non-existent module) | Integration | `tests/index.cross-file-resolution.spec.ts` | Exists |
 | File with parse errors — graceful skip | Integration | `tests/index.cross-file-resolution.spec.ts` | Exists |
 | Empty file — no crash | Integration | `tests/index.cross-file-resolution.spec.ts` | Exists |
@@ -460,7 +460,7 @@ Methods that are thin wrappers over `IndexStore` can be unit-tested with a pre-p
 | Result utilities | 8 | 0 | 100% |
 | Module resolver | 9 | 0 | 100% |
 | IndexStore | 14 | 0 | 100% |
-| Index builder | 31 | 0 | 100% |
+| Index builder | 33 | 0 | 100% |
 | Index query (ProjectIndex) | 16 | 0 | 100% |
 | Policy loading | 7 | 0 | 100% |
 | Policy tree check | 7 | 0 | 100% |
@@ -486,7 +486,7 @@ Ordered by risk (silent corruption potential) and effort (lower effort = do it s
 | 2 | IndexStore | High | Medium (14 tests, need test helper for `FileIndexDelta`) | In-memory data structure that all queries depend on. Bugs here corrupt symbols, references, and exports silently. Requires building a `testDeltaCreate` helper first, which pays for itself across all store and query tests. | Done |
 | 3 | Result utilities | Low | Trivial (8 tests, ~30 min) | Low risk because the implementation is simple, but the tests validate the error-handling contract that every `Result`-returning function depends on. Quick win. | Done |
 | 4 | ProjectIndex query methods | Medium | Small (10 tests, reuse IndexStore test helper) | Thin wrappers, but untested wrappers can silently drop filters or mismap fields. Once the IndexStore helper exists, these are fast to write. | Done |
-| 5 | Index builder topologies | High | Large (17 new tests, each needs multi-file setups) | Cross-file resolution is the hardest feature. Circular imports, re-exports, star exports, diamond deps, missing files — these are the scenarios where bugs actually ship. | Done (topology tests in `cross-file-resolution.spec.ts`; symbol extraction, scopes, calls, async builder, incremental APIs, `adapterRegister` in `index.builder.spec.ts`. Async flag detection, enum member extraction, generator/abstract_class config mappings implemented — 3 previously skipped tests now pass.) |
+| 5 | Index builder topologies | High | Large (17 new tests, each needs multi-file setups) | Cross-file resolution is the hardest feature. Circular imports, re-exports, star exports, diamond deps, missing files — these are the scenarios where bugs actually ship. | Done (topology tests in `cross-file-resolution.spec.ts`; symbol extraction, scopes, calls, async builder, incremental APIs, `adapterRegister` in `index.builder.spec.ts`. Re-export chain and star export symbols propagated into the export map via `exportMapAddReexportedSymbols` — 2 previously skipped tests now pass. Namespace import member resolution remains skipped.) |
 | 6 | Policy loading | Medium | Small (6 tests, inline policy objects) | Glob matching and target resolution are used by every rule. Bugs here cause rules to silently skip files. | Done |
 | 7 | Config discovery | Medium | Medium (6 tests, temp directories with config files) | Users hit config discovery issues first. Needs temp directory scaffolding but each test is straightforward. | Done (11 tests: discovery, precedence, walk-up, error paths, JS config loading async/sync, cache clear, defineConfig) |
 | 7b | Tree check adapter | Low | Trivial (2 tests, pure functions) | Small module but 0% coverage. Pure mapper functions, quick to test exhaustively. | Done (6 tests: field mapping, severity, fix pass-through, array mapping) |
@@ -827,18 +827,15 @@ These were added as part of closing gaps identified in this plan.
 | `tests/index.builder.spec.ts` (expanded) | Integration | Added: `adapterRegister` — registers spy adapter for 'typescript', verifies factory and indexFile calls, validates spy delta in resulting index. Documents `languageIdFromFile` hardcoded switch as known gap for custom languages. Un-skipped: async flag detection (adapter now checks for `async` keyword child on declaration nodes), enum member extraction (symbols query now captures `enum_assignment` nodes as `enumMember` kind). |
 | `tests/eslint.unused-exports-adapter.spec.ts` | Integration | ESLint adapter with `requiresProjectIndex: true`: adapts `unusedExportsRule`, builds ProjectIndex from multi-file temp dir, verifies unused exports detected via treeCheckViolation. Valid cases: all-exports-consumed file, consumer-only file. Invalid case: file with unused export. Exercises `getOrBuildProjectIndex`, `discoverIndexableFiles`, and cross-file import resolution through the ESLint adapter pipeline. |
 | `packages/core/src/index/testHelpers.ts` | — | Shared test helper for building `FileIndexDelta`, `SymbolRecord`, and `ScopeRecord` objects without tree-sitter. Extracted from duplicate helpers in `indexStore.spec.ts` and `indexQuery.spec.ts`. Exports: `byteRangeGet`, `scopeRecordNew`, `symbolRecordNew`, `fileIndexDeltaNew`. |
+| `tests/index.cross-file-resolution.spec.ts` (expanded) | Integration | Un-skipped: re-export chain (consumer import traced through proxy to origin symbol via `exportMapAddReexportedSymbols`), star export expansion (imports from `export *` proxy mapped to origin symbols, references updated). TS export query extended with `export.reexport_name` and `export.reexport_source` captures for `export { foo } from "module"` patterns. 1 test remains skipped: namespace import member resolution. |
 
 ### Known gaps discovered during testing
 
 #### Cross-file resolution gaps
 
-Tests for namespace imports, re-exports, and star exports revealed current limitations in `crossFileResolve`:
-
-- **Namespace imports** (`import * as X`): The `ImportBinding` is indexed with `isNamespace: true` and `importedName: "*"`, but `resolvedModulePath` is not set. Individual member accesses (`X.foo`) are not resolved to the exporter's symbols.
-- **Named re-exports** (`export { x } from './y'`): The proxy file generates no symbols or file exports. Consumer bindings reference the proxy but cannot resolve through to the origin.
-- **Star exports** (`export * from './y'`): The wildcard export is indexed (`exportedName: "*"`, `sourceModule`), but the resolver does not expand `export *` to match individual import names. Consumer bindings remain unresolved.
-
-These are implementation gaps, not test gaps. The tests document the current behavior and will automatically validate improvements when the resolver is enhanced.
+- **Namespace imports** (`import * as X`): The `ImportBinding` is indexed with `isNamespace: true` and `importedName: "*"`, but `resolvedModulePath` is not set. Individual member accesses (`X.foo`) are not resolved to the exporter's symbols. Test remains skipped.
+- **Named re-exports** (`export { x } from './y'`): **Fixed.** TS export query now captures `export.reexport_name` and `export.reexport_source`. `exportMapAddReexportedSymbols` in `indexBuilder.ts` follows `sourceModule` references in `ExportsRelation`, looks up the origin symbol ID, and adds it to the proxy file's export map. Consumer bindings trace through the proxy to the origin symbol.
+- **Star exports** (`export * from './y'`): **Fixed.** `exportMapAddReexportedSymbols` copies all non-default symbol IDs from the source module's export map into the proxy file's export map. Handles chains (A star-exports from B which star-exports from C) via iterative propagation with a max iteration limit to prevent infinite loops from circular re-exports.
 
 #### Adapter extraction gaps
 
@@ -865,6 +862,12 @@ These are implementation gaps, not test gaps. The tests document the current beh
 ### Planned tests (not yet created)
 
 No remaining planned test files. All identified gaps either have tests (possibly skipped) or are documented as known implementation gaps above. The shared `testHelpers.ts` has been created and is in use by `indexStore.spec.ts` and `indexQuery.spec.ts`.
+
+Remaining skipped tests (5 total across 4 files):
+- `tests/index.cross-file-resolution.spec.ts`: namespace import member resolution (requires `utils.alpha` style property access resolution)
+- `tests/index.builder.spec.ts`: getCallers/getCallees (symbol ranges need full declaration span)
+- `tests/e2e.cli.spec.ts`: `--fix` (ESLint rule wiring gap), `--watch` (complex async lifecycle)
+- `tests/esbuild.policy-plugin.spec.ts`: `fix: true` (ESLint rule wiring gap)
 
 ### Fixtures (current)
 

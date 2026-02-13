@@ -89,6 +89,21 @@ export const EXPORTS_QUERY = `
 ;  Re-exports
 ; =========================
 
+; export { foo } from './mod' (named re-export)
+(export_statement
+  (export_clause
+    (export_specifier
+      name: (identifier) @export.reexport_name))
+  source: (string) @export.reexport_source) @export.reexport
+
+; export { foo as bar } from './mod' (aliased re-export)
+(export_statement
+  (export_clause
+    (export_specifier
+      name: (identifier) @export.reexport_name
+      alias: (identifier) @export.reexport_alias))
+  source: (string) @export.reexport_source) @export.reexport
+
 ; export * from './mod' (star re-export)
 (export_statement
   "*"
