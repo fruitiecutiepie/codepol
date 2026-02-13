@@ -701,6 +701,53 @@ export class IndexStore {
         }
       }
     }
+
+    if (oldRelation.kind === 'TypeRelation' && newRelation.kind === 'TypeRelation') {
+      // Update by-symbol index
+      const bySymbol = this.typeRelationsBySymbol.get(oldRelation.symbolId);
+      if (bySymbol) {
+        const relIdx = bySymbol.indexOf(oldRelation);
+        if (relIdx !== -1) {
+          bySymbol[relIdx] = newRelation;
+        }
+      }
+
+      // Update by-target-name index (if targetName changed, move between buckets)
+      if (oldRelation.targetName !== newRelation.targetName) {
+        const oldBucket = this.typeRelationsByTargetName.get(oldRelation.targetName);
+        if (oldBucket) {
+          const relIdx = oldBucket.indexOf(oldRelation);
+          if (relIdx !== -1) oldBucket.splice(relIdx, 1);
+          if (oldBucket.length === 0) this.typeRelationsByTargetName.delete(oldRelation.targetName);
+        }
+        let newBucket = this.typeRelationsByTargetName.get(newRelation.targetName);
+        if (!newBucket) {
+          newBucket = [];
+          this.typeRelationsByTargetName.set(newRelation.targetName, newBucket);
+        }
+        newBucket.push(newRelation);
+      } else {
+        const bucket = this.typeRelationsByTargetName.get(oldRelation.targetName);
+        if (bucket) {
+          const relIdx = bucket.indexOf(oldRelation);
+          if (relIdx !== -1) {
+            bucket[relIdx] = newRelation;
+          }
+        }
+      }
+
+      // Update by-file index
+      const childSym = this.symbolsById.get(oldRelation.symbolId);
+      if (childSym) {
+        const fileRels = this.typeRelationsByFile.get(childSym.file);
+        if (fileRels) {
+          const relIdx = fileRels.indexOf(oldRelation as TypeRelation);
+          if (relIdx !== -1) {
+            fileRels[relIdx] = newRelation as TypeRelation;
+          }
+        }
+      }
+    }
   }
 
   /**

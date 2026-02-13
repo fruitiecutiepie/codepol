@@ -325,11 +325,10 @@ class PlainClass {
   // Cross-file type relation
   // ==========================================================================
 
-  it('should detect cross-file type relation with file-local resolution', () => {
-    // In this test, the class extends a symbol imported from another file.
-    // The targetName is the local alias. resolvedTargetId will be the local
-    // import binding symbol, not the remote symbol (cross-file resolution of
-    // type relations is not yet implemented).
+  it('should resolve cross-file extends to actual exported symbol', () => {
+    // Class extends a symbol imported from another file.
+    // resolvedTargetId should point to the actual exported BaseService symbol
+    // in the source file, not the local import binding.
     const fileBase = path.join(testDir, 'xfile_base.ts');
     fs.writeFileSync(fileBase, `
 export class BaseService {
@@ -359,9 +358,14 @@ class DerivedService extends BaseService {
     expect(rels).toHaveLength(1);
     expect(rels[0].targetName).toBe('BaseService');
     expect(rels[0].relationKind).toBe('extends');
-    // File-local resolution finds the import binding symbol named 'BaseService'
-    // in the derived file, so resolvedTargetId should be defined
     expect(rels[0].resolvedTargetId).toBeDefined();
+
+    // resolvedTargetId should point to the actual exported symbol in the base file,
+    // not the local import binding in the derived file
+    const baseSymbols = index.symbolsGetByName('BaseService');
+    const exportedBase = baseSymbols.find(s => s.file === fileBase);
+    expect(exportedBase).toBeDefined();
+    expect(rels[0].resolvedTargetId).toBe(exportedBase!.id);
   });
 
   // ==========================================================================
@@ -398,5 +402,174 @@ interface IStream extends IReadable, IWritable {
     expect(rels.every(r => r.relationKind === 'extends')).toBe(true);
     const targetNames = rels.map(r => r.targetName).sort();
     expect(targetNames).toEqual(['IReadable', 'IWritable']);
+  });
+
+  // ==========================================================================
+  // Cross-file: class implements imported interface
+  // ==========================================================================
+
+  it('should resolve cross-file implements to actual exported interface', () => {
+    const fileInterface = path.join(testDir, 'xfile_iface.ts');
+    fs.writeFileSync(fileInterface, `
+export interface IRepository {
+  findById(id: string): unknown;
+}
+`);
+
+    const fileImpl = path.join(testDir, 'xfile_impl.ts');
+    fs.writeFileSync(fileImpl, `
+import { IRepository } from './xfile_iface';
+
+export class UserRepository implements IRepository {
+  findById(id: string) { return null; }
+}
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [fileInterface, fileImpl],
+      dir: testDir,
+    });
+
+    const implSymbols = index.symbolsGetByName('UserRepository');
+    expect(implSymbols).toHaveLength(1);
+
+    const rels = index.typeRelationsGet(implSymbols[0].id);
+    expect(rels).toHaveLength(1);
+    expect(rels[0].targetName).toBe('IRepository');
+    expect(rels[0].relationKind).toBe('implements');
+
+    // resolvedTargetId should point to the exported interface in xfile_iface.ts
+    const ifaceSymbols = index.symbolsGetByName('IRepository');
+    const exportedIface = ifaceSymbols.find(s => s.file === fileInterface);
+    expect(exportedIface).toBeDefined();
+    expect(rels[0].resolvedTargetId).toBe(exportedIface!.id);
+  });
+
+  // ==========================================================================
+  // Cross-file: extends through re-export chain
+  // ==========================================================================
+
+  it('should resolve cross-file extends through re-export chain', () => {
+    const fileOrigin = path.join(testDir, 'xfile_origin.ts');
+    fs.writeFileSync(fileOrigin, `
+export class BaseEntity {
+  id: string = '';
+}
+`);
+
+    const fileProxy = path.join(testDir, 'xfile_proxy.ts');
+    fs.writeFileSync(fileProxy, `
+export { BaseEntity } from './xfile_origin';
+`);
+
+    const fileConsumer = path.join(testDir, 'xfile_consumer.ts');
+    fs.writeFileSync(fileConsumer, `
+import { BaseEntity } from './xfile_proxy';
+
+export class UserEntity extends BaseEntity {
+  name: string = '';
+}
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [fileOrigin, fileProxy, fileConsumer],
+      dir: testDir,
+    });
+
+    const userSymbols = index.symbolsGetByName('UserEntity');
+    expect(userSymbols).toHaveLength(1);
+
+    const rels = index.typeRelationsGet(userSymbols[0].id);
+    expect(rels).toHaveLength(1);
+    expect(rels[0].targetName).toBe('BaseEntity');
+    expect(rels[0].relationKind).toBe('extends');
+
+    // resolvedTargetId should trace through the re-export to the origin symbol
+    const originSymbols = index.symbolsGetByName('BaseEntity');
+    const exportedOrigin = originSymbols.find(s => s.file === fileOrigin);
+    expect(exportedOrigin).toBeDefined();
+    expect(rels[0].resolvedTargetId).toBe(exportedOrigin!.id);
+  });
+
+  // ==========================================================================
+  // Cross-file: extends with aliased import
+  // ==========================================================================
+
+  it('should resolve cross-file extends with aliased import', () => {
+    const fileBase = path.join(testDir, 'xfile_aliased_base.ts');
+    fs.writeFileSync(fileBase, `
+export class HttpClient {
+  request() { return null; }
+}
+`);
+
+    const fileDerived = path.join(testDir, 'xfile_aliased_derived.ts');
+    fs.writeFileSync(fileDerived, `
+import { HttpClient as BaseClient } from './xfile_aliased_base';
+
+export class ApiClient extends BaseClient {
+  get() { return this.request(); }
+}
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [fileBase, fileDerived],
+      dir: testDir,
+    });
+
+    const apiSymbols = index.symbolsGetByName('ApiClient');
+    expect(apiSymbols).toHaveLength(1);
+
+    const rels = index.typeRelationsGet(apiSymbols[0].id);
+    expect(rels).toHaveLength(1);
+    expect(rels[0].targetName).toBe('BaseClient');
+    expect(rels[0].relationKind).toBe('extends');
+
+    // resolvedTargetId should point to the actual HttpClient symbol in the base file
+    const httpSymbols = index.symbolsGetByName('HttpClient');
+    const exportedHttp = httpSymbols.find(s => s.file === fileBase);
+    expect(exportedHttp).toBeDefined();
+    expect(rels[0].resolvedTargetId).toBe(exportedHttp!.id);
+  });
+
+  // ==========================================================================
+  // Cross-file: interface extends imported interface
+  // ==========================================================================
+
+  it('should resolve cross-file interface extends to actual exported interface', () => {
+    const fileParent = path.join(testDir, 'xfile_parent_iface.ts');
+    fs.writeFileSync(fileParent, `
+export interface ILogger {
+  log(message: string): void;
+}
+`);
+
+    const fileChild = path.join(testDir, 'xfile_child_iface.ts');
+    fs.writeFileSync(fileChild, `
+import { ILogger } from './xfile_parent_iface';
+
+export interface IStructuredLogger extends ILogger {
+  logJson(data: Record<string, unknown>): void;
+}
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [fileParent, fileChild],
+      dir: testDir,
+    });
+
+    const childSymbols = index.symbolsGetByName('IStructuredLogger');
+    expect(childSymbols).toHaveLength(1);
+
+    const rels = index.typeRelationsGet(childSymbols[0].id);
+    expect(rels).toHaveLength(1);
+    expect(rels[0].targetName).toBe('ILogger');
+    expect(rels[0].relationKind).toBe('extends');
+
+    // resolvedTargetId should point to the exported ILogger in the parent file
+    const loggerSymbols = index.symbolsGetByName('ILogger');
+    const exportedLogger = loggerSymbols.find(s => s.file === fileParent);
+    expect(exportedLogger).toBeDefined();
+    expect(rels[0].resolvedTargetId).toBe(exportedLogger!.id);
   });
 });

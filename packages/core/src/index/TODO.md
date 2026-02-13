@@ -115,19 +115,20 @@ Use cases:
 - Reachability analysis
 
 #### 5. Type Relations
-**Status**: Partially Implemented  
-**What's done**: Extends/implements extraction and querying
+**Status**: Implemented  
+**What's done**: Extends/implements extraction, querying, and cross-file resolution
 
 Implemented in the full stack:
 - [x] `TypeRelation` type in `indexTypes.ts` — captures `extends` and `implements` relationships with `symbolId`, `targetName`, `relationKind`, `byteRange`, and optional `resolvedTargetId`
 - [x] Tree-sitter query (`typeRelations.ts`) — patterns for class extends, class implements, abstract class extends/implements, interface extends
 - [x] `typeRelationsExtract()` in `adapterCore.ts` — extracts type relations from query captures, resolves file-local targets
 - [x] `IndexStore` indexes — `typeRelationsBySymbol`, `typeRelationsByTargetName`, `typeRelationsByFile` with query methods and proper cleanup in `filePut`/`fileRemove`/`clear`
+- [x] `IndexStore.relationUpdate` TypeRelation branch — updates all three TypeRelation indexes when a relation is modified
 - [x] `ProjectIndex` API — `typeRelationsGet(symbolId)`, `subTypesGet(symbolId)`, `typeRelationsInFileGet(file)`
-- [x] Unit tests (5 IndexStore + 3 ProjectIndex) and integration tests (11 in `tests/index.type-relations.spec.ts`)
+- [x] Cross-file `resolvedTargetId` resolution — Step 6 in `crossFileResolve` (`indexBuilder.ts`) follows import bindings to resolve `resolvedTargetId` to the actual exported symbol from the source module. Works with re-export chains and aliased imports.
+- [x] Unit tests (5 IndexStore + 3 ProjectIndex) and integration tests (15 in `tests/index.type-relations.spec.ts`)
 
 **What's remaining**:
-- [ ] Cross-file `resolvedTargetId` resolution — when a class extends an imported symbol, `resolvedTargetId` currently points to the local import binding symbol, not the original exported symbol from the source module. Needs integration with `crossFileResolve`.
 - [ ] `TypeOf` relation — value-to-type mapping requires type inference beyond tree-sitter's capabilities. Deferred.
 
 #### 6. Persistence / Caching

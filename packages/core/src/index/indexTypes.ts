@@ -244,8 +244,9 @@ export type ExportsRelation = {
 /**
  * A "TypeRelation" relation: captures type hierarchy edges.
  * Records extends/implements relationships between classes and interfaces.
- * `resolvedTargetId` is populated during file-local resolution;
- * cross-file resolution may leave it undefined.
+ * `resolvedTargetId` is populated during file-local resolution in
+ * `typeRelationsExtract`, then updated to the actual exported symbol
+ * during cross-file resolution (Step 6 in `crossFileResolve`).
  */
 export type TypeRelation = {
   kind: 'TypeRelation';

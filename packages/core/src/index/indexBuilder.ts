@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import type { Language } from 'web-tree-sitter';
-import type { IndexCapabilities, ImportBindingRelation, ReferencesRelation, SymbolId } from './indexTypes';
+import type { IndexCapabilities, ImportBindingRelation, ReferencesRelation, TypeRelation, SymbolId } from './indexTypes';
 import { IndexStore, indexStoreNew } from './indexStore';
 import { projectIndexCreate, type ProjectIndex } from './indexQuery';
 import type { IndexAdapter } from '../adapters/treeSitter/adapterTypes';
@@ -827,6 +827,28 @@ function crossFileResolve(
           };
           store.relationUpdate(ref, updatedRef);
         }
+      }
+    }
+  }
+
+  // Step 6: Resolve cross-file TypeRelation targets
+  // When a class extends/implements an imported symbol, resolvedTargetId currently
+  // points to the local import binding symbol. Update it to point to the actual
+  // exported symbol from the source module.
+  for (const file of indexedFiles) {
+    const typeRels = store.typeRelationsInFileGet(file);
+
+    for (const rel of typeRels) {
+      if (!rel.resolvedTargetId) continue;
+
+      // Check if resolvedTargetId points to an import binding symbol
+      const actualExportId = importResolutionMap.get(rel.resolvedTargetId);
+      if (actualExportId && actualExportId !== rel.resolvedTargetId) {
+        const updatedRel: TypeRelation = {
+          ...rel,
+          resolvedTargetId: actualExportId,
+        };
+        store.relationUpdate(rel, updatedRel);
       }
     }
   }
