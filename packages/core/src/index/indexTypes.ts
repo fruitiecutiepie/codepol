@@ -181,6 +181,8 @@ export type ImportsRelation = {
   /** Module specifier (e.g., './foo', 'lodash') */
   spec: string;
   byteRange: ByteRange;
+  /** Resolved absolute path (set during cross-file resolution) */
+  resolvedModulePath?: string;
 };
 
 /**

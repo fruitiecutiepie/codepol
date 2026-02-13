@@ -5,7 +5,7 @@
  * Supports:
  * - ESM static imports (named, default, namespace, side-effect)
  * - CommonJS require() (whole-module and destructured)
- * - Dynamic import() specifier extraction
+ * - Dynamic import() with binding resolution and specifier extraction
  *
  * Note: #eq? predicates are used for require() to avoid matching
  * arbitrary call expressions. Confirmed working in web-tree-sitter.
@@ -76,6 +76,33 @@ export const IMPORTS_QUERY = `
     value: (call_expression
       function: (identifier) @_fn (#eq? @_fn "require")
       arguments: (arguments (string) @import.require_source)))) @import.require
+
+; =========================
+;  Dynamic import (whole-module binding)
+; =========================
+
+; const mod = await import("module")
+(lexical_declaration
+  (variable_declarator
+    name: (identifier) @import.dynamic_name
+    value: (await_expression
+      (call_expression
+        function: (import)
+        arguments: (arguments (string) @import.dynamic_source))))) @import.dynamic
+
+; =========================
+;  Dynamic import (destructured binding)
+; =========================
+
+; const { foo } = await import("module")
+(lexical_declaration
+  (variable_declarator
+    name: (object_pattern
+      (shorthand_property_identifier_pattern) @import.dynamic_binding)
+    value: (await_expression
+      (call_expression
+        function: (import)
+        arguments: (arguments (string) @import.dynamic_source))))) @import.dynamic
 
 ; =========================
 ;  Dynamic import (specifier extraction only)

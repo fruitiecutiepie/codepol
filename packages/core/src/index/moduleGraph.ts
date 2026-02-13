@@ -97,11 +97,17 @@ export function moduleGraphBuild(store: IndexStore): ModuleGraph {
       reverse.get(target)!.add(file);
     }
 
-    // Also check ImportsRelation for side-effect imports (no bindings)
+    // Also check ImportsRelation for side-effect and dynamic imports
+    // that were resolved during crossFileResolve (Step 7).
     const imports = store.importsInFileGet(file);
-    // Side-effect imports don't have bindings, so we skip them for now
-    // (they don't create module-level edges since we can't resolve them without bindings)
-    void imports;
+    for (const imp of imports) {
+      const target = imp.resolvedModulePath;
+      if (!target || !fileSet.has(target)) continue;
+      if (target === file) continue;
+
+      forward.get(file)!.add(target);
+      reverse.get(target)!.add(file);
+    }
   }
 
   // Cache computed results

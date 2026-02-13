@@ -679,6 +679,7 @@ function importBindingsExtract(
     let moduleSpec = '';
     const sourceNode = capturesByName.get('import.source') ??
                        capturesByName.get('import.require_source') ??
+                       capturesByName.get('import.dynamic_source') ??
                        capturesByName.get('import.from_module') ??
                        capturesByName.get('import.relative_module');
     if (sourceNode) {
@@ -801,6 +802,43 @@ function importBindingsExtract(
           isDefault: false,
           isNamespace: false,
           byteRange: importRange.end > 0 ? importRange : { start: requireBindingNode.startIndex, end: requireBindingNode.endIndex },
+        });
+      }
+    }
+
+    // Handle dynamic import (whole-module): const mod = await import("module")
+    // Creates a namespace-like binding, same as `import * as mod from "module"`.
+    const dynamicNameNode = capturesByName.get('import.dynamic_name');
+    if (dynamicNameNode) {
+      const localName = sliceText(source, dynamicNameNode.startIndex, dynamicNameNode.endIndex);
+      const localSymbol = findImportSymbol(symbolsByName, localName, dynamicNameNode.startIndex);
+      if (localSymbol) {
+        bindings.push({
+          kind: 'ImportBinding',
+          localSymbolId: localSymbol.id,
+          importedName: '*',
+          moduleSpec,
+          isDefault: false,
+          isNamespace: true,
+          byteRange: importRange.end > 0 ? importRange : { start: dynamicNameNode.startIndex, end: dynamicNameNode.endIndex },
+        });
+      }
+    }
+
+    // Handle dynamic import (destructured): const { foo } = await import("module")
+    const dynamicBindingNode = capturesByName.get('import.dynamic_binding');
+    if (dynamicBindingNode) {
+      const localName = sliceText(source, dynamicBindingNode.startIndex, dynamicBindingNode.endIndex);
+      const localSymbol = findImportSymbol(symbolsByName, localName, dynamicBindingNode.startIndex);
+      if (localSymbol) {
+        bindings.push({
+          kind: 'ImportBinding',
+          localSymbolId: localSymbol.id,
+          importedName: localName,
+          moduleSpec,
+          isDefault: false,
+          isNamespace: false,
+          byteRange: importRange.end > 0 ? importRange : { start: dynamicBindingNode.startIndex, end: dynamicBindingNode.endIndex },
         });
       }
     }

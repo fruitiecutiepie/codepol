@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import type { Language } from 'web-tree-sitter';
-import type { IndexCapabilities, ImportBindingRelation, ReferencesRelation, TypeRelation, SymbolId } from './indexTypes';
+import type { IndexCapabilities, ImportsRelation, ImportBindingRelation, ReferencesRelation, TypeRelation, SymbolId } from './indexTypes';
 import { IndexStore, indexStoreNew } from './indexStore';
 import { projectIndexCreate, type ProjectIndex } from './indexQuery';
 import type { IndexAdapter } from '../adapters/treeSitter/adapterTypes';
@@ -849,6 +849,30 @@ function crossFileResolve(
           resolvedTargetId: actualExportId,
         };
         store.relationUpdate(rel, updatedRel);
+      }
+    }
+  }
+
+  // Step 7: Resolve ImportsRelation specifiers
+  // Sets resolvedModulePath on side-effect and dynamic imports so the module
+  // graph can include them as dependency edges.
+  for (const file of indexedFiles) {
+    const imports = store.importsInFileGet(file);
+
+    for (const imp of imports) {
+      if (imp.resolvedModulePath) continue; // Already resolved
+
+      const resolvedPath = moduleResolve(imp.spec, file, {
+        ...resolveOptions,
+        indexedFiles,
+      });
+
+      if (resolvedPath && indexedFiles.has(resolvedPath)) {
+        const updatedImport: ImportsRelation = {
+          ...imp,
+          resolvedModulePath: resolvedPath,
+        };
+        store.relationUpdate(imp, updatedImport);
       }
     }
   }

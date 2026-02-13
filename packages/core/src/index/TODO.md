@@ -66,9 +66,9 @@ All export patterns are handled. No remaining gaps.
 - [x] Namespace imports (`import * as foo`)
 - [x] Import aliases (`import { foo as bar }`) — resolved via `childForFieldName('alias')` on the `import_specifier` AST node in both `symbolsExtract()` and `importBindingsExtract()`
 - [x] CommonJS requires (`require()`) — tree-sitter query patterns added with `#eq?` predicate for `require` identifier. Whole-module (`const mod = require("module")`) creates `ImportBindingRelation` with `isDefault: true`; destructured (`const { foo } = require("module")`) creates named bindings. Adapter extraction was pre-existing in `adapterCore.ts`. Cross-file resolution, module graph inclusion, and external package handling all work via existing `ImportBindingRelation` pipeline. Tested in `tests/index.cross-file-resolution.spec.ts`.
-- [x] Dynamic imports (`import("module")`) — specifier extraction only. Tree-sitter query pattern captures `import()` as `ImportsRelation` via `import.source`/`import.side_effect` captures. Tested in `tests/index.cross-file-resolution.spec.ts`.
-- [ ] Dynamic import binding resolution (`const mod = await import("./module")`) — requires linking variable declaration to dynamic import call and creating `ImportBindingRelation` with `isNamespace: true`
-- [ ] Dynamic import module graph integration — requires either resolving `ImportsRelation` specifiers or creating `ImportBindingRelation` entries for dynamic imports
+- [x] Dynamic imports (`import("module")`) — specifier extraction and binding resolution. Tree-sitter query patterns: `import.source`/`import.side_effect` for specifier tracking, `import.dynamic_name`/`import.dynamic_source` for whole-module binding (`const mod = await import("module")` creates `ImportBindingRelation` with `isNamespace: true`), `import.dynamic_binding`/`import.dynamic_source` for destructured binding (`const { foo } = await import("module")` creates named bindings). `ImportsRelation.resolvedModulePath` set during `crossFileResolve` Step 7 for side-effect imports. Tested in `tests/index.cross-file-resolution.spec.ts`.
+- [x] Dynamic import binding resolution (`const mod = await import("./module")`) — tree-sitter query patterns capture the `await_expression` > `call_expression` > `import` pattern inside `variable_declarator`. Whole-module creates namespace-like `ImportBindingRelation`; destructured creates named bindings. Cross-file resolution, namespace member resolution, and external package handling all work via existing pipelines.
+- [x] Dynamic import module graph integration — `ImportsRelation.resolvedModulePath` resolved during `crossFileResolve` Step 7. `moduleGraphBuild` reads both `ImportBindingRelation` and `ImportsRelation` resolved paths to build edges. Covers dynamic imports with bindings, bare dynamic imports, and static side-effect imports.
 
 ## Not Yet Implemented
 
@@ -82,14 +82,14 @@ Module-level dependency graph built from import relations in `packages/core/src/
 - [x] Import relations stored in `IndexStore`
 - [x] Module specifier extraction
 - [x] `ModuleGraph` type and API — `moduleGraphBuild(store)` in `moduleGraph.ts`
-- [x] `moduleGraphImportersGet(file)` / `moduleGraphImporteesGet(file)` — forward/reverse adjacency from resolved import bindings
+- [x] `moduleGraphImportersGet(file)` / `moduleGraphImporteesGet(file)` — forward/reverse adjacency from resolved import bindings and resolved `ImportsRelation` entries (covers side-effect and dynamic imports)
 - [x] Topological sort (`moduleGraphDependencyOrderGet()`) — Kahn's algorithm on reversed dependency graph
 - [x] Circular dependency detection (`moduleGraphCyclesGet()`) — Tarjan's SCC algorithm
 - [x] Entry point detection (`moduleGraphEntryPointsGet()`) — files with no importers in the indexed set, sorted alphabetically
 
 Exposed on `ProjectIndex` as `moduleImportersGet()`, `moduleImporteesGet()`, `moduleDependencyOrderGet()`, `moduleCyclesGet()`, `moduleEntryPointsGet()`. Graph is lazily built and cached.
 
-Integration tests in `tests/index.module-graph.spec.ts`: linear chain, circular imports, diamond dependencies, isolated files, external package filtering, unknown files, multi-import deduplication, entry point detection (linear chain root, diamond root, isolated files, circular imports, external-only imports).
+Integration tests in `tests/index.module-graph.spec.ts`: linear chain, circular imports, diamond dependencies, isolated files, external package filtering, unknown files, multi-import deduplication, entry point detection (linear chain root, diamond root, isolated files, circular imports, external-only imports), dynamic import module graph edges (binding-based, side-effect dynamic, static side-effect).
 
 ### Medium Priority
 
@@ -218,7 +218,8 @@ These are intentional constraints, not bugs:
 - [x] Type-only named exports (`export type { Foo }`) — tested in `tests/index.cross-file-resolution.spec.ts`; tree-sitter produces identical `export_clause` structure; `Exported` flag set by `exportsExtract`
 - [x] Anonymous default exports — tested in `tests/index.cross-file-resolution.spec.ts`; synthetic symbols created via AST walking in `exportsExtract`
 - [x] CommonJS require() — tested in `tests/index.cross-file-resolution.spec.ts` (whole-module, destructured, ESM interop, module graph, external packages)
-- [x] Dynamic import() specifier extraction — tested in `tests/index.cross-file-resolution.spec.ts` (module specifier as `ImportsRelation`; binding resolution deferred)
+- [x] Dynamic import() binding resolution — tested in `tests/index.cross-file-resolution.spec.ts` (whole-module namespace binding, destructured named bindings, member access resolution, external package handling, `ImportsRelation` specifier resolution)
+- [x] Dynamic import() module graph integration — tested in `tests/index.module-graph.spec.ts` (dynamic import with binding, side-effect dynamic import, static side-effect import all create edges)
 
 ## Documentation Needed
 

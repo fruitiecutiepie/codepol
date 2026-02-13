@@ -748,6 +748,20 @@ export class IndexStore {
         }
       }
     }
+
+    if (oldRelation.kind === 'Imports' && newRelation.kind === 'Imports') {
+      // Update by-file index (file derived from scope)
+      const scope = this.scopesById.get(oldRelation.scopeId);
+      if (scope) {
+        const fileImports = this.importsByFile.get(scope.file);
+        if (fileImports) {
+          const impIdx = fileImports.indexOf(oldRelation as ImportsRelation);
+          if (impIdx !== -1) {
+            fileImports[impIdx] = newRelation as ImportsRelation;
+          }
+        }
+      }
+    }
   }
 
   /**

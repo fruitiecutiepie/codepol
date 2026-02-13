@@ -1208,13 +1208,14 @@ const result = lodash.map([1, 2, 3], (x: number) => x * 2);
   });
 
   // ==========================================================================
-  // Dynamic import() specifier extraction
+  // Dynamic import() — binding resolution
   // ==========================================================================
 
-  it('should extract dynamic import() module specifier as ImportsRelation', () => {
+  it('should resolve whole-module dynamic import (const mod = await import())', () => {
     const dynamicTarget = path.join(testDir, 'dynamic_target.ts');
     fs.writeFileSync(dynamicTarget, `
 export function lazyHelper() { return 'lazy'; }
+export const lazyConst = 42;
 `);
 
     const dynamicCaller = path.join(testDir, 'dynamic_caller.ts');
@@ -1230,19 +1231,147 @@ async function loadModule() {
       dir: testDir,
     });
 
-    // Dynamic import should produce an ImportsRelation with the specifier
-    const stats = index.statsGet();
-    // The caller file should have at least one import relation
-    const callerSymbols = index.symbolsInFileGet(dynamicCaller);
-    expect(callerSymbols.length).toBeGreaterThan(0);
-
-    // Check import bindings — dynamic import does not create ImportBindingRelation
-    // because the binding resolution for `const mod = await import(...)` is not yet implemented.
-    // The specifier is tracked as an ImportsRelation (module specifier awareness).
+    // Dynamic import with await should create an ImportBindingRelation
+    // with isNamespace: true (like import * as mod from "...")
     const bindings = index.importBindingsGet(dynamicCaller);
-    // TODO: Remove this check once dynamic import binding resolution is implemented.
-    // For now, dynamic import() does not create ImportBindingRelation entries,
-    // only ImportsRelation for module specifier tracking.
-    expect(bindings.length).toBe(0);
+    expect(bindings.length).toBe(1);
+
+    const modBinding = bindings[0];
+    expect(modBinding.importedName).toBe('*');
+    expect(modBinding.isNamespace).toBe(true);
+    expect(modBinding.isDefault).toBe(false);
+    expect(modBinding.moduleSpec).toBe('./dynamic_target');
+    expect(modBinding.resolvedModulePath).toBe(dynamicTarget);
+
+    // The module specifier should also be tracked as an ImportsRelation
+    const imports = index.importsGet(dynamicCaller);
+    expect(imports.length).toBeGreaterThan(0);
+    const dynamicImport = imports.find(i => i.spec === './dynamic_target');
+    expect(dynamicImport).toBeDefined();
+    expect(dynamicImport!.resolvedModulePath).toBe(dynamicTarget);
+  });
+
+  it('should resolve destructured dynamic import (const { foo } = await import())', () => {
+    const destrTarget = path.join(testDir, 'destr_target.ts');
+    fs.writeFileSync(destrTarget, `
+export function alpha() { return 'a'; }
+export function beta() { return 'b'; }
+`);
+
+    const destrCaller = path.join(testDir, 'destr_caller.ts');
+    fs.writeFileSync(destrCaller, `
+async function loadParts() {
+  const { alpha, beta } = await import('./destr_target');
+  return alpha() + beta();
+}
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [destrTarget, destrCaller],
+      dir: testDir,
+    });
+
+    // Destructured dynamic import creates named ImportBindingRelation entries
+    const bindings = index.importBindingsGet(destrCaller);
+    expect(bindings.length).toBe(2);
+
+    const alphaBinding = bindings.find(b => b.importedName === 'alpha');
+    expect(alphaBinding).toBeDefined();
+    expect(alphaBinding!.isDefault).toBe(false);
+    expect(alphaBinding!.isNamespace).toBe(false);
+    expect(alphaBinding!.moduleSpec).toBe('./destr_target');
+    expect(alphaBinding!.resolvedModulePath).toBe(destrTarget);
+    expect(alphaBinding!.resolvedExportId).toBeDefined();
+
+    const betaBinding = bindings.find(b => b.importedName === 'beta');
+    expect(betaBinding).toBeDefined();
+    expect(betaBinding!.resolvedModulePath).toBe(destrTarget);
+    expect(betaBinding!.resolvedExportId).toBeDefined();
+  });
+
+  it('should resolve dynamic import member accesses via namespace resolution', () => {
+    const memberTarget = path.join(testDir, 'dyn_member_target.ts');
+    fs.writeFileSync(memberTarget, `
+export function greet() { return 'hello'; }
+`);
+
+    const memberCaller = path.join(testDir, 'dyn_member_caller.ts');
+    fs.writeFileSync(memberCaller, `
+async function callGreet() {
+  const mod = await import('./dyn_member_target');
+  return mod.greet();
+}
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [memberTarget, memberCaller],
+      dir: testDir,
+    });
+
+    // The namespace binding should be resolved
+    const bindings = index.importBindingsGet(memberCaller);
+    const nsBind = bindings.find(b => b.isNamespace);
+    expect(nsBind).toBeDefined();
+    expect(nsBind!.resolvedModulePath).toBe(memberTarget);
+
+    // Member access (mod.greet) should be resolved to the exported symbol
+    const refs = index.referencesInFileGet(memberCaller);
+    const greetRef = refs.find(r => r.name.includes('greet'));
+    expect(greetRef).toBeDefined();
+
+    // The reference should resolve to the exported greet symbol
+    if (greetRef?.resolvedSymbolId) {
+      const resolvedSym = index.symbolGet(greetRef.resolvedSymbolId);
+      expect(resolvedSym).toBeDefined();
+      expect(resolvedSym!.name).toBe('greet');
+      expect(resolvedSym!.file).toBe(memberTarget);
+    }
+  });
+
+  it('should handle external dynamic import gracefully (no resolvedModulePath)', () => {
+    const extDynamic = path.join(testDir, 'ext_dynamic.ts');
+    fs.writeFileSync(extDynamic, `
+async function loadExternal() {
+  const lodash = await import('lodash');
+  return lodash.default;
+}
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [extDynamic],
+      dir: testDir,
+    });
+
+    // External dynamic import creates binding but no resolved path
+    const bindings = index.importBindingsGet(extDynamic);
+    const lodashBinding = bindings.find(b => b.moduleSpec === 'lodash');
+    expect(lodashBinding).toBeDefined();
+    expect(lodashBinding!.isNamespace).toBe(true);
+    expect(lodashBinding!.resolvedModulePath).toBeUndefined();
+    expect(lodashBinding!.resolvedExportId).toBeUndefined();
+  });
+
+  it('should resolve ImportsRelation specifiers for side-effect imports', () => {
+    const sideEffectTarget = path.join(testDir, 'side_effect_target.ts');
+    fs.writeFileSync(sideEffectTarget, `
+export const setup = true;
+`);
+
+    const sideEffectCaller = path.join(testDir, 'side_effect_caller.ts');
+    fs.writeFileSync(sideEffectCaller, `
+import './side_effect_target';
+const x = 1;
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [sideEffectTarget, sideEffectCaller],
+      dir: testDir,
+    });
+
+    // Side-effect import should have resolvedModulePath set
+    const imports = index.importsGet(sideEffectCaller);
+    const sideEffect = imports.find(i => i.spec === './side_effect_target');
+    expect(sideEffect).toBeDefined();
+    expect(sideEffect!.resolvedModulePath).toBe(sideEffectTarget);
   });
 });

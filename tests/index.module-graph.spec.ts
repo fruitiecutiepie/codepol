@@ -455,4 +455,90 @@ export function consumer() { return path.join('a', 'b'); }
     expect(entryPoints).toContain(epExtOnly);
     expect(entryPoints).toContain(epLeaf);
   });
+
+  // ==========================================================================
+  // Dynamic import() in module graph
+  // ==========================================================================
+
+  it('should include dynamic imports in the module graph', () => {
+    const mgDynTarget = path.join(testDir, 'mg_dyn_target.ts');
+    fs.writeFileSync(mgDynTarget, `
+export function lazyFn() { return 'lazy'; }
+`);
+
+    const mgDynCaller = path.join(testDir, 'mg_dyn_caller.ts');
+    fs.writeFileSync(mgDynCaller, `
+async function loadIt() {
+  const mod = await import('./mg_dyn_target');
+  return mod.lazyFn();
+}
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [mgDynTarget, mgDynCaller],
+      dir: testDir,
+    });
+
+    // Dynamic import should create a module graph edge
+    const importees = index.moduleImporteesGet(mgDynCaller);
+    expect(importees).toContain(mgDynTarget);
+
+    const importers = index.moduleImportersGet(mgDynTarget);
+    expect(importers).toContain(mgDynCaller);
+
+    // Caller is an entry point (nothing imports it)
+    const entryPoints = index.moduleEntryPointsGet();
+    expect(entryPoints).toContain(mgDynCaller);
+    expect(entryPoints).not.toContain(mgDynTarget);
+  });
+
+  it('should include side-effect dynamic imports in the module graph', () => {
+    const mgSideTarget = path.join(testDir, 'mg_side_target.ts');
+    fs.writeFileSync(mgSideTarget, `
+export const polyfill = true;
+`);
+
+    const mgSideCaller = path.join(testDir, 'mg_side_caller.ts');
+    fs.writeFileSync(mgSideCaller, `
+async function loadPolyfills() {
+  await import('./mg_side_target');
+}
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [mgSideTarget, mgSideCaller],
+      dir: testDir,
+    });
+
+    // Side-effect dynamic import (no binding) should still appear via
+    // ImportsRelation.resolvedModulePath in the module graph
+    const importees = index.moduleImporteesGet(mgSideCaller);
+    expect(importees).toContain(mgSideTarget);
+
+    const importers = index.moduleImportersGet(mgSideTarget);
+    expect(importers).toContain(mgSideCaller);
+  });
+
+  it('should include static side-effect imports in the module graph', () => {
+    const mgStaticSideTarget = path.join(testDir, 'mg_static_side_target.ts');
+    fs.writeFileSync(mgStaticSideTarget, `
+export const init = true;
+`);
+
+    const mgStaticSideCaller = path.join(testDir, 'mg_static_side_caller.ts');
+    fs.writeFileSync(mgStaticSideCaller, `
+import './mg_static_side_target';
+const x = 1;
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [mgStaticSideTarget, mgStaticSideCaller],
+      dir: testDir,
+    });
+
+    // Static side-effect import (import "module") should appear in module graph
+    // via ImportsRelation.resolvedModulePath
+    const importees = index.moduleImporteesGet(mgStaticSideCaller);
+    expect(importees).toContain(mgStaticSideTarget);
+  });
 });
