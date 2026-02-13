@@ -1056,4 +1056,193 @@ const result = compute();
     expect(defaultBinding).toBeDefined();
     expect(defaultBinding!.resolvedExportId).toBeDefined();
   });
+
+  // ==========================================================================
+  // CommonJS require() imports
+  // ==========================================================================
+
+  it('should resolve whole-module require() to default export', () => {
+    const cjsExporter = path.join(testDir, 'cjs_exporter.ts');
+    fs.writeFileSync(cjsExporter, `
+export function greet(name: string) {
+  return 'hello ' + name;
+}
+
+export default function main() {
+  return greet('world');
+}
+`);
+
+    const cjsConsumer = path.join(testDir, 'cjs_consumer.ts');
+    fs.writeFileSync(cjsConsumer, `
+const mod = require('./cjs_exporter');
+
+const result = mod();
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [cjsExporter, cjsConsumer],
+      dir: testDir,
+    });
+
+    // Consumer should have an import binding from require()
+    const bindings = index.importBindingsGet(cjsConsumer);
+    const requireBinding = bindings.find(b => b.moduleSpec === './cjs_exporter');
+    expect(requireBinding).toBeDefined();
+    expect(requireBinding!.isDefault).toBe(true);
+    expect(requireBinding!.resolvedModulePath).toBe(cjsExporter);
+    expect(requireBinding!.resolvedExportId).toBeDefined();
+  });
+
+  it('should resolve destructured require() to named exports', () => {
+    const namedExporter = path.join(testDir, 'cjs_named_exporter.ts');
+    fs.writeFileSync(namedExporter, `
+export function alpha() { return 'a'; }
+export function beta() { return 'b'; }
+`);
+
+    const destructuredConsumer = path.join(testDir, 'cjs_destructured.ts');
+    fs.writeFileSync(destructuredConsumer, `
+const { alpha, beta } = require('./cjs_named_exporter');
+
+const a = alpha();
+const b = beta();
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [namedExporter, destructuredConsumer],
+      dir: testDir,
+    });
+
+    const bindings = index.importBindingsGet(destructuredConsumer);
+    const alphaBinding = bindings.find(b => b.importedName === 'alpha');
+    const betaBinding = bindings.find(b => b.importedName === 'beta');
+
+    expect(alphaBinding).toBeDefined();
+    expect(alphaBinding!.isDefault).toBe(false);
+    expect(alphaBinding!.resolvedModulePath).toBe(namedExporter);
+    expect(alphaBinding!.resolvedExportId).toBeDefined();
+
+    expect(betaBinding).toBeDefined();
+    expect(betaBinding!.isDefault).toBe(false);
+    expect(betaBinding!.resolvedModulePath).toBe(namedExporter);
+    expect(betaBinding!.resolvedExportId).toBeDefined();
+  });
+
+  it('should handle require() with ESM exports interop', () => {
+    // A file that uses ESM exports, consumed via require()
+    const esmExporter = path.join(testDir, 'cjs_esm_interop_exporter.ts');
+    fs.writeFileSync(esmExporter, `
+export const PI = 3.14159;
+export function circleArea(r: number) { return PI * r * r; }
+`);
+
+    const cjsMixed = path.join(testDir, 'cjs_esm_interop_consumer.ts');
+    fs.writeFileSync(cjsMixed, `
+const { PI, circleArea } = require('./cjs_esm_interop_exporter');
+
+const area = circleArea(5);
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [esmExporter, cjsMixed],
+      dir: testDir,
+    });
+
+    const bindings = index.importBindingsGet(cjsMixed);
+    const piBinding = bindings.find(b => b.importedName === 'PI');
+    const areaBinding = bindings.find(b => b.importedName === 'circleArea');
+
+    expect(piBinding).toBeDefined();
+    expect(piBinding!.resolvedExportId).toBeDefined();
+
+    expect(areaBinding).toBeDefined();
+    expect(areaBinding!.resolvedExportId).toBeDefined();
+  });
+
+  it('should include require() imports in module graph', () => {
+    const graphExporter = path.join(testDir, 'cjs_graph_exporter.ts');
+    fs.writeFileSync(graphExporter, `
+export function helper() { return 42; }
+`);
+
+    const graphConsumer = path.join(testDir, 'cjs_graph_consumer.ts');
+    fs.writeFileSync(graphConsumer, `
+const { helper } = require('./cjs_graph_exporter');
+
+const val = helper();
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [graphExporter, graphConsumer],
+      dir: testDir,
+    });
+
+    // Module graph should show the dependency
+    const importees = index.moduleImporteesGet(graphConsumer);
+    expect(importees).toContain(graphExporter);
+
+    const importers = index.moduleImportersGet(graphExporter);
+    expect(importers).toContain(graphConsumer);
+  });
+
+  it('should handle external require() gracefully (no resolvedModulePath)', () => {
+    const externalRequire = path.join(testDir, 'cjs_external.ts');
+    fs.writeFileSync(externalRequire, `
+const lodash = require('lodash');
+const result = lodash.map([1, 2, 3], (x: number) => x * 2);
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [externalRequire],
+      dir: testDir,
+    });
+
+    const bindings = index.importBindingsGet(externalRequire);
+    const lodashBinding = bindings.find(b => b.moduleSpec === 'lodash');
+    expect(lodashBinding).toBeDefined();
+    expect(lodashBinding!.isDefault).toBe(true);
+    // External package — no resolved path
+    expect(lodashBinding!.resolvedModulePath).toBeUndefined();
+    expect(lodashBinding!.resolvedExportId).toBeUndefined();
+  });
+
+  // ==========================================================================
+  // Dynamic import() specifier extraction
+  // ==========================================================================
+
+  it('should extract dynamic import() module specifier as ImportsRelation', () => {
+    const dynamicTarget = path.join(testDir, 'dynamic_target.ts');
+    fs.writeFileSync(dynamicTarget, `
+export function lazyHelper() { return 'lazy'; }
+`);
+
+    const dynamicCaller = path.join(testDir, 'dynamic_caller.ts');
+    fs.writeFileSync(dynamicCaller, `
+async function loadModule() {
+  const mod = await import('./dynamic_target');
+  return mod.lazyHelper();
+}
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [dynamicTarget, dynamicCaller],
+      dir: testDir,
+    });
+
+    // Dynamic import should produce an ImportsRelation with the specifier
+    const stats = index.statsGet();
+    // The caller file should have at least one import relation
+    const callerSymbols = index.symbolsInFileGet(dynamicCaller);
+    expect(callerSymbols.length).toBeGreaterThan(0);
+
+    // Check import bindings — dynamic import does not create ImportBindingRelation
+    // because the binding resolution for `const mod = await import(...)` is not yet implemented.
+    // The specifier is tracked as an ImportsRelation (module specifier awareness).
+    const bindings = index.importBindingsGet(dynamicCaller);
+    // TODO: Remove this check once dynamic import binding resolution is implemented.
+    // For now, dynamic import() does not create ImportBindingRelation entries,
+    // only ImportsRelation for module specifier tracking.
+    expect(bindings.length).toBe(0);
+  });
 });

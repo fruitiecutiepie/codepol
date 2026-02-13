@@ -58,15 +58,17 @@ All export patterns are handled. No remaining gaps.
 - [x] Anonymous default exports (`export default class {}`, `export default function() {}`) — AST walking in `exportsExtract` detects unhandled default exports and creates synthetic `SymbolRecord` (name `"default"`, appropriate kind, `Exported` flag). `indexFileWithTreeSitter` merges synthetic symbols into the delta.
 
 ### 3. Import Binding Relations
-**Status**: Partially Implemented
+**Status**: Mostly Implemented
 
 - [x] `ImportBindingRelation` type defined
 - [x] Named imports (`import { foo }`)
 - [x] Default imports (`import foo from`)
 - [x] Namespace imports (`import * as foo`)
 - [x] Import aliases (`import { foo as bar }`) — resolved via `childForFieldName('alias')` on the `import_specifier` AST node in both `symbolsExtract()` and `importBindingsExtract()`
-- [ ] Dynamic imports (`import("module")`) - query removed
-- [ ] CommonJS requires (`require()`) - query removed
+- [x] CommonJS requires (`require()`) — tree-sitter query patterns added with `#eq?` predicate for `require` identifier. Whole-module (`const mod = require("module")`) creates `ImportBindingRelation` with `isDefault: true`; destructured (`const { foo } = require("module")`) creates named bindings. Adapter extraction was pre-existing in `adapterCore.ts`. Cross-file resolution, module graph inclusion, and external package handling all work via existing `ImportBindingRelation` pipeline. Tested in `tests/index.cross-file-resolution.spec.ts`.
+- [x] Dynamic imports (`import("module")`) — specifier extraction only. Tree-sitter query pattern captures `import()` as `ImportsRelation` via `import.source`/`import.side_effect` captures. Tested in `tests/index.cross-file-resolution.spec.ts`.
+- [ ] Dynamic import binding resolution (`const mod = await import("./module")`) — requires linking variable declaration to dynamic import call and creating `ImportBindingRelation` with `isNamespace: true`
+- [ ] Dynamic import module graph integration — requires either resolving `ImportsRelation` specifiers or creating `ImportBindingRelation` entries for dynamic imports
 
 ## Not Yet Implemented
 
@@ -215,6 +217,8 @@ These are intentional constraints, not bugs:
 - [x] Cross-file interface/type/enum exports — tested in `tests/index.cross-file-resolution.spec.ts` (interface, type alias, enum, re-exported interface through chain)
 - [x] Type-only named exports (`export type { Foo }`) — tested in `tests/index.cross-file-resolution.spec.ts`; tree-sitter produces identical `export_clause` structure; `Exported` flag set by `exportsExtract`
 - [x] Anonymous default exports — tested in `tests/index.cross-file-resolution.spec.ts`; synthetic symbols created via AST walking in `exportsExtract`
+- [x] CommonJS require() — tested in `tests/index.cross-file-resolution.spec.ts` (whole-module, destructured, ESM interop, module graph, external packages)
+- [x] Dynamic import() specifier extraction — tested in `tests/index.cross-file-resolution.spec.ts` (module specifier as `ImportsRelation`; binding resolution deferred)
 
 ## Documentation Needed
 

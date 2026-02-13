@@ -1,8 +1,14 @@
 /**
  * Tree-sitter import query for TypeScript/TSX.
  * Captures import statements with binding details for cross-file resolution.
- * 
- * Note: Simplified to avoid predicates and node types that may not be supported.
+ *
+ * Supports:
+ * - ESM static imports (named, default, namespace, side-effect)
+ * - CommonJS require() (whole-module and destructured)
+ * - Dynamic import() specifier extraction
+ *
+ * Note: #eq? predicates are used for require() to avoid matching
+ * arbitrary call expressions. Confirmed working in web-tree-sitter.
  */
 export const IMPORTS_QUERY = `
 ; =========================
@@ -45,4 +51,38 @@ export const IMPORTS_QUERY = `
 ; import "module" (no bindings)
 (import_statement
   source: (string) @import.source) @import.side_effect
+
+; =========================
+;  CommonJS require (whole-module)
+; =========================
+
+; const foo = require("module")
+(lexical_declaration
+  (variable_declarator
+    name: (identifier) @import.require_name
+    value: (call_expression
+      function: (identifier) @_fn (#eq? @_fn "require")
+      arguments: (arguments (string) @import.require_source)))) @import.require
+
+; =========================
+;  CommonJS require (destructured)
+; =========================
+
+; const { foo } = require("module")
+(lexical_declaration
+  (variable_declarator
+    name: (object_pattern
+      (shorthand_property_identifier_pattern) @import.require_binding)
+    value: (call_expression
+      function: (identifier) @_fn (#eq? @_fn "require")
+      arguments: (arguments (string) @import.require_source)))) @import.require
+
+; =========================
+;  Dynamic import (specifier extraction only)
+; =========================
+
+; import("module") — captured as side-effect for module specifier tracking
+(call_expression
+  function: (import)
+  arguments: (arguments (string) @import.source)) @import.side_effect
 `;
