@@ -136,6 +136,40 @@ function configContentCreate(): string {
 `;
 }
 
+/**
+ * Codepol config that enables both ESLint and treesitter providers.
+ * Used for --fix tests where ESLint autofix must actually run.
+ */
+function configContentCreateWithEslint(): string {
+  return `module.exports = {
+  plugins: [{ module: '@codepol/plugin' }],
+  exclude: [],
+  targets: {
+    src: {
+      language: 'typescript',
+      files: ['src/app.ts'],
+    },
+  },
+  rules: [
+    {
+      id: 'function-logging',
+      ruleId: '@codepol/plugin/require-logger-enter-exit',
+      description: 'Ensure functions include logger enter/exit',
+      args: {
+        logger: {
+          identifier: 'logger',
+          enterMethod: 'enter',
+          exitMethod: 'exit',
+          import: { module: './logger', named: 'logger' },
+        },
+      },
+      targets: ['src'],
+    },
+  ],
+};
+`;
+}
+
 /** Source code for a function that is already instrumented (no violation). */
 const SOURCE_VALID = `\
 import { logger } from './logger';
@@ -286,15 +320,47 @@ describe('CLI E2E', () => {
     });
   });
 
-  // -------------------------------------------------------------------------
-  // Skipped scenarios
-  // -------------------------------------------------------------------------
+  describe('--fix', () => {
+    let fixDir: string;
 
-  // TODO: Remove .skip once the esbuild/eslint plugin wiring gap is resolved.
-  // The CLI's --fix flag applies ESLint fixes, but the codepol ESLint rules
-  // need proper overrideConfig wiring to work end-to-end (same gap as the
-  // esbuild plugin fix:true scenario).
-  it.skip('--fix applies fixes to disk', () => {});
+    beforeAll(() => {
+      fixDir = tempProjectCreate();
+      // Config that enables ESLint providers (no `providers: ['treesitter']` restriction)
+      fs.writeFileSync(
+        path.join(fixDir, 'codepol.config.js'),
+        configContentCreateWithEslint(),
+        'utf8',
+      );
+      // Logger mock module so the ESLint autofix import resolves
+      fs.mkdirSync(path.join(fixDir, 'src'), { recursive: true });
+      fs.writeFileSync(
+        path.join(fixDir, 'src', 'logger.ts'),
+        'export const logger = { enter(p: unknown) { return p; }, exit(p: unknown) { return p; } };\n',
+        'utf8',
+      );
+    });
+
+    afterAll(() => {
+      fs.rmSync(fixDir, { recursive: true, force: true });
+    });
+
+    it('applies ESLint fixes to disk', async () => {
+      const appPath = path.join(fixDir, 'src', 'app.ts');
+      fs.writeFileSync(appPath, SOURCE_VIOLATION, 'utf8');
+      const originalContent = fs.readFileSync(appPath, 'utf8');
+
+      const result = await runCli(['--fix'], fixDir);
+
+      // After fix, the file should be modified with logger instrumentation
+      const fixedContent = fs.readFileSync(appPath, 'utf8');
+      expect(fixedContent).not.toBe(originalContent);
+      expect(fixedContent).toContain('logger.enter');
+      expect(fixedContent).toContain('logger.exit');
+
+      // Tree-sitter re-reads the fixed file from disk and should pass
+      expect(result.exitCode).toBe(0);
+    });
+  });
 
   describe('--config <path>', () => {
     /**

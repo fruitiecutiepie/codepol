@@ -29,17 +29,23 @@ import { ESLint } from 'eslint';
 import {
   langAdd,
   parserInit,
+  policyPluginsGet,
+  policyRuleTargetsResolve,
   ruleMatchesGet,
   policyViolationsGetFromDir,
   policyViolationsGetOutputPretty,
   configGet,
   configGetFromPath,
+  ESLINT_PLUGIN_NAME_DEFAULT,
   type PolicyFile,
   type PolicyViolation,
+  type PolicyRuleTargetContext,
   type CodepolConfig,
+  type LintProvider,
+  type LintSeverity,
+  type EslintProviderConfig,
 } from '@codepol/core';
 import { eslintPluginCreate } from '@codepol/eslint-plugin';
-import pluginRules from '@codepol/plugin';
 
 const ESLINT_CONFIG_EXTENSIONS = ['.js', '.mjs', '.cjs', '.ts', '.mts', '.cts'];
 
@@ -71,6 +77,13 @@ export type PolicyPluginOptions = {
   cwd?: string;
 };
 
+type LintProviderEntry = {
+  provider: LintProvider;
+  ruleId: string;
+  ruleArgs?: unknown;
+  severity?: LintSeverity;
+};
+
 type PolicyCheckResult = {
   policy: PolicyFile;
   files: string[];
@@ -79,13 +92,67 @@ type PolicyCheckResult = {
   treeViolations: PolicyViolation[];
 };
 
+function policyRuleTargetsGet(policy: PolicyFile): PolicyRuleTargetContext[] {
+  const targets: PolicyRuleTargetContext[] = [];
+  for (const rule of policy.rules) {
+    const resolvedTargets = policyRuleTargetsResolve(rule, policy);
+    for (const target of resolvedTargets) {
+      targets.push({
+        ruleId: rule.ruleId,
+        description: rule.description,
+        args: rule.args,
+        target,
+      });
+    }
+  }
+  return targets;
+}
+
+/**
+ * Generates ESLint rule configurations from lint providers.
+ * Produces an `overrideConfig` object that enables the codepol rules
+ * matching the policy, so ESLint actually runs (and optionally fixes) them.
+ */
+function eslintConfigGet(
+  providers: LintProviderEntry[],
+  context: { policy: PolicyFile; configPath: string; cwd: string; ruleTargets: PolicyRuleTargetContext[] }
+): ESLint.Options['overrideConfig'] {
+  const rules: Record<string, unknown> = {};
+
+  for (const entry of providers) {
+    if (entry.provider.platform !== 'eslint') {
+      continue;
+    }
+    const eslintConfig = entry.provider.config as EslintProviderConfig;
+    const ruleNameFull = entry.ruleId;
+    const lastSlashIndex = ruleNameFull.lastIndexOf('/');
+    const ruleNameShort = lastSlashIndex !== -1 ? ruleNameFull.slice(lastSlashIndex + 1) : ruleNameFull;
+
+    const pluginName = eslintConfig.pluginName ?? ESLINT_PLUGIN_NAME_DEFAULT;
+    const configKey = `${pluginName}/${ruleNameShort}`;
+    if (rules[configKey]) {
+      throw new Error(`Duplicate ESLint rule configuration detected: ${configKey}.`);
+    }
+    const options = eslintConfig.ruleOptions?.({
+      ...context,
+      ruleId: entry.ruleId,
+      ruleArgs: entry.ruleArgs,
+    }) ?? {};
+    const severity = entry.severity ?? 'error';
+    rules[configKey] = [severity, options];
+  }
+
+  return { rules } as ESLint.Options['overrideConfig'];
+}
+
 async function policyCheck(options: {
   config: CodepolConfig;
+  configPath: string;
   eslintConfigPath: string;
   fix?: boolean;
   cwd: string;
 }): Promise<PolicyCheckResult> {
-  const { config, eslintConfigPath, fix, cwd } = options;
+  const { config, configPath, eslintConfigPath, fix, cwd } = options;
 
   // Register languages and initialize web-tree-sitter WASM parser
   langAdd({ langId: 'typescript', fileExtensions: ['.ts'] });
@@ -93,6 +160,49 @@ async function policyCheck(options: {
   await parserInit();
 
   const policy = config as PolicyFile;
+
+  // Load plugins from policy config (dynamic, not hardcoded import)
+  const pluginRulesResult = await policyPluginsGet(policy, cwd);
+  if ('Err' in pluginRulesResult) {
+    throw new Error(pluginRulesResult.Err);
+  }
+  const pluginRulesMap = pluginRulesResult.Ok;
+  const pluginRules = Array.from(pluginRulesMap.values());
+  const ruleTargets = policyRuleTargetsGet(policy);
+
+  // Collect lint providers filtered by policy rules
+  const lintProviderEntries: LintProviderEntry[] = [];
+  for (const entry of pluginRules) {
+    const lintProviders = entry.pluginRule.capabilities.lintProviders ?? [];
+    for (const provider of lintProviders) {
+      const matchingRule = policy.rules.find(r =>
+        r.ruleId === entry.pluginRule.id ||
+        entry.pluginRule.id.endsWith(`/${r.ruleId}`)
+      );
+
+      // Skip providers for plugin rules that have no matching policy rule
+      if (!matchingRule) continue;
+
+      // Skip if rule specifies providers and this provider's platform is not included
+      if (matchingRule.providers && matchingRule.providers.length > 0) {
+        if (!matchingRule.providers.includes(provider.platform)) {
+          continue;
+        }
+      }
+
+      lintProviderEntries.push({
+        provider,
+        ruleId: entry.pluginRule.id,
+        ruleArgs: matchingRule.args,
+        severity: matchingRule.severity,
+      });
+    }
+  }
+
+  const eslintProviders = lintProviderEntries.filter(
+    entry => entry.provider.platform === 'eslint'
+  );
+
   const matches = await ruleMatchesGet(policy, cwd);
   const files = Array.from(new Set(matches.flatMap(matchGet => matchGet.files)));
 
@@ -100,11 +210,18 @@ async function policyCheck(options: {
   if (fix != null) {
     fixEnabled = fix;
   }
+
+  // Build overrideConfig so codepol ESLint rules are actually enabled
+  const overrideConfig = eslintProviders.length > 0
+    ? eslintConfigGet(eslintProviders, { policy, configPath, cwd, ruleTargets })
+    : undefined;
+
   const eslint = new ESLint({
     overrideConfigFile: eslintConfigPath,
     plugins: {
-      codepol: eslintPluginCreate(pluginRules) as unknown as ESLint.Plugin,
+      codepol: eslintPluginCreate(pluginRules.map(pr => pr.pluginRule)) as unknown as ESLint.Plugin,
     },
+    ...(overrideConfig ? { overrideConfig } : {}),
     fix: fixEnabled,
     cwd: cwd,
   });
@@ -199,6 +316,7 @@ export function esbuildPluginCreate(options: PolicyPluginOptions = {}): Plugin {
 
         const result = await policyCheck({
           config,
+          configPath,
           eslintConfigPath,
           fix: options.fix,
           cwd,

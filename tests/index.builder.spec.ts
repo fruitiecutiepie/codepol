@@ -684,11 +684,11 @@ const a = alpha();
       expect(stats.filesIndexed).toBe(1);
       expect(stats.errors).toHaveLength(0);
 
-      // NOTE: Testing a truly custom language (e.g. 'custom' with .custom files)
-      // is blocked because languageIdFromFile() uses a hardcoded switch statement
-      // that only recognizes known extensions. A custom language registered via
-      // adapterRegister() would need languageIdFromFile() to also consult the
-      // langAdd() registry. This is a known implementation gap.
+      // NOTE: languageIdFromFile() now consults the langAdd() registry before
+      // falling back to the hardcoded switch. A truly custom language registered
+      // via langAdd() + adapterRegister() will be routed correctly. However,
+      // testing this end-to-end would require a WASM grammar for the custom
+      // language, which is outside the scope of this test.
     });
   });
 });

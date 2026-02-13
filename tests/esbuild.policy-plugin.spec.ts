@@ -1,9 +1,13 @@
 import { build } from 'esbuild';
-import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { esbuildPluginCreate } from '@codepol/esbuild-plugin';
+
+/** Workspace root — used to symlink node_modules into temp dirs. */
+const WORKSPACE_ROOT = path.resolve(__dirname, '..');
+const NODE_MODULES_PATH = path.join(WORKSPACE_ROOT, 'node_modules');
 
 // ============================================================================
 // Helpers
@@ -95,6 +99,9 @@ function tempProjectCreate(opts?: {
   const eslintConfigPath = path.join(dir, 'eslint.config.mjs');
   const outfile = path.join(dir, 'out.js');
 
+  // Symlink monorepo node_modules so @codepol/* packages resolve from the temp dir
+  symlinkSync(NODE_MODULES_PATH, path.join(dir, 'node_modules'), 'junction');
+
   writeFileSync(configPath, opts?.configContent ?? codepolConfigContent({ targetFiles: opts?.targetFiles }));
   writeFileSync(loggerPath, loggerModuleContent);
   writeFileSync(eslintConfigPath, opts?.eslintConfigContent ?? eslintConfigMinimal);
@@ -138,13 +145,7 @@ describe('esbuild policy plugin', () => {
     expect(result.errors.length).toBe(0);
   });
 
-  // TODO: Remove .skip once the esbuild plugin properly wires codepol ESLint rules
-  // into the flat config. Currently, the esbuild plugin injects the codepol plugin
-  // via the ESLint constructor's `plugins` option, but the ESLint flat config file
-  // does not enable any codepol rules. The fix mechanism works (ESLint.outputFixes
-  // writes back), but no codepol rules fire, so nothing is fixed. The tree-sitter
-  // check then finds the original violations and fails the build.
-  it.skip('fix: true applies ESLint autofixes to disk', async () => {
+  it('fix: true applies ESLint autofixes to disk', async () => {
     const { dir, outfile } = tempProjectCreate();
     const entryPath = path.join(dir, 'index.ts');
 

@@ -78,9 +78,10 @@ function policyRuleTargetsGet(policy: PolicyFile): PolicyRuleTargetContext[] {
 function policyFileGetMatch(
   ruleTargets: PolicyRuleTargetContext[],
   policyExclude: string[],
-  filePath: string
+  filePath: string,
+  cwd?: string,
 ): PolicyRuleTargetContext | undefined {
-  const relative = path.relative(process.cwd(), filePath);
+  const relative = path.relative(cwd ?? process.cwd(), filePath);
   if (globPatternsGetMatchAny(policyExclude, relative)) {
     return undefined;
   }
@@ -436,7 +437,7 @@ const requireLoggerRule = createRule<Options, MessageIds>({
       return policyRuleId === loggerRuleId || policyRuleId.endsWith(`/${loggerRuleId}`);
     });
 
-    const matchedTarget = policyFileGetMatch(relevantRuleTargets, policyExclude, filename);
+    const matchedTarget = policyFileGetMatch(relevantRuleTargets, policyExclude, filename, context.cwd);
     if (!matchedTarget) {
       return {};
     }

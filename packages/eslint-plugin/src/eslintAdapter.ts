@@ -498,7 +498,10 @@ function createAdaptedRule(
                 message: diagnostic.message,
               },
               fix: diagnostic.fix
-                ? (fixer) => fixer.replaceTextRange(diagnostic.fix!.byteRange, diagnostic.fix!.text)
+                ? (fixer) => fixer.replaceTextRange(
+                    [diagnostic.fix!.byteRange.start, diagnostic.fix!.byteRange.end],
+                    diagnostic.fix!.text,
+                  )
                 : undefined,
             });
           }

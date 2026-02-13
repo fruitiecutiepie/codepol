@@ -182,9 +182,12 @@ async function policyCheck(options: {
         r.ruleId === entry.pluginRule.id || 
         entry.pluginRule.id.endsWith(`/${r.ruleId}`)
       );
+
+      // Skip providers for plugin rules that have no matching policy rule
+      if (!matchingRule) continue;
       
       // Skip if rule specifies providers and this provider's platform is not included
-      if (matchingRule?.providers && matchingRule.providers.length > 0) {
+      if (matchingRule.providers && matchingRule.providers.length > 0) {
         if (!matchingRule.providers.includes(provider.platform)) {
           continue;
         }
@@ -193,8 +196,8 @@ async function policyCheck(options: {
       lintProviderEntries.push({
         provider,
         ruleId: entry.pluginRule.id,
-        ruleArgs: matchingRule?.args,
-        severity: matchingRule?.severity,
+        ruleArgs: matchingRule.args,
+        severity: matchingRule.severity,
       });
     }
   }

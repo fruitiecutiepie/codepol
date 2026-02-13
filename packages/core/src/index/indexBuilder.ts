@@ -19,7 +19,7 @@ import type { IndexAdapter } from '../adapters/treeSitter/adapterTypes';
 import { indexAdapterCreate } from '../adapters/treeSitter/adapterCore';
 import { typescriptConfigCreate } from '../adapters/treeSitter/languages/typescript/config';
 import { pythonConfigCreate } from '../adapters/treeSitter/languages/python/config';
-import { langGetForFile } from '../parser/parserLangs';
+import { langGetForFile, langIdGetForFile } from '../parser/parserLangs';
 import { moduleResolve, DEFAULT_EXTENSIONS, type ModuleResolveOptions } from './moduleResolver';
 
 // ============================================================================
@@ -222,10 +222,21 @@ export function projectIndexBuildSync(options: IndexBuildOptions): IndexBuildRes
 
 /**
  * Detect language ID from file path.
+ *
+ * Consults the `langAdd` registry first so that custom languages registered
+ * via `langAdd` + `adapterRegister` are routed correctly. Falls back to a
+ * hardcoded switch for extensions that may not be registered (e.g., `.js`/`.jsx`
+ * are served by the TS/TSX parsers but callers may not register them explicitly).
  */
 function languageIdFromFile(filePath: string): string | undefined {
+  // Check langAdd registry first (populated by langAdd calls)
+  const registeredId = langIdGetForFile(filePath);
+  if (registeredId) {
+    return registeredId;
+  }
+
+  // Fallback for extensions not registered via langAdd
   const ext = filePath.slice(filePath.lastIndexOf('.')).toLowerCase();
-  
   switch (ext) {
     case '.ts':
     case '.mts':

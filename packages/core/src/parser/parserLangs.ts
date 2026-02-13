@@ -110,3 +110,16 @@ export function langGetForFile(filePath: string): Language | null {
   }
   return result;
 }
+
+/**
+ * Returns the registered language ID for a file path based on its extension.
+ * Uses the `langAdd` registry (the `fileExtensionsMap`).
+ * Returns `null` if the extension is not registered.
+ */
+export function langIdGetForFile(filePath: string): string | null {
+  const extension = path.extname(filePath).toLowerCase();
+  if (!extension) {
+    return null;
+  }
+  return fileExtensionsMap.get(extension) ?? null;
+}

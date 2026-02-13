@@ -414,7 +414,7 @@ Methods that are thin wrappers over `IndexStore` can be unit-tested with a pre-p
 |----------|-------|-----------|--------|
 | Build fails when violations exist | Integration | `tests/esbuild.policy-plugin.spec.ts` | Exists |
 | Build succeeds after fix | Integration | `tests/esbuild.policy-plugin.spec.ts` | Exists |
-| `fix: true` applies autofixes | Integration | `tests/esbuild.policy-plugin.spec.ts` | Skipped (esbuild plugin does not wire codepol ESLint rules into flat config — ESLint fix pipeline not exercised) |
+| `fix: true` applies autofixes | Integration | `tests/esbuild.policy-plugin.spec.ts` | Exists (esbuild plugin now generates `overrideConfig` from policy, enabling codepol ESLint rules) |
 | Config auto-discovery (no `configPath`) | Integration | `tests/esbuild.policy-plugin.spec.ts` | Exists |
 | No matching files — build passes | Integration | `tests/esbuild.policy-plugin.spec.ts` | Exists |
 | Multiple rules — all checked | Integration | `tests/esbuild.policy-plugin.spec.ts` | Exists |
@@ -430,7 +430,7 @@ Methods that are thin wrappers over `IndexStore` can be unit-tested with a pre-p
 | `--check-plugins` validates config and exits | E2E | `tests/e2e.cli.spec.ts` | Exists |
 | No violations — exits 0 | E2E | `tests/e2e.cli.spec.ts` | Exists |
 | Violations present — exits non-zero | E2E | `tests/e2e.cli.spec.ts` | Exists |
-| `--fix` applies fixes to disk | E2E | `tests/e2e.cli.spec.ts` | Skipped (same ESLint rule wiring gap as esbuild plugin fix:true) |
+| `--fix` applies fixes to disk | E2E | `tests/e2e.cli.spec.ts` | Exists (ESLint wiring fixed; config uses both ESLint and treesitter providers) |
 | `--config <path>` uses explicit config | E2E | `tests/e2e.cli.spec.ts` | Exists |
 | Config not found — exits with error | E2E | `tests/e2e.cli.spec.ts` | Exists |
 | `--watch` mode starts and responds to changes | E2E | `tests/e2e.cli.spec.ts` | Skipped (complex async lifecycle — chokidar watcher with debounced re-runs) |
@@ -472,8 +472,8 @@ Methods that are thin wrappers over `IndexStore` can be unit-tested with a pre-p
 | Plugin: logger ESLint rule | 8 | 0 | 100% |
 | Plugin: unused exports | 26 | 0 | 100% |
 | ESLint plugin | 16 | 0 | 100% |
-| esbuild plugin | 5 | 1 | 83% |
-| CLI | 8 | 2 | 80% |
+| esbuild plugin | 6 | 0 | 100% |
+| CLI | 9 | 1 | 90% |
 | Policy contract | 5 | 0 | 100% |
 
 ### Priority order for closing gaps
@@ -493,10 +493,10 @@ Ordered by risk (silent corruption potential) and effort (lower effort = do it s
 | 7c | Policy check output | Low | Trivial (1 test, pure function) | Output formatting was untested. Pure function, easy to verify. | Done (3 tests: empty, single, multi-file grouped output) |
 | 7d | Policy tree check + check runner | Medium | Small (4 tests, temp dirs with real plugin) | `policyViolationsGetForFile` had no direct Ok-path test. `policyViolationsGetFromDir` exclude patterns untested. `policyCheck` full pipeline untested. Bugs in exclude filtering or pipeline wiring silently skip files. | Done (1 direct violation test in `core.plugins.spec.ts`, 2 exclude pattern tests in `treesitter.require-logger-enter-exit.spec.ts`, 2 pipeline tests in `core.policy-check.spec.ts`) |
 | 7e | Logger ESLint rule completeness | Medium | Small (3 RuleTester cases) | Multiple functions, nested functions, and class methods were untested — the most common real-world patterns. ESLint fix-merging behavior for overlapping fixes was undocumented. | Done (3 invalid cases in `eslint.require-logger-enter-exit.spec.ts`: multiple functions, nested functions, class methods. Discovered: ESLint one-pass fix only instruments one function when import insertion causes range overlap; class methods produce 2 reports due to MethodDefinition + FunctionExpression dual visit.) |
-| 8 | CLI E2E | Medium | Large (9 tests, subprocess spawning, file assertions) | User-facing surface. Requires building a test harness for subprocess execution. Most effort per test, but validates the entire pipeline. | Partial (8 passing, 2 skipped: --fix blocked by ESLint rule wiring gap, --watch complex async lifecycle. --config <path> now tested with explicit config in subdirectory.) |
+| 8 | CLI E2E | Medium | Large (9 tests, subprocess spawning, file assertions) | User-facing surface. Requires building a test harness for subprocess execution. Most effort per test, but validates the entire pipeline. | Done (9 passing, 1 skipped: --fix now works after ESLint wiring fix and CLI provider collection fix; --watch still skipped due to complex async lifecycle. --config <path> tested with explicit config in subdirectory.) |
 | 9 | eslintPluginCreate + adapter | Low | Small (3 tests, mock plugin objects) | Plugin assembly bugs would be caught by existing RuleTester tests. These unit tests add defense in depth. | Done (10 plugin tests + 6 adapter cache/state clearing tests + 4 requiresProjectIndex integration tests: CJS/ESM interop, lint provider assembly, treeCheck adaptation, multi-rule, invalid input, policyCacheClear, providerInitStateClear, projectIndexCacheClear. Adapter with `requiresProjectIndex: true` verified via `unusedExportsRule` in `eslint.unused-exports-adapter.spec.ts`.) |
 | 10 | Parser/language registration | Low | Small (6 tests, but complicated by global state) | Edge cases (duplicate registration, unknown extensions) are unlikely in practice. The global singleton issue makes these tests tricky to isolate. | Done (18 unit tests in `parserLangs.spec.ts`: langAdd validation, error paths, duplicate/conflict handling, langsGet, wasmPathGet, langExists, langGetForFile. 4 integration tests in `parserInit.spec.ts`: init, parser lookup, error paths. Vitest file-level isolation avoids global state conflicts.) |
-| 11 | esbuild plugin scenarios | Low | Medium (4 tests, each needs esbuild + temp project) | Existing tests cover the critical path. Additional scenarios (fix mode, auto-discovery) are nice-to-have. | Done (3 passing + 1 skipped: auto-discovery, no-matching-files, multiple-rules pass; fix:true skipped — esbuild plugin does not wire codepol ESLint rules into flat config) |
+| 11 | esbuild plugin scenarios | Low | Medium (4 tests, each needs esbuild + temp project) | Existing tests cover the critical path. Additional scenarios (fix mode, auto-discovery) are nice-to-have. | Done (5 passing: auto-discovery, no-matching-files, multiple-rules, fix:true — esbuild plugin now loads plugins via `policyPluginsGet` and generates `overrideConfig` to enable codepol ESLint rules) |
 
 ---
 
@@ -816,14 +816,14 @@ These were added as part of closing gaps identified in this plan.
 | `packages/core/src/config/configDiscover.spec.ts` | Unit/Integration | configFileDiscover (direct, walk-up, not found, precedence), configGet error path, configGetFromPath/Sync (JS loading, error paths), configCacheClear, defineConfig identity |
 | `packages/eslint-plugin/src/eslintPluginCreate.spec.ts` | Unit | eslintPluginCreate: CJS/ESM interop (array, __esModule, default, pluginRules), lint provider rule assembly, treeCheckProvider auto-adaptation, platform filtering, multi-rule collection, invalid input rejection |
 | `packages/eslint-plugin/src/eslintAdapter.spec.ts` | Unit | Cache/state clearing: policyCacheClear, providerInitStateClear, projectIndexCacheClear (smoke tests for singleton Map clearing) |
-| `tests/esbuild.policy-plugin.spec.ts` (expanded) | Integration | Added: config auto-discovery, no matching files, multiple rules, fix:true (skipped). Existing: build fail/succeed with policy plugin |
+| `tests/esbuild.policy-plugin.spec.ts` (expanded) | Integration | Added: config auto-discovery, no matching files, multiple rules, fix:true (un-skipped — esbuild plugin now loads plugins via `policyPluginsGet` and generates `overrideConfig`). Temp dirs now symlink `node_modules` for module resolution. Existing: build fail/succeed with policy plugin |
 | `packages/core/src/parser/parserLangs.spec.ts` | Unit | langAdd (register, normalize, default/custom wasmPath, error paths for empty langId, no extensions, wasmPath conflict, extension conflict, duplicate merge), langsGet, wasmPathGet, langExists, langGetForFile (known/unknown/no extension, case-insensitive, unloaded language) |
 | `packages/core/src/parser/parserInit.spec.ts` | Integration | parserInit (successful init, idempotent), parserGetForFile (Ok for known extension, Err before init, Err for unknown extension) |
 | `tests/treesitter.require-logger-enter-exit.spec.ts` (expanded) | Integration | Added: method definitions, function expressions, async functions, empty function body, generator functions, target-level exclude patterns, global policy-level exclude patterns. Existing: fixture-based function declaration / arrow function / already-instrumented check. Generator function support implemented by adding `generator_function_declaration` and `generator_function` node types to `functionsVisit`. |
 | `tests/core.plugins.spec.ts` (expanded) | Integration | Added: `policyViolationsGetForFile` Ok path with real logger plugin (returns violations for uninstrumented function). Existing: Err paths for missing capability and wrong language |
 | `tests/eslint.require-logger-enter-exit.spec.ts` (expanded) | Integration | Added: multiple functions in one file (2 errors, one-pass fix), nested functions (2 errors, inner fixed first), class methods (2 errors from dual MethodDefinition+FunctionExpression visit). Existing: block function, arrow expression, reuse import, valid instrumented, excluded file |
 | `tests/core.policy-check.spec.ts` | Integration | `policyCheck` full pipeline: loads config from temp dir via jiti, finds matching files, returns tree violations. Error path: config not found returns Err |
-| `tests/e2e.cli.spec.ts` (expanded) | E2E | CLI subprocess tests: --help, --version, --check-plugins, no violations (exit 0), violations present (exit 1), config not found (error), --config <path> with explicit config (exit 0 + violation detection). 2 skipped: --fix (ESLint wiring gap), --watch (complex async lifecycle). Uses symlinked node_modules for module resolution. |
+| `tests/e2e.cli.spec.ts` (expanded) | E2E | CLI subprocess tests: --help, --version, --check-plugins, no violations (exit 0), violations present (exit 1), config not found (error), --config <path> with explicit config (exit 0 + violation detection), --fix applies ESLint fixes to disk (un-skipped — uses config with both ESLint and treesitter providers). 1 skipped: --watch (complex async lifecycle). Uses symlinked node_modules for module resolution. |
 | `tests/index.builder.spec.ts` (expanded) | Integration | Added: `adapterRegister` — registers spy adapter for 'typescript', verifies factory and indexFile calls, validates spy delta in resulting index. Documents `languageIdFromFile` hardcoded switch as known gap for custom languages. Un-skipped: async flag detection (adapter now checks for `async` keyword child on declaration nodes), enum member extraction (symbols query now captures `enum_assignment` nodes as `enumMember` kind). Un-skipped: `getCallers`/`getCallees` via ProjectIndex API — symbol `byteRange` expanded to full declaration span in `adapterCore.ts`; `getCallers` algorithm fixed to use file-scoped symbol range containment instead of scopeId-based lookup. |
 | `tests/eslint.unused-exports-adapter.spec.ts` | Integration | ESLint adapter with `requiresProjectIndex: true`: adapts `unusedExportsRule`, builds ProjectIndex from multi-file temp dir, verifies unused exports detected via treeCheckViolation. Valid cases: all-exports-consumed file, consumer-only file. Invalid case: file with unused export. Exercises `getOrBuildProjectIndex`, `discoverIndexableFiles`, and cross-file import resolution through the ESLint adapter pipeline. |
 | `packages/core/src/index/testHelpers.ts` | — | Shared test helper for building `FileIndexDelta`, `SymbolRecord`, and `ScopeRecord` objects without tree-sitter. Extracted from duplicate helpers in `indexStore.spec.ts` and `indexQuery.spec.ts`. Exports: `byteRangeGet`, `scopeRecordNew`, `symbolRecordNew`, `fileIndexDeltaNew`. |
@@ -849,23 +849,30 @@ These were added as part of closing gaps identified in this plan.
 
 #### esbuild plugin ESLint rule wiring gap
 
-- **`fix: true` does not exercise ESLint codepol rules**: The esbuild plugin injects the codepol ESLint plugin via the ESLint constructor's `plugins` option, but the ESLint flat config file generated for the build does not enable any `codepol/*` rules. As a result, ESLint lints files but finds no codepol violations, so `fix: true` has nothing to fix. The tree-sitter check runs independently and still finds violations. To make `fix: true` work end-to-end, the esbuild plugin would need to either (a) generate an `overrideConfig` that enables the codepol rules with proper targets/args, or (b) use the ESLint API to programmatically enable rules after config loading.
+- **`fix: true` does not exercise ESLint codepol rules**: **Fixed.** The esbuild plugin now loads plugins from the policy via `policyPluginsGet`, collects ESLint lint providers filtered by policy rules (skipping unconfigured rules), and generates an `overrideConfig` with the matching rules enabled. The `plugins` option still injects the codepol ESLint plugin, while `overrideConfig` activates the specific rules. `fix: true` now works end-to-end: ESLint applies autofix, writes the fixed file to disk, then tree-sitter re-reads the fixed file and finds no violations.
 
 #### CLI ESLint provider collection gap
 
-- **Unfiltered ESLint providers from unconfigured plugin rules**: The CLI iterates all plugin rules loaded from `plugins: [{ module: '@codepol/plugin' }]` and collects their ESLint lint providers. When a plugin rule (e.g., `unusedExportsRule`) has no matching entry in the policy's `rules` array, the `matchingRule?.providers` filter is undefined and the provider passes through unfiltered. This causes ESLint to run with `codepol/no-unused-exports` enabled even when the policy doesn't configure it. The E2E test works around this by providing a proper ESLint config with the codepol plugin registered and targeting only the specific policy file. The fix would be to skip ESLint providers for plugin rules that have no matching policy rule.
+- **Unfiltered ESLint providers from unconfigured plugin rules**: **Fixed.** Added `if (!matchingRule) continue;` guard in the CLI's provider collection loop (`apps/cli/src/index.ts`). ESLint providers are now only collected for plugin rules that have a matching entry in the policy's `rules` array. The same guard is applied in the esbuild plugin's provider collection.
 
 #### adapterRegister: custom language gap
 
-- **`languageIdFromFile` hardcoded switch**: The `adapterRegister` function correctly stores custom adapter factories in the `adapterFactories` Map, but `languageIdFromFile` (a private function in `indexBuilder.ts`) uses a hardcoded switch statement to map file extensions to language IDs. It does not consult the `langAdd` registry. This means a custom language registered via `adapterRegister('custom', factory)` and `langAdd({ langId: 'custom', fileExtensions: ['.custom'] })` will never be routed to the custom adapter because `languageIdFromFile` won't recognize `.custom` files. The `adapterRegister` test validates the contract by overriding an existing language ('typescript').
+- **`languageIdFromFile` hardcoded switch**: **Fixed.** `languageIdFromFile` now consults the `langAdd` registry (via new `langIdGetForFile` function in `parserLangs.ts`) before falling back to the hardcoded switch. Custom languages registered via `langAdd({ langId: 'custom', fileExtensions: ['.custom'] })` + `adapterRegister('custom', factory)` will be routed to their adapter. The hardcoded switch remains as a fallback for extensions like `.js`/`.jsx` that may not be explicitly registered via `langAdd`.
+
+#### ESLint rule CWD mismatch in esbuild plugin context
+
+- **`policyFileGetMatch` used `process.cwd()` for path relativization**: **Fixed.** The `policyFileGetMatch` function in the ESLint logger rule (`packages/plugin/src/index.ts`) previously used `process.cwd()` to relativize absolute file paths for glob matching. When ESLint runs via the esbuild plugin (where the ESLint CWD differs from the process CWD), this caused target file patterns to not match. Fixed by accepting an optional `cwd` parameter and using `context.cwd` from the ESLint rule context.
+
+#### Pre-existing build error in eslint-plugin
+
+- **`ByteRange` type mismatch in `eslintAdapter.ts`**: **Fixed.** `fixer.replaceTextRange` expects `readonly [number, number]` but was receiving a `ByteRange` object (`{ start, end }`). Fixed by converting to `[byteRange.start, byteRange.end]` tuple.
 
 ### Planned tests (not yet created)
 
 No remaining planned test files. All identified gaps either have tests (possibly skipped) or are documented as known implementation gaps above. The shared `testHelpers.ts` has been created and is in use by `indexStore.spec.ts` and `indexQuery.spec.ts`.
 
-Remaining skipped tests (3 total across 2 files):
-- `tests/e2e.cli.spec.ts`: `--fix` (ESLint rule wiring gap), `--watch` (complex async lifecycle)
-- `tests/esbuild.policy-plugin.spec.ts`: `fix: true` (ESLint rule wiring gap)
+Remaining skipped tests (1 total across 1 file):
+- `tests/e2e.cli.spec.ts`: `--watch` (complex async lifecycle — chokidar watcher with debounced re-runs)
 
 ### Fixtures (current)
 
