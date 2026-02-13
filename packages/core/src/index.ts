@@ -410,6 +410,10 @@ export {
 export type { ProjectIndex } from './index/indexQuery';
 export { projectIndexCreate } from './index/indexQuery';
 
+// Module Graph
+export type { ModuleGraph } from './index/moduleGraph';
+export { moduleGraphBuild } from './index/moduleGraph';
+
 // Index builder
 export type { IndexBuildOptions, IndexBuildResult } from './index/indexBuilder';
 export {

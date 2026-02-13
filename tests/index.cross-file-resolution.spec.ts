@@ -249,19 +249,64 @@ const result = renamedFn();
     const bindings = index.getImportBindings(aliasImporter);
     expect(bindings.length).toBeGreaterThan(0);
 
-    // The binding should reference the original exported name
-    const aliasBinding = bindings.find(
-      b => b.importedName === 'originalName' || b.importedName === 'renamedFn'
-    );
+    // importedName must be the original exported name, not the local alias
+    const aliasBinding = bindings.find(b => b.importedName === 'originalName');
     expect(aliasBinding).toBeDefined();
     expect(aliasBinding!.resolvedModulePath).toBe(aliasExporter);
     expect(aliasBinding!.resolvedExportId).toBeDefined();
+
+    // The local symbol should be named 'renamedFn' (the alias)
+    const localSymbol = index.getSymbol(aliasBinding!.localSymbolId);
+    expect(localSymbol).toBeDefined();
+    expect(localSymbol!.name).toBe('renamedFn');
 
     // The resolved export should be the 'originalName' symbol from the exporter
     const exportedSymbols = index.getExportedSymbols({ file: aliasExporter });
     const originalSymbol = exportedSymbols.find(s => s.name === 'originalName');
     expect(originalSymbol).toBeDefined();
     expect(aliasBinding!.resolvedExportId).toBe(originalSymbol!.id);
+
+    // References to 'renamedFn' in the importer should resolve to the exported symbol
+    const refs = index.getReferencesInFile(aliasImporter);
+    const renamedRefs = refs.filter(r => r.name === 'renamedFn');
+    expect(renamedRefs.length).toBeGreaterThan(0);
+  });
+
+  it('should resolve export aliases (export { foo as bar })', () => {
+    const aliasExportSource = path.join(testDir, 'alias_export_source.ts');
+    fs.writeFileSync(aliasExportSource, `
+function internalFn() { return 'internal'; }
+export { internalFn as publicApi };
+`);
+
+    const aliasExportConsumer = path.join(testDir, 'alias_export_consumer.ts');
+    fs.writeFileSync(aliasExportConsumer, `
+import { publicApi } from './alias_export_source';
+
+const result = publicApi();
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [aliasExportSource, aliasExportConsumer],
+      dir: testDir,
+    });
+
+    // The export map should contain 'publicApi' (the alias), not 'internalFn'
+    const exports = index.getFileExports(aliasExportSource);
+    const aliasedExport = exports.find(e => e.exportedName === 'publicApi');
+    expect(aliasedExport).toBeDefined();
+    expect(aliasedExport!.symbolId).toBeDefined();
+
+    // There should NOT be an export under the internal name
+    const internalExport = exports.find(e => e.exportedName === 'internalFn');
+    expect(internalExport).toBeUndefined();
+
+    // The consumer should resolve the import to the correct symbol
+    const bindings = index.getImportBindings(aliasExportConsumer);
+    const publicApiBinding = bindings.find(b => b.importedName === 'publicApi');
+    expect(publicApiBinding).toBeDefined();
+    expect(publicApiBinding!.resolvedModulePath).toBe(aliasExportSource);
+    expect(publicApiBinding!.resolvedExportId).toBeDefined();
   });
 
   it('should resolve re-exports (export { x } from "./y")', () => {

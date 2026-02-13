@@ -48,7 +48,7 @@ Core infrastructure complete, but TypeScript queries simplified for compatibilit
 - [x] Basic export declarations (`export const/function/class`)
 - [x] Named exports (`export { foo }`)
 - [x] Default exports (`export default foo`)
-- [ ] Export aliases (`export { foo as bar }`) - query not yet added
+- [x] Export aliases (`export { foo as bar }`) — resolved via `childForFieldName('alias')` on the `export_specifier` AST node in `exportsExtract()`
 - [x] Re-exports (`export { foo } from "module"`) — TS query captures `export.reexport_name` + `export.reexport_source`
 - [x] Star exports (`export * from "module"`) — already captured via `export.star_source`; symbols added to export map by `exportMapAddReexportedSymbols`
 - [ ] Namespace re-exports (`export * as ns`) - query exists but resolution not implemented
@@ -62,7 +62,7 @@ Core infrastructure complete, but TypeScript queries simplified for compatibilit
 - [x] Named imports (`import { foo }`)
 - [x] Default imports (`import foo from`)
 - [x] Namespace imports (`import * as foo`)
-- [ ] Import aliases (`import { foo as bar }`) - query removed
+- [x] Import aliases (`import { foo as bar }`) — resolved via `childForFieldName('alias')` on the `import_specifier` AST node in both `symbolsExtract()` and `importBindingsExtract()`
 - [ ] Dynamic imports (`import("module")`) - query removed
 - [ ] CommonJS requires (`require()`) - query removed
 
@@ -71,26 +71,21 @@ Core infrastructure complete, but TypeScript queries simplified for compatibilit
 ### High Priority
 
 #### 1. Module Graph
-**Status**: Not implemented (foundation exists)
+**Status**: Implemented
 
-Build a module-level graph from import relations:
+Module-level dependency graph built from import relations in `packages/core/src/index/moduleGraph.ts`.
 
 - [x] Import relations stored in `IndexStore`
 - [x] Module specifier extraction
-- [ ] `ModuleGraph` type and API
-- [ ] `moduleGraphImportersGet(file)` / `moduleGraphImporteesGet(file)`
-- [ ] Topological sort (`moduleGraphDependencyOrderGet()`)
-- [ ] Circular dependency detection (`moduleGraphCyclesGet()`)
-- [ ] Entry point detection
+- [x] `ModuleGraph` type and API — `moduleGraphBuild(store)` in `moduleGraph.ts`
+- [x] `moduleGraphImportersGet(file)` / `moduleGraphImporteesGet(file)` — forward/reverse adjacency from resolved import bindings
+- [x] Topological sort (`moduleGraphDependencyOrderGet()`) — Kahn's algorithm on reversed dependency graph
+- [x] Circular dependency detection (`moduleGraphCyclesGet()`) — Tarjan's SCC algorithm
+- [ ] Entry point detection — not yet implemented (can be derived: files with no importers)
 
-```typescript
-type ModuleGraph = {
-  moduleGraphImportersGet(file: string): string[];
-  moduleGraphImporteesGet(file: string): string[];
-  moduleGraphDependencyOrderGet(): string[];  // Topological sort
-  moduleGraphCyclesGet(): string[][];
-};
-```
+Exposed on `ProjectIndex` as `getModuleImporters()`, `getModuleImportees()`, `getModuleDependencyOrder()`, `getModuleCycles()`. Graph is lazily built and cached.
+
+Integration tests in `tests/index.module-graph.spec.ts`: linear chain, circular imports, diamond dependencies, isolated files, external package filtering, unknown files, multi-import deduplication.
 
 ### Medium Priority
 
@@ -205,9 +200,12 @@ These are intentional constraints, not bugs:
 - [x] Unit tests for IndexStore operations (`packages/core/src/index/indexStore.spec.ts`)
 - [ ] Unit tests for adapter query execution
 - [x] Integration tests for cross-file scenarios (`tests/index.cross-file-resolution.spec.ts`)
-- [ ] Performance benchmarks for large codebases
+- [x] Performance benchmarks for large codebases (`packages/core/src/index/indexBuilder.bench.ts`, `indexQuery.bench.ts`, `packages/plugin/src/unusedExportsCheck.bench.ts`)
 - [x] Edge case coverage (circular imports, re-exports, star exports, diamond deps, missing files, namespace imports)
 - [x] `getCallers`/`getCallees` via ProjectIndex API (`tests/index.builder.spec.ts`)
+- [x] Import aliases (`import { foo as bar }`) — tested in `tests/index.cross-file-resolution.spec.ts`
+- [x] Export aliases (`export { foo as bar }`) — tested in `tests/index.cross-file-resolution.spec.ts`
+- [x] Module graph queries — tested in `tests/index.module-graph.spec.ts` (linear chain, circular, diamond, isolated, external packages)
 
 ## Documentation Needed
 

@@ -19,6 +19,8 @@ import type {
   ExportsRelation,
 } from './indexTypes';
 import type { IndexStore } from './indexStore';
+import type { ModuleGraph } from './moduleGraph';
+import { moduleGraphBuild } from './moduleGraph';
 
 // ============================================================================
 // ProjectIndex Interface
@@ -164,6 +166,35 @@ export type ProjectIndex = {
   resolveImport(fromFile: string, specifier: string, name: string): SymbolId | undefined;
 
   // ============================================================================
+  // Module Graph Queries
+  // ============================================================================
+
+  /**
+   * Get files that import the given file (reverse dependency edges).
+   * Only includes indexed files; external packages are excluded.
+   */
+  getModuleImporters(file: string): string[];
+
+  /**
+   * Get files that the given file imports (forward dependency edges).
+   * Only includes indexed files; external packages are excluded.
+   */
+  getModuleImportees(file: string): string[];
+
+  /**
+   * Get all indexed files in dependency order (topological sort).
+   * Files with no dependencies come first; dependents come after their dependencies.
+   * Files in cycles are included with arbitrary intra-cycle ordering.
+   */
+  getModuleDependencyOrder(): string[];
+
+  /**
+   * Get all circular dependency cycles.
+   * Each cycle is an array of file paths. Returns empty array if no cycles exist.
+   */
+  getModuleCycles(): string[][];
+
+  // ============================================================================
   // Metadata
   // ============================================================================
 
@@ -196,6 +227,9 @@ export function projectIndexCreate(
   store: IndexStore,
   capabilities: IndexCapabilities
 ): ProjectIndex {
+  // Lazily built module graph (cached after first access)
+  let graph: ModuleGraph | undefined;
+
   return {
     // Symbol queries
     getSymbols(filter?: SymbolFilter): SymbolRecord[] {
@@ -389,6 +423,27 @@ export function projectIndexCreate(
       }
       
       return undefined;
+    },
+
+    // Module graph queries (lazily built, cached)
+    getModuleImporters(file: string): string[] {
+      if (!graph) graph = moduleGraphBuild(store);
+      return graph.moduleGraphImportersGet(file);
+    },
+
+    getModuleImportees(file: string): string[] {
+      if (!graph) graph = moduleGraphBuild(store);
+      return graph.moduleGraphImporteesGet(file);
+    },
+
+    getModuleDependencyOrder(): string[] {
+      if (!graph) graph = moduleGraphBuild(store);
+      return graph.moduleGraphDependencyOrderGet();
+    },
+
+    getModuleCycles(): string[][] {
+      if (!graph) graph = moduleGraphBuild(store);
+      return graph.moduleGraphCyclesGet();
     },
 
     // Metadata

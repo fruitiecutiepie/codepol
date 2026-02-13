@@ -232,7 +232,18 @@ function symbolsExtract(
       }
     }
 
-    const name = sliceText(source, nameNode.startIndex, nameNode.endIndex);
+    let name = sliceText(source, nameNode.startIndex, nameNode.endIndex);
+
+    // For import bindings with alias (import { foo as bar }), use the alias as local name.
+    // The tree-sitter import_specifier node has name: "foo" and alias: "bar".
+    // The local binding is "bar", so symbol name must be "bar".
+    if (declNode?.type === 'import_specifier') {
+      const aliasNode = declNode.childForFieldName('alias');
+      if (aliasNode) {
+        name = sliceText(source, aliasNode.startIndex, aliasNode.endIndex);
+      }
+    }
+
     // Name range: used for dedup and scope lookup (the identifier position)
     const nameRange: ByteRange = { start: nameNode.startIndex, end: nameNode.endIndex };
     declRanges.add(`${nameRange.start}:${nameRange.end}`);
@@ -697,11 +708,13 @@ function importBindingsExtract(
 
     // Handle named imports: import { foo, bar as baz } from "module"
     const bindingNameNode = capturesByName.get('import.binding_name');
-    const bindingAliasNode = capturesByName.get('import.binding_alias');
     if (bindingNameNode) {
       const importedName = sliceText(source, bindingNameNode.startIndex, bindingNameNode.endIndex);
-      const localName = bindingAliasNode 
-        ? sliceText(source, bindingAliasNode.startIndex, bindingAliasNode.endIndex)
+      // Check for alias via the tree-sitter node (import { foo as bar } -> alias field = "bar")
+      const specifierNode = bindingNameNode.parent;
+      const aliasNode = specifierNode?.childForFieldName('alias');
+      const localName = aliasNode 
+        ? sliceText(source, aliasNode.startIndex, aliasNode.endIndex)
         : importedName;
 
       // Find the corresponding symbol
@@ -895,11 +908,13 @@ function exportsExtract(
 
     // Handle named exports: export { foo } or export { foo as bar }
     const namedNode = capturesByName.get('export.name');
-    const aliasNode = capturesByName.get('export.alias');
     if (namedNode && !capturesByName.get('export.reexport_source')) {
       const symbolName = sliceText(source, namedNode.startIndex, namedNode.endIndex);
-      const exportedName = aliasNode 
-        ? sliceText(source, aliasNode.startIndex, aliasNode.endIndex)
+      // Check for alias via the tree-sitter node (export { foo as bar } -> alias field = "bar")
+      const specifierNode = namedNode.parent;
+      const exportAliasNode = specifierNode?.childForFieldName('alias');
+      const exportedName = exportAliasNode 
+        ? sliceText(source, exportAliasNode.startIndex, exportAliasNode.endIndex)
         : symbolName;
       const symbol = findExportSymbol(symbolsByName, symbolName, namedNode.startIndex);
       if (symbol) {

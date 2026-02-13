@@ -201,7 +201,8 @@ Examples:
 | `crossFileResolve` — named imports | Integration | `tests/index.cross-file-resolution.spec.ts` | Exists |
 | `crossFileResolve` — default imports | Integration | `tests/index.cross-file-resolution.spec.ts` | Exists |
 | `crossFileResolve` — namespace imports | Integration | `tests/index.cross-file-resolution.spec.ts` | Exists (binding indexed with `resolvedModulePath`; member accesses like `utils.alpha` resolved to exported symbols via `memberRefsExtract` + namespace member resolution pass) |
-| `crossFileResolve` — aliased imports | Integration | `tests/index.cross-file-resolution.spec.ts` | Exists |
+| `crossFileResolve` — aliased imports | Integration | `tests/index.cross-file-resolution.spec.ts` | Exists (`importedName` is original exported name; local symbol uses alias via `childForFieldName('alias')` on `import_specifier` AST node) |
+| `crossFileResolve` — export aliases (`export { foo as bar }`) | Integration | `tests/index.cross-file-resolution.spec.ts` | Exists (export alias resolved via `childForFieldName('alias')` on `export_specifier`; consumer imports by aliased name) |
 | `crossFileResolve` — re-exports (A re-exports from B) | Integration | `tests/index.cross-file-resolution.spec.ts` | Exists (re-export chain followed via `exportMapAddReexportedSymbols`) |
 | `crossFileResolve` — circular imports (A imports B, B imports A) | Integration | `tests/index.cross-file-resolution.spec.ts` | Exists |
 | `crossFileResolve` — diamond dependency (A imports B+C, both import D) | Integration | `tests/index.cross-file-resolution.spec.ts` | Exists |
@@ -232,6 +233,22 @@ Methods that are thin wrappers over `IndexStore` can be unit-tested with a pre-p
 | `resolveImport(fromFile, specifier, name)` | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
 | `getStats()` | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
 | `capabilities` | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
+
+#### Module Graph (`index/moduleGraph.ts`)
+
+| Method | Layer | Test File | Status |
+|--------|-------|-----------|--------|
+| `getModuleImporters(file)` — reverse dependency edges | Integration | `tests/index.module-graph.spec.ts` | Exists |
+| `getModuleImportees(file)` — forward dependency edges | Integration | `tests/index.module-graph.spec.ts` | Exists |
+| `getModuleDependencyOrder()` — topological sort | Integration | `tests/index.module-graph.spec.ts` | Exists |
+| `getModuleCycles()` — circular dependency detection | Integration | `tests/index.module-graph.spec.ts` | Exists |
+| Linear chain topology (A imports B imports C) | Integration | `tests/index.module-graph.spec.ts` | Exists |
+| Circular imports (A imports B, B imports A) | Integration | `tests/index.module-graph.spec.ts` | Exists |
+| Diamond dependency (A imports B+C, both import D) | Integration | `tests/index.module-graph.spec.ts` | Exists |
+| Isolated file (no imports/exports) | Integration | `tests/index.module-graph.spec.ts` | Exists |
+| External packages excluded from graph | Integration | `tests/index.module-graph.spec.ts` | Exists |
+| Unknown file returns empty arrays | Integration | `tests/index.module-graph.spec.ts` | Exists |
+| Multiple imports between same files deduplicated | Integration | `tests/index.module-graph.spec.ts` | Exists |
 
 #### Policy Loading (`policyGet.ts`)
 
@@ -460,8 +477,9 @@ Methods that are thin wrappers over `IndexStore` can be unit-tested with a pre-p
 | Result utilities | 8 | 0 | 100% |
 | Module resolver | 9 | 0 | 100% |
 | IndexStore | 14 | 0 | 100% |
-| Index builder | 33 | 0 | 100% |
+| Index builder | 35 | 0 | 100% |
 | Index query (ProjectIndex) | 16 | 0 | 100% |
+| Module graph | 11 | 0 | 100% |
 | Policy loading | 7 | 0 | 100% |
 | Policy tree check | 7 | 0 | 100% |
 | Policy check runner | 5 | 0 | 100% |
@@ -631,51 +649,40 @@ Detect performance regressions in indexing, cross-file resolution, and policy ch
 
 ### Benchmark files
 
+> **Status:** All 3 benchmark files exist and run via `pnpm bench`.
+
 Location: `*.bench.ts` files co-located with the module they benchmark (consistent with Vitest's bench convention).
 
 ```
-packages/core/src/index/indexBuilder.bench.ts    — Indexing throughput
-packages/core/src/index/indexQuery.bench.ts      — Query latency
-packages/plugin/src/unusedExportsCheck.bench.ts  — Per-file check latency
+packages/core/src/index/indexBuilder.bench.ts    — Indexing throughput        (Exists)
+packages/core/src/index/indexQuery.bench.ts      — Query latency              (Exists)
+packages/plugin/src/unusedExportsCheck.bench.ts  — Per-file check latency     (Exists)
 ```
 
-Run separately from normal tests: `pnpm vitest bench`
+A shared helper `tests/benchHelpers.ts` generates realistic multi-file TypeScript projects (functions, classes, imports, exports) in a temp directory. Each file imports from up to 3 earlier files, creating a topology with linear chains and fan-out.
+
+Run separately from normal tests: `pnpm bench`
 
 ### What to benchmark
 
-| Benchmark | What it measures | Target |
-|-----------|-----------------|--------|
-| Index 100 files | `projectIndexBuildSync` throughput | TBD — run baseline first |
-| Index 500 files | Scale behavior (should be ~linear) | TBD |
-| Cross-file resolve (100 files, 50 imports each) | Resolution throughput | TBD |
-| `unusedExportsCheck` on 100-file index | Per-file check latency | TBD |
-| `policyViolationsGetFromDir` (100 files) | Full pipeline | TBD |
+| Benchmark | What it measures | Bench File | Target |
+|-----------|-----------------|------------|--------|
+| Index 100 files | `projectIndexBuildSync` throughput | `indexBuilder.bench.ts` | TBD — run baseline first |
+| Index 500 files | Scale behavior (should be ~linear) | `indexBuilder.bench.ts` | TBD |
+| Index 100 files (no cross-file) | Indexing without resolution | `indexBuilder.bench.ts` | TBD |
+| `getSymbols()` (all, no filter) | Full symbol scan | `indexQuery.bench.ts` | TBD |
+| `getSymbolsInFile(file)` | File-scoped query | `indexQuery.bench.ts` | TBD |
+| `getSymbolsByName(name)` | Name lookup | `indexQuery.bench.ts` | TBD |
+| `getExportedSymbols({ file })` | Export filter | `indexQuery.bench.ts` | TBD |
+| `getReferences(symbolId)` | Reference lookup | `indexQuery.bench.ts` | TBD |
+| `getCallers(symbolId)` | Call graph traversal | `indexQuery.bench.ts` | TBD |
+| `unusedExportsCheck` (single file, 100-file index) | Per-file check latency | `unusedExportsCheck.bench.ts` | TBD |
 
 **Setting targets:** Run each benchmark 3 times on CI hardware, take the p95, and set the target at 2x that value. Record the baseline hardware and date. Revisit targets when CI hardware changes.
 
 ### Implementation
 
-Use Vitest's `bench()` function, which provides statistical analysis (iterations, min, max, p95) rather than a single `performance.now()` sample:
-
-```typescript
-import { bench, describe, beforeAll } from 'vitest';
-
-describe('indexing throughput', () => {
-  let files: string[];
-  let testDir: string;
-
-  beforeAll(async () => {
-    // Warm up: initialize parser and WASM once so bench measures indexing, not loading
-    await parserInit();
-    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-bench-'));
-    files = generateTestFiles(100, testDir);
-  });
-
-  bench('index 100 files', () => {
-    projectIndexBuildSync({ files, dir: testDir });
-  });
-});
-```
+All benchmarks use Vitest's `bench()` function, which provides statistical analysis (iterations, min, max, p95) rather than a single `performance.now()` sample. Parsers are warmed up in `beforeAll` and temp directories are cleaned up in `afterAll`.
 
 **Warm-up:** Tree-sitter WASM loading is a one-time cost. Always initialize parsers in `beforeAll` so the benchmark measures the operation, not the startup.
 
@@ -683,66 +690,58 @@ describe('indexing throughput', () => {
 
 ## 8. CI Integration
 
-> **Status:** No CI pipeline exists yet. This section defines the target design. Implementation requires adding a CI config (e.g., `.github/workflows/test.yml`) and the `package.json` scripts below.
+> **Status:** CI pipeline exists at `.github/workflows/test.yml`. Runs on pushes to `master` and PRs targeting `master`. Uses `pnpm/action-setup@v4` (reads `packageManager` field) and Node 22.
 
 ### Package scripts
 
-Define named scripts in the root `package.json` instead of relying on shell glob expansion (which varies between bash versions and CI environments):
+Named scripts in the root `package.json` separate the three test layers for CI:
 
 ```jsonc
 {
   "scripts": {
-    "test:unit": "vitest run --config vitest.config.ts --project unit",
-    "test:integration": "vitest run --config vitest.config.ts --project integration",
-    "test:e2e": "vitest run --config vitest.config.ts --project e2e",
-    "test": "vitest run",
+    "test": "pnpm build && vitest run --exclude '**/e2e.*.spec.ts'",
+    "test:unit": "vitest run packages/",
+    "test:integration": "vitest run tests/ --exclude '**/e2e.*.spec.ts'",
+    "test:e2e": "vitest run tests/e2e.",
     "bench": "vitest bench"
   }
 }
 ```
 
-This requires Vitest workspace projects (or separate configs) to separate the three layers. An alternative is a single config with `include` patterns:
-
-```typescript
-// vitest.config.ts
-export default defineConfig({
-  test: {
-    include: ['packages/**/*.spec.ts', 'tests/**/*.spec.ts'],
-    exclude: ['tests/e2e.*.spec.ts'], // excluded from default `pnpm test` for speed
-  },
-});
-```
-
-With E2E run explicitly: `pnpm vitest run --include 'tests/e2e.*.spec.ts'`
+The default `pnpm test` builds first and runs all non-E2E tests (unit + integration). E2E tests are excluded via `--exclude` and run explicitly via `pnpm test:e2e`. The layer scripts use Vitest 4.x positional filter patterns to scope which files run.
 
 ### Pipeline stages
 
 ```
-Stage 1: Typecheck
+Build (shared artifact)
+  pnpm install && pnpm build
+  Uploads dist/ and WASM to artifact for downstream jobs.
+
+Stage 1: Typecheck (parallel with stages 2-4)
   pnpm typecheck
   Catches type errors before any tests run.
 
-Stage 2: Unit Tests
+Stage 2: Unit Tests (parallel with stages 1, 3-4)
   pnpm test:unit
   Co-located specs in packages/. No tree-sitter WASM, no cross-package wiring.
   Target: < 10 seconds.
 
-Stage 3: Integration Tests
+Stage 3: Integration Tests (parallel with stages 1-2, 4)
   pnpm test:integration
   Cross-package specs in tests/. Real parsers, real files, esbuild builds.
   Target: < 60 seconds.
 
-Stage 4: E2E Tests
+Stage 4: E2E Tests (parallel with stages 1-3)
   pnpm test:e2e
   CLI subprocess tests only.
   Target: < 120 seconds.
 
-Stage 5: Benchmarks (main branch only)
+Stage 5: Benchmarks (main branch only, non-blocking)
   pnpm bench
-  Records timings. Fails if any benchmark exceeds 2x its baseline target.
+  Records timings. continue-on-error: true so benchmark regressions don't block PRs.
 ```
 
-Stages 2-4 can run in parallel in CI since they test disjoint file sets.
+Stages 1-4 run in parallel after the build job completes. Stage 5 only runs on `master` pushes.
 
 ### Coverage
 
@@ -827,7 +826,13 @@ These were added as part of closing gaps identified in this plan.
 | `tests/index.builder.spec.ts` (expanded) | Integration | Added: `adapterRegister` — registers spy adapter for 'typescript', verifies factory and indexFile calls, validates spy delta in resulting index. Documents `languageIdFromFile` hardcoded switch as known gap for custom languages. Un-skipped: async flag detection (adapter now checks for `async` keyword child on declaration nodes), enum member extraction (symbols query now captures `enum_assignment` nodes as `enumMember` kind). Un-skipped: `getCallers`/`getCallees` via ProjectIndex API — symbol `byteRange` expanded to full declaration span in `adapterCore.ts`; `getCallers` algorithm fixed to use file-scoped symbol range containment instead of scopeId-based lookup. |
 | `tests/eslint.unused-exports-adapter.spec.ts` | Integration | ESLint adapter with `requiresProjectIndex: true`: adapts `unusedExportsRule`, builds ProjectIndex from multi-file temp dir, verifies unused exports detected via treeCheckViolation. Valid cases: all-exports-consumed file, consumer-only file. Invalid case: file with unused export. Exercises `getOrBuildProjectIndex`, `discoverIndexableFiles`, and cross-file import resolution through the ESLint adapter pipeline. |
 | `packages/core/src/index/testHelpers.ts` | — | Shared test helper for building `FileIndexDelta`, `SymbolRecord`, and `ScopeRecord` objects without tree-sitter. Extracted from duplicate helpers in `indexStore.spec.ts` and `indexQuery.spec.ts`. Exports: `byteRangeGet`, `scopeRecordNew`, `symbolRecordNew`, `fileIndexDeltaNew`. |
-| `tests/index.cross-file-resolution.spec.ts` (expanded) | Integration | Un-skipped: re-export chain (consumer import traced through proxy to origin symbol via `exportMapAddReexportedSymbols`), star export expansion (imports from `export *` proxy mapped to origin symbols, references updated). TS export query extended with `export.reexport_name` and `export.reexport_source` captures for `export { foo } from "module"` patterns. Un-skipped: namespace import member resolution — `memberRefsExtract` creates dotted references for member expressions, `crossFileResolve` sets `resolvedModulePath` on namespace bindings and resolves dotted references against the namespace's module export map. No tests remain skipped in this file. |
+| `tests/index.cross-file-resolution.spec.ts` (expanded) | Integration | Un-skipped: re-export chain (consumer import traced through proxy to origin symbol via `exportMapAddReexportedSymbols`), star export expansion (imports from `export *` proxy mapped to origin symbols, references updated). TS export query extended with `export.reexport_name` and `export.reexport_source` captures for `export { foo } from "module"` patterns. Un-skipped: namespace import member resolution — `memberRefsExtract` creates dotted references for member expressions, `crossFileResolve` sets `resolvedModulePath` on namespace bindings and resolves dotted references against the namespace's module export map. Added: import alias test tightened to verify `importedName === 'originalName'` and local symbol named `'renamedFn'`. Added: export alias test (`export { foo as bar }`) verifying aliased export name and consumer resolution. No tests remain skipped in this file. |
+| `tests/index.module-graph.spec.ts` | Integration | Module graph API: linear chain (importers/importees, dependency order, no cycles), circular imports (cycle detection, bidirectional edges), diamond dependency (no false cycles, correct ordering), isolated files (included in graph), external packages filtered out, unknown files return empty, multi-import deduplication. 9 tests exercising `getModuleImporters`, `getModuleImportees`, `getModuleDependencyOrder`, `getModuleCycles` via `ProjectIndex`. |
+| `packages/core/src/index/moduleGraph.ts` | — | Module graph implementation: `moduleGraphBuild(store)` builds forward/reverse adjacency lists from `ImportBindingRelation.resolvedModulePath`. Topological sort (Kahn's algorithm), cycle detection (Tarjan's SCC). Lazily built, cached. Exported from `@codepol/core`. |
+| `tests/benchHelpers.ts` | — | Shared benchmark helper for generating realistic multi-file TypeScript projects in a temp directory. Generates N files with exported functions, classes, types, interfaces, and cross-file imports. Used by all 3 benchmark files. Exports: `benchProjectGenerate`, `benchProjectCleanup`. |
+| `packages/core/src/index/indexBuilder.bench.ts` | Bench | Indexing throughput: `projectIndexBuildSync` on 100 and 500 generated files, plus a variant without cross-file resolution. |
+| `packages/core/src/index/indexQuery.bench.ts` | Bench | Query latency on a 100-file pre-built index: `getSymbols`, `getSymbolsInFile`, `getSymbolsByName`, `getExportedSymbols`, `getReferences`, `getReferencesInFile`, `getCallers`, `getCallees`, `getScopesInFile`, `getImportBindings`, `getFileExports`, `getStats`. |
+| `packages/plugin/src/unusedExportsCheck.bench.ts` | Bench | Per-file `unusedExportsCheck` latency on a 100-file index. Benchmarks checking a middle file, first file (likely all used), and last file (likely unused exports). |
 
 ### Known gaps discovered during testing
 
@@ -836,6 +841,12 @@ These were added as part of closing gaps identified in this plan.
 - **Namespace imports** (`import * as X`): **Fixed.** `resolvedModulePath` is now set on namespace import bindings. Member accesses (`X.foo`) are resolved to the exporter's symbols via a two-part mechanism: (1) `memberRefsExtract` in `adapterCore.ts` creates `ReferencesRelation` entries with dotted names (e.g., `"utils.alpha"`) pointing to the namespace import symbol, and (2) a namespace member resolution pass in `crossFileResolve` maps these dotted references to the actual exported symbols using the namespace's module export map.
 - **Named re-exports** (`export { x } from './y'`): **Fixed.** TS export query now captures `export.reexport_name` and `export.reexport_source`. `exportMapAddReexportedSymbols` in `indexBuilder.ts` follows `sourceModule` references in `ExportsRelation`, looks up the origin symbol ID, and adds it to the proxy file's export map. Consumer bindings trace through the proxy to the origin symbol.
 - **Star exports** (`export * from './y'`): **Fixed.** `exportMapAddReexportedSymbols` copies all non-default symbol IDs from the source module's export map into the proxy file's export map. Handles chains (A star-exports from B which star-exports from C) via iterative propagation with a max iteration limit to prevent infinite loops from circular re-exports.
+- **Import aliases** (`import { foo as bar }`): **Fixed.** `symbolsExtract()` now uses `declNode.childForFieldName('alias')` to detect aliased imports and use the alias as the local symbol name. `importBindingsExtract()` uses `bindingNameNode.parent?.childForFieldName('alias')` to distinguish the imported name (original exported name) from the local name (alias). `importedName` stores the original name for correct export map lookup; `localSymbolId` points to the alias-named symbol.
+- **Export aliases** (`export { foo as bar }`): **Fixed.** `exportsExtract()` now uses `namedNode.parent?.childForFieldName('alias')` on the `export_specifier` node to detect aliased exports. The `exportedName` is the alias; the `symbolId` references the original symbol. Consumers import by the aliased name.
+
+#### Module graph
+
+- **Module graph API**: **Implemented.** `ModuleGraph` type and `moduleGraphBuild(store)` in `packages/core/src/index/moduleGraph.ts`. Builds forward/reverse adjacency lists from resolved `ImportBindingRelation.resolvedModulePath` data. External packages (unresolved paths) are excluded. Exposed on `ProjectIndex` as `getModuleImporters()`, `getModuleImportees()`, `getModuleDependencyOrder()`, `getModuleCycles()`. Graph is lazily built and cached. Topological sort uses Kahn's algorithm on the reversed dependency graph. Cycle detection uses Tarjan's SCC algorithm. Entry point detection not yet implemented (can be derived from files with no importers).
 
 #### Adapter extraction gaps
 
