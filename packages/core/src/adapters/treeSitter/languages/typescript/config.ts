@@ -14,6 +14,7 @@ import { REFS_QUERY } from './queries/refs';
 import { CALLS_QUERY } from './queries/calls';
 import { IMPORTS_QUERY } from './queries/imports';
 import { EXPORTS_QUERY } from './queries/exports';
+import { TYPE_RELATIONS_QUERY } from './queries/typeRelations';
 
 /**
  * Reference filter for TypeScript.
@@ -66,6 +67,7 @@ export function typescriptConfigCreate(language: Language): LangConfig {
       calls: CALLS_QUERY,
       imports: IMPORTS_QUERY,
       exports: EXPORTS_QUERY,
+      typeRelations: TYPE_RELATIONS_QUERY,
     },
     captures: CAPTURE_NAMES_DEFAULT,
     symbolKinds: {

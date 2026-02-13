@@ -25,6 +25,7 @@ import type {
   ImportsRelation,
   ImportBindingRelation,
   ExportsRelation,
+  TypeRelation,
 } from '../../index/indexTypes';
 import { SymbolFlags } from '../../index/indexTypes';
 import type {
@@ -1077,6 +1078,108 @@ function findExportSymbol(
 // Main Indexing Function
 // ============================================================================
 
+// ============================================================================
+// Type Relation Extraction
+// ============================================================================
+
+/**
+ * Extract type relations (extends/implements) from Tree-sitter query captures.
+ *
+ * Captures patterns like:
+ * - `class Foo extends Bar`
+ * - `class Foo implements IBar, IBaz`
+ * - `interface IFoo extends IBar`
+ * - `abstract class AbstractFoo extends Bar implements IBar`
+ *
+ * For file-local targets, `resolvedTargetId` is populated by looking up
+ * the target name in the same file's symbol table.
+ */
+function typeRelationsExtract(
+  cfg: LangConfig,
+  tree: Parser.Tree,
+  file: string,
+  source: Uint8Array,
+  symbols: SymbolRecord[],
+  _diags: AdapterDiagnostic[]
+): TypeRelation[] {
+  if (!cfg.queries.typeRelations) return [];
+
+  const typeRelations: TypeRelation[] = [];
+  const query = cfg.language.query(cfg.queries.typeRelations);
+  const matches = query.matches(tree.rootNode);
+
+  // Build symbol lookup by name for local resolution
+  const symbolsByName = new Map<string, SymbolRecord[]>();
+  for (const sym of symbols) {
+    const existing = symbolsByName.get(sym.name) ?? [];
+    existing.push(sym);
+    symbolsByName.set(sym.name, existing);
+  }
+
+  for (const match of matches) {
+    const capturesByName = new Map<string, Parser.SyntaxNode>();
+    for (const capture of match.captures) {
+      capturesByName.set(capture.name, capture.node);
+    }
+
+    // Get the child (declaring) class/interface name
+    const childNameNode = capturesByName.get('typerel.child_name');
+    if (!childNameNode) continue;
+
+    const childName = sliceText(source, childNameNode.startIndex, childNameNode.endIndex);
+
+    // Find the child symbol in the symbol table
+    const childSymbol = findExportSymbol(symbolsByName, childName, childNameNode.startIndex);
+    if (!childSymbol) continue;
+
+    // Determine extends vs implements and get target name node
+    const extendsTargetNode = capturesByName.get('typerel.extends_target');
+    const implementsTargetNode = capturesByName.get('typerel.implements_target');
+
+    if (extendsTargetNode) {
+      const targetName = sliceText(source, extendsTargetNode.startIndex, extendsTargetNode.endIndex);
+      const byteRange: ByteRange = {
+        start: extendsTargetNode.startIndex,
+        end: extendsTargetNode.endIndex,
+      };
+
+      // Attempt file-local resolution
+      const targetSymbol = findExportSymbol(symbolsByName, targetName, extendsTargetNode.startIndex);
+
+      typeRelations.push({
+        kind: 'TypeRelation',
+        symbolId: childSymbol.id,
+        targetName,
+        relationKind: 'extends',
+        byteRange,
+        resolvedTargetId: targetSymbol?.id,
+      });
+    }
+
+    if (implementsTargetNode) {
+      const targetName = sliceText(source, implementsTargetNode.startIndex, implementsTargetNode.endIndex);
+      const byteRange: ByteRange = {
+        start: implementsTargetNode.startIndex,
+        end: implementsTargetNode.endIndex,
+      };
+
+      // Attempt file-local resolution
+      const targetSymbol = findExportSymbol(symbolsByName, targetName, implementsTargetNode.startIndex);
+
+      typeRelations.push({
+        kind: 'TypeRelation',
+        symbolId: childSymbol.id,
+        targetName,
+        relationKind: 'implements',
+        byteRange,
+        resolvedTargetId: targetSymbol?.id,
+      });
+    }
+  }
+
+  return typeRelations;
+}
+
 /**
  * Index a file using Tree-sitter and return the delta.
  *
@@ -1152,6 +1255,10 @@ export function indexFileWithTreeSitter(
   // Exports (for cross-file resolution)
   const exportRelations = exportsExtract(cfg, tree, file, bytes, scopes, symbols, diags);
   relations.push(...exportRelations);
+
+  // Type relations (extends/implements)
+  const typeRelations = typeRelationsExtract(cfg, tree, file, bytes, symbols, diags);
+  relations.push(...typeRelations);
 
   return {
     file,

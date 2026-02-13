@@ -8,6 +8,7 @@ import {
   type CallsRelation,
   type ExportsRelation,
   type ImportBindingRelation,
+  type TypeRelation,
 } from './indexTypes';
 import {
   byteRangeGet,
@@ -337,6 +338,120 @@ describe('ProjectIndex', () => {
 
       const idx = projectIndexCreate(store, defaultCapabilities);
       expect(idx.resolveImport(file, './nonexistent', 'foo')).toBeUndefined();
+    });
+  });
+
+  describe('type relation queries', () => {
+    it('getTypeRelations(symbolId) returns extends/implements for a symbol', () => {
+      const store = indexStoreNew();
+      const file = '/src/a.ts';
+      const scope = scopeRecordNew('scope-a', file);
+      const classSym = symbolRecordNew('sym-class', 'Dog', file, scope.id, 'class');
+      const parentSym = symbolRecordNew('sym-parent', 'Animal', file, scope.id, 'class');
+      const ifaceSym = symbolRecordNew('sym-iface', 'IMovable', file, scope.id, 'interface');
+
+      const extendsRel: TypeRelation = {
+        kind: 'TypeRelation',
+        symbolId: classSym.id,
+        targetName: 'Animal',
+        relationKind: 'extends',
+        byteRange: byteRangeGet(10, 16),
+        resolvedTargetId: parentSym.id,
+      };
+      const implementsRel: TypeRelation = {
+        kind: 'TypeRelation',
+        symbolId: classSym.id,
+        targetName: 'IMovable',
+        relationKind: 'implements',
+        byteRange: byteRangeGet(20, 28),
+        resolvedTargetId: ifaceSym.id,
+      };
+
+      store.filePut(fileIndexDeltaNew({
+        file,
+        symbols: [classSym, parentSym, ifaceSym],
+        scopes: [scope],
+        relations: [extendsRel, implementsRel],
+      }));
+
+      const idx = projectIndexCreate(store, defaultCapabilities);
+      const rels = idx.getTypeRelations(classSym.id);
+      expect(rels).toHaveLength(2);
+      expect(rels.find(r => r.relationKind === 'extends')?.targetName).toBe('Animal');
+      expect(rels.find(r => r.relationKind === 'implements')?.targetName).toBe('IMovable');
+    });
+
+    it('getSubTypes(symbolId) returns children that extend/implement', () => {
+      const store = indexStoreNew();
+      const file = '/src/a.ts';
+      const scope = scopeRecordNew('scope-a', file);
+      const parentSym = symbolRecordNew('sym-parent', 'Base', file, scope.id, 'class');
+      const child1 = symbolRecordNew('sym-child1', 'DerivedA', file, scope.id, 'class');
+      const child2 = symbolRecordNew('sym-child2', 'DerivedB', file, scope.id, 'class');
+
+      const rel1: TypeRelation = {
+        kind: 'TypeRelation',
+        symbolId: child1.id,
+        targetName: 'Base',
+        relationKind: 'extends',
+        byteRange: byteRangeGet(50, 54),
+        resolvedTargetId: parentSym.id,
+      };
+      const rel2: TypeRelation = {
+        kind: 'TypeRelation',
+        symbolId: child2.id,
+        targetName: 'Base',
+        relationKind: 'extends',
+        byteRange: byteRangeGet(100, 104),
+        resolvedTargetId: parentSym.id,
+      };
+
+      store.filePut(fileIndexDeltaNew({
+        file,
+        symbols: [parentSym, child1, child2],
+        scopes: [scope],
+        relations: [rel1, rel2],
+      }));
+
+      const idx = projectIndexCreate(store, defaultCapabilities);
+      const subs = idx.getSubTypes(parentSym.id);
+      expect(subs).toHaveLength(2);
+      expect(subs.map(r => r.symbolId).sort()).toEqual([child1.id, child2.id].sort());
+    });
+
+    it('getTypeRelationsInFile(file) returns all type relations in a file', () => {
+      const store = indexStoreNew();
+      const file = '/src/a.ts';
+      const scope = scopeRecordNew('scope-a', file);
+      const sym1 = symbolRecordNew('sym-1', 'Foo', file, scope.id, 'class');
+      const sym2 = symbolRecordNew('sym-2', 'Bar', file, scope.id, 'interface');
+
+      const rel1: TypeRelation = {
+        kind: 'TypeRelation',
+        symbolId: sym1.id,
+        targetName: 'Base',
+        relationKind: 'extends',
+        byteRange: byteRangeGet(10, 14),
+      };
+      const rel2: TypeRelation = {
+        kind: 'TypeRelation',
+        symbolId: sym2.id,
+        targetName: 'IParent',
+        relationKind: 'extends',
+        byteRange: byteRangeGet(60, 67),
+      };
+
+      store.filePut(fileIndexDeltaNew({
+        file,
+        symbols: [sym1, sym2],
+        scopes: [scope],
+        relations: [rel1, rel2],
+      }));
+
+      const idx = projectIndexCreate(store, defaultCapabilities);
+      const rels = idx.getTypeRelationsInFile(file);
+      expect(rels).toHaveLength(2);
+      expect(rels.map(r => r.targetName).sort()).toEqual(['Base', 'IParent']);
     });
   });
 

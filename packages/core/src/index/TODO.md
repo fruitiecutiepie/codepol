@@ -12,6 +12,7 @@ The semantic index provides:
 - Heuristic call detection
 - Import statement extraction (named, default, namespace)
 - Export statement extraction (basic patterns)
+- Type relations extraction (extends/implements, file-local resolution)
 - Query API for plugins (`ProjectIndex`)
 
 ## Implementation Status
@@ -114,17 +115,20 @@ Use cases:
 - Reachability analysis
 
 #### 5. Type Relations
-**Status**: Not implemented  
-**What's missing**: Type system awareness
+**Status**: Partially Implemented  
+**What's done**: Extends/implements extraction and querying
 
-```typescript
-type TypeRelation =
-  | { kind: 'Extends'; childId: SymbolId; parentId: SymbolId }
-  | { kind: 'Implements'; classId: SymbolId; interfaceId: SymbolId }
-  | { kind: 'TypeOf'; valueId: SymbolId; typeId: SymbolId };
-```
+Implemented in the full stack:
+- [x] `TypeRelation` type in `indexTypes.ts` — captures `extends` and `implements` relationships with `symbolId`, `targetName`, `relationKind`, `byteRange`, and optional `resolvedTargetId`
+- [x] Tree-sitter query (`typeRelations.ts`) — patterns for class extends, class implements, abstract class extends/implements, interface extends
+- [x] `typeRelationsExtract()` in `adapterCore.ts` — extracts type relations from query captures, resolves file-local targets
+- [x] `IndexStore` indexes — `typeRelationsBySymbol`, `typeRelationsByTargetName`, `typeRelationsByFile` with query methods and proper cleanup in `filePut`/`fileRemove`/`clear`
+- [x] `ProjectIndex` API — `getTypeRelations(symbolId)`, `getSubTypes(symbolId)`, `getTypeRelationsInFile(file)`
+- [x] Unit tests (5 IndexStore + 3 ProjectIndex) and integration tests (11 in `tests/index.type-relations.spec.ts`)
 
-Requires deeper Tree-sitter queries or TypeScript compiler API integration.
+**What's remaining**:
+- [ ] Cross-file `resolvedTargetId` resolution — when a class extends an imported symbol, `resolvedTargetId` currently points to the local import binding symbol, not the original exported symbol from the source module. Needs integration with `crossFileResolve`.
+- [ ] `TypeOf` relation — value-to-type mapping requires type inference beyond tree-sitter's capabilities. Deferred.
 
 #### 6. Persistence / Caching
 **Status**: In-memory only  

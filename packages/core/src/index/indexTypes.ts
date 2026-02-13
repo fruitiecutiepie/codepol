@@ -242,6 +242,26 @@ export type ExportsRelation = {
 };
 
 /**
+ * A "TypeRelation" relation: captures type hierarchy edges.
+ * Records extends/implements relationships between classes and interfaces.
+ * `resolvedTargetId` is populated during file-local resolution;
+ * cross-file resolution may leave it undefined.
+ */
+export type TypeRelation = {
+  kind: 'TypeRelation';
+  /** The child symbol (class or interface that extends/implements) */
+  symbolId: SymbolId;
+  /** Parent/interface name as raw text from source */
+  targetName: string;
+  /** Whether this is an extends or implements relationship */
+  relationKind: 'extends' | 'implements';
+  /** Byte range of the extends/implements clause */
+  byteRange: ByteRange;
+  /** Resolved target symbol ID (populated during resolution) */
+  resolvedTargetId?: SymbolId;
+};
+
+/**
  * Union of all relation types.
  * Relations are append-only facts extracted by adapters.
  */
@@ -252,7 +272,8 @@ export type RelationRecord =
   | ImportsRelation
   | CallsRelation
   | ImportBindingRelation
-  | ExportsRelation;
+  | ExportsRelation
+  | TypeRelation;
 
 // ============================================================================
 // Query Filter Types

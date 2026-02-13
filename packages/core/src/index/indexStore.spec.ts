@@ -6,6 +6,7 @@ import {
   type CallsRelation,
   type ImportBindingRelation,
   type ExportsRelation,
+  type TypeRelation,
 } from './indexTypes';
 import { byteRangeGet, scopeRecordNew, symbolRecordNew, fileIndexDeltaNew } from './testHelpers';
 
@@ -317,5 +318,158 @@ describe('IndexStore', () => {
     });
     expect(store.filesGet()).toHaveLength(0);
     expect(store.symbolsGet()).toHaveLength(0);
+  });
+
+  // ============================================================================
+  // Type Relation Tests
+  // ============================================================================
+
+  describe('TypeRelation', () => {
+    it('filePut / typeRelationsForSymbolGet round-trip', () => {
+      const store = indexStoreNew();
+      const file = '/src/tr.ts';
+      const scope = scopeRecordNew('scope-tr', file);
+      const childSym = symbolRecordNew('sym-child', 'Dog', file, scope.id, 'class');
+      const parentSym = symbolRecordNew('sym-parent', 'Animal', file, scope.id, 'class');
+      const typeRel: TypeRelation = {
+        kind: 'TypeRelation',
+        symbolId: childSym.id,
+        targetName: 'Animal',
+        relationKind: 'extends',
+        byteRange: byteRangeGet(20, 26),
+        resolvedTargetId: parentSym.id,
+      };
+
+      store.filePut(fileIndexDeltaNew({
+        file,
+        symbols: [childSym, parentSym],
+        scopes: [scope],
+        relations: [typeRel],
+      }));
+
+      const rels = store.typeRelationsForSymbolGet(childSym.id);
+      expect(rels).toHaveLength(1);
+      expect(rels[0].targetName).toBe('Animal');
+      expect(rels[0].relationKind).toBe('extends');
+      expect(rels[0].resolvedTargetId).toBe(parentSym.id);
+    });
+
+    it('typeRelationsByTargetNameGet returns relations targeting a name', () => {
+      const store = indexStoreNew();
+      const file = '/src/tr2.ts';
+      const scope = scopeRecordNew('scope-tr2', file);
+      const ifaceSym = symbolRecordNew('sym-iface', 'IMovable', file, scope.id, 'interface');
+      const classSym = symbolRecordNew('sym-impl', 'Car', file, scope.id, 'class');
+      const typeRel: TypeRelation = {
+        kind: 'TypeRelation',
+        symbolId: classSym.id,
+        targetName: 'IMovable',
+        relationKind: 'implements',
+        byteRange: byteRangeGet(30, 38),
+        resolvedTargetId: ifaceSym.id,
+      };
+
+      store.filePut(fileIndexDeltaNew({
+        file,
+        symbols: [ifaceSym, classSym],
+        scopes: [scope],
+        relations: [typeRel],
+      }));
+
+      const rels = store.typeRelationsByTargetNameGet('IMovable');
+      expect(rels).toHaveLength(1);
+      expect(rels[0].symbolId).toBe(classSym.id);
+      expect(rels[0].relationKind).toBe('implements');
+    });
+
+    it('typeRelationsInFileGet returns all type relations in a file', () => {
+      const store = indexStoreNew();
+      const file = '/src/tr3.ts';
+      const scope = scopeRecordNew('scope-tr3', file);
+      const classSym = symbolRecordNew('sym-multi', 'Widget', file, scope.id, 'class');
+      const rel1: TypeRelation = {
+        kind: 'TypeRelation',
+        symbolId: classSym.id,
+        targetName: 'Base',
+        relationKind: 'extends',
+        byteRange: byteRangeGet(10, 14),
+      };
+      const rel2: TypeRelation = {
+        kind: 'TypeRelation',
+        symbolId: classSym.id,
+        targetName: 'IRenderable',
+        relationKind: 'implements',
+        byteRange: byteRangeGet(20, 31),
+      };
+
+      store.filePut(fileIndexDeltaNew({
+        file,
+        symbols: [classSym],
+        scopes: [scope],
+        relations: [rel1, rel2],
+      }));
+
+      const rels = store.typeRelationsInFileGet(file);
+      expect(rels).toHaveLength(2);
+      expect(rels.map(r => r.targetName).sort()).toEqual(['Base', 'IRenderable']);
+    });
+
+    it('fileRemove clears type relations for file', () => {
+      const store = indexStoreNew();
+      const file = '/src/tr4.ts';
+      const scope = scopeRecordNew('scope-tr4', file);
+      const sym = symbolRecordNew('sym-tr4', 'Foo', file, scope.id, 'class');
+      const typeRel: TypeRelation = {
+        kind: 'TypeRelation',
+        symbolId: sym.id,
+        targetName: 'Bar',
+        relationKind: 'extends',
+        byteRange: byteRangeGet(5, 8),
+      };
+
+      store.filePut(fileIndexDeltaNew({
+        file,
+        symbols: [sym],
+        scopes: [scope],
+        relations: [typeRel],
+      }));
+
+      expect(store.typeRelationsForSymbolGet(sym.id)).toHaveLength(1);
+      expect(store.typeRelationsByTargetNameGet('Bar')).toHaveLength(1);
+      expect(store.typeRelationsInFileGet(file)).toHaveLength(1);
+
+      store.fileRemove(file);
+
+      expect(store.typeRelationsForSymbolGet(sym.id)).toHaveLength(0);
+      expect(store.typeRelationsByTargetNameGet('Bar')).toHaveLength(0);
+      expect(store.typeRelationsInFileGet(file)).toHaveLength(0);
+    });
+
+    it('clear() empties type relations', () => {
+      const store = indexStoreNew();
+      const file = '/src/tr5.ts';
+      const scope = scopeRecordNew('scope-tr5', file);
+      const sym = symbolRecordNew('sym-tr5', 'Baz', file, scope.id, 'class');
+      const typeRel: TypeRelation = {
+        kind: 'TypeRelation',
+        symbolId: sym.id,
+        targetName: 'Qux',
+        relationKind: 'extends',
+        byteRange: byteRangeGet(0, 3),
+      };
+
+      store.filePut(fileIndexDeltaNew({
+        file,
+        symbols: [sym],
+        scopes: [scope],
+        relations: [typeRel],
+      }));
+
+      store.clear();
+
+      expect(store.typeRelationsForSymbolGet(sym.id)).toHaveLength(0);
+      expect(store.typeRelationsByTargetNameGet('Qux')).toHaveLength(0);
+      expect(store.typeRelationsInFileGet(file)).toHaveLength(0);
+    });
   });
 });

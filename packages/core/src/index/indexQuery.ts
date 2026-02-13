@@ -17,6 +17,7 @@ import type {
   ImportsRelation,
   ImportBindingRelation,
   ExportsRelation,
+  TypeRelation,
 } from './indexTypes';
 import type { IndexStore } from './indexStore';
 import type { ModuleGraph } from './moduleGraph';
@@ -164,6 +165,28 @@ export type ProjectIndex = {
    * @returns The resolved symbol ID, or undefined if not resolved
    */
   resolveImport(fromFile: string, specifier: string, name: string): SymbolId | undefined;
+
+  // ============================================================================
+  // Type Relation Queries
+  // ============================================================================
+
+  /**
+   * Get type relations for a symbol (what it extends/implements).
+   * Returns empty array if symbol has no type relations.
+   */
+  getTypeRelations(symbolId: SymbolId): TypeRelation[];
+
+  /**
+   * Get symbols that extend/implement a given symbol (reverse lookup).
+   * Uses the symbol's name to find children, then filters by resolvedTargetId
+   * when available for precision.
+   */
+  getSubTypes(symbolId: SymbolId): TypeRelation[];
+
+  /**
+   * Get all type relations in a file.
+   */
+  getTypeRelationsInFile(file: string): TypeRelation[];
 
   // ============================================================================
   // Module Graph Queries
@@ -430,6 +453,28 @@ export function projectIndexCreate(
       }
       
       return undefined;
+    },
+
+    // Type relation queries
+    getTypeRelations(symbolId: SymbolId): TypeRelation[] {
+      return store.typeRelationsForSymbolGet(symbolId);
+    },
+
+    getSubTypes(symbolId: SymbolId): TypeRelation[] {
+      const symbol = store.symbolGet(symbolId);
+      if (!symbol) return [];
+
+      // Look up by target name
+      const byName = store.typeRelationsByTargetNameGet(symbol.name);
+      // When resolvedTargetId is available, filter for exact match;
+      // otherwise include all name-based matches
+      return byName.filter(
+        rel => rel.resolvedTargetId === symbolId || rel.resolvedTargetId === undefined
+      );
+    },
+
+    getTypeRelationsInFile(file: string): TypeRelation[] {
+      return store.typeRelationsInFileGet(file);
     },
 
     // Module graph queries (lazily built, cached)

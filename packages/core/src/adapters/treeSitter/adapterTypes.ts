@@ -75,6 +75,8 @@ export type QueryPack = {
   imports?: string;
   /** Export patterns for cross-file resolution (optional) */
   exports?: string;
+  /** Type relation patterns (extends/implements) (optional) */
+  typeRelations?: string;
 };
 
 // ============================================================================

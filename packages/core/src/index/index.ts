@@ -23,6 +23,7 @@ export type {
   ReferencesRelation,
   ImportsRelation,
   CallsRelation,
+  TypeRelation,
   SymbolFilter,
   IndexCapabilities,
 } from './indexTypes';

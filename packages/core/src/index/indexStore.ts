@@ -19,6 +19,7 @@ import type {
   ImportsRelation,
   ImportBindingRelation,
   ExportsRelation,
+  TypeRelation,
 } from './indexTypes';
 
 // ============================================================================
@@ -74,6 +75,11 @@ export class IndexStore {
   private importBindingsBySymbol = new Map<SymbolId, ImportBindingRelation>();
   private exportsByFile = new Map<string, ExportsRelation[]>();
   private exportsByName = new Map<string, Map<string, ExportsRelation>>(); // exportedName -> file -> export
+
+  // Type relation indexes
+  private typeRelationsBySymbol = new Map<SymbolId, TypeRelation[]>();
+  private typeRelationsByTargetName = new Map<string, TypeRelation[]>();
+  private typeRelationsByFile = new Map<string, TypeRelation[]>();
 
   // File revision tracking for incremental updates
   private fileRevisions = new Map<string, string>();
@@ -220,6 +226,33 @@ export class IndexStore {
           this.exportsByName.set(relation.exportedName, byName);
         }
         byName.set(file, relation);
+      } else if (relation.kind === 'TypeRelation') {
+        // Index by child symbol
+        let bySymbol = this.typeRelationsBySymbol.get(relation.symbolId);
+        if (!bySymbol) {
+          bySymbol = [];
+          this.typeRelationsBySymbol.set(relation.symbolId, bySymbol);
+        }
+        bySymbol.push(relation);
+
+        // Index by target name
+        let byTarget = this.typeRelationsByTargetName.get(relation.targetName);
+        if (!byTarget) {
+          byTarget = [];
+          this.typeRelationsByTargetName.set(relation.targetName, byTarget);
+        }
+        byTarget.push(relation);
+
+        // Index by file (derive file from the child symbol)
+        const childSym = this.symbolsById.get(relation.symbolId);
+        if (childSym) {
+          let byFile = this.typeRelationsByFile.get(childSym.file);
+          if (!byFile) {
+            byFile = [];
+            this.typeRelationsByFile.set(childSym.file, byFile);
+          }
+          byFile.push(relation);
+        }
       }
     }
   }
@@ -309,6 +342,29 @@ export class IndexStore {
       this.exportsByFile.delete(file);
     }
 
+    // Remove type relations for this file
+    const typeRels = this.typeRelationsByFile.get(file);
+    if (typeRels) {
+      for (const rel of typeRels) {
+        // Remove from by-symbol index
+        const bySymbol = this.typeRelationsBySymbol.get(rel.symbolId);
+        if (bySymbol) {
+          const idx = bySymbol.indexOf(rel);
+          if (idx !== -1) bySymbol.splice(idx, 1);
+          if (bySymbol.length === 0) this.typeRelationsBySymbol.delete(rel.symbolId);
+        }
+
+        // Remove from by-target index
+        const byTarget = this.typeRelationsByTargetName.get(rel.targetName);
+        if (byTarget) {
+          const idx = byTarget.indexOf(rel);
+          if (idx !== -1) byTarget.splice(idx, 1);
+          if (byTarget.length === 0) this.typeRelationsByTargetName.delete(rel.targetName);
+        }
+      }
+      this.typeRelationsByFile.delete(file);
+    }
+
     // Remove relations from main array (rebuild without file's relations)
     if (scopeIds && scopeIds.size > 0) {
       this.relations = this.relations.filter(r => {
@@ -320,6 +376,9 @@ export class IndexStore {
           return !symbolIds?.has(r.localSymbolId);
         }
         if (r.kind === 'Exports') {
+          return !symbolIds?.has(r.symbolId);
+        }
+        if (r.kind === 'TypeRelation') {
           return !symbolIds?.has(r.symbolId);
         }
         return true;
@@ -350,6 +409,9 @@ export class IndexStore {
     this.importBindingsBySymbol.clear();
     this.exportsByFile.clear();
     this.exportsByName.clear();
+    this.typeRelationsBySymbol.clear();
+    this.typeRelationsByTargetName.clear();
+    this.typeRelationsByFile.clear();
     this.fileRevisions.clear();
   }
 
@@ -522,6 +584,31 @@ export class IndexStore {
    */
   exportsGet(): ExportsRelation[] {
     return this.relations.filter((r): r is ExportsRelation => r.kind === 'Exports');
+  }
+
+  // ============================================================================
+  // Type Relation Queries
+  // ============================================================================
+
+  /**
+   * Get type relations for a symbol (what it extends/implements).
+   */
+  typeRelationsForSymbolGet(symbolId: SymbolId): TypeRelation[] {
+    return this.typeRelationsBySymbol.get(symbolId) ?? [];
+  }
+
+  /**
+   * Get type relations targeting a name (who extends/implements it).
+   */
+  typeRelationsByTargetNameGet(name: string): TypeRelation[] {
+    return this.typeRelationsByTargetName.get(name) ?? [];
+  }
+
+  /**
+   * Get all type relations in a file.
+   */
+  typeRelationsInFileGet(file: string): TypeRelation[] {
+    return this.typeRelationsByFile.get(file) ?? [];
   }
 
   /**

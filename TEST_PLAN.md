@@ -172,6 +172,11 @@ Examples:
 | `symbolsGet` with `SymbolFilter` (by name, kind, file, flags) | Unit | `packages/core/src/index/indexStore.spec.ts` | Exists |
 | `filesGet` lists indexed files | Unit | `packages/core/src/index/indexStore.spec.ts` | Exists |
 | `clear()` empties everything | Unit | `packages/core/src/index/indexStore.spec.ts` | Exists |
+| `filePut` / `typeRelationsForSymbolGet` round-trip | Unit | `packages/core/src/index/indexStore.spec.ts` | Exists |
+| `typeRelationsByTargetNameGet` lookup | Unit | `packages/core/src/index/indexStore.spec.ts` | Exists |
+| `typeRelationsInFileGet` lookup | Unit | `packages/core/src/index/indexStore.spec.ts` | Exists |
+| `fileRemove` clears type relations | Unit | `packages/core/src/index/indexStore.spec.ts` | Exists |
+| `clear()` empties type relations | Unit | `packages/core/src/index/indexStore.spec.ts` | Exists |
 
 #### Index Builder (`index/indexBuilder.ts`)
 
@@ -235,6 +240,9 @@ Methods that are thin wrappers over `IndexStore` can be unit-tested with a pre-p
 | `resolveImport(fromFile, specifier, name)` | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
 | `getStats()` | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
 | `capabilities` | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
+| `getTypeRelations(symbolId)` — type relations for a symbol | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
+| `getSubTypes(symbolId)` — reverse type relation lookup | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
+| `getTypeRelationsInFile(file)` — all type relations in file | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
 
 #### Module Graph (`index/moduleGraph.ts`)
 
@@ -257,6 +265,30 @@ Methods that are thin wrappers over `IndexStore` can be unit-tested with a pre-p
 | Entry points — isolated files are entry points | Integration | `tests/index.module-graph.spec.ts` | Exists |
 | Entry points — circular imports have no entry points | Integration | `tests/index.module-graph.spec.ts` | Exists |
 | Entry points — external-only imports are entry points | Integration | `tests/index.module-graph.spec.ts` | Exists |
+
+#### Type Relations (`index/indexTypes.ts`, `adapters/treeSitter/adapterCore.ts`)
+
+| Method / Scenario | Layer | Test File | Status |
+|-------------------|-------|-----------|--------|
+| `filePut` / `typeRelationsForSymbolGet` round-trip | Unit | `packages/core/src/index/indexStore.spec.ts` | Exists |
+| `typeRelationsByTargetNameGet` lookup | Unit | `packages/core/src/index/indexStore.spec.ts` | Exists |
+| `typeRelationsInFileGet` lookup | Unit | `packages/core/src/index/indexStore.spec.ts` | Exists |
+| `fileRemove` clears type relations | Unit | `packages/core/src/index/indexStore.spec.ts` | Exists |
+| `clear()` empties type relations | Unit | `packages/core/src/index/indexStore.spec.ts` | Exists |
+| `getTypeRelations(symbolId)` returns extends/implements | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
+| `getSubTypes(symbolId)` returns children | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
+| `getTypeRelationsInFile(file)` returns all relations | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
+| Class extends class (same file) | Integration | `tests/index.type-relations.spec.ts` | Exists |
+| Class implements interface (same file) | Integration | `tests/index.type-relations.spec.ts` | Exists |
+| Class implements multiple interfaces | Integration | `tests/index.type-relations.spec.ts` | Exists |
+| Interface extends interface | Integration | `tests/index.type-relations.spec.ts` | Exists |
+| Abstract class extends + implements | Integration | `tests/index.type-relations.spec.ts` | Exists |
+| Class extends with generic type parameter | Integration | `tests/index.type-relations.spec.ts` | Exists |
+| `getSubTypes` reverse lookup | Integration | `tests/index.type-relations.spec.ts` | Exists |
+| No type relations returns empty array | Integration | `tests/index.type-relations.spec.ts` | Exists |
+| Symbol with no extends/implements returns empty | Integration | `tests/index.type-relations.spec.ts` | Exists |
+| Cross-file type relation (import + extends) | Integration | `tests/index.type-relations.spec.ts` | Exists (file-local resolution resolves to import binding symbol; cross-file resolution of type relations to the original exported symbol is not yet implemented) |
+| Interface extends multiple interfaces | Integration | `tests/index.type-relations.spec.ts` | Exists |
 
 #### Policy Loading (`policyGet.ts`)
 
@@ -484,10 +516,11 @@ Methods that are thin wrappers over `IndexStore` can be unit-tested with a pre-p
 |----------|----------|---------|----------|
 | Result utilities | 8 | 0 | 100% |
 | Module resolver | 9 | 0 | 100% |
-| IndexStore | 14 | 0 | 100% |
+| IndexStore | 19 | 0 | 100% |
 | Index builder | 37 | 0 | 100% |
-| Index query (ProjectIndex) | 16 | 0 | 100% |
+| Index query (ProjectIndex) | 20 | 0 | 100% |
 | Module graph | 16 | 0 | 100% |
+| Type relations | 19 | 0 | 100% |
 | Policy loading | 7 | 0 | 100% |
 | Policy tree check | 7 | 0 | 100% |
 | Policy check runner | 5 | 0 | 100% |
@@ -523,6 +556,7 @@ Ordered by risk (silent corruption potential) and effort (lower effort = do it s
 | 9 | eslintPluginCreate + adapter | Low | Small (3 tests, mock plugin objects) | Plugin assembly bugs would be caught by existing RuleTester tests. These unit tests add defense in depth. | Done (10 plugin tests + 6 adapter cache/state clearing tests + 4 requiresProjectIndex integration tests: CJS/ESM interop, lint provider assembly, treeCheck adaptation, multi-rule, invalid input, policyCacheClear, providerInitStateClear, projectIndexCacheClear. Adapter with `requiresProjectIndex: true` verified via `unusedExportsRule` in `eslint.unused-exports-adapter.spec.ts`.) |
 | 10 | Parser/language registration | Low | Small (6 tests, but complicated by global state) | Edge cases (duplicate registration, unknown extensions) are unlikely in practice. The global singleton issue makes these tests tricky to isolate. | Done (18 unit tests in `parserLangs.spec.ts`: langAdd validation, error paths, duplicate/conflict handling, langsGet, wasmPathGet, langExists, langGetForFile. 4 integration tests in `parserInit.spec.ts`: init, parser lookup, error paths. Vitest file-level isolation avoids global state conflicts.) |
 | 11 | esbuild plugin scenarios | Low | Medium (4 tests, each needs esbuild + temp project) | Existing tests cover the critical path. Additional scenarios (fix mode, auto-discovery) are nice-to-have. | Done (5 passing: auto-discovery, no-matching-files, multiple-rules, fix:true — esbuild plugin now loads plugins via `policyPluginsGet` and generates `overrideConfig` to enable codepol ESLint rules) |
+| 12 | Type relations (Extends/Implements) | Medium | Medium (19 tests: 8 unit + 11 integration) | Class hierarchy analysis and interface compliance checking. New `TypeRelation` relation type with full stack: tree-sitter queries, adapter extraction, IndexStore storage, ProjectIndex API. | Done (5 IndexStore unit tests, 3 ProjectIndex unit tests, 11 integration tests covering class extends, implements, multiple implements, interface extends, abstract class, generics, getSubTypes, empty results, cross-file, multi-interface extends. File-local resolvedTargetId populated; cross-file type relation resolution deferred.) |
 
 ---
 
@@ -833,6 +867,7 @@ These were added as part of closing gaps identified in this plan.
 | `tests/e2e.cli.spec.ts` (expanded) | E2E | CLI subprocess tests: --help, --version, --check-plugins, no violations (exit 0), violations present (exit 1), config not found (error), --config <path> with explicit config (exit 0 + violation detection), --fix applies ESLint fixes to disk (un-skipped — uses config with both ESLint and treesitter providers). 1 skipped: --watch (complex async lifecycle). Uses symlinked node_modules for module resolution. |
 | `tests/index.builder.spec.ts` (expanded) | Integration | Added: `adapterRegister` — registers spy adapter for 'typescript', verifies factory and indexFile calls, validates spy delta in resulting index. Documents `languageIdFromFile` hardcoded switch as known gap for custom languages. Un-skipped: async flag detection (adapter now checks for `async` keyword child on declaration nodes), enum member extraction (symbols query now captures `enum_assignment` nodes as `enumMember` kind). Un-skipped: `getCallers`/`getCallees` via ProjectIndex API — symbol `byteRange` expanded to full declaration span in `adapterCore.ts`; `getCallers` algorithm fixed to use file-scoped symbol range containment instead of scopeId-based lookup. |
 | `tests/eslint.unused-exports-adapter.spec.ts` | Integration | ESLint adapter with `requiresProjectIndex: true`: adapts `unusedExportsRule`, builds ProjectIndex from multi-file temp dir, verifies unused exports detected via treeCheckViolation. Valid cases: all-exports-consumed file, consumer-only file. Invalid case: file with unused export. Exercises `getOrBuildProjectIndex`, `discoverIndexableFiles`, and cross-file import resolution through the ESLint adapter pipeline. |
+| `tests/index.type-relations.spec.ts` | Integration | Type relation extraction and query: class extends class, class implements interface (single/multiple), interface extends interface, abstract class extends + implements, generic type parameter, getSubTypes reverse lookup, empty results for no relations, cross-file type relation (file-local resolution to import binding), interface extends multiple interfaces. 11 tests exercising full stack from tree-sitter extraction through ProjectIndex API. |
 | `packages/core/src/index/testHelpers.ts` | — | Shared test helper for building `FileIndexDelta`, `SymbolRecord`, and `ScopeRecord` objects without tree-sitter. Extracted from duplicate helpers in `indexStore.spec.ts` and `indexQuery.spec.ts`. Exports: `byteRangeGet`, `scopeRecordNew`, `symbolRecordNew`, `fileIndexDeltaNew`. |
 | `tests/index.cross-file-resolution.spec.ts` (expanded) | Integration | Un-skipped: re-export chain (consumer import traced through proxy to origin symbol via `exportMapAddReexportedSymbols`), star export expansion (imports from `export *` proxy mapped to origin symbols, references updated). TS export query extended with `export.reexport_name` and `export.reexport_source` captures for `export { foo } from "module"` patterns. Un-skipped: namespace import member resolution — `memberRefsExtract` creates dotted references for member expressions, `crossFileResolve` sets `resolvedModulePath` on namespace bindings and resolves dotted references against the namespace's module export map. Added: import alias test tightened to verify `importedName === 'originalName'` and local symbol named `'renamedFn'`. Added: export alias test (`export { foo as bar }`) verifying aliased export name and consumer resolution. Added: namespace re-export resolution (`export * as ns from './mod'`) — consumer named import converted to namespace binding, member accesses resolved to origin symbols. Added: chained namespace re-export (through star-export intermediary). No tests remain skipped in this file. |
 | `tests/index.module-graph.spec.ts` (expanded) | Integration | Module graph API: linear chain (importers/importees, dependency order, no cycles), circular imports (cycle detection, bidirectional edges), diamond dependency (no false cycles, correct ordering), isolated files (included in graph), external packages filtered out, unknown files return empty, multi-import deduplication. Added: entry point detection — linear chain (only root), diamond (only root), isolated files (both entry points), circular imports (no entry points), external-only imports (entry points). 14 tests exercising `getModuleImporters`, `getModuleImportees`, `getModuleDependencyOrder`, `getModuleCycles`, `getModuleEntryPoints` via `ProjectIndex`. |
