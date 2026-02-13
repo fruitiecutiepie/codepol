@@ -29,7 +29,7 @@ const defaultCapabilities: IndexCapabilities = {
 
 describe('ProjectIndex', () => {
   describe('symbol queries', () => {
-    it('getSymbols() returns all symbols across files', () => {
+    it('symbolsGet() returns all symbols across files', () => {
       const store = indexStoreNew();
       const fileA = '/src/a.ts';
       const fileB = '/src/b.ts';
@@ -43,12 +43,12 @@ describe('ProjectIndex', () => {
       store.filePut(fileIndexDeltaNew({ file: fileB, symbols: [sym3], scopes: [scopeB] }));
 
       const idx = projectIndexCreate(store, defaultCapabilities);
-      const all = idx.getSymbols();
+      const all = idx.symbolsGet();
       expect(all).toHaveLength(3);
       expect(all.map(s => s.name).sort()).toEqual(['bar', 'baz', 'foo']);
     });
 
-    it('getSymbol(id) returns the symbol or undefined', () => {
+    it('symbolGet(id) returns the symbol or undefined', () => {
       const store = indexStoreNew();
       const file = '/src/a.ts';
       const scope = scopeRecordNew('scope-a', file);
@@ -57,12 +57,12 @@ describe('ProjectIndex', () => {
       store.filePut(fileIndexDeltaNew({ file, symbols: [sym], scopes: [scope] }));
 
       const idx = projectIndexCreate(store, defaultCapabilities);
-      expect(idx.getSymbol('sym-1')).toBeDefined();
-      expect(idx.getSymbol('sym-1')!.name).toBe('foo');
-      expect(idx.getSymbol('nonexistent')).toBeUndefined();
+      expect(idx.symbolGet('sym-1')).toBeDefined();
+      expect(idx.symbolGet('sym-1')!.name).toBe('foo');
+      expect(idx.symbolGet('nonexistent')).toBeUndefined();
     });
 
-    it('getSymbolsInFile(file) returns only symbols from that file', () => {
+    it('symbolsInFileGet(file) returns only symbols from that file', () => {
       const store = indexStoreNew();
       const fileA = '/src/a.ts';
       const fileB = '/src/b.ts';
@@ -75,12 +75,12 @@ describe('ProjectIndex', () => {
       store.filePut(fileIndexDeltaNew({ file: fileB, symbols: [sym2], scopes: [scopeB] }));
 
       const idx = projectIndexCreate(store, defaultCapabilities);
-      const inA = idx.getSymbolsInFile(fileA);
+      const inA = idx.symbolsInFileGet(fileA);
       expect(inA).toHaveLength(1);
       expect(inA[0].name).toBe('foo');
     });
 
-    it('getSymbolsByName(name) returns matching symbols across files', () => {
+    it('symbolsGetByName(name) returns matching symbols across files', () => {
       const store = indexStoreNew();
       const fileA = '/src/a.ts';
       const fileB = '/src/b.ts';
@@ -94,14 +94,14 @@ describe('ProjectIndex', () => {
       store.filePut(fileIndexDeltaNew({ file: fileB, symbols: [sym2], scopes: [scopeB] }));
 
       const idx = projectIndexCreate(store, defaultCapabilities);
-      const helpers = idx.getSymbolsByName('helper');
+      const helpers = idx.symbolsGetByName('helper');
       expect(helpers).toHaveLength(2);
       expect(helpers.map(s => s.file).sort()).toEqual([fileA, fileB]);
     });
   });
 
   describe('export queries', () => {
-    it('getExportedSymbols() filters by Exported flag', () => {
+    it('exportedSymbolsGet() filters by Exported flag', () => {
       const store = indexStoreNew();
       const file = '/src/a.ts';
       const scope = scopeRecordNew('scope-a', file);
@@ -112,12 +112,12 @@ describe('ProjectIndex', () => {
       store.filePut(fileIndexDeltaNew({ file, symbols: [exported, internal, alsoExported], scopes: [scope] }));
 
       const idx = projectIndexCreate(store, defaultCapabilities);
-      const result = idx.getExportedSymbols({ file });
+      const result = idx.exportedSymbolsGet({ file });
       expect(result).toHaveLength(2);
       expect(result.map(s => s.name).sort()).toEqual(['PubClass', 'pubFn']);
     });
 
-    it('getExporters(symbolName) returns exported symbols with that name', () => {
+    it('exportersGet(symbolName) returns exported symbols with that name', () => {
       const store = indexStoreNew();
       const fileA = '/src/a.ts';
       const fileB = '/src/b.ts';
@@ -131,12 +131,12 @@ describe('ProjectIndex', () => {
       store.filePut(fileIndexDeltaNew({ file: fileB, symbols: [expB], scopes: [scopeB] }));
 
       const idx = projectIndexCreate(store, defaultCapabilities);
-      const exporters = idx.getExporters('Config');
+      const exporters = idx.exportersGet('Config');
       expect(exporters).toHaveLength(2);
       expect(exporters.every(s => (s.flags & SymbolFlags.Exported) !== 0)).toBe(true);
     });
 
-    it('getExportLocations(symbolId) returns file and exported name', () => {
+    it('exportLocationsGet(symbolId) returns file and exported name', () => {
       const store = indexStoreNew();
       const file = '/src/a.ts';
       const scope = scopeRecordNew('scope-a', file);
@@ -152,14 +152,14 @@ describe('ProjectIndex', () => {
       store.filePut(fileIndexDeltaNew({ file, symbols: [sym], scopes: [scope], relations: [exp] }));
 
       const idx = projectIndexCreate(store, defaultCapabilities);
-      const locs = idx.getExportLocations('sym-a');
+      const locs = idx.exportLocationsGet('sym-a');
       expect(locs).toHaveLength(1);
       expect(locs[0]).toEqual({ file: '/src/a.ts', exportedName: 'doWork' });
     });
   });
 
   describe('reference queries', () => {
-    it('getReferencesInFile(file) returns references in that file', () => {
+    it('referencesInFileGet(file) returns references in that file', () => {
       const store = indexStoreNew();
       const file = '/src/a.ts';
       const scope = scopeRecordNew('scope-a', file);
@@ -175,7 +175,7 @@ describe('ProjectIndex', () => {
       store.filePut(fileIndexDeltaNew({ file, symbols: [sym], scopes: [scope], relations: [ref] }));
 
       const idx = projectIndexCreate(store, defaultCapabilities);
-      const refs = idx.getReferencesInFile(file);
+      const refs = idx.referencesInFileGet(file);
       expect(refs).toHaveLength(1);
       expect(refs[0].name).toBe('target');
       expect(refs[0].resolvedSymbolId).toBe('sym-target');
@@ -183,13 +183,13 @@ describe('ProjectIndex', () => {
   });
 
   describe('call graph queries', () => {
-    // Layout for getCallers:
+    // Layout for callersGet:
     //   file scope (scope-file, kind=file, range 0..500)
     //     callerFn symbol (sym-caller, kind=function, scopeId=scope-file, range 0..200)
     //       fnBody scope (scope-fn, kind=function, parent=scope-file, range 10..190)
     //         Calls relation in scope-fn, resolvedSymbolId=sym-callee
     //   callee symbol (sym-callee) in same or different file
-    it('getCallers(symbolId) resolves caller function symbols', () => {
+    it('callersGet(symbolId) resolves caller function symbols', () => {
       const store = indexStoreNew();
       const file = '/src/a.ts';
 
@@ -214,17 +214,17 @@ describe('ProjectIndex', () => {
       }));
 
       const idx = projectIndexCreate(store, defaultCapabilities);
-      const callers = idx.getCallers('sym-callee');
+      const callers = idx.callersGet('sym-callee');
       expect(callers).toHaveLength(1);
       expect(callers[0]).toBe('sym-caller');
     });
 
-    // Layout for getCallees:
+    // Layout for calleesGet:
     //   file scope (range 0..500)
     //     callerFn symbol (kind=function, range 0..200)
     //       fnBody scope (kind=function, range 10..190) — within caller symbol range
     //         Calls relation with resolvedSymbolId=sym-callee
-    it('getCallees(symbolId) returns callee symbol IDs', () => {
+    it('calleesGet(symbolId) returns callee symbol IDs', () => {
       const store = indexStoreNew();
       const file = '/src/a.ts';
 
@@ -249,12 +249,12 @@ describe('ProjectIndex', () => {
       }));
 
       const idx = projectIndexCreate(store, defaultCapabilities);
-      const callees = idx.getCallees('sym-caller');
+      const callees = idx.calleesGet('sym-caller');
       expect(callees).toHaveLength(1);
       expect(callees[0]).toBe('sym-callee');
     });
 
-    it('getCallees returns empty for non-function symbols', () => {
+    it('calleesGet returns empty for non-function symbols', () => {
       const store = indexStoreNew();
       const file = '/src/a.ts';
       const scope = scopeRecordNew('scope-a', file);
@@ -263,12 +263,12 @@ describe('ProjectIndex', () => {
       store.filePut(fileIndexDeltaNew({ file, symbols: [sym], scopes: [scope] }));
 
       const idx = projectIndexCreate(store, defaultCapabilities);
-      expect(idx.getCallees('sym-var')).toEqual([]);
+      expect(idx.calleesGet('sym-var')).toEqual([]);
     });
   });
 
   describe('scope queries', () => {
-    it('getScopesInFile(file) returns all scopes for the file', () => {
+    it('scopesInFileGet(file) returns all scopes for the file', () => {
       const store = indexStoreNew();
       const file = '/src/a.ts';
       const fileScope = scopeRecordNew('scope-file', file, 'file');
@@ -278,14 +278,14 @@ describe('ProjectIndex', () => {
       store.filePut(fileIndexDeltaNew({ file, scopes: [fileScope, fnScope, blockScope] }));
 
       const idx = projectIndexCreate(store, defaultCapabilities);
-      const scopes = idx.getScopesInFile(file);
+      const scopes = idx.scopesInFileGet(file);
       expect(scopes).toHaveLength(3);
       expect(scopes.map(s => s.kind).sort()).toEqual(['block', 'file', 'function']);
     });
   });
 
   describe('import/export queries', () => {
-    it('resolveImport resolves named import by specifier and name', () => {
+    it('importResolve resolves named import by specifier and name', () => {
       const store = indexStoreNew();
       const file = '/src/a.ts';
       const scope = scopeRecordNew('scope-a', file);
@@ -304,10 +304,10 @@ describe('ProjectIndex', () => {
       store.filePut(fileIndexDeltaNew({ file, symbols: [localSym], scopes: [scope], relations: [binding] }));
 
       const idx = projectIndexCreate(store, defaultCapabilities);
-      expect(idx.resolveImport(file, './utils', 'utils')).toBe('sym-remote-utils');
+      expect(idx.importResolve(file, './utils', 'utils')).toBe('sym-remote-utils');
     });
 
-    it('resolveImport resolves default import', () => {
+    it('importResolve resolves default import', () => {
       const store = indexStoreNew();
       const file = '/src/a.ts';
       const scope = scopeRecordNew('scope-a', file);
@@ -326,10 +326,10 @@ describe('ProjectIndex', () => {
       store.filePut(fileIndexDeltaNew({ file, symbols: [localSym], scopes: [scope], relations: [binding] }));
 
       const idx = projectIndexCreate(store, defaultCapabilities);
-      expect(idx.resolveImport(file, './MyComp', 'default')).toBe('sym-remote-comp');
+      expect(idx.importResolve(file, './MyComp', 'default')).toBe('sym-remote-comp');
     });
 
-    it('resolveImport returns undefined for unresolved specifier', () => {
+    it('importResolve returns undefined for unresolved specifier', () => {
       const store = indexStoreNew();
       const file = '/src/a.ts';
       const scope = scopeRecordNew('scope-a', file);
@@ -337,12 +337,12 @@ describe('ProjectIndex', () => {
       store.filePut(fileIndexDeltaNew({ file, scopes: [scope] }));
 
       const idx = projectIndexCreate(store, defaultCapabilities);
-      expect(idx.resolveImport(file, './nonexistent', 'foo')).toBeUndefined();
+      expect(idx.importResolve(file, './nonexistent', 'foo')).toBeUndefined();
     });
   });
 
   describe('type relation queries', () => {
-    it('getTypeRelations(symbolId) returns extends/implements for a symbol', () => {
+    it('typeRelationsGet(symbolId) returns extends/implements for a symbol', () => {
       const store = indexStoreNew();
       const file = '/src/a.ts';
       const scope = scopeRecordNew('scope-a', file);
@@ -375,13 +375,13 @@ describe('ProjectIndex', () => {
       }));
 
       const idx = projectIndexCreate(store, defaultCapabilities);
-      const rels = idx.getTypeRelations(classSym.id);
+      const rels = idx.typeRelationsGet(classSym.id);
       expect(rels).toHaveLength(2);
       expect(rels.find(r => r.relationKind === 'extends')?.targetName).toBe('Animal');
       expect(rels.find(r => r.relationKind === 'implements')?.targetName).toBe('IMovable');
     });
 
-    it('getSubTypes(symbolId) returns children that extend/implement', () => {
+    it('subTypesGet(symbolId) returns children that extend/implement', () => {
       const store = indexStoreNew();
       const file = '/src/a.ts';
       const scope = scopeRecordNew('scope-a', file);
@@ -414,12 +414,12 @@ describe('ProjectIndex', () => {
       }));
 
       const idx = projectIndexCreate(store, defaultCapabilities);
-      const subs = idx.getSubTypes(parentSym.id);
+      const subs = idx.subTypesGet(parentSym.id);
       expect(subs).toHaveLength(2);
       expect(subs.map(r => r.symbolId).sort()).toEqual([child1.id, child2.id].sort());
     });
 
-    it('getTypeRelationsInFile(file) returns all type relations in a file', () => {
+    it('typeRelationsInFileGet(file) returns all type relations in a file', () => {
       const store = indexStoreNew();
       const file = '/src/a.ts';
       const scope = scopeRecordNew('scope-a', file);
@@ -449,7 +449,7 @@ describe('ProjectIndex', () => {
       }));
 
       const idx = projectIndexCreate(store, defaultCapabilities);
-      const rels = idx.getTypeRelationsInFile(file);
+      const rels = idx.typeRelationsInFileGet(file);
       expect(rels).toHaveLength(2);
       expect(rels.map(r => r.targetName).sort()).toEqual(['Base', 'IParent']);
     });
@@ -470,7 +470,7 @@ describe('ProjectIndex', () => {
       expect(idx.capabilities.callGraph).toBe('none');
     });
 
-    it('getStats() returns correct counts', () => {
+    it('statsGet() returns correct counts', () => {
       const store = indexStoreNew();
       const file = '/src/a.ts';
       const scope = scopeRecordNew('scope-a', file);
@@ -486,7 +486,7 @@ describe('ProjectIndex', () => {
       store.filePut(fileIndexDeltaNew({ file, symbols: [sym], scopes: [scope], relations: [ref] }));
 
       const idx = projectIndexCreate(store, defaultCapabilities);
-      expect(idx.getStats()).toEqual({
+      expect(idx.statsGet()).toEqual({
         files: 1,
         symbols: 1,
         scopes: 1,

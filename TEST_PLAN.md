@@ -202,7 +202,7 @@ Examples:
 | Symbol extraction — enum members | Integration | `tests/index.builder.spec.ts` | Exists |
 | Scope tree construction — nested functions, classes, blocks | Integration | `tests/index.builder.spec.ts` | Exists |
 | Heuristic call detection | Integration | `tests/index.builder.spec.ts` | Exists |
-| `getCallers` / `getCallees` via ProjectIndex API | Integration | `tests/index.builder.spec.ts` | Exists (symbol ranges expanded to full declaration span; `getCallers` fixed to use file-scoped range containment) |
+| `callersGet` / `calleesGet` via ProjectIndex API | Integration | `tests/index.builder.spec.ts` | Exists (symbol ranges expanded to full declaration span; `callersGet` fixed to use file-scoped range containment) |
 | `crossFileResolve` — named imports | Integration | `tests/index.cross-file-resolution.spec.ts` | Exists |
 | `crossFileResolve` — default imports | Integration | `tests/index.cross-file-resolution.spec.ts` | Exists |
 | `crossFileResolve` — namespace imports | Integration | `tests/index.cross-file-resolution.spec.ts` | Exists (binding indexed with `resolvedModulePath`; member accesses like `utils.alpha` resolved to exported symbols via `memberRefsExtract` + namespace member resolution pass) |
@@ -224,34 +224,34 @@ Methods that are thin wrappers over `IndexStore` can be unit-tested with a pre-p
 
 | Method | Layer | Test File | Status |
 |--------|-------|-----------|--------|
-| `getSymbols()` — all symbols | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
-| `getSymbol(id)` | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
-| `getSymbolsInFile(file)` | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
-| `getSymbolsByName(name)` | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
-| `getExportedSymbols({ file })` | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
-| `getReferences(symbolId)` | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists (asserted in cross-file test) |
-| `getReferencesInFile(file)` | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
-| `getCallers(symbolId)` | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
-| `getCallees(symbolId)` | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
-| `getScope(scopeId)` | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists (used indirectly in cross-file test) |
-| `getScopesInFile(file)` | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
-| `getImportBindings(file)` | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists (asserted in cross-file test) |
-| `getFileExports(file)` | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists (asserted in cross-file test) |
-| `resolveImport(fromFile, specifier, name)` | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
-| `getStats()` | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
+| `symbolsGet()` — all symbols | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
+| `symbolGet(id)` | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
+| `symbolsInFileGet(file)` | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
+| `symbolsGetByName(name)` | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
+| `exportedSymbolsGet({ file })` | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
+| `referencesGet(symbolId)` | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists (asserted in cross-file test) |
+| `referencesInFileGet(file)` | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
+| `callersGet(symbolId)` | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
+| `calleesGet(symbolId)` | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
+| `scopeGet(scopeId)` | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists (used indirectly in cross-file test) |
+| `scopesInFileGet(file)` | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
+| `importBindingsGet(file)` | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists (asserted in cross-file test) |
+| `fileExportsGet(file)` | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists (asserted in cross-file test) |
+| `importResolve(fromFile, specifier, name)` | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
+| `statsGet()` | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
 | `capabilities` | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
-| `getTypeRelations(symbolId)` — type relations for a symbol | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
-| `getSubTypes(symbolId)` — reverse type relation lookup | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
-| `getTypeRelationsInFile(file)` — all type relations in file | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
+| `typeRelationsGet(symbolId)` — type relations for a symbol | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
+| `subTypesGet(symbolId)` — reverse type relation lookup | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
+| `typeRelationsInFileGet(file)` — all type relations in file | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
 
 #### Module Graph (`index/moduleGraph.ts`)
 
 | Method | Layer | Test File | Status |
 |--------|-------|-----------|--------|
-| `getModuleImporters(file)` — reverse dependency edges | Integration | `tests/index.module-graph.spec.ts` | Exists |
-| `getModuleImportees(file)` — forward dependency edges | Integration | `tests/index.module-graph.spec.ts` | Exists |
-| `getModuleDependencyOrder()` — topological sort | Integration | `tests/index.module-graph.spec.ts` | Exists |
-| `getModuleCycles()` — circular dependency detection | Integration | `tests/index.module-graph.spec.ts` | Exists |
+| `moduleImportersGet(file)` — reverse dependency edges | Integration | `tests/index.module-graph.spec.ts` | Exists |
+| `moduleImporteesGet(file)` — forward dependency edges | Integration | `tests/index.module-graph.spec.ts` | Exists |
+| `moduleDependencyOrderGet()` — topological sort | Integration | `tests/index.module-graph.spec.ts` | Exists |
+| `moduleCyclesGet()` — circular dependency detection | Integration | `tests/index.module-graph.spec.ts` | Exists |
 | Linear chain topology (A imports B imports C) | Integration | `tests/index.module-graph.spec.ts` | Exists |
 | Circular imports (A imports B, B imports A) | Integration | `tests/index.module-graph.spec.ts` | Exists |
 | Diamond dependency (A imports B+C, both import D) | Integration | `tests/index.module-graph.spec.ts` | Exists |
@@ -259,7 +259,7 @@ Methods that are thin wrappers over `IndexStore` can be unit-tested with a pre-p
 | External packages excluded from graph | Integration | `tests/index.module-graph.spec.ts` | Exists |
 | Unknown file returns empty arrays | Integration | `tests/index.module-graph.spec.ts` | Exists |
 | Multiple imports between same files deduplicated | Integration | `tests/index.module-graph.spec.ts` | Exists |
-| `getModuleEntryPoints()` — files with no importers | Integration | `tests/index.module-graph.spec.ts` | Exists |
+| `moduleEntryPointsGet()` — files with no importers | Integration | `tests/index.module-graph.spec.ts` | Exists |
 | Entry points — linear chain (only root) | Integration | `tests/index.module-graph.spec.ts` | Exists |
 | Entry points — diamond (only root) | Integration | `tests/index.module-graph.spec.ts` | Exists |
 | Entry points — isolated files are entry points | Integration | `tests/index.module-graph.spec.ts` | Exists |
@@ -275,16 +275,16 @@ Methods that are thin wrappers over `IndexStore` can be unit-tested with a pre-p
 | `typeRelationsInFileGet` lookup | Unit | `packages/core/src/index/indexStore.spec.ts` | Exists |
 | `fileRemove` clears type relations | Unit | `packages/core/src/index/indexStore.spec.ts` | Exists |
 | `clear()` empties type relations | Unit | `packages/core/src/index/indexStore.spec.ts` | Exists |
-| `getTypeRelations(symbolId)` returns extends/implements | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
-| `getSubTypes(symbolId)` returns children | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
-| `getTypeRelationsInFile(file)` returns all relations | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
+| `typeRelationsGet(symbolId)` returns extends/implements | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
+| `subTypesGet(symbolId)` returns children | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
+| `typeRelationsInFileGet(file)` returns all relations | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
 | Class extends class (same file) | Integration | `tests/index.type-relations.spec.ts` | Exists |
 | Class implements interface (same file) | Integration | `tests/index.type-relations.spec.ts` | Exists |
 | Class implements multiple interfaces | Integration | `tests/index.type-relations.spec.ts` | Exists |
 | Interface extends interface | Integration | `tests/index.type-relations.spec.ts` | Exists |
 | Abstract class extends + implements | Integration | `tests/index.type-relations.spec.ts` | Exists |
 | Class extends with generic type parameter | Integration | `tests/index.type-relations.spec.ts` | Exists |
-| `getSubTypes` reverse lookup | Integration | `tests/index.type-relations.spec.ts` | Exists |
+| `subTypesGet` reverse lookup | Integration | `tests/index.type-relations.spec.ts` | Exists |
 | No type relations returns empty array | Integration | `tests/index.type-relations.spec.ts` | Exists |
 | Symbol with no extends/implements returns empty | Integration | `tests/index.type-relations.spec.ts` | Exists |
 | Cross-file type relation (import + extends) | Integration | `tests/index.type-relations.spec.ts` | Exists (file-local resolution resolves to import binding symbol; cross-file resolution of type relations to the original exported symbol is not yet implemented) |
@@ -545,7 +545,7 @@ Ordered by risk (silent corruption potential) and effort (lower effort = do it s
 | 2 | IndexStore | High | Medium (14 tests, need test helper for `FileIndexDelta`) | In-memory data structure that all queries depend on. Bugs here corrupt symbols, references, and exports silently. Requires building a `testDeltaCreate` helper first, which pays for itself across all store and query tests. | Done |
 | 3 | Result utilities | Low | Trivial (8 tests, ~30 min) | Low risk because the implementation is simple, but the tests validate the error-handling contract that every `Result`-returning function depends on. Quick win. | Done |
 | 4 | ProjectIndex query methods | Medium | Small (10 tests, reuse IndexStore test helper) | Thin wrappers, but untested wrappers can silently drop filters or mismap fields. Once the IndexStore helper exists, these are fast to write. | Done |
-| 5 | Index builder topologies | High | Large (17 new tests, each needs multi-file setups) | Cross-file resolution is the hardest feature. Circular imports, re-exports, star exports, diamond deps, missing files — these are the scenarios where bugs actually ship. | Done (topology tests in `cross-file-resolution.spec.ts`; symbol extraction, scopes, calls, async builder, incremental APIs, `adapterRegister` in `index.builder.spec.ts`. Re-export chain and star export symbols propagated into the export map via `exportMapAddReexportedSymbols`. Namespace import member resolution implemented via `memberRefsExtract` and namespace member resolution pass in `crossFileResolve`. `getCallers`/`getCallees` working after symbol byteRange expanded to full declaration span and `getCallers` fixed to use file-scoped range containment.) |
+| 5 | Index builder topologies | High | Large (17 new tests, each needs multi-file setups) | Cross-file resolution is the hardest feature. Circular imports, re-exports, star exports, diamond deps, missing files — these are the scenarios where bugs actually ship. | Done (topology tests in `cross-file-resolution.spec.ts`; symbol extraction, scopes, calls, async builder, incremental APIs, `adapterRegister` in `index.builder.spec.ts`. Re-export chain and star export symbols propagated into the export map via `exportMapAddReexportedSymbols`. Namespace import member resolution implemented via `memberRefsExtract` and namespace member resolution pass in `crossFileResolve`. `callersGet`/`calleesGet` working after symbol byteRange expanded to full declaration span and `callersGet` fixed to use file-scoped range containment.) |
 | 6 | Policy loading | Medium | Small (6 tests, inline policy objects) | Glob matching and target resolution are used by every rule. Bugs here cause rules to silently skip files. | Done |
 | 7 | Config discovery | Medium | Medium (6 tests, temp directories with config files) | Users hit config discovery issues first. Needs temp directory scaffolding but each test is straightforward. | Done (11 tests: discovery, precedence, walk-up, error paths, JS config loading async/sync, cache clear, defineConfig) |
 | 7b | Tree check adapter | Low | Trivial (2 tests, pure functions) | Small module but 0% coverage. Pure mapper functions, quick to test exhaustively. | Done (6 tests: field mapping, severity, fix pass-through, array mapping) |
@@ -556,7 +556,7 @@ Ordered by risk (silent corruption potential) and effort (lower effort = do it s
 | 9 | eslintPluginCreate + adapter | Low | Small (3 tests, mock plugin objects) | Plugin assembly bugs would be caught by existing RuleTester tests. These unit tests add defense in depth. | Done (10 plugin tests + 6 adapter cache/state clearing tests + 4 requiresProjectIndex integration tests: CJS/ESM interop, lint provider assembly, treeCheck adaptation, multi-rule, invalid input, policyCacheClear, providerInitStateClear, projectIndexCacheClear. Adapter with `requiresProjectIndex: true` verified via `unusedExportsRule` in `eslint.unused-exports-adapter.spec.ts`.) |
 | 10 | Parser/language registration | Low | Small (6 tests, but complicated by global state) | Edge cases (duplicate registration, unknown extensions) are unlikely in practice. The global singleton issue makes these tests tricky to isolate. | Done (18 unit tests in `parserLangs.spec.ts`: langAdd validation, error paths, duplicate/conflict handling, langsGet, wasmPathGet, langExists, langGetForFile. 4 integration tests in `parserInit.spec.ts`: init, parser lookup, error paths. Vitest file-level isolation avoids global state conflicts.) |
 | 11 | esbuild plugin scenarios | Low | Medium (4 tests, each needs esbuild + temp project) | Existing tests cover the critical path. Additional scenarios (fix mode, auto-discovery) are nice-to-have. | Done (5 passing: auto-discovery, no-matching-files, multiple-rules, fix:true — esbuild plugin now loads plugins via `policyPluginsGet` and generates `overrideConfig` to enable codepol ESLint rules) |
-| 12 | Type relations (Extends/Implements) | Medium | Medium (19 tests: 8 unit + 11 integration) | Class hierarchy analysis and interface compliance checking. New `TypeRelation` relation type with full stack: tree-sitter queries, adapter extraction, IndexStore storage, ProjectIndex API. | Done (5 IndexStore unit tests, 3 ProjectIndex unit tests, 11 integration tests covering class extends, implements, multiple implements, interface extends, abstract class, generics, getSubTypes, empty results, cross-file, multi-interface extends. File-local resolvedTargetId populated; cross-file type relation resolution deferred.) |
+| 12 | Type relations (Extends/Implements) | Medium | Medium (19 tests: 8 unit + 11 integration) | Class hierarchy analysis and interface compliance checking. New `TypeRelation` relation type with full stack: tree-sitter queries, adapter extraction, IndexStore storage, ProjectIndex API. | Done (5 IndexStore unit tests, 3 ProjectIndex unit tests, 11 integration tests covering class extends, implements, multiple implements, interface extends, abstract class, generics, subTypesGet, empty results, cross-file, multi-interface extends. File-local resolvedTargetId populated; cross-file type relation resolution deferred.) |
 
 ---
 
@@ -712,12 +712,12 @@ Run separately from normal tests: `pnpm bench`
 | Index 100 files | `projectIndexBuildSync` throughput | `indexBuilder.bench.ts` | TBD — run baseline first |
 | Index 500 files | Scale behavior (should be ~linear) | `indexBuilder.bench.ts` | TBD |
 | Index 100 files (no cross-file) | Indexing without resolution | `indexBuilder.bench.ts` | TBD |
-| `getSymbols()` (all, no filter) | Full symbol scan | `indexQuery.bench.ts` | TBD |
-| `getSymbolsInFile(file)` | File-scoped query | `indexQuery.bench.ts` | TBD |
-| `getSymbolsByName(name)` | Name lookup | `indexQuery.bench.ts` | TBD |
-| `getExportedSymbols({ file })` | Export filter | `indexQuery.bench.ts` | TBD |
-| `getReferences(symbolId)` | Reference lookup | `indexQuery.bench.ts` | TBD |
-| `getCallers(symbolId)` | Call graph traversal | `indexQuery.bench.ts` | TBD |
+| `symbolsGet()` (all, no filter) | Full symbol scan | `indexQuery.bench.ts` | TBD |
+| `symbolsInFileGet(file)` | File-scoped query | `indexQuery.bench.ts` | TBD |
+| `symbolsGetByName(name)` | Name lookup | `indexQuery.bench.ts` | TBD |
+| `exportedSymbolsGet({ file })` | Export filter | `indexQuery.bench.ts` | TBD |
+| `referencesGet(symbolId)` | Reference lookup | `indexQuery.bench.ts` | TBD |
+| `callersGet(symbolId)` | Call graph traversal | `indexQuery.bench.ts` | TBD |
 | `unusedExportsCheck` (single file, 100-file index) | Per-file check latency | `unusedExportsCheck.bench.ts` | TBD |
 
 **Setting targets:** Run each benchmark 3 times on CI hardware, take the p95, and set the target at 2x that value. Record the baseline hardware and date. Revisit targets when CI hardware changes.
@@ -849,7 +849,7 @@ These were added as part of closing gaps identified in this plan.
 | `packages/core/src/result/result.spec.ts` | Unit | Ok, Err, isOk, isErr, resultFrom, resultFromAsync |
 | `packages/core/src/index/indexStore.spec.ts` | Unit | Store CRUD, queries, filters, export map, clear |
 | `packages/core/src/index/moduleResolver.spec.ts` | Unit | Path resolution, extensions, aliases, index files |
-| `packages/core/src/index/indexQuery.spec.ts` | Unit | ProjectIndex query methods: symbols, references, callers/callees, exports, scopes, resolveImport, stats, capabilities |
+| `packages/core/src/index/indexQuery.spec.ts` | Unit | ProjectIndex query methods: symbols, references, callers/callees, exports, scopes, importResolve, stats, capabilities |
 | `packages/core/src/policy/policyGet.spec.ts` | Unit | Target resolution, glob matching, language matching, policyFileGetChecked, ruleMatchesGet, policy contract validation (unknown refs, empty targets map, empty targets array) |
 | `tests/index.builder.spec.ts` | Integration | Symbol extraction (functions, classes, variables, types, interfaces, enums, enum members, async flag), scope tree construction, heuristic call detection, async builder, incremental APIs (updateFromSource, removeFiles, crossFileResolveForFile). Async flag detection and enum member extraction implemented in the TypeScript adapter; `abstract_class` and `generator` symbol kind mappings added as drive-by fixes. |
 | `packages/core/src/adapter/treeCheckAdapter.spec.ts` | Unit | violationToLintDiagnostic (field mapping, severity, fix pass-through), violationsToLintDiagnostics (empty, multi-element, custom severity) |
@@ -865,16 +865,16 @@ These were added as part of closing gaps identified in this plan.
 | `tests/eslint.require-logger-enter-exit.spec.ts` (expanded) | Integration | Added: multiple functions in one file (2 errors, one-pass fix), nested functions (2 errors, inner fixed first), class methods (2 errors from dual MethodDefinition+FunctionExpression visit). Existing: block function, arrow expression, reuse import, valid instrumented, excluded file |
 | `tests/core.policy-check.spec.ts` | Integration | `policyCheck` full pipeline: loads config from temp dir via jiti, finds matching files, returns tree violations. Error path: config not found returns Err |
 | `tests/e2e.cli.spec.ts` (expanded) | E2E | CLI subprocess tests: --help, --version, --check-plugins, no violations (exit 0), violations present (exit 1), config not found (error), --config <path> with explicit config (exit 0 + violation detection), --fix applies ESLint fixes to disk (un-skipped — uses config with both ESLint and treesitter providers). 1 skipped: --watch (complex async lifecycle). Uses symlinked node_modules for module resolution. |
-| `tests/index.builder.spec.ts` (expanded) | Integration | Added: `adapterRegister` — registers spy adapter for 'typescript', verifies factory and indexFile calls, validates spy delta in resulting index. Documents `languageIdFromFile` hardcoded switch as known gap for custom languages. Un-skipped: async flag detection (adapter now checks for `async` keyword child on declaration nodes), enum member extraction (symbols query now captures `enum_assignment` nodes as `enumMember` kind). Un-skipped: `getCallers`/`getCallees` via ProjectIndex API — symbol `byteRange` expanded to full declaration span in `adapterCore.ts`; `getCallers` algorithm fixed to use file-scoped symbol range containment instead of scopeId-based lookup. |
+| `tests/index.builder.spec.ts` (expanded) | Integration | Added: `adapterRegister` — registers spy adapter for 'typescript', verifies factory and indexFile calls, validates spy delta in resulting index. Documents `languageIdFromFile` hardcoded switch as known gap for custom languages. Un-skipped: async flag detection (adapter now checks for `async` keyword child on declaration nodes), enum member extraction (symbols query now captures `enum_assignment` nodes as `enumMember` kind). Un-skipped: `callersGet`/`calleesGet` via ProjectIndex API — symbol `byteRange` expanded to full declaration span in `adapterCore.ts`; `callersGet` algorithm fixed to use file-scoped symbol range containment instead of scopeId-based lookup. |
 | `tests/eslint.unused-exports-adapter.spec.ts` | Integration | ESLint adapter with `requiresProjectIndex: true`: adapts `unusedExportsRule`, builds ProjectIndex from multi-file temp dir, verifies unused exports detected via treeCheckViolation. Valid cases: all-exports-consumed file, consumer-only file. Invalid case: file with unused export. Exercises `getOrBuildProjectIndex`, `discoverIndexableFiles`, and cross-file import resolution through the ESLint adapter pipeline. |
-| `tests/index.type-relations.spec.ts` | Integration | Type relation extraction and query: class extends class, class implements interface (single/multiple), interface extends interface, abstract class extends + implements, generic type parameter, getSubTypes reverse lookup, empty results for no relations, cross-file type relation (file-local resolution to import binding), interface extends multiple interfaces. 11 tests exercising full stack from tree-sitter extraction through ProjectIndex API. |
+| `tests/index.type-relations.spec.ts` | Integration | Type relation extraction and query: class extends class, class implements interface (single/multiple), interface extends interface, abstract class extends + implements, generic type parameter, subTypesGet reverse lookup, empty results for no relations, cross-file type relation (file-local resolution to import binding), interface extends multiple interfaces. 11 tests exercising full stack from tree-sitter extraction through ProjectIndex API. |
 | `packages/core/src/index/testHelpers.ts` | — | Shared test helper for building `FileIndexDelta`, `SymbolRecord`, and `ScopeRecord` objects without tree-sitter. Extracted from duplicate helpers in `indexStore.spec.ts` and `indexQuery.spec.ts`. Exports: `byteRangeGet`, `scopeRecordNew`, `symbolRecordNew`, `fileIndexDeltaNew`. |
 | `tests/index.cross-file-resolution.spec.ts` (expanded) | Integration | Un-skipped: re-export chain (consumer import traced through proxy to origin symbol via `exportMapAddReexportedSymbols`), star export expansion (imports from `export *` proxy mapped to origin symbols, references updated). TS export query extended with `export.reexport_name` and `export.reexport_source` captures for `export { foo } from "module"` patterns. Un-skipped: namespace import member resolution — `memberRefsExtract` creates dotted references for member expressions, `crossFileResolve` sets `resolvedModulePath` on namespace bindings and resolves dotted references against the namespace's module export map. Added: import alias test tightened to verify `importedName === 'originalName'` and local symbol named `'renamedFn'`. Added: export alias test (`export { foo as bar }`) verifying aliased export name and consumer resolution. Added: namespace re-export resolution (`export * as ns from './mod'`) — consumer named import converted to namespace binding, member accesses resolved to origin symbols. Added: chained namespace re-export (through star-export intermediary). No tests remain skipped in this file. |
-| `tests/index.module-graph.spec.ts` (expanded) | Integration | Module graph API: linear chain (importers/importees, dependency order, no cycles), circular imports (cycle detection, bidirectional edges), diamond dependency (no false cycles, correct ordering), isolated files (included in graph), external packages filtered out, unknown files return empty, multi-import deduplication. Added: entry point detection — linear chain (only root), diamond (only root), isolated files (both entry points), circular imports (no entry points), external-only imports (entry points). 14 tests exercising `getModuleImporters`, `getModuleImportees`, `getModuleDependencyOrder`, `getModuleCycles`, `getModuleEntryPoints` via `ProjectIndex`. |
+| `tests/index.module-graph.spec.ts` (expanded) | Integration | Module graph API: linear chain (importers/importees, dependency order, no cycles), circular imports (cycle detection, bidirectional edges), diamond dependency (no false cycles, correct ordering), isolated files (included in graph), external packages filtered out, unknown files return empty, multi-import deduplication. Added: entry point detection — linear chain (only root), diamond (only root), isolated files (both entry points), circular imports (no entry points), external-only imports (entry points). 14 tests exercising `moduleImportersGet`, `moduleImporteesGet`, `moduleDependencyOrderGet`, `moduleCyclesGet`, `moduleEntryPointsGet` via `ProjectIndex`. |
 | `packages/core/src/index/moduleGraph.ts` (expanded) | — | Module graph implementation: `moduleGraphBuild(store)` builds forward/reverse adjacency lists from `ImportBindingRelation.resolvedModulePath`. Topological sort (Kahn's algorithm), cycle detection (Tarjan's SCC), entry point detection (files with empty reverse adjacency). Lazily built, cached. Exported from `@codepol/core`. |
 | `tests/benchHelpers.ts` | — | Shared benchmark helper for generating realistic multi-file TypeScript projects in a temp directory. Generates N files with exported functions, classes, types, interfaces, and cross-file imports. Used by all 3 benchmark files. Exports: `benchProjectGenerate`, `benchProjectCleanup`. |
 | `packages/core/src/index/indexBuilder.bench.ts` | Bench | Indexing throughput: `projectIndexBuildSync` on 100 and 500 generated files, plus a variant without cross-file resolution. |
-| `packages/core/src/index/indexQuery.bench.ts` | Bench | Query latency on a 100-file pre-built index: `getSymbols`, `getSymbolsInFile`, `getSymbolsByName`, `getExportedSymbols`, `getReferences`, `getReferencesInFile`, `getCallers`, `getCallees`, `getScopesInFile`, `getImportBindings`, `getFileExports`, `getStats`. |
+| `packages/core/src/index/indexQuery.bench.ts` | Bench | Query latency on a 100-file pre-built index: `symbolsGet`, `symbolsInFileGet`, `symbolsGetByName`, `exportedSymbolsGet`, `referencesGet`, `referencesInFileGet`, `callersGet`, `calleesGet`, `scopesInFileGet`, `importBindingsGet`, `fileExportsGet`, `statsGet`. |
 | `packages/plugin/src/unusedExportsCheck.bench.ts` | Bench | Per-file `unusedExportsCheck` latency on a 100-file index. Benchmarks checking a middle file, first file (likely all used), and last file (likely unused exports). |
 
 ### Known gaps discovered during testing
@@ -890,11 +890,11 @@ These were added as part of closing gaps identified in this plan.
 
 #### Module graph
 
-- **Module graph API**: **Implemented.** `ModuleGraph` type and `moduleGraphBuild(store)` in `packages/core/src/index/moduleGraph.ts`. Builds forward/reverse adjacency lists from resolved `ImportBindingRelation.resolvedModulePath` data. External packages (unresolved paths) are excluded. Exposed on `ProjectIndex` as `getModuleImporters()`, `getModuleImportees()`, `getModuleDependencyOrder()`, `getModuleCycles()`, `getModuleEntryPoints()`. Graph is lazily built and cached. Topological sort uses Kahn's algorithm on the reversed dependency graph. Cycle detection uses Tarjan's SCC algorithm. Entry point detection implemented via `moduleGraphEntryPointsGet()` — files with no importers in the indexed set, sorted alphabetically.
+- **Module graph API**: **Implemented.** `ModuleGraph` type and `moduleGraphBuild(store)` in `packages/core/src/index/moduleGraph.ts`. Builds forward/reverse adjacency lists from resolved `ImportBindingRelation.resolvedModulePath` data. External packages (unresolved paths) are excluded. Exposed on `ProjectIndex` as `moduleImportersGet()`, `moduleImporteesGet()`, `moduleDependencyOrderGet()`, `moduleCyclesGet()`, `moduleEntryPointsGet()`. Graph is lazily built and cached. Topological sort uses Kahn's algorithm on the reversed dependency graph. Cycle detection uses Tarjan's SCC algorithm. Entry point detection implemented via `moduleGraphEntryPointsGet()` — files with no importers in the indexed set, sorted alphabetically.
 
 #### Adapter extraction gaps
 
-- **getCallers/getCallees accuracy**: **Fixed.** Symbol `byteRange` now uses the full declaration span (the `declNode` range from tree-sitter, e.g., the entire `function foo() { ... }`) instead of just the name span. This enables reliable scope-based containment checks in `getCallees`. Additionally, `getCallers` was fixed to search for function symbols by file and byte range containment instead of by `scopeId`, because `findInnermostScope` places function symbols inside their own function scope rather than the parent scope where the declaration lives.
+- **callersGet/calleesGet accuracy**: **Fixed.** Symbol `byteRange` now uses the full declaration span (the `declNode` range from tree-sitter, e.g., the entire `function foo() { ... }`) instead of just the name span. This enables reliable scope-based containment checks in `calleesGet`. Additionally, `callersGet` was fixed to search for function symbols by file and byte range containment instead of by `scopeId`, because `findInnermostScope` places function symbols inside their own function scope rather than the parent scope where the declaration lives.
 
 #### ESLint logger rule: fix merging and dual-visit behavior
 

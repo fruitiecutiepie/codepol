@@ -109,7 +109,7 @@ function getImportedExportNames(
   const importedNames = new Set<string>();
   
   // Get all unique files from the index
-  const allSymbols = projectIndex.getSymbols();
+  const allSymbols = projectIndex.symbolsGet();
   const files = new Set(allSymbols.map(s => s.file));
   
   // Check each file's import bindings
@@ -117,7 +117,7 @@ function getImportedExportNames(
     if (file === targetFile) continue; // Skip self
     
     // Use the proper ImportBinding API
-    const bindings = projectIndex.getImportBindings(file);
+    const bindings = projectIndex.importBindingsGet(file);
     
     for (const binding of bindings) {
       // Check if this import points to our target file
@@ -176,7 +176,7 @@ export function unusedExportsCheck(
   const violations: PolicyViolation[] = [];
 
   // Get all exports from this file (ExportsRelation provides exportedName)
-  const fileExports = projectIndex.getFileExports(filePath);
+  const fileExports = projectIndex.fileExportsGet(filePath);
   
   // Get all exported names that are imported from this file by other files
   const importedExportNames = getImportedExportNames(projectIndex, filePath);
@@ -189,7 +189,7 @@ export function unusedExportsCheck(
     // Check if this export's name is imported by any other file
     if (!importedExportNames.has(exp.exportedName)) {
       // Get the symbol for better error messages
-      const symbol = exp.symbolId ? projectIndex.getSymbol(exp.symbolId) : undefined;
+      const symbol = exp.symbolId ? projectIndex.symbolGet(exp.symbolId) : undefined;
       const symbolName = symbol?.name ?? exp.exportedName;
       const symbolKind = symbol?.kind ?? 'export';
       

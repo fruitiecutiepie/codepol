@@ -54,7 +54,7 @@ export async function fetchData() {
 
       const { index } = projectIndexBuildSync({ files: [file], dir: testDir });
 
-      const symbols = index.getSymbolsInFile(file);
+      const symbols = index.symbolsInFileGet(file);
       const fnSymbols = symbols.filter(s => s.kind === 'function');
 
       const greet = fnSymbols.find(s => s.name === 'greet');
@@ -87,7 +87,7 @@ export function syncFn() {
 
       const { index } = projectIndexBuildSync({ files: [file], dir: testDir });
 
-      const symbols = index.getSymbolsInFile(file);
+      const symbols = index.symbolsInFileGet(file);
       const fnSymbols = symbols.filter(s => s.kind === 'function');
 
       const fetchData = fnSymbols.find(s => s.name === 'fetchData');
@@ -125,7 +125,7 @@ class InternalHelper {
 
       const { index } = projectIndexBuildSync({ files: [file], dir: testDir });
 
-      const symbols = index.getSymbolsInFile(file);
+      const symbols = index.symbolsInFileGet(file);
 
       const animal = symbols.find(s => s.name === 'Animal' && s.kind === 'class');
       expect(animal).toBeDefined();
@@ -157,7 +157,7 @@ const internal = 'private';
 
       const { index } = projectIndexBuildSync({ files: [file], dir: testDir });
 
-      const symbols = index.getSymbolsInFile(file);
+      const symbols = index.symbolsInFileGet(file);
 
       const maxSize = symbols.find(s => s.name === 'MAX_SIZE');
       expect(maxSize).toBeDefined();
@@ -190,7 +190,7 @@ export type StringOrNumber = string | number;
 
       const { index } = projectIndexBuildSync({ files: [file], dir: testDir });
 
-      const symbols = index.getSymbolsInFile(file);
+      const symbols = index.symbolsInFileGet(file);
       const typeSymbols = symbols.filter(s => s.kind === 'type');
 
       const options = typeSymbols.find(s => s.name === 'Options');
@@ -222,7 +222,7 @@ interface InternalCache {
 
       const { index } = projectIndexBuildSync({ files: [file], dir: testDir });
 
-      const symbols = index.getSymbolsInFile(file);
+      const symbols = index.symbolsInFileGet(file);
       const interfaceSymbols = symbols.filter(s => s.kind === 'interface');
 
       const serializable = interfaceSymbols.find(s => s.name === 'Serializable');
@@ -252,7 +252,7 @@ enum InternalStatus {
 
       const { index } = projectIndexBuildSync({ files: [file], dir: testDir });
 
-      const symbols = index.getSymbolsInFile(file);
+      const symbols = index.symbolsInFileGet(file);
 
       const colorEnum = symbols.find(s => s.name === 'Color' && s.kind === 'enum');
       expect(colorEnum).toBeDefined();
@@ -276,7 +276,7 @@ export enum Color {
 
       const { index } = projectIndexBuildSync({ files: [file], dir: testDir });
 
-      const symbols = index.getSymbolsInFile(file);
+      const symbols = index.symbolsInFileGet(file);
       const enumMembers = symbols.filter(s => s.kind === 'enumMember');
 
       expect(enumMembers).toHaveLength(3);
@@ -325,7 +325,7 @@ class MyClass {
 
       const { index } = projectIndexBuildSync({ files: [file], dir: testDir });
 
-      const scopes = index.getScopesInFile(file);
+      const scopes = index.scopesInFileGet(file);
       expect(scopes.length).toBeGreaterThanOrEqual(3);
 
       // Should have a file-level scope
@@ -406,7 +406,7 @@ function main() {
       expect(computeCalls[0].resolvedSymbolId).toBe(computeSym!.id);
     });
 
-    it('should resolve getCallers and getCallees via the ProjectIndex API', () => {
+    it('should resolve callersGet and calleesGet via the ProjectIndex API', () => {
       const file = path.join(testDir, 'calls_api.ts');
       fs.writeFileSync(file, `
 function helper(): number {
@@ -425,7 +425,7 @@ function main() {
 
       const { index } = projectIndexBuildSync({ files: [file], dir: testDir });
 
-      const symbols = index.getSymbolsInFile(file);
+      const symbols = index.symbolsInFileGet(file);
       const helperSym = symbols.find(s => s.name === 'helper' && s.kind === 'function');
       const computeSym = symbols.find(s => s.name === 'compute' && s.kind === 'function');
       const mainSym = symbols.find(s => s.name === 'main' && s.kind === 'function');
@@ -434,17 +434,17 @@ function main() {
       expect(computeSym).toBeDefined();
       expect(mainSym).toBeDefined();
 
-      // getCallees: main calls compute and helper
-      const mainCallees = index.getCallees(mainSym!.id);
+      // calleesGet: main calls compute and helper
+      const mainCallees = index.calleesGet(mainSym!.id);
       expect(mainCallees).toContain(computeSym!.id);
       expect(mainCallees).toContain(helperSym!.id);
 
-      // getCallees: compute calls helper
-      const computeCallees = index.getCallees(computeSym!.id);
+      // calleesGet: compute calls helper
+      const computeCallees = index.calleesGet(computeSym!.id);
       expect(computeCallees).toContain(helperSym!.id);
 
-      // getCallers: helper is called by both compute and main
-      const helperCallers = index.getCallers(helperSym!.id);
+      // callersGet: helper is called by both compute and main
+      const helperCallers = index.callersGet(helperSym!.id);
       expect(helperCallers).toContain(computeSym!.id);
       expect(helperCallers).toContain(mainSym!.id);
     });
@@ -473,8 +473,8 @@ export const asyncTestConst = 42;
       expect(asyncResult.stats.errors).toHaveLength(0);
 
       // Same symbols
-      const syncSymbols = syncResult.index.getSymbolsInFile(file);
-      const asyncSymbols = asyncResult.index.getSymbolsInFile(file);
+      const syncSymbols = syncResult.index.symbolsInFileGet(file);
+      const asyncSymbols = asyncResult.index.symbolsInFileGet(file);
       expect(asyncSymbols.map(s => s.name).sort()).toEqual(syncSymbols.map(s => s.name).sort());
 
       // Same capabilities
@@ -675,7 +675,7 @@ const a = alpha();
       expect(indexFileCalls[0]).toBe(file);
 
       // The builder used the spy's delta, not the real adapter's output
-      const symbols = index.getSymbolsInFile(file);
+      const symbols = index.symbolsInFileGet(file);
       expect(symbols).toHaveLength(1);
       expect(symbols[0].name).toBe('spyFunction');
       expect(symbols[0].flags & SymbolFlags.Exported).toBeTruthy();

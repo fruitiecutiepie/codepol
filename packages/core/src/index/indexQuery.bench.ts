@@ -48,7 +48,7 @@ describe('query latency', () => {
     sampleFile = project.files[50];
 
     // Pick a symbol from that file
-    const syms = index.getSymbolsInFile(sampleFile);
+    const syms = index.symbolsInFileGet(sampleFile);
     const exported = syms.find(s => (s.flags & SymbolFlags.Exported) !== 0);
     sampleSymbolId = exported?.id ?? syms[0].id;
     sampleSymbolName = exported?.name ?? syms[0].name;
@@ -62,71 +62,71 @@ describe('query latency', () => {
   // Symbol queries
   // --------------------------------------------------------------------------
 
-  bench('getSymbols() — all symbols (no filter)', () => {
-    index.getSymbols();
+  bench('symbolsGet() — all symbols (no filter)', () => {
+    index.symbolsGet();
   });
 
-  bench('getSymbolsInFile(file)', () => {
-    index.getSymbolsInFile(sampleFile);
+  bench('symbolsInFileGet(file)', () => {
+    index.symbolsInFileGet(sampleFile);
   });
 
-  bench('getSymbolsByName(name)', () => {
-    index.getSymbolsByName(sampleSymbolName);
+  bench('symbolsGetByName(name)', () => {
+    index.symbolsGetByName(sampleSymbolName);
   });
 
-  bench('getExportedSymbols({ file })', () => {
-    index.getExportedSymbols({ file: sampleFile });
+  bench('exportedSymbolsGet({ file })', () => {
+    index.exportedSymbolsGet({ file: sampleFile });
   });
 
   // --------------------------------------------------------------------------
   // Reference queries
   // --------------------------------------------------------------------------
 
-  bench('getReferences(symbolId)', () => {
-    index.getReferences(sampleSymbolId);
+  bench('referencesGet(symbolId)', () => {
+    index.referencesGet(sampleSymbolId);
   });
 
-  bench('getReferencesInFile(file)', () => {
-    index.getReferencesInFile(sampleFile);
+  bench('referencesInFileGet(file)', () => {
+    index.referencesInFileGet(sampleFile);
   });
 
   // --------------------------------------------------------------------------
   // Call graph queries
   // --------------------------------------------------------------------------
 
-  bench('getCallers(symbolId)', () => {
-    index.getCallers(sampleSymbolId);
+  bench('callersGet(symbolId)', () => {
+    index.callersGet(sampleSymbolId);
   });
 
-  bench('getCallees(symbolId)', () => {
-    index.getCallees(sampleSymbolId);
+  bench('calleesGet(symbolId)', () => {
+    index.calleesGet(sampleSymbolId);
   });
 
   // --------------------------------------------------------------------------
   // Scope queries
   // --------------------------------------------------------------------------
 
-  bench('getScopesInFile(file)', () => {
-    index.getScopesInFile(sampleFile);
+  bench('scopesInFileGet(file)', () => {
+    index.scopesInFileGet(sampleFile);
   });
 
   // --------------------------------------------------------------------------
   // Import / Export queries
   // --------------------------------------------------------------------------
 
-  bench('getImportBindings(file)', () => {
-    index.getImportBindings(sampleFile);
+  bench('importBindingsGet(file)', () => {
+    index.importBindingsGet(sampleFile);
   });
 
-  bench('getFileExports(file)', () => {
-    index.getFileExports(sampleFile);
+  bench('fileExportsGet(file)', () => {
+    index.fileExportsGet(sampleFile);
   });
 
   // --------------------------------------------------------------------------
   // Metadata
   // --------------------------------------------------------------------------
 
-  bench('getStats()', () => {
-    index.getStats();
+  bench('statsGet()', () => {
+    index.statsGet();
   });
 });

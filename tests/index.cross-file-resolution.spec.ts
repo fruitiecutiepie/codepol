@@ -50,18 +50,18 @@ const x = bar;
       dir: testDir,
     });
 
-    const exportedSymbols = index.getExportedSymbols({ file: fileA });
+    const exportedSymbols = index.exportedSymbolsGet({ file: fileA });
     const fooSymbol = exportedSymbols.find(s => s.name === 'foo');
     expect(fooSymbol).toBeDefined();
 
-    const importBindings = index.getImportBindings(fileB);
+    const importBindings = index.importBindingsGet(fileB);
     const fooBinding = importBindings.find(b => b.importedName === 'foo');
     expect(fooBinding).toBeDefined();
     expect(fooBinding!.resolvedExportId).toBeDefined();
 
-    const fooRefs = index.getReferences(fooSymbol!.id);
+    const fooRefs = index.referencesGet(fooSymbol!.id);
     const externalRefs = fooRefs.filter(ref => {
-      const scope = index.getScope(ref.scopeId);
+      const scope = index.scopeGet(ref.scopeId);
       return scope && scope.file !== fileA;
     });
     expect(externalRefs.length).toBeGreaterThan(0);
@@ -89,13 +89,13 @@ const result = myFunc();
       dir: testDir,
     });
 
-    const importBindings = index.getImportBindings(fileD);
+    const importBindings = index.importBindingsGet(fileD);
     const defaultBinding = importBindings.find(b => b.isDefault);
     expect(defaultBinding).toBeDefined();
     expect(defaultBinding!.resolvedExportId).toBeDefined();
   });
 
-  it('should find external references via getReferences API', () => {
+  it('should find external references via referencesGet API', () => {
     const fileExporter = path.join(testDir, 'exporter.ts');
     fs.writeFileSync(fileExporter, `
 export function usedFunction() {
@@ -119,14 +119,14 @@ const result = usedFunction();
       dir: testDir,
     });
 
-    const exportedSymbols = index.getExportedSymbols({ file: fileExporter });
+    const exportedSymbols = index.exportedSymbolsGet({ file: fileExporter });
     const unusedExports: string[] = [];
     const usedExports: string[] = [];
 
     for (const symbol of exportedSymbols) {
-      const references = index.getReferences(symbol.id);
+      const references = index.referencesGet(symbol.id);
       const externalReferences = references.filter(ref => {
-        const scope = index.getScope(ref.scopeId);
+        const scope = index.scopeGet(ref.scopeId);
         return scope && scope.file !== fileExporter;
       });
 
@@ -180,7 +180,7 @@ const b = utils.beta;
     expect(stats.filesIndexed).toBe(2);
 
     // Namespace import produces a single binding with isNamespace: true
-    const bindings = index.getImportBindings(nsImporter);
+    const bindings = index.importBindingsGet(nsImporter);
     expect(bindings).toHaveLength(1);
 
     const nsBinding = bindings[0];
@@ -210,19 +210,19 @@ const b = utils.beta;
       dir: testDir,
     });
 
-    const bindings = index.getImportBindings(nsImporter);
+    const bindings = index.importBindingsGet(nsImporter);
     const nsBinding = bindings.find(b => b.isNamespace);
     expect(nsBinding).toBeDefined();
     expect(nsBinding!.resolvedModulePath).toBe(nsExporter);
 
     // Member accesses (utils.alpha, utils.beta) should resolve to exporter symbols
-    const exportedSymbols = index.getExportedSymbols({ file: nsExporter });
+    const exportedSymbols = index.exportedSymbolsGet({ file: nsExporter });
     const alphaSym = exportedSymbols.find(s => s.name === 'alpha');
     expect(alphaSym).toBeDefined();
 
-    const alphaRefs = index.getReferences(alphaSym!.id);
+    const alphaRefs = index.referencesGet(alphaSym!.id);
     const externalRefs = alphaRefs.filter(ref => {
-      const scope = index.getScope(ref.scopeId);
+      const scope = index.scopeGet(ref.scopeId);
       return scope && scope.file !== nsExporter;
     });
     expect(externalRefs.length).toBeGreaterThan(0);
@@ -246,7 +246,7 @@ const result = renamedFn();
       dir: testDir,
     });
 
-    const bindings = index.getImportBindings(aliasImporter);
+    const bindings = index.importBindingsGet(aliasImporter);
     expect(bindings.length).toBeGreaterThan(0);
 
     // importedName must be the original exported name, not the local alias
@@ -256,18 +256,18 @@ const result = renamedFn();
     expect(aliasBinding!.resolvedExportId).toBeDefined();
 
     // The local symbol should be named 'renamedFn' (the alias)
-    const localSymbol = index.getSymbol(aliasBinding!.localSymbolId);
+    const localSymbol = index.symbolGet(aliasBinding!.localSymbolId);
     expect(localSymbol).toBeDefined();
     expect(localSymbol!.name).toBe('renamedFn');
 
     // The resolved export should be the 'originalName' symbol from the exporter
-    const exportedSymbols = index.getExportedSymbols({ file: aliasExporter });
+    const exportedSymbols = index.exportedSymbolsGet({ file: aliasExporter });
     const originalSymbol = exportedSymbols.find(s => s.name === 'originalName');
     expect(originalSymbol).toBeDefined();
     expect(aliasBinding!.resolvedExportId).toBe(originalSymbol!.id);
 
     // References to 'renamedFn' in the importer should resolve to the exported symbol
-    const refs = index.getReferencesInFile(aliasImporter);
+    const refs = index.referencesInFileGet(aliasImporter);
     const renamedRefs = refs.filter(r => r.name === 'renamedFn');
     expect(renamedRefs.length).toBeGreaterThan(0);
   });
@@ -292,7 +292,7 @@ const result = publicApi();
     });
 
     // The export map should contain 'publicApi' (the alias), not 'internalFn'
-    const exports = index.getFileExports(aliasExportSource);
+    const exports = index.fileExportsGet(aliasExportSource);
     const aliasedExport = exports.find(e => e.exportedName === 'publicApi');
     expect(aliasedExport).toBeDefined();
     expect(aliasedExport!.symbolId).toBeDefined();
@@ -302,7 +302,7 @@ const result = publicApi();
     expect(internalExport).toBeUndefined();
 
     // The consumer should resolve the import to the correct symbol
-    const bindings = index.getImportBindings(aliasExportConsumer);
+    const bindings = index.importBindingsGet(aliasExportConsumer);
     const publicApiBinding = bindings.find(b => b.importedName === 'publicApi');
     expect(publicApiBinding).toBeDefined();
     expect(publicApiBinding!.resolvedModulePath).toBe(aliasExportSource);
@@ -336,11 +336,11 @@ const val = innerFn();
     expect(stats.errors).toHaveLength(0);
 
     // The origin file should have the exported symbol
-    const originExports = index.getExportedSymbols({ file: reexportOrigin });
+    const originExports = index.exportedSymbolsGet({ file: reexportOrigin });
     expect(originExports.find(s => s.name === 'innerFn')).toBeDefined();
 
     // The consumer should have an import binding for 'innerFn'
-    const consumerBindings = index.getImportBindings(reexportConsumer);
+    const consumerBindings = index.importBindingsGet(reexportConsumer);
     const innerBinding = consumerBindings.find(b => b.importedName === 'innerFn');
     expect(innerBinding).toBeDefined();
     expect(innerBinding!.moduleSpec).toBe('./reexport_proxy');
@@ -370,20 +370,20 @@ const val = innerFn();
       dir: testDir,
     });
 
-    // Proxy should surface re-exported symbols in getFileExports
-    const proxyExports = index.getFileExports(reProxy);
+    // Proxy should surface re-exported symbols in fileExportsGet
+    const proxyExports = index.fileExportsGet(reProxy);
     const innerExport = proxyExports.find(e => e.exportedName === 'innerFn');
     expect(innerExport).toBeDefined();
 
     // Consumer binding should resolve through the proxy to the origin
-    const consumerBindings = index.getImportBindings(reConsumer);
+    const consumerBindings = index.importBindingsGet(reConsumer);
     const innerBinding = consumerBindings.find(b => b.importedName === 'innerFn');
     expect(innerBinding).toBeDefined();
     expect(innerBinding!.resolvedModulePath).toBe(reProxy);
     expect(innerBinding!.resolvedExportId).toBeDefined();
 
     // The resolvedExportId should ultimately trace back to the origin symbol
-    const originExports = index.getExportedSymbols({ file: reOrigin });
+    const originExports = index.exportedSymbolsGet({ file: reOrigin });
     const originSym = originExports.find(s => s.name === 'innerFn');
     expect(originSym).toBeDefined();
   });
@@ -416,14 +416,14 @@ const useA = fromA();
     expect(stats.errors).toHaveLength(0);
 
     // Both files should have their exports indexed
-    const exportsA = index.getExportedSymbols({ file: circA });
-    const exportsB = index.getExportedSymbols({ file: circB });
+    const exportsA = index.exportedSymbolsGet({ file: circA });
+    const exportsB = index.exportedSymbolsGet({ file: circB });
     expect(exportsA.find(s => s.name === 'fromA')).toBeDefined();
     expect(exportsB.find(s => s.name === 'fromB')).toBeDefined();
 
     // Import bindings should resolve in both directions
-    const bindingsA = index.getImportBindings(circA);
-    const bindingsB = index.getImportBindings(circB);
+    const bindingsA = index.importBindingsGet(circA);
+    const bindingsB = index.importBindingsGet(circB);
     const bBindingInA = bindingsA.find(b => b.importedName === 'fromB');
     const aBindingInB = bindingsB.find(b => b.importedName === 'fromA');
     expect(bBindingInA).toBeDefined();
@@ -468,14 +468,14 @@ const c = fromC();
     expect(stats.errors).toHaveLength(0);
 
     // D's 'shared' export should be referenced from both B and C
-    const dExports = index.getExportedSymbols({ file: diamondD });
+    const dExports = index.exportedSymbolsGet({ file: diamondD });
     const sharedSym = dExports.find(s => s.name === 'shared');
     expect(sharedSym).toBeDefined();
 
-    const sharedRefs = index.getReferences(sharedSym!.id);
+    const sharedRefs = index.referencesGet(sharedSym!.id);
     const refFiles = new Set(
       sharedRefs.map(ref => {
-        const scope = index.getScope(ref.scopeId);
+        const scope = index.scopeGet(ref.scopeId);
         return scope?.file;
       }).filter(Boolean)
     );
@@ -484,7 +484,7 @@ const c = fromC();
     expect(refFiles.has(diamondC)).toBe(true);
 
     // A's imports from B and C should resolve
-    const aBindings = index.getImportBindings(diamondA);
+    const aBindings = index.importBindingsGet(diamondA);
     const fromBBinding = aBindings.find(b => b.importedName === 'fromB');
     const fromCBinding = aBindings.find(b => b.importedName === 'fromC');
     expect(fromBBinding).toBeDefined();
@@ -522,13 +522,13 @@ const b = starConst;
     expect(stats.errors).toHaveLength(0);
 
     // The proxy file should have a wildcard export entry
-    const proxyExports = index.getFileExports(starProxy);
+    const proxyExports = index.fileExportsGet(starProxy);
     const wildcardExport = proxyExports.find(e => e.exportedName === '*');
     expect(wildcardExport).toBeDefined();
     expect(wildcardExport!.sourceModule).toBe('./star_origin');
 
     // Consumer should have import bindings referencing the proxy
-    const consumerBindings = index.getImportBindings(starConsumer);
+    const consumerBindings = index.importBindingsGet(starConsumer);
     expect(consumerBindings).toHaveLength(2);
 
     const starFnBinding = consumerBindings.find(b => b.importedName === 'starFn');
@@ -565,21 +565,21 @@ const b = starConst;
     });
 
     // Consumer bindings should resolve through the star-export proxy
-    const consumerBindings = index.getImportBindings(starDest);
+    const consumerBindings = index.importBindingsGet(starDest);
     const starFnBinding = consumerBindings.find(b => b.importedName === 'starFn');
     expect(starFnBinding).toBeDefined();
     expect(starFnBinding!.resolvedModulePath).toBe(starMid);
     expect(starFnBinding!.resolvedExportId).toBeDefined();
 
     // The origin symbol should be reachable
-    const originExports = index.getExportedSymbols({ file: starSrc });
+    const originExports = index.exportedSymbolsGet({ file: starSrc });
     const originFn = originExports.find(s => s.name === 'starFn');
     expect(originFn).toBeDefined();
 
     // References to the origin symbol should include the consumer file
-    const refs = index.getReferences(originFn!.id);
+    const refs = index.referencesGet(originFn!.id);
     const externalRefs = refs.filter(ref => {
-      const scope = index.getScope(ref.scopeId);
+      const scope = index.scopeGet(ref.scopeId);
       return scope && scope.file === starDest;
     });
     expect(externalRefs.length).toBeGreaterThan(0);
@@ -602,7 +602,7 @@ const x = ghost();
     expect(stats.filesIndexed).toBe(1);
 
     // Import binding exists but cannot be resolved
-    const bindings = index.getImportBindings(missingImporter);
+    const bindings = index.importBindingsGet(missingImporter);
     const ghostBinding = bindings.find(b => b.importedName === 'ghost');
     expect(ghostBinding).toBeDefined();
     // Module path should be undefined since the target doesn't exist
@@ -622,7 +622,7 @@ const x = ghost();
     expect(stats.filesIndexed).toBe(1);
     expect(stats.errors).toHaveLength(0);
 
-    const symbols = index.getSymbolsInFile(emptyFile);
+    const symbols = index.symbolsInFileGet(emptyFile);
     expect(symbols).toHaveLength(0);
   });
 
@@ -678,14 +678,14 @@ const b = utils.beta();
     });
 
     // Verify the proxy file captured the namespace re-export relation
-    const proxyExports = index.getFileExports(proxyFile);
+    const proxyExports = index.fileExportsGet(proxyFile);
     const nsExport = proxyExports.find(e => e.exportedName === 'utils');
     expect(nsExport).toBeDefined();
     expect(nsExport!.sourceModule).toBe('./nsre_origin');
     expect(nsExport!.sourceName).toBe('*');
 
     // The consumer's import binding for 'utils' should be treated as a namespace
-    const bindings = index.getImportBindings(consumerFile);
+    const bindings = index.importBindingsGet(consumerFile);
     const utilsBinding = bindings.find(b => b.importedName === 'utils');
     expect(utilsBinding).toBeDefined();
     // Should be resolved as a namespace pointing to origin module
@@ -693,7 +693,7 @@ const b = utils.beta();
     expect(utilsBinding!.resolvedModulePath).toBe(originFile);
 
     // Member accesses (utils.alpha, utils.beta) should resolve to origin's symbols
-    const refs = index.getReferencesInFile(consumerFile);
+    const refs = index.referencesInFileGet(consumerFile);
     const alphaRef = refs.find(r => r.name === 'utils.alpha');
     const betaRef = refs.find(r => r.name === 'utils.beta');
 
@@ -702,14 +702,14 @@ const b = utils.beta();
 
     // The resolved symbol IDs should point to origin's exported symbols
     if (alphaRef?.resolvedSymbolId) {
-      const alphaSym = index.getSymbol(alphaRef.resolvedSymbolId);
+      const alphaSym = index.symbolGet(alphaRef.resolvedSymbolId);
       expect(alphaSym).toBeDefined();
       expect(alphaSym!.name).toBe('alpha');
       expect(alphaSym!.file).toBe(originFile);
     }
 
     if (betaRef?.resolvedSymbolId) {
-      const betaSym = index.getSymbol(betaRef.resolvedSymbolId);
+      const betaSym = index.symbolGet(betaRef.resolvedSymbolId);
       expect(betaSym).toBeDefined();
       expect(betaSym!.name).toBe('beta');
       expect(betaSym!.file).toBe(originFile);
@@ -748,7 +748,7 @@ const val = lib.deepFn();
     });
 
     // The app's import binding for 'lib' should be a namespace
-    const bindings = index.getImportBindings(appFile);
+    const bindings = index.importBindingsGet(appFile);
     const libBinding = bindings.find(b => b.importedName === 'lib');
     expect(libBinding).toBeDefined();
     expect(libBinding!.isNamespace).toBe(true);
@@ -756,12 +756,12 @@ const val = lib.deepFn();
     expect(libBinding!.resolvedModulePath).toBe(midFile);
 
     // lib.deepFn should resolve through mid's star export to deep's symbol
-    const refs = index.getReferencesInFile(appFile);
+    const refs = index.referencesInFileGet(appFile);
     const deepFnRef = refs.find(r => r.name === 'lib.deepFn');
     expect(deepFnRef).toBeDefined();
 
     if (deepFnRef?.resolvedSymbolId) {
-      const sym = index.getSymbol(deepFnRef.resolvedSymbolId);
+      const sym = index.symbolGet(deepFnRef.resolvedSymbolId);
       expect(sym).toBeDefined();
       expect(sym!.name).toBe('deepFn');
       expect(sym!.file).toBe(deepFile);

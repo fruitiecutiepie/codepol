@@ -50,14 +50,14 @@ const result = middle();
     });
 
     // Forward edges (importees)
-    expect(index.getModuleImportees(fileA)).toEqual([fileB]);
-    expect(index.getModuleImportees(fileB)).toEqual([fileC]);
-    expect(index.getModuleImportees(fileC)).toEqual([]);
+    expect(index.moduleImporteesGet(fileA)).toEqual([fileB]);
+    expect(index.moduleImporteesGet(fileB)).toEqual([fileC]);
+    expect(index.moduleImporteesGet(fileC)).toEqual([]);
 
     // Reverse edges (importers)
-    expect(index.getModuleImporters(fileA)).toEqual([]);
-    expect(index.getModuleImporters(fileB)).toEqual([fileA]);
-    expect(index.getModuleImporters(fileC)).toEqual([fileB]);
+    expect(index.moduleImportersGet(fileA)).toEqual([]);
+    expect(index.moduleImportersGet(fileB)).toEqual([fileA]);
+    expect(index.moduleImportersGet(fileC)).toEqual([fileB]);
   });
 
   it('should produce correct dependency order for a linear chain', () => {
@@ -83,7 +83,7 @@ const result = middle();
       dir: testDir,
     });
 
-    const order = index.getModuleDependencyOrder();
+    const order = index.moduleDependencyOrderGet();
     expect(order).toHaveLength(3);
 
     // C has no deps -> comes before B -> comes before A
@@ -117,7 +117,7 @@ const result = middle();
       dir: testDir,
     });
 
-    expect(index.getModuleCycles()).toEqual([]);
+    expect(index.moduleCyclesGet()).toEqual([]);
   });
 
   // ==========================================================================
@@ -143,15 +143,15 @@ export function betaFn() { return 'beta'; }
       dir: testDir,
     });
 
-    const cycles = index.getModuleCycles();
+    const cycles = index.moduleCyclesGet();
     expect(cycles).toHaveLength(1);
     expect(cycles[0]).toHaveLength(2);
     expect(cycles[0]).toContain(circA);
     expect(cycles[0]).toContain(circB);
 
     // Both files import each other
-    expect(index.getModuleImportees(circA)).toContain(circB);
-    expect(index.getModuleImportees(circB)).toContain(circA);
+    expect(index.moduleImporteesGet(circA)).toContain(circB);
+    expect(index.moduleImporteesGet(circB)).toContain(circA);
   });
 
   // ==========================================================================
@@ -189,22 +189,22 @@ const result = branchB() + branchC();
     });
 
     // No cycles in a diamond
-    expect(index.getModuleCycles()).toEqual([]);
+    expect(index.moduleCyclesGet()).toEqual([]);
 
     // A imports B and C
-    const aImportees = index.getModuleImportees(fileA);
+    const aImportees = index.moduleImporteesGet(fileA);
     expect(aImportees).toContain(fileB);
     expect(aImportees).toContain(fileCC);
     expect(aImportees).toHaveLength(2);
 
     // D is imported by both B and C
-    const dImporters = index.getModuleImporters(fileD);
+    const dImporters = index.moduleImportersGet(fileD);
     expect(dImporters).toContain(fileB);
     expect(dImporters).toContain(fileCC);
     expect(dImporters).toHaveLength(2);
 
     // Dependency order: D before B and C, B and C before A
-    const order = index.getModuleDependencyOrder();
+    const order = index.moduleDependencyOrderGet();
     const idxA = order.indexOf(fileA);
     const idxB = order.indexOf(fileB);
     const idxC = order.indexOf(fileCC);
@@ -237,17 +237,17 @@ export function pub() { return 'pub'; }
     });
 
     // Isolated file appears in dependency order
-    const order = index.getModuleDependencyOrder();
+    const order = index.moduleDependencyOrderGet();
     expect(order).toContain(isolated);
     expect(order).toContain(connected);
     expect(order).toHaveLength(2);
 
     // No importers or importees
-    expect(index.getModuleImporters(isolated)).toEqual([]);
-    expect(index.getModuleImportees(isolated)).toEqual([]);
+    expect(index.moduleImportersGet(isolated)).toEqual([]);
+    expect(index.moduleImporteesGet(isolated)).toEqual([]);
 
     // No cycles
-    expect(index.getModuleCycles()).toEqual([]);
+    expect(index.moduleCyclesGet()).toEqual([]);
   });
 
   // ==========================================================================
@@ -274,11 +274,11 @@ export function localHelper() { return 'local'; }
     });
 
     // External packages should not appear as importees
-    const importees = index.getModuleImportees(fileWithExternal);
+    const importees = index.moduleImporteesGet(fileWithExternal);
     expect(importees).toEqual([]); // No local imports
 
     // No cycles
-    expect(index.getModuleCycles()).toEqual([]);
+    expect(index.moduleCyclesGet()).toEqual([]);
   });
 
   // ==========================================================================
@@ -295,8 +295,8 @@ export function localHelper() { return 'local'; }
     });
 
     const unknownFile = '/nonexistent/path.ts';
-    expect(index.getModuleImporters(unknownFile)).toEqual([]);
-    expect(index.getModuleImportees(unknownFile)).toEqual([]);
+    expect(index.moduleImportersGet(unknownFile)).toEqual([]);
+    expect(index.moduleImporteesGet(unknownFile)).toEqual([]);
   });
 
   // ==========================================================================
@@ -323,8 +323,8 @@ const result = fnA() + fnB() + fnC();
     });
 
     // Only one edge despite 3 imports from the same file
-    expect(index.getModuleImportees(multiConsumer)).toEqual([multi]);
-    expect(index.getModuleImporters(multi)).toEqual([multiConsumer]);
+    expect(index.moduleImporteesGet(multiConsumer)).toEqual([multi]);
+    expect(index.moduleImportersGet(multi)).toEqual([multiConsumer]);
   });
 
   // ==========================================================================
@@ -352,7 +352,7 @@ const result = middle();
       dir: testDir,
     });
 
-    const entryPoints = index.getModuleEntryPoints();
+    const entryPoints = index.moduleEntryPointsGet();
     // Only A is an entry point (nothing imports A)
     expect(entryPoints).toEqual([epA]);
   });
@@ -385,7 +385,7 @@ const result = branchB() + branchC();
       dir: testDir,
     });
 
-    const entryPoints = index.getModuleEntryPoints();
+    const entryPoints = index.moduleEntryPointsGet();
     // Only A is an entry point
     expect(entryPoints).toEqual([epA]);
   });
@@ -402,7 +402,7 @@ const result = branchB() + branchC();
       dir: testDir,
     });
 
-    const entryPoints = index.getModuleEntryPoints();
+    const entryPoints = index.moduleEntryPointsGet();
     // Both files are entry points (neither is imported by the other)
     expect(entryPoints).toHaveLength(2);
     expect(entryPoints).toContain(epIso);
@@ -428,7 +428,7 @@ export function betaFn() { return 'beta'; }
       dir: testDir,
     });
 
-    const entryPoints = index.getModuleEntryPoints();
+    const entryPoints = index.moduleEntryPointsGet();
     // Neither file is an entry point (both have importers)
     expect(entryPoints).toEqual([]);
   });
@@ -449,7 +449,7 @@ export function consumer() { return path.join('a', 'b'); }
       dir: testDir,
     });
 
-    const entryPoints = index.getModuleEntryPoints();
+    const entryPoints = index.moduleEntryPointsGet();
     // Both files are entry points (external imports don't count as importers)
     expect(entryPoints).toHaveLength(2);
     expect(entryPoints).toContain(epExtOnly);

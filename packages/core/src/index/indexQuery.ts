@@ -45,23 +45,23 @@ export type ProjectIndex = {
    * Get all symbols matching the filter.
    * Returns empty array if no matches.
    */
-  getSymbols(filter?: SymbolFilter): SymbolRecord[];
+  symbolsGet(filter?: SymbolFilter): SymbolRecord[];
 
   /**
    * Get a symbol by its stable ID.
    * Returns undefined if not found.
    */
-  getSymbol(id: SymbolId): SymbolRecord | undefined;
+  symbolGet(id: SymbolId): SymbolRecord | undefined;
 
   /**
    * Get all symbols in a file.
    */
-  getSymbolsInFile(file: string): SymbolRecord[];
+  symbolsInFileGet(file: string): SymbolRecord[];
 
   /**
    * Get all symbols with a specific name (across all files).
    */
-  getSymbolsByName(name: string): SymbolRecord[];
+  symbolsGetByName(name: string): SymbolRecord[];
 
   // ============================================================================
   // Reference Queries
@@ -71,12 +71,12 @@ export type ProjectIndex = {
    * Get all references to a symbol.
    * Returns empty array if symbol has no references.
    */
-  getReferences(symbolId: SymbolId): ReferencesRelation[];
+  referencesGet(symbolId: SymbolId): ReferencesRelation[];
 
   /**
    * Get all references in a file.
    */
-  getReferencesInFile(file: string): ReferencesRelation[];
+  referencesInFileGet(file: string): ReferencesRelation[];
 
   // ============================================================================
   // Call Graph Queries (heuristic)
@@ -86,13 +86,13 @@ export type ProjectIndex = {
    * Get symbols that call a given symbol.
    * Based on heuristic call detection; may have false positives/negatives.
    */
-  getCallers(symbolId: SymbolId): SymbolId[];
+  callersGet(symbolId: SymbolId): SymbolId[];
 
   /**
    * Get symbols called by a given symbol (function/method).
    * Based on heuristic call detection; may have false positives/negatives.
    */
-  getCallees(symbolId: SymbolId): SymbolId[];
+  calleesGet(symbolId: SymbolId): SymbolId[];
 
   // ============================================================================
   // Scope Queries
@@ -101,17 +101,17 @@ export type ProjectIndex = {
   /**
    * Get a scope by its stable ID.
    */
-  getScope(id: ScopeId): ScopeRecord | undefined;
+  scopeGet(id: ScopeId): ScopeRecord | undefined;
 
   /**
    * Get all scopes in a file.
    */
-  getScopesInFile(file: string): ScopeRecord[];
+  scopesInFileGet(file: string): ScopeRecord[];
 
   /**
    * Get all symbols defined in a scope.
    */
-  getSymbolsInScope(scopeId: ScopeId): SymbolRecord[];
+  symbolsInScopeGet(scopeId: ScopeId): SymbolRecord[];
 
   // ============================================================================
   // Import/Export Queries
@@ -120,40 +120,40 @@ export type ProjectIndex = {
   /**
    * Get all imports in a file.
    */
-  getImports(file: string): ImportsRelation[];
+  importsGet(file: string): ImportsRelation[];
 
   /**
    * Get all import bindings in a file.
    * Import bindings contain detailed information about each imported name.
    */
-  getImportBindings(file: string): ImportBindingRelation[];
+  importBindingsGet(file: string): ImportBindingRelation[];
 
   /**
    * Get the import binding for a symbol (if it was imported).
    */
-  getImportBindingForSymbol(symbolId: SymbolId): ImportBindingRelation | undefined;
+  importBindingGetForSymbol(symbolId: SymbolId): ImportBindingRelation | undefined;
 
   /**
    * Get all symbols that are exported (have Exported flag).
    */
-  getExportedSymbols(filter?: { file?: string; name?: string }): SymbolRecord[];
+  exportedSymbolsGet(filter?: { file?: string; name?: string }): SymbolRecord[];
 
   /**
    * Get symbols that export a given name.
    * Useful for resolving imports across files.
    */
-  getExporters(symbolName: string): SymbolRecord[];
+  exportersGet(symbolName: string): SymbolRecord[];
 
   /**
    * Get all exports from a file.
    */
-  getFileExports(file: string): ExportsRelation[];
+  fileExportsGet(file: string): ExportsRelation[];
 
   /**
    * Find where a symbol is exported from.
    * Returns the files and exported names for this symbol.
    */
-  getExportLocations(symbolId: SymbolId): { file: string; exportedName: string }[];
+  exportLocationsGet(symbolId: SymbolId): { file: string; exportedName: string }[];
 
   /**
    * Resolve an import to its target symbol.
@@ -164,7 +164,7 @@ export type ProjectIndex = {
    * @param name - The imported name (or 'default' for default imports)
    * @returns The resolved symbol ID, or undefined if not resolved
    */
-  resolveImport(fromFile: string, specifier: string, name: string): SymbolId | undefined;
+  importResolve(fromFile: string, specifier: string, name: string): SymbolId | undefined;
 
   // ============================================================================
   // Type Relation Queries
@@ -174,19 +174,19 @@ export type ProjectIndex = {
    * Get type relations for a symbol (what it extends/implements).
    * Returns empty array if symbol has no type relations.
    */
-  getTypeRelations(symbolId: SymbolId): TypeRelation[];
+  typeRelationsGet(symbolId: SymbolId): TypeRelation[];
 
   /**
    * Get symbols that extend/implement a given symbol (reverse lookup).
    * Uses the symbol's name to find children, then filters by resolvedTargetId
    * when available for precision.
    */
-  getSubTypes(symbolId: SymbolId): TypeRelation[];
+  subTypesGet(symbolId: SymbolId): TypeRelation[];
 
   /**
    * Get all type relations in a file.
    */
-  getTypeRelationsInFile(file: string): TypeRelation[];
+  typeRelationsInFileGet(file: string): TypeRelation[];
 
   // ============================================================================
   // Module Graph Queries
@@ -196,33 +196,33 @@ export type ProjectIndex = {
    * Get files that import the given file (reverse dependency edges).
    * Only includes indexed files; external packages are excluded.
    */
-  getModuleImporters(file: string): string[];
+  moduleImportersGet(file: string): string[];
 
   /**
    * Get files that the given file imports (forward dependency edges).
    * Only includes indexed files; external packages are excluded.
    */
-  getModuleImportees(file: string): string[];
+  moduleImporteesGet(file: string): string[];
 
   /**
    * Get all indexed files in dependency order (topological sort).
    * Files with no dependencies come first; dependents come after their dependencies.
    * Files in cycles are included with arbitrary intra-cycle ordering.
    */
-  getModuleDependencyOrder(): string[];
+  moduleDependencyOrderGet(): string[];
 
   /**
    * Get all circular dependency cycles.
    * Each cycle is an array of file paths. Returns empty array if no cycles exist.
    */
-  getModuleCycles(): string[][];
+  moduleCyclesGet(): string[][];
 
   /**
    * Get all entry point files (files with no importers within the indexed set).
    * These are root files that nothing else depends on.
    * Sorted alphabetically for determinism.
    */
-  getModuleEntryPoints(): string[];
+  moduleEntryPointsGet(): string[];
 
   // ============================================================================
   // Metadata
@@ -237,7 +237,7 @@ export type ProjectIndex = {
   /**
    * Get statistics about the index.
    */
-  getStats(): {
+  statsGet(): {
     files: number;
     symbols: number;
     scopes: number;
@@ -262,33 +262,33 @@ export function projectIndexCreate(
 
   return {
     // Symbol queries
-    getSymbols(filter?: SymbolFilter): SymbolRecord[] {
+    symbolsGet(filter?: SymbolFilter): SymbolRecord[] {
       return store.symbolsGet(filter);
     },
 
-    getSymbol(id: SymbolId): SymbolRecord | undefined {
+    symbolGet(id: SymbolId): SymbolRecord | undefined {
       return store.symbolGet(id);
     },
 
-    getSymbolsInFile(file: string): SymbolRecord[] {
+    symbolsInFileGet(file: string): SymbolRecord[] {
       return store.symbolsGet({ file });
     },
 
-    getSymbolsByName(name: string): SymbolRecord[] {
+    symbolsGetByName(name: string): SymbolRecord[] {
       return store.symbolsGet({ name });
     },
 
     // Reference queries
-    getReferences(symbolId: SymbolId): ReferencesRelation[] {
+    referencesGet(symbolId: SymbolId): ReferencesRelation[] {
       return store.referencesGet(symbolId);
     },
 
-    getReferencesInFile(file: string): ReferencesRelation[] {
+    referencesInFileGet(file: string): ReferencesRelation[] {
       return store.referencesInFileGet(file);
     },
 
     // Call graph queries
-    getCallers(symbolId: SymbolId): SymbolId[] {
+    callersGet(symbolId: SymbolId): SymbolId[] {
       // Find all Calls relations that resolved to this symbol
       const calls = store.callsGet();
       const callerScopes = new Set<ScopeId>();
@@ -338,7 +338,7 @@ export function projectIndexCreate(
       return [...new Set(callers)];
     },
 
-    getCallees(symbolId: SymbolId): SymbolId[] {
+    calleesGet(symbolId: SymbolId): SymbolId[] {
       const symbol = store.symbolGet(symbolId);
       if (!symbol) return [];
 
@@ -376,48 +376,48 @@ export function projectIndexCreate(
     },
 
     // Scope queries
-    getScope(id: ScopeId): ScopeRecord | undefined {
+    scopeGet(id: ScopeId): ScopeRecord | undefined {
       return store.scopeGet(id);
     },
 
-    getScopesInFile(file: string): ScopeRecord[] {
+    scopesInFileGet(file: string): ScopeRecord[] {
       return store.scopesInFileGet(file);
     },
 
-    getSymbolsInScope(scopeId: ScopeId): SymbolRecord[] {
+    symbolsInScopeGet(scopeId: ScopeId): SymbolRecord[] {
       return store.symbolsInScopeGet(scopeId);
     },
 
     // Import/export queries
-    getImports(file: string): ImportsRelation[] {
+    importsGet(file: string): ImportsRelation[] {
       return store.importsInFileGet(file);
     },
 
-    getImportBindings(file: string): ImportBindingRelation[] {
+    importBindingsGet(file: string): ImportBindingRelation[] {
       return store.importBindingsInFileGet(file);
     },
 
-    getImportBindingForSymbol(symbolId: SymbolId): ImportBindingRelation | undefined {
+    importBindingGetForSymbol(symbolId: SymbolId): ImportBindingRelation | undefined {
       return store.importBindingForSymbolGet(symbolId);
     },
 
-    getExportedSymbols(filter?: { file?: string; name?: string }): SymbolRecord[] {
+    exportedSymbolsGet(filter?: { file?: string; name?: string }): SymbolRecord[] {
       const symbols = store.symbolsGet(filter);
       // SymbolFlags.Exported = 1
       return symbols.filter(s => (s.flags & 1) !== 0);
     },
 
-    getExporters(symbolName: string): SymbolRecord[] {
+    exportersGet(symbolName: string): SymbolRecord[] {
       const symbols = store.symbolsGet({ name: symbolName });
       // SymbolFlags.Exported = 1
       return symbols.filter(s => (s.flags & 1) !== 0);
     },
 
-    getFileExports(file: string): ExportsRelation[] {
+    fileExportsGet(file: string): ExportsRelation[] {
       return store.exportsInFileGet(file);
     },
 
-    getExportLocations(symbolId: SymbolId): { file: string; exportedName: string }[] {
+    exportLocationsGet(symbolId: SymbolId): { file: string; exportedName: string }[] {
       const results: { file: string; exportedName: string }[] = [];
       const exports = store.exportsGet();
       
@@ -437,7 +437,7 @@ export function projectIndexCreate(
       return results;
     },
 
-    resolveImport(fromFile: string, specifier: string, name: string): SymbolId | undefined {
+    importResolve(fromFile: string, specifier: string, name: string): SymbolId | undefined {
       const bindings = store.importBindingsInFileGet(fromFile);
       
       for (const binding of bindings) {
@@ -456,11 +456,11 @@ export function projectIndexCreate(
     },
 
     // Type relation queries
-    getTypeRelations(symbolId: SymbolId): TypeRelation[] {
+    typeRelationsGet(symbolId: SymbolId): TypeRelation[] {
       return store.typeRelationsForSymbolGet(symbolId);
     },
 
-    getSubTypes(symbolId: SymbolId): TypeRelation[] {
+    subTypesGet(symbolId: SymbolId): TypeRelation[] {
       const symbol = store.symbolGet(symbolId);
       if (!symbol) return [];
 
@@ -473,32 +473,32 @@ export function projectIndexCreate(
       );
     },
 
-    getTypeRelationsInFile(file: string): TypeRelation[] {
+    typeRelationsInFileGet(file: string): TypeRelation[] {
       return store.typeRelationsInFileGet(file);
     },
 
     // Module graph queries (lazily built, cached)
-    getModuleImporters(file: string): string[] {
+    moduleImportersGet(file: string): string[] {
       if (!graph) graph = moduleGraphBuild(store);
       return graph.moduleGraphImportersGet(file);
     },
 
-    getModuleImportees(file: string): string[] {
+    moduleImporteesGet(file: string): string[] {
       if (!graph) graph = moduleGraphBuild(store);
       return graph.moduleGraphImporteesGet(file);
     },
 
-    getModuleDependencyOrder(): string[] {
+    moduleDependencyOrderGet(): string[] {
       if (!graph) graph = moduleGraphBuild(store);
       return graph.moduleGraphDependencyOrderGet();
     },
 
-    getModuleCycles(): string[][] {
+    moduleCyclesGet(): string[][] {
       if (!graph) graph = moduleGraphBuild(store);
       return graph.moduleGraphCyclesGet();
     },
 
-    getModuleEntryPoints(): string[] {
+    moduleEntryPointsGet(): string[] {
       if (!graph) graph = moduleGraphBuild(store);
       return graph.moduleGraphEntryPointsGet();
     },
@@ -506,7 +506,7 @@ export function projectIndexCreate(
     // Metadata
     capabilities,
 
-    getStats() {
+    statsGet() {
       return store.statsGet();
     },
   };

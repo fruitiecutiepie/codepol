@@ -45,7 +45,7 @@ Core infrastructure complete, but TypeScript queries simplified for compatibilit
 - [x] `ExportsRelation` type with all fields (`symbolId`, `exportedName`, `isDefault`, `sourceModule`, `sourceName`)
 - [x] `IndexStore` indexes (`exportsByFile`, `exportsByName`, `exportMapBuild()`)
 - [x] `exportsExtract()` function in `adapterCore.ts`
-- [x] `ProjectIndex` API (`getFileExports()`, `getExportLocations()`)
+- [x] `ProjectIndex` API (`fileExportsGet()`, `exportLocationsGet()`)
 - [x] Basic export declarations (`export const/function/class`)
 - [x] Named exports (`export { foo }`)
 - [x] Default exports (`export default foo`)
@@ -84,7 +84,7 @@ Module-level dependency graph built from import relations in `packages/core/src/
 - [x] Circular dependency detection (`moduleGraphCyclesGet()`) — Tarjan's SCC algorithm
 - [x] Entry point detection (`moduleGraphEntryPointsGet()`) — files with no importers in the indexed set, sorted alphabetically
 
-Exposed on `ProjectIndex` as `getModuleImporters()`, `getModuleImportees()`, `getModuleDependencyOrder()`, `getModuleCycles()`, `getModuleEntryPoints()`. Graph is lazily built and cached.
+Exposed on `ProjectIndex` as `moduleImportersGet()`, `moduleImporteesGet()`, `moduleDependencyOrderGet()`, `moduleCyclesGet()`, `moduleEntryPointsGet()`. Graph is lazily built and cached.
 
 Integration tests in `tests/index.module-graph.spec.ts`: linear chain, circular imports, diamond dependencies, isolated files, external package filtering, unknown files, multi-import deduplication, entry point detection (linear chain root, diamond root, isolated files, circular imports, external-only imports).
 
@@ -123,7 +123,7 @@ Implemented in the full stack:
 - [x] Tree-sitter query (`typeRelations.ts`) — patterns for class extends, class implements, abstract class extends/implements, interface extends
 - [x] `typeRelationsExtract()` in `adapterCore.ts` — extracts type relations from query captures, resolves file-local targets
 - [x] `IndexStore` indexes — `typeRelationsBySymbol`, `typeRelationsByTargetName`, `typeRelationsByFile` with query methods and proper cleanup in `filePut`/`fileRemove`/`clear`
-- [x] `ProjectIndex` API — `getTypeRelations(symbolId)`, `getSubTypes(symbolId)`, `getTypeRelationsInFile(file)`
+- [x] `ProjectIndex` API — `typeRelationsGet(symbolId)`, `subTypesGet(symbolId)`, `typeRelationsInFileGet(file)`
 - [x] Unit tests (5 IndexStore + 3 ProjectIndex) and integration tests (11 in `tests/index.type-relations.spec.ts`)
 
 **What's remaining**:
@@ -206,7 +206,7 @@ These are intentional constraints, not bugs:
 - [x] Integration tests for cross-file scenarios (`tests/index.cross-file-resolution.spec.ts`)
 - [x] Performance benchmarks for large codebases (`packages/core/src/index/indexBuilder.bench.ts`, `indexQuery.bench.ts`, `packages/plugin/src/unusedExportsCheck.bench.ts`)
 - [x] Edge case coverage (circular imports, re-exports, star exports, diamond deps, missing files, namespace imports)
-- [x] `getCallers`/`getCallees` via ProjectIndex API (`tests/index.builder.spec.ts`)
+- [x] `callersGet`/`calleesGet` via ProjectIndex API (`tests/index.builder.spec.ts`)
 - [x] Import aliases (`import { foo as bar }`) — tested in `tests/index.cross-file-resolution.spec.ts`
 - [x] Export aliases (`export { foo as bar }`) — tested in `tests/index.cross-file-resolution.spec.ts`
 - [x] Module graph queries — tested in `tests/index.module-graph.spec.ts` (linear chain, circular, diamond, isolated, external packages)

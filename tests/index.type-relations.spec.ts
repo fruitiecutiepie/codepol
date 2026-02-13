@@ -44,18 +44,18 @@ class Dog extends Animal {
       dir: testDir,
     });
 
-    const dogSymbols = index.getSymbolsByName('Dog');
+    const dogSymbols = index.symbolsGetByName('Dog');
     expect(dogSymbols).toHaveLength(1);
     const dog = dogSymbols[0];
 
-    const rels = index.getTypeRelations(dog.id);
+    const rels = index.typeRelationsGet(dog.id);
     expect(rels).toHaveLength(1);
     expect(rels[0].targetName).toBe('Animal');
     expect(rels[0].relationKind).toBe('extends');
     expect(rels[0].resolvedTargetId).toBeDefined();
 
     // Verify the resolved target is the Animal symbol
-    const animalSymbols = index.getSymbolsByName('Animal');
+    const animalSymbols = index.symbolsGetByName('Animal');
     expect(animalSymbols).toHaveLength(1);
     expect(rels[0].resolvedTargetId).toBe(animalSymbols[0].id);
   });
@@ -81,17 +81,17 @@ class Car implements IMovable {
       dir: testDir,
     });
 
-    const carSymbols = index.getSymbolsByName('Car');
+    const carSymbols = index.symbolsGetByName('Car');
     expect(carSymbols).toHaveLength(1);
     const car = carSymbols[0];
 
-    const rels = index.getTypeRelations(car.id);
+    const rels = index.typeRelationsGet(car.id);
     expect(rels).toHaveLength(1);
     expect(rels[0].targetName).toBe('IMovable');
     expect(rels[0].relationKind).toBe('implements');
     expect(rels[0].resolvedTargetId).toBeDefined();
 
-    const ifaceSymbols = index.getSymbolsByName('IMovable');
+    const ifaceSymbols = index.symbolsGetByName('IMovable');
     expect(ifaceSymbols).toHaveLength(1);
     expect(rels[0].resolvedTargetId).toBe(ifaceSymbols[0].id);
   });
@@ -122,11 +122,11 @@ class Document implements ISerializable, ICloneable {
       dir: testDir,
     });
 
-    const docSymbols = index.getSymbolsByName('Document');
+    const docSymbols = index.symbolsGetByName('Document');
     expect(docSymbols).toHaveLength(1);
     const doc = docSymbols[0];
 
-    const rels = index.getTypeRelations(doc.id);
+    const rels = index.typeRelationsGet(doc.id);
     expect(rels).toHaveLength(2);
     expect(rels.every(r => r.relationKind === 'implements')).toBe(true);
     const targetNames = rels.map(r => r.targetName).sort();
@@ -154,17 +154,17 @@ interface IDog extends IAnimal {
       dir: testDir,
     });
 
-    const dogSymbols = index.getSymbolsByName('IDog');
+    const dogSymbols = index.symbolsGetByName('IDog');
     expect(dogSymbols).toHaveLength(1);
     const dog = dogSymbols[0];
 
-    const rels = index.getTypeRelations(dog.id);
+    const rels = index.typeRelationsGet(dog.id);
     expect(rels).toHaveLength(1);
     expect(rels[0].targetName).toBe('IAnimal');
     expect(rels[0].relationKind).toBe('extends');
     expect(rels[0].resolvedTargetId).toBeDefined();
 
-    const animalSymbols = index.getSymbolsByName('IAnimal');
+    const animalSymbols = index.symbolsGetByName('IAnimal');
     expect(animalSymbols).toHaveLength(1);
     expect(rels[0].resolvedTargetId).toBe(animalSymbols[0].id);
   });
@@ -194,11 +194,11 @@ abstract class AbstractWidget extends Shape implements IDrawable {
       dir: testDir,
     });
 
-    const widgetSymbols = index.getSymbolsByName('AbstractWidget');
+    const widgetSymbols = index.symbolsGetByName('AbstractWidget');
     expect(widgetSymbols).toHaveLength(1);
     const widget = widgetSymbols[0];
 
-    const rels = index.getTypeRelations(widget.id);
+    const rels = index.typeRelationsGet(widget.id);
     expect(rels).toHaveLength(2);
 
     const extendsRel = rels.find(r => r.relationKind === 'extends');
@@ -227,11 +227,11 @@ class TypedArray extends Array<string> {
       dir: testDir,
     });
 
-    const typedArraySymbols = index.getSymbolsByName('TypedArray');
+    const typedArraySymbols = index.symbolsGetByName('TypedArray');
     expect(typedArraySymbols).toHaveLength(1);
     const typedArray = typedArraySymbols[0];
 
-    const rels = index.getTypeRelations(typedArray.id);
+    const rels = index.typeRelationsGet(typedArray.id);
     expect(rels).toHaveLength(1);
     expect(rels[0].targetName).toBe('Array');
     expect(rels[0].relationKind).toBe('extends');
@@ -240,10 +240,10 @@ class TypedArray extends Array<string> {
   });
 
   // ==========================================================================
-  // getSubTypes — reverse lookup
+  // subTypesGet — reverse lookup
   // ==========================================================================
 
-  it('should find sub-types via getSubTypes', () => {
+  it('should find sub-types via subTypesGet', () => {
     const file = path.join(testDir, 'subtypes.ts');
     fs.writeFileSync(file, `
 class Vehicle {
@@ -264,14 +264,14 @@ class Sedan extends Vehicle {
       dir: testDir,
     });
 
-    const vehicleSymbols = index.getSymbolsByName('Vehicle');
+    const vehicleSymbols = index.symbolsGetByName('Vehicle');
     expect(vehicleSymbols).toHaveLength(1);
     const vehicle = vehicleSymbols[0];
 
-    const subs = index.getSubTypes(vehicle.id);
+    const subs = index.subTypesGet(vehicle.id);
     expect(subs).toHaveLength(2);
     const childNames = subs.map(r => {
-      const sym = index.getSymbol(r.symbolId);
+      const sym = index.symbolGet(r.symbolId);
       return sym?.name;
     }).sort();
     expect(childNames).toEqual(['Sedan', 'Truck']);
@@ -296,7 +296,7 @@ const x = standalone();
       dir: testDir,
     });
 
-    const rels = index.getTypeRelationsInFile(file);
+    const rels = index.typeRelationsInFileGet(file);
     expect(rels).toHaveLength(0);
   });
 
@@ -313,11 +313,11 @@ class PlainClass {
       dir: testDir,
     });
 
-    const plainSymbols = index.getSymbolsByName('PlainClass');
+    const plainSymbols = index.symbolsGetByName('PlainClass');
     expect(plainSymbols).toHaveLength(1);
     const plain = plainSymbols[0];
 
-    const rels = index.getTypeRelations(plain.id);
+    const rels = index.typeRelationsGet(plain.id);
     expect(rels).toHaveLength(0);
   });
 
@@ -351,11 +351,11 @@ class DerivedService extends BaseService {
       dir: testDir,
     });
 
-    const derivedSymbols = index.getSymbolsByName('DerivedService');
+    const derivedSymbols = index.symbolsGetByName('DerivedService');
     expect(derivedSymbols).toHaveLength(1);
     const derived = derivedSymbols[0];
 
-    const rels = index.getTypeRelations(derived.id);
+    const rels = index.typeRelationsGet(derived.id);
     expect(rels).toHaveLength(1);
     expect(rels[0].targetName).toBe('BaseService');
     expect(rels[0].relationKind).toBe('extends');
@@ -389,11 +389,11 @@ interface IStream extends IReadable, IWritable {
       dir: testDir,
     });
 
-    const streamSymbols = index.getSymbolsByName('IStream');
+    const streamSymbols = index.symbolsGetByName('IStream');
     expect(streamSymbols).toHaveLength(1);
     const stream = streamSymbols[0];
 
-    const rels = index.getTypeRelations(stream.id);
+    const rels = index.typeRelationsGet(stream.id);
     expect(rels).toHaveLength(2);
     expect(rels.every(r => r.relationKind === 'extends')).toBe(true);
     const targetNames = rels.map(r => r.targetName).sort();
