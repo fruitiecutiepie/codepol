@@ -233,10 +233,11 @@ function symbolsExtract(
     }
 
     const name = sliceText(source, nameNode.startIndex, nameNode.endIndex);
-    const declRange: ByteRange = { start: nameNode.startIndex, end: nameNode.endIndex };
-    declRanges.add(`${declRange.start}:${declRange.end}`);
+    // Name range: used for dedup and scope lookup (the identifier position)
+    const nameRange: ByteRange = { start: nameNode.startIndex, end: nameNode.endIndex };
+    declRanges.add(`${nameRange.start}:${nameRange.end}`);
 
-    const scopeId = findInnermostScope(scopes, declRange);
+    const scopeId = findInnermostScope(scopes, nameRange);
     const qualName = buildQualifiedName(scopes, scopeId, name);
     const id = symbolIdCreate(cfg.languageId, file, kind, qualName, nameNode.startIndex);
 
@@ -266,12 +267,17 @@ function symbolsExtract(
       }
     }
 
+    // Full declaration span for byteRange (enables caller/callee containment checks)
+    const symbolRange: ByteRange = declNode
+      ? { start: declNode.startIndex, end: declNode.endIndex }
+      : nameRange;
+
     symbols.push({
       id,
       kind,
       name,
       file,
-      byteRange: declRange,
+      byteRange: symbolRange,
       scopeId,
       qualName,
       flags,
@@ -363,6 +369,79 @@ function refsExtract(
       name,
       byteRange,
       resolvedSymbolId: resolved?.id,
+    });
+  }
+
+  return refs;
+}
+
+/**
+ * Extract member expression references (e.g., utils.alpha) as dotted references.
+ *
+ * These references are used during cross-file resolution to resolve namespace
+ * import member accesses (import * as X → X.foo) to the exported symbol.
+ *
+ * Creates a ReferencesRelation with name "obj.prop" where the resolvedSymbolId
+ * initially points to the local symbol for the object (the namespace binding).
+ */
+function memberRefsExtract(
+  cfg: LangConfig,
+  tree: Parser.Tree,
+  file: string,
+  source: Uint8Array,
+  scopes: ScopeRecord[],
+  symbols: SymbolRecord[],
+  declRanges: Set<string>
+): ReferencesRelation[] {
+  const refs: ReferencesRelation[] = [];
+
+  // Query for member expressions: obj.prop
+  const memberQuery = cfg.language.query(
+    `(member_expression
+       object: (identifier) @member.obj
+       property: (property_identifier) @member.prop)`
+  );
+  const matches = memberQuery.matches(tree.rootNode);
+
+  // Build name -> symbol map for local resolution of the object part
+  const symbolsByName = new Map<string, SymbolRecord[]>();
+  for (const sym of symbols) {
+    const existing = symbolsByName.get(sym.name) ?? [];
+    existing.push(sym);
+    symbolsByName.set(sym.name, existing);
+  }
+
+  for (const match of matches) {
+    const capturesByName = new Map<string, Parser.SyntaxNode>();
+    for (const capture of match.captures) {
+      capturesByName.set(capture.name, capture.node);
+    }
+
+    const objNode = capturesByName.get('member.obj');
+    const propNode = capturesByName.get('member.prop');
+    if (!objNode || !propNode) continue;
+
+    const objName = sliceText(source, objNode.startIndex, objNode.endIndex);
+    const propName = sliceText(source, propNode.startIndex, propNode.endIndex);
+
+    // Use the property identifier's range for the reference
+    const byteRange: ByteRange = { start: propNode.startIndex, end: propNode.endIndex };
+
+    // Skip if this falls on a declaration site
+    const rangeKey = `${byteRange.start}:${byteRange.end}`;
+    if (declRanges.has(rangeKey)) continue;
+
+    const scopeId = findInnermostScope(scopes, byteRange);
+
+    // Resolve the object to a local symbol (may be a namespace import)
+    const objResolved = resolveLocal(symbolsByName, objName, scopeId, scopes);
+
+    refs.push({
+      kind: 'References',
+      scopeId,
+      name: `${objName}.${propName}`,
+      byteRange,
+      resolvedSymbolId: objResolved?.id,
     });
   }
 
@@ -1012,6 +1091,10 @@ export function indexFileWithTreeSitter(
   // References
   const refs = refsExtract(cfg, tree, file, bytes, scopes, symbols, declRanges, diags);
   relations.push(...refs);
+
+  // Member expression references (e.g., utils.alpha for namespace import resolution)
+  const memberRefs = memberRefsExtract(cfg, tree, file, bytes, scopes, symbols, declRanges);
+  relations.push(...memberRefs);
 
   // Calls
   const calls = callsExtract(cfg, tree, file, bytes, scopes, symbols, diags);

@@ -660,8 +660,14 @@ function crossFileResolve(
       // Default import: look for 'default' export
       resolvedExportId = fileExports.get('default');
     } else if (binding.isNamespace) {
-      // Namespace import: we could create a synthetic symbol, but for now skip
-      // The namespace itself doesn't resolve to a single symbol
+      // Namespace import: doesn't resolve to a single symbol, but we still
+      // set resolvedModulePath so namespace member accesses can be resolved later
+      const updatedBinding: ImportBindingRelation = {
+        ...binding,
+        resolvedModulePath: resolvedPath,
+        // No resolvedExportId — namespace doesn't map to a single export
+      };
+      store.relationUpdate(binding, updatedBinding);
       continue;
     } else {
       // Named import: look for the specific exported name
@@ -701,6 +707,49 @@ function crossFileResolve(
           const updatedRef: ReferencesRelation = {
             ...ref,
             resolvedSymbolId: actualSymbolId,
+          };
+          store.relationUpdate(ref, updatedRef);
+        }
+      }
+    }
+  }
+
+  // Step 5: Resolve namespace import member accesses (e.g., utils.alpha)
+  // Build a map of namespace symbol IDs to their module's export map
+  const namespaceExports = new Map<string, Map<string, string>>();
+  for (const binding of store.importBindingsGet()) {
+    if (binding.isNamespace && binding.resolvedModulePath) {
+      const moduleExports = exportMap.get(binding.resolvedModulePath);
+      if (moduleExports) {
+        namespaceExports.set(binding.localSymbolId, moduleExports);
+      }
+    }
+  }
+
+  // For each file, check dotted references (e.g., "utils.alpha") and resolve
+  // them against the namespace's module exports
+  if (namespaceExports.size > 0) {
+    for (const file of indexedFiles) {
+      const refs = store.referencesInFileGet(file);
+
+      for (const ref of refs) {
+        // Dotted references were created by memberRefsExtract
+        if (!ref.name.includes('.')) continue;
+
+        const dotIdx = ref.name.indexOf('.');
+        const memberName = ref.name.slice(dotIdx + 1);
+
+        // The resolvedSymbolId should point to the namespace import symbol
+        if (!ref.resolvedSymbolId) continue;
+        const moduleExports = namespaceExports.get(ref.resolvedSymbolId);
+        if (!moduleExports) continue;
+
+        // Look up the member name in the namespace's module exports
+        const exportedSymbolId = moduleExports.get(memberName);
+        if (exportedSymbolId) {
+          const updatedRef: ReferencesRelation = {
+            ...ref,
+            resolvedSymbolId: exportedSymbolId,
           };
           store.relationUpdate(ref, updatedRef);
         }

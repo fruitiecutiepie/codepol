@@ -406,9 +406,7 @@ function main() {
       expect(computeCalls[0].resolvedSymbolId).toBe(computeSym!.id);
     });
 
-    // TODO: remove .skip once symbol ranges are expanded to full declaration spans
-    // (currently symbol.range is the name span only, so scope-based matching fails)
-    it.skip('should resolve getCallers and getCallees via the ProjectIndex API', () => {
+    it('should resolve getCallers and getCallees via the ProjectIndex API', () => {
       const file = path.join(testDir, 'calls_api.ts');
       fs.writeFileSync(file, `
 function helper(): number {

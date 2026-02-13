@@ -190,8 +190,7 @@ const b = utils.beta;
 
   });
 
-  // TODO: remove .skip once namespace import resolution is implemented
-  it.skip('should resolve namespace import module path and member accesses', () => {
+  it('should resolve namespace import module path and member accesses', () => {
     const nsExporter = path.join(testDir, 'ns_full_exporter.ts');
     fs.writeFileSync(nsExporter, `
 export function alpha() { return 1; }

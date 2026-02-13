@@ -246,21 +246,19 @@ export function projectIndexCreate(
         let current: ScopeRecord | undefined = scope;
         while (current) {
           if (current.kind === 'function') {
-            // Find symbol at this scope
-            const symbols = store.symbolsGet({ scopeId: current.parent });
-            for (const sym of symbols) {
+            // Find the function/method symbol whose declaration range contains
+            // this function scope. We search by file (not by scopeId) because
+            // function symbols are scoped to their own function scope, not to
+            // the parent scope where the function is declared.
+            const fileSymbols = store.symbolsGet({ file: scope.file });
+            for (const sym of fileSymbols) {
               if (
                 (sym.kind === 'function' || sym.kind === 'method') &&
-                sym.scopeId === current.parent
+                sym.byteRange.start <= current.byteRange.start &&
+                sym.byteRange.end >= current.byteRange.end
               ) {
-                // Check if the symbol's range contains the scope's range
-                if (
-                  sym.byteRange.start <= current.byteRange.start &&
-                  sym.byteRange.end >= current.byteRange.end
-                ) {
-                  callers.push(sym.id);
-                  break;
-                }
+                callers.push(sym.id);
+                break;
               }
             }
             break;

@@ -29,6 +29,7 @@ Core infrastructure complete, some advanced features pending:
 - [x] Re-export chain following (A re-exports from B re-exports from C) — `exportMapAddReexportedSymbols` in `indexBuilder.ts`
 - [x] Star export enumeration (`export *` should list all symbols) — `exportMapAddReexportedSymbols` copies source module symbols into proxy's export map
 - [x] Circular re-export detection — max iteration limit in `exportMapAddReexportedSymbols` prevents infinite loops
+- [x] Namespace import member resolution (`import * as X` → `X.foo` resolved to exported symbol) — `memberRefsExtract` in `adapterCore.ts` + namespace member resolution pass in `crossFileResolve`
 
 The `crossFileResolve()` function:
 1. Builds export map: `Map<filePath, Map<exportedName, SymbolId>>`
@@ -205,7 +206,8 @@ These are intentional constraints, not bugs:
 - [ ] Unit tests for adapter query execution
 - [x] Integration tests for cross-file scenarios (`tests/index.cross-file-resolution.spec.ts`)
 - [ ] Performance benchmarks for large codebases
-- [x] Edge case coverage (circular imports, re-exports, star exports, diamond deps, missing files)
+- [x] Edge case coverage (circular imports, re-exports, star exports, diamond deps, missing files, namespace imports)
+- [x] `getCallers`/`getCallees` via ProjectIndex API (`tests/index.builder.spec.ts`)
 
 ## Documentation Needed
 
