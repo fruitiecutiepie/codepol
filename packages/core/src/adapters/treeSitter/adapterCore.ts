@@ -843,8 +843,22 @@ function findImportSymbol(
 // ============================================================================
 
 /**
+ * Result of export extraction. Includes the export relations and any
+ * synthetic symbols created for anonymous default exports.
+ */
+type ExportsExtractResult = {
+  exports: ExportsRelation[];
+  syntheticSymbols: SymbolRecord[];
+};
+
+/**
  * Extract export statements for cross-file resolution.
  * Creates ExportsRelation for each exported symbol.
+ *
+ * Anonymous default exports (e.g., `export default class {}`) produce
+ * synthetic SymbolRecords since they have no name node for `symbolsExtract`
+ * to capture. These are returned in `syntheticSymbols` for the caller to
+ * merge into the delta.
  */
 function exportsExtract(
   cfg: LangConfig,
@@ -854,8 +868,8 @@ function exportsExtract(
   scopes: ScopeRecord[],
   symbols: SymbolRecord[],
   _diags: AdapterDiagnostic[]
-): ExportsRelation[] {
-  if (!cfg.queries.exports) return [];
+): ExportsExtractResult {
+  if (!cfg.queries.exports) return { exports: [], syntheticSymbols: [] };
 
   const exports: ExportsRelation[] = [];
   const query = cfg.language.query(cfg.queries.exports);
@@ -908,6 +922,9 @@ function exportsExtract(
     }
 
     // Handle named exports: export { foo } or export { foo as bar }
+    // Also handles type-only named exports: export type { Foo }
+    // (tree-sitter produces identical export_clause > export_specifier structure
+    // for both; the "type" keyword is just an extra unnamed child of export_statement)
     const namedNode = capturesByName.get('export.name');
     if (namedNode && !capturesByName.get('export.reexport_source')) {
       const symbolName = sliceText(source, namedNode.startIndex, namedNode.endIndex);
@@ -919,6 +936,11 @@ function exportsExtract(
         : symbolName;
       const symbol = findExportSymbol(symbolsByName, symbolName, namedNode.startIndex);
       if (symbol) {
+        // Set Exported flag on the symbol — for separate named exports
+        // (e.g., `export { foo }` or `export type { Foo }`), the symbol
+        // declaration itself is not inside an export_statement, so the flag
+        // was not set during symbolsExtract.
+        symbol.flags |= SymbolFlags.Exported;
         exports.push({
           kind: 'Exports',
           symbolId: symbol.id,
@@ -1021,6 +1043,71 @@ function exportsExtract(
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Anonymous default exports: export default class { } / function() { }
+  // Query patterns can't capture these reliably because the declaration has
+  // no name field. Walk root-level export_statement nodes and detect default
+  // exports that weren't captured by any query pattern.
+  // -------------------------------------------------------------------------
+  const syntheticSymbols: SymbolRecord[] = [];
+  const hasDefaultExport = exports.some(e => e.isDefault);
+
+  if (!hasDefaultExport) {
+    for (let i = 0; i < tree.rootNode.childCount; i++) {
+      const child = tree.rootNode.child(i);
+      if (!child || child.type !== 'export_statement') continue;
+
+      // Check for "default" keyword among children
+      let hasDefault = false;
+      let declChild: Parser.SyntaxNode | null = null;
+      for (let j = 0; j < child.childCount; j++) {
+        const c = child.child(j);
+        if (!c) continue;
+        if (c.type === 'default') hasDefault = true;
+        // The declaration/value child is the class or function node
+        if (c.type.includes('class') || c.type.includes('function')) {
+          declChild = c;
+        }
+      }
+
+      if (!hasDefault || !declChild) continue;
+
+      // Check if this declaration has a name field — if it does, it should
+      // have been captured by the named default export query pattern above.
+      const nameNode = declChild.childForFieldName('name');
+      if (nameNode) continue;
+
+      // Anonymous default export: create a synthetic symbol
+      const kind: SymbolKind = declChild.type.includes('class') ? 'class' : 'function';
+      const declRange: ByteRange = { start: declChild.startIndex, end: declChild.endIndex };
+      const scopeId = findInnermostScope(scopes, declRange);
+      const qualName = buildQualifiedName(scopes, scopeId, 'default');
+      const syntheticId = symbolIdCreate(cfg.languageId, file, kind, qualName, declChild.startIndex);
+
+      syntheticSymbols.push({
+        id: syntheticId,
+        kind,
+        name: 'default',
+        file,
+        byteRange: declRange,
+        scopeId,
+        qualName,
+        flags: SymbolFlags.Exported,
+      });
+
+      exports.push({
+        kind: 'Exports',
+        symbolId: syntheticId,
+        exportedName: 'default',
+        isDefault: true,
+        byteRange: { start: child.startIndex, end: child.endIndex },
+      });
+
+      // At most one default export per file
+      break;
+    }
+  }
+
   // Deduplicate exports: if we have both a named export and default export for the same symbol,
   // keep only the default export (for `export default class Foo` patterns)
   const symbolsWithDefault = new Set<string>();
@@ -1039,7 +1126,7 @@ function exportsExtract(
     return false;
   });
 
-  return dedupedExports;
+  return { exports: dedupedExports, syntheticSymbols };
 }
 
 /**
@@ -1253,17 +1340,31 @@ export function indexFileWithTreeSitter(
   relations.push(...importBindings);
 
   // Exports (for cross-file resolution)
-  const exportRelations = exportsExtract(cfg, tree, file, bytes, scopes, symbols, diags);
+  const { exports: exportRelations, syntheticSymbols } = exportsExtract(cfg, tree, file, bytes, scopes, symbols, diags);
   relations.push(...exportRelations);
 
+  // Merge synthetic symbols (from anonymous default exports) into the symbol list
+  const allSymbols = syntheticSymbols.length > 0
+    ? [...symbols, ...syntheticSymbols]
+    : symbols;
+
+  // Add Defines relations for synthetic symbols
+  for (const sym of syntheticSymbols) {
+    relations.push({
+      kind: 'Defines',
+      scopeId: sym.scopeId,
+      symbolId: sym.id,
+    } satisfies DefinesRelation);
+  }
+
   // Type relations (extends/implements)
-  const typeRelations = typeRelationsExtract(cfg, tree, file, bytes, symbols, diags);
+  const typeRelations = typeRelationsExtract(cfg, tree, file, bytes, allSymbols, diags);
   relations.push(...typeRelations);
 
   return {
     file,
     revision,
-    symbols,
+    symbols: allSymbols,
     scopes,
     relations,
     diagnostics: diags,

@@ -954,13 +954,7 @@ const model: BaseModel = { id: '1', createdAt: new Date() };
   // Type-only exports: export type { Foo }
   // ==========================================================================
 
-  // TODO: Remove .skip once type-only named export extraction is implemented.
-  // `export type { Foo }` uses a different tree-sitter node structure than
-  // `export { Foo }`. The current export query only matches `export_clause`
-  // with `export_specifier`, but type-only exports may use a different
-  // grammar construct (e.g., `export_type_clause`). The symbol itself is
-  // extracted, but the export relation is not created.
-  it.skip('should resolve type-only named exports (export type { Foo })', () => {
+  it('should resolve type-only named exports (export type { Foo })', () => {
     const typeOnlySource = path.join(testDir, 'typeonly_source.ts');
     fs.writeFileSync(typeOnlySource, `
 interface InternalConfig {
@@ -999,11 +993,7 @@ const cfg: InternalConfig = { host: 'localhost', port: 3000 };
   // Anonymous default exports
   // ==========================================================================
 
-  // TODO: Remove .skip once anonymous default export extraction is implemented.
-  // The tree-sitter export query currently only captures named defaults via
-  // export.default_name. Anonymous class/function defaults produce no symbol
-  // and no ExportsRelation because there is no name node to match.
-  it.skip('should resolve anonymous default class exports (export default class {})', () => {
+  it('should resolve anonymous default class exports (export default class {})', () => {
     const anonClassExporter = path.join(testDir, 'anon_class_exporter.ts');
     fs.writeFileSync(anonClassExporter, `
 export default class {
@@ -1035,9 +1025,7 @@ const instance = new MyClass();
     expect(defaultBinding!.resolvedExportId).toBeDefined();
   });
 
-  // TODO: Remove .skip once anonymous default export extraction is implemented.
-  // Same issue as anonymous default class — no name node to capture.
-  it.skip('should resolve anonymous default function exports (export default function() {})', () => {
+  it('should resolve anonymous default function exports (export default function() {})', () => {
     const anonFnExporter = path.join(testDir, 'anon_fn_exporter.ts');
     fs.writeFileSync(anonFnExporter, `
 export default function() {
