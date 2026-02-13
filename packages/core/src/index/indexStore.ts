@@ -601,6 +601,18 @@ export class IndexStore {
           refs.push(newRelation);
         }
       }
+
+      // Update by-file index (scope determines the file)
+      const scope = this.scopesById.get(oldRelation.scopeId);
+      if (scope) {
+        const fileRefs = this.referencesByFile.get(scope.file);
+        if (fileRefs) {
+          const fileRefIdx = fileRefs.indexOf(oldRelation as ReferencesRelation);
+          if (fileRefIdx !== -1) {
+            fileRefs[fileRefIdx] = newRelation as ReferencesRelation;
+          }
+        }
+      }
     }
   }
 

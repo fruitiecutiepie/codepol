@@ -194,6 +194,13 @@ export type ProjectIndex = {
    */
   getModuleCycles(): string[][];
 
+  /**
+   * Get all entry point files (files with no importers within the indexed set).
+   * These are root files that nothing else depends on.
+   * Sorted alphabetically for determinism.
+   */
+  getModuleEntryPoints(): string[];
+
   // ============================================================================
   // Metadata
   // ============================================================================
@@ -444,6 +451,11 @@ export function projectIndexCreate(
     getModuleCycles(): string[][] {
       if (!graph) graph = moduleGraphBuild(store);
       return graph.moduleGraphCyclesGet();
+    },
+
+    getModuleEntryPoints(): string[] {
+      if (!graph) graph = moduleGraphBuild(store);
+      return graph.moduleGraphEntryPointsGet();
     },
 
     // Metadata

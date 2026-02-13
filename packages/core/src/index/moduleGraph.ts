@@ -6,6 +6,7 @@
  * - Forward and reverse adjacency queries (importers / importees)
  * - Topological sort (dependency order)
  * - Circular dependency detection (Tarjan's SCC)
+ * - Entry point detection (files with no importers)
  *
  * Operates on resolved module paths from IndexStore import bindings.
  * External packages (unresolved paths) are excluded from the graph.
@@ -49,6 +50,13 @@ export type ModuleGraph = {
    * Returns empty array if no cycles exist.
    */
   moduleGraphCyclesGet(): string[][];
+
+  /**
+   * Get all entry point files (files with no importers within the indexed set).
+   * These are root files that nothing else depends on.
+   * Sorted alphabetically for determinism.
+   */
+  moduleGraphEntryPointsGet(): string[];
 };
 
 // ============================================================================
@@ -99,6 +107,7 @@ export function moduleGraphBuild(store: IndexStore): ModuleGraph {
   // Cache computed results
   let cachedOrder: string[] | undefined;
   let cachedCycles: string[][] | undefined;
+  let cachedEntryPoints: string[] | undefined;
 
   return {
     moduleGraphImportersGet(file: string): string[] {
@@ -119,6 +128,14 @@ export function moduleGraphBuild(store: IndexStore): ModuleGraph {
       if (cachedCycles) return cachedCycles;
       cachedCycles = cyclesDetect(files, forward);
       return cachedCycles;
+    },
+
+    moduleGraphEntryPointsGet(): string[] {
+      if (cachedEntryPoints) return cachedEntryPoints;
+      cachedEntryPoints = files
+        .filter(file => (reverse.get(file)?.size ?? 0) === 0)
+        .sort();
+      return cachedEntryPoints;
     },
   };
 }

@@ -461,6 +461,8 @@ const requireLoggerRule = createRule<Options, MessageIds>({
         checkBlock(context, sourceCode, logger, node, body);
       },
       FunctionExpression(node) {
+        // Skip when parent is MethodDefinition — already handled by MethodDefinition visitor
+        if (node.parent?.type === TSESTree.AST_NODE_TYPES.MethodDefinition) return;
         let body: TSESTree.BlockStatement | undefined = undefined;
         if (node.body !== undefined) {
           body = node.body;

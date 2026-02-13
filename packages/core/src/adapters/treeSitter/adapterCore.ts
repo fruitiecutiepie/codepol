@@ -992,6 +992,32 @@ function exportsExtract(
         byteRange: { start: starSourceNode.startIndex, end: starSourceNode.endIndex },
       });
     }
+
+    // Handle namespace re-exports: export * as ns from "module"
+    const nsNameNode = capturesByName.get('export.namespace_name');
+    const nsSourceNode = capturesByName.get('export.namespace_source');
+    if (nsNameNode && nsSourceNode) {
+      const exportedName = sliceText(source, nsNameNode.startIndex, nsNameNode.endIndex);
+      let sourceModule = sliceText(source, nsSourceNode.startIndex, nsSourceNode.endIndex);
+      if ((sourceModule.startsWith('"') && sourceModule.endsWith('"')) ||
+          (sourceModule.startsWith("'") && sourceModule.endsWith("'"))) {
+        sourceModule = sourceModule.slice(1, -1);
+      }
+
+      // Namespace re-exports bundle all source exports under a single name.
+      // sourceName='*' with a non-'*' exportedName signals this pattern to
+      // exportMapAddReexportedSymbols, which creates a sentinel ID for
+      // namespace-style resolution in crossFileResolve.
+      exports.push({
+        kind: 'Exports',
+        symbolId: '',
+        exportedName,
+        isDefault: false,
+        sourceModule,
+        sourceName: '*',
+        byteRange: { start: nsNameNode.startIndex, end: nsSourceNode.endIndex },
+      });
+    }
   }
 
   // Deduplicate exports: if we have both a named export and default export for the same symbol,

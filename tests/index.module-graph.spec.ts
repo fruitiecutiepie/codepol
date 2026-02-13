@@ -326,4 +326,133 @@ const result = fnA() + fnB() + fnC();
     expect(index.getModuleImportees(multiConsumer)).toEqual([multi]);
     expect(index.getModuleImporters(multi)).toEqual([multiConsumer]);
   });
+
+  // ==========================================================================
+  // Entry point detection
+  // ==========================================================================
+
+  it('should identify entry points in a linear chain (only root)', () => {
+    const epC = path.join(testDir, 'ep_chain_c.ts');
+    fs.writeFileSync(epC, `export function leaf() { return 'leaf'; }\n`);
+
+    const epB = path.join(testDir, 'ep_chain_b.ts');
+    fs.writeFileSync(epB, `
+import { leaf } from './ep_chain_c';
+export function middle() { return leaf(); }
+`);
+
+    const epA = path.join(testDir, 'ep_chain_a.ts');
+    fs.writeFileSync(epA, `
+import { middle } from './ep_chain_b';
+const result = middle();
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [epA, epB, epC],
+      dir: testDir,
+    });
+
+    const entryPoints = index.getModuleEntryPoints();
+    // Only A is an entry point (nothing imports A)
+    expect(entryPoints).toEqual([epA]);
+  });
+
+  it('should identify entry points in a diamond (only root)', () => {
+    const epD = path.join(testDir, 'ep_diamond_d.ts');
+    fs.writeFileSync(epD, `export function shared() { return 'shared'; }\n`);
+
+    const epB = path.join(testDir, 'ep_diamond_b.ts');
+    fs.writeFileSync(epB, `
+import { shared } from './ep_diamond_d';
+export function branchB() { return shared(); }
+`);
+
+    const epC = path.join(testDir, 'ep_diamond_c.ts');
+    fs.writeFileSync(epC, `
+import { shared } from './ep_diamond_d';
+export function branchC() { return shared(); }
+`);
+
+    const epA = path.join(testDir, 'ep_diamond_a.ts');
+    fs.writeFileSync(epA, `
+import { branchB } from './ep_diamond_b';
+import { branchC } from './ep_diamond_c';
+const result = branchB() + branchC();
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [epA, epB, epC, epD],
+      dir: testDir,
+    });
+
+    const entryPoints = index.getModuleEntryPoints();
+    // Only A is an entry point
+    expect(entryPoints).toEqual([epA]);
+  });
+
+  it('should treat isolated files as entry points', () => {
+    const epIso = path.join(testDir, 'ep_isolated.ts');
+    fs.writeFileSync(epIso, `const x = 42;\n`);
+
+    const epConnected = path.join(testDir, 'ep_connected.ts');
+    fs.writeFileSync(epConnected, `export function pub() { return 'pub'; }\n`);
+
+    const { index } = projectIndexBuildSync({
+      files: [epIso, epConnected],
+      dir: testDir,
+    });
+
+    const entryPoints = index.getModuleEntryPoints();
+    // Both files are entry points (neither is imported by the other)
+    expect(entryPoints).toHaveLength(2);
+    expect(entryPoints).toContain(epIso);
+    expect(entryPoints).toContain(epConnected);
+  });
+
+  it('should not treat circular import files as entry points', () => {
+    const epCircA = path.join(testDir, 'ep_circ_a.ts');
+    const epCircB = path.join(testDir, 'ep_circ_b.ts');
+
+    fs.writeFileSync(epCircA, `
+import { betaFn } from './ep_circ_b';
+export function alphaFn() { return betaFn(); }
+`);
+
+    fs.writeFileSync(epCircB, `
+import { alphaFn } from './ep_circ_a';
+export function betaFn() { return 'beta'; }
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [epCircA, epCircB],
+      dir: testDir,
+    });
+
+    const entryPoints = index.getModuleEntryPoints();
+    // Neither file is an entry point (both have importers)
+    expect(entryPoints).toEqual([]);
+  });
+
+  it('should treat files with only external imports as entry points', () => {
+    const epExtOnly = path.join(testDir, 'ep_ext_only.ts');
+    fs.writeFileSync(epExtOnly, `
+import path from 'node:path';
+import { something } from 'lodash';
+export function consumer() { return path.join('a', 'b'); }
+`);
+
+    const epLeaf = path.join(testDir, 'ep_leaf.ts');
+    fs.writeFileSync(epLeaf, `export function helper() { return 'help'; }\n`);
+
+    const { index } = projectIndexBuildSync({
+      files: [epExtOnly, epLeaf],
+      dir: testDir,
+    });
+
+    const entryPoints = index.getModuleEntryPoints();
+    // Both files are entry points (external imports don't count as importers)
+    expect(entryPoints).toHaveLength(2);
+    expect(entryPoints).toContain(epExtOnly);
+    expect(entryPoints).toContain(epLeaf);
+  });
 });

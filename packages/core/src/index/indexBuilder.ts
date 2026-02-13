@@ -472,12 +472,30 @@ export function crossFileResolveForFile(
     if (binding.isDefault) {
       resolvedExportId = fileExports.get('default');
     } else if (binding.isNamespace) {
+      const updatedNsBinding: ImportBindingRelation = {
+        ...binding,
+        resolvedModulePath: resolvedPath,
+      };
+      store.relationUpdate(binding, updatedNsBinding);
       continue;
     } else {
       resolvedExportId = fileExports.get(binding.importedName);
     }
 
     if (resolvedExportId) {
+      // Check for namespace re-export sentinel
+      const NS_SENTINEL = '__ns_reexport:';
+      if (resolvedExportId.startsWith(NS_SENTINEL)) {
+        const nsSourcePath = resolvedExportId.slice(NS_SENTINEL.length);
+        const updatedBinding: ImportBindingRelation = {
+          ...binding,
+          resolvedModulePath: nsSourcePath,
+          isNamespace: true,
+        };
+        store.relationUpdate(binding, updatedBinding);
+        continue;
+      }
+
       const updatedBinding: ImportBindingRelation = {
         ...binding,
         resolvedModulePath: resolvedPath,
@@ -525,9 +543,27 @@ export function crossFileResolveForFile(
       if (binding.isDefault) {
         resolvedExportId = fileExports.get('default');
       } else if (binding.isNamespace) {
+        const updatedNsBinding: ImportBindingRelation = {
+          ...binding,
+          resolvedModulePath: file,
+        };
+        store.relationUpdate(binding, updatedNsBinding);
         continue;
       } else {
         resolvedExportId = fileExports.get(binding.importedName);
+      }
+
+      // Check for namespace re-export sentinel
+      const NS_SENTINEL = '__ns_reexport:';
+      if (resolvedExportId?.startsWith(NS_SENTINEL)) {
+        const nsSourcePath = resolvedExportId.slice(NS_SENTINEL.length);
+        const updatedBinding: ImportBindingRelation = {
+          ...binding,
+          resolvedModulePath: nsSourcePath,
+          isNamespace: true,
+        };
+        store.relationUpdate(binding, updatedBinding);
+        continue;
       }
 
       // Update binding (even if resolvedExportId is undefined - export may have been removed)
@@ -599,6 +635,15 @@ function exportMapAddReexportedSymbols(
               fileExportMap.set(name, symbolId);
               changed = true;
             }
+          }
+        } else if (exp.exportedName !== '*' && exp.sourceName === '*') {
+          // Namespace re-export: export * as ns from "module"
+          // Store a sentinel ID so crossFileResolve can treat the consumer's
+          // named import as a namespace binding pointing to the source module.
+          const sentinel = `__ns_reexport:${resolvedSourcePath}`;
+          if (!fileExportMap.has(exp.exportedName)) {
+            fileExportMap.set(exp.exportedName, sentinel);
+            changed = true;
           }
         } else if (exp.symbolId === '' && exp.sourceName) {
           // Named re-export: look up the specific name in the source module
@@ -686,6 +731,24 @@ function crossFileResolve(
     }
 
     if (resolvedExportId) {
+      // Check for namespace re-export sentinel (export * as ns from "module").
+      // The consumer did a named import (import { ns } from './proxy'), but
+      // the export map entry is a sentinel pointing to the source module.
+      // Convert to a namespace-like binding so the member resolution pass
+      // (Step 5) can resolve ns.foo accesses.
+      const NS_SENTINEL = '__ns_reexport:';
+      if (resolvedExportId.startsWith(NS_SENTINEL)) {
+        const nsSourcePath = resolvedExportId.slice(NS_SENTINEL.length);
+        const updatedBinding: ImportBindingRelation = {
+          ...binding,
+          resolvedModulePath: nsSourcePath,
+          isNamespace: true,
+          // No resolvedExportId — namespace doesn't map to a single export
+        };
+        store.relationUpdate(binding, updatedBinding);
+        continue;
+      }
+
       // Update the ImportBinding with the resolved information
       const updatedBinding: ImportBindingRelation = {
         ...binding,

@@ -187,9 +187,9 @@ function outer() {
     return 'done';
   }
 }`,
-      // MethodDefinition and FunctionExpression handlers both fire for the method,
-      // producing 2 reports for the same function body.
-      errors: [{ messageId: 'missingLogger' }, { messageId: 'missingLogger' }],
+      // FunctionExpression visitor now skips when parent is MethodDefinition,
+      // so only the MethodDefinition handler reports (1 error, not 2).
+      errors: [{ messageId: 'missingLogger' }],
       output: `import { logger } from '@org/logger';
 class Service {
   handle() {

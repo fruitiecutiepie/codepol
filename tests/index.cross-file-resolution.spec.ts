@@ -645,4 +645,126 @@ function (((( {
     // File was processed (indexed or skipped) without crashing
     expect(stats.filesIndexed + stats.filesSkipped).toBeGreaterThan(0);
   });
+
+  // ==========================================================================
+  // Namespace re-exports: export * as ns from './mod'
+  // ==========================================================================
+
+  it('should resolve namespace re-exports (export * as ns from "./mod")', () => {
+    // origin.ts: exports alpha and beta
+    const originFile = path.join(testDir, 'nsre_origin.ts');
+    fs.writeFileSync(originFile, `
+export function alpha() { return 'a'; }
+export function beta() { return 'b'; }
+`);
+
+    // proxy.ts: re-exports all of origin under the 'utils' namespace
+    const proxyFile = path.join(testDir, 'nsre_proxy.ts');
+    fs.writeFileSync(proxyFile, `
+export * as utils from './nsre_origin';
+`);
+
+    // consumer.ts: imports the namespace and accesses members
+    const consumerFile = path.join(testDir, 'nsre_consumer.ts');
+    fs.writeFileSync(consumerFile, `
+import { utils } from './nsre_proxy';
+const a = utils.alpha();
+const b = utils.beta();
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [originFile, proxyFile, consumerFile],
+      dir: testDir,
+    });
+
+    // Verify the proxy file captured the namespace re-export relation
+    const proxyExports = index.getFileExports(proxyFile);
+    const nsExport = proxyExports.find(e => e.exportedName === 'utils');
+    expect(nsExport).toBeDefined();
+    expect(nsExport!.sourceModule).toBe('./nsre_origin');
+    expect(nsExport!.sourceName).toBe('*');
+
+    // The consumer's import binding for 'utils' should be treated as a namespace
+    const bindings = index.getImportBindings(consumerFile);
+    const utilsBinding = bindings.find(b => b.importedName === 'utils');
+    expect(utilsBinding).toBeDefined();
+    // Should be resolved as a namespace pointing to origin module
+    expect(utilsBinding!.isNamespace).toBe(true);
+    expect(utilsBinding!.resolvedModulePath).toBe(originFile);
+
+    // Member accesses (utils.alpha, utils.beta) should resolve to origin's symbols
+    const refs = index.getReferencesInFile(consumerFile);
+    const alphaRef = refs.find(r => r.name === 'utils.alpha');
+    const betaRef = refs.find(r => r.name === 'utils.beta');
+
+    expect(alphaRef).toBeDefined();
+    expect(betaRef).toBeDefined();
+
+    // The resolved symbol IDs should point to origin's exported symbols
+    if (alphaRef?.resolvedSymbolId) {
+      const alphaSym = index.getSymbol(alphaRef.resolvedSymbolId);
+      expect(alphaSym).toBeDefined();
+      expect(alphaSym!.name).toBe('alpha');
+      expect(alphaSym!.file).toBe(originFile);
+    }
+
+    if (betaRef?.resolvedSymbolId) {
+      const betaSym = index.getSymbol(betaRef.resolvedSymbolId);
+      expect(betaSym).toBeDefined();
+      expect(betaSym!.name).toBe('beta');
+      expect(betaSym!.file).toBe(originFile);
+    }
+  });
+
+  it('should resolve chained namespace re-exports', () => {
+    // deep.ts: exports a function
+    const deepFile = path.join(testDir, 'nsre_deep.ts');
+    fs.writeFileSync(deepFile, `
+export function deepFn() { return 'deep'; }
+`);
+
+    // mid.ts: star-exports everything from deep
+    const midFile = path.join(testDir, 'nsre_mid.ts');
+    fs.writeFileSync(midFile, `
+export * from './nsre_deep';
+`);
+
+    // top.ts: namespace re-exports from mid
+    const topFile = path.join(testDir, 'nsre_top.ts');
+    fs.writeFileSync(topFile, `
+export * as lib from './nsre_mid';
+`);
+
+    // app.ts: consumes the namespace
+    const appFile = path.join(testDir, 'nsre_app.ts');
+    fs.writeFileSync(appFile, `
+import { lib } from './nsre_top';
+const val = lib.deepFn();
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [deepFile, midFile, topFile, appFile],
+      dir: testDir,
+    });
+
+    // The app's import binding for 'lib' should be a namespace
+    const bindings = index.getImportBindings(appFile);
+    const libBinding = bindings.find(b => b.importedName === 'lib');
+    expect(libBinding).toBeDefined();
+    expect(libBinding!.isNamespace).toBe(true);
+    // Should resolve to midFile (the direct source of the namespace re-export)
+    expect(libBinding!.resolvedModulePath).toBe(midFile);
+
+    // lib.deepFn should resolve through mid's star export to deep's symbol
+    const refs = index.getReferencesInFile(appFile);
+    const deepFnRef = refs.find(r => r.name === 'lib.deepFn');
+    expect(deepFnRef).toBeDefined();
+
+    if (deepFnRef?.resolvedSymbolId) {
+      const sym = index.getSymbol(deepFnRef.resolvedSymbolId);
+      expect(sym).toBeDefined();
+      expect(sym!.name).toBe('deepFn');
+      expect(sym!.file).toBe(deepFile);
+    }
+  });
 });

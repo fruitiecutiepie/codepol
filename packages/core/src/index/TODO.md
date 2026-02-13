@@ -51,7 +51,7 @@ Core infrastructure complete, but TypeScript queries simplified for compatibilit
 - [x] Export aliases (`export { foo as bar }`) — resolved via `childForFieldName('alias')` on the `export_specifier` AST node in `exportsExtract()`
 - [x] Re-exports (`export { foo } from "module"`) — TS query captures `export.reexport_name` + `export.reexport_source`
 - [x] Star exports (`export * from "module"`) — already captured via `export.star_source`; symbols added to export map by `exportMapAddReexportedSymbols`
-- [ ] Namespace re-exports (`export * as ns`) - query exists but resolution not implemented
+- [x] Namespace re-exports (`export * as ns from './mod'`) — `exportsExtract()` processes `export.namespace_name` + `export.namespace_source` captures; sentinel ID (`__ns_reexport:path`) in export map; `crossFileResolve` converts consumer named import to namespace binding; member accesses resolved via namespace member resolution pass
 - [ ] Interface/type/enum exports - query removed
 - [ ] Anonymous default exports - query removed
 
@@ -81,11 +81,11 @@ Module-level dependency graph built from import relations in `packages/core/src/
 - [x] `moduleGraphImportersGet(file)` / `moduleGraphImporteesGet(file)` — forward/reverse adjacency from resolved import bindings
 - [x] Topological sort (`moduleGraphDependencyOrderGet()`) — Kahn's algorithm on reversed dependency graph
 - [x] Circular dependency detection (`moduleGraphCyclesGet()`) — Tarjan's SCC algorithm
-- [ ] Entry point detection — not yet implemented (can be derived: files with no importers)
+- [x] Entry point detection (`moduleGraphEntryPointsGet()`) — files with no importers in the indexed set, sorted alphabetically
 
-Exposed on `ProjectIndex` as `getModuleImporters()`, `getModuleImportees()`, `getModuleDependencyOrder()`, `getModuleCycles()`. Graph is lazily built and cached.
+Exposed on `ProjectIndex` as `getModuleImporters()`, `getModuleImportees()`, `getModuleDependencyOrder()`, `getModuleCycles()`, `getModuleEntryPoints()`. Graph is lazily built and cached.
 
-Integration tests in `tests/index.module-graph.spec.ts`: linear chain, circular imports, diamond dependencies, isolated files, external package filtering, unknown files, multi-import deduplication.
+Integration tests in `tests/index.module-graph.spec.ts`: linear chain, circular imports, diamond dependencies, isolated files, external package filtering, unknown files, multi-import deduplication, entry point detection (linear chain root, diamond root, isolated files, circular imports, external-only imports).
 
 ### Medium Priority
 
