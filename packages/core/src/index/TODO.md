@@ -38,9 +38,9 @@ The `crossFileResolve()` function:
 3. Updates `References.resolvedSymbolId` to point to actual exported symbols
 
 ### 2. Export Relation
-**Status**: Partially Implemented
+**Status**: Mostly Implemented
 
-Core infrastructure complete, but TypeScript queries simplified for compatibility:
+Core infrastructure complete. Interface/type/enum inline exports verified working. Remaining gaps: type-only named exports and anonymous default exports.
 
 - [x] `ExportsRelation` type with all fields (`symbolId`, `exportedName`, `isDefault`, `sourceModule`, `sourceName`)
 - [x] `IndexStore` indexes (`exportsByFile`, `exportsByName`, `exportMapBuild()`)
@@ -53,8 +53,9 @@ Core infrastructure complete, but TypeScript queries simplified for compatibilit
 - [x] Re-exports (`export { foo } from "module"`) — TS query captures `export.reexport_name` + `export.reexport_source`
 - [x] Star exports (`export * from "module"`) — already captured via `export.star_source`; symbols added to export map by `exportMapAddReexportedSymbols`
 - [x] Namespace re-exports (`export * as ns from './mod'`) — `exportsExtract()` processes `export.namespace_name` + `export.namespace_source` captures; sentinel ID (`__ns_reexport:path`) in export map; `crossFileResolve` converts consumer named import to namespace binding; member accesses resolved via namespace member resolution pass
-- [ ] Interface/type/enum exports - query removed
-- [ ] Anonymous default exports - query removed
+- [x] Interface/type/enum exports — tree-sitter queries for `export interface`, `export type`, `export enum` exist and work via `export.decl_name` capture pattern. Verified with cross-file integration tests in `tests/index.cross-file-resolution.spec.ts`.
+- [ ] Type-only named exports (`export type { Foo }`) — tree-sitter grammar uses a different node structure than `export { Foo }`; current `export_clause`/`export_specifier` patterns do not match. Needs export query extension.
+- [ ] Anonymous default exports (`export default class {}`, `export default function() {}`) — no name node to capture; needs synthetic symbol creation in `exportsExtract` or `symbolsExtract`
 
 ### 3. Import Binding Relations
 **Status**: Partially Implemented
@@ -211,6 +212,9 @@ These are intentional constraints, not bugs:
 - [x] Import aliases (`import { foo as bar }`) — tested in `tests/index.cross-file-resolution.spec.ts`
 - [x] Export aliases (`export { foo as bar }`) — tested in `tests/index.cross-file-resolution.spec.ts`
 - [x] Module graph queries — tested in `tests/index.module-graph.spec.ts` (linear chain, circular, diamond, isolated, external packages)
+- [x] Cross-file interface/type/enum exports — tested in `tests/index.cross-file-resolution.spec.ts` (interface, type alias, enum, re-exported interface through chain)
+- [ ] Type-only named exports (`export type { Foo }`) — skipped test in `tests/index.cross-file-resolution.spec.ts`; needs tree-sitter export query extension
+- [ ] Anonymous default exports — skipped tests in `tests/index.cross-file-resolution.spec.ts`; needs synthetic symbol creation
 
 ## Documentation Needed
 

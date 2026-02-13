@@ -767,4 +767,305 @@ const val = lib.deepFn();
       expect(sym!.file).toBe(deepFile);
     }
   });
+
+  // ==========================================================================
+  // Cross-file interface, type alias, and enum exports
+  // ==========================================================================
+
+  it('should resolve cross-file interface exports', () => {
+    const ifaceExporter = path.join(testDir, 'iface_exporter.ts');
+    fs.writeFileSync(ifaceExporter, `
+export interface Config {
+  host: string;
+  port: number;
+  debug: boolean;
+}
+`);
+
+    const ifaceConsumer = path.join(testDir, 'iface_consumer.ts');
+    fs.writeFileSync(ifaceConsumer, `
+import { Config } from './iface_exporter';
+
+const cfg: Config = { host: 'localhost', port: 8080, debug: false };
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [ifaceExporter, ifaceConsumer],
+      dir: testDir,
+    });
+
+    // The exporter should have Config as an exported symbol with kind 'interface'
+    const exportedSymbols = index.exportedSymbolsGet({ file: ifaceExporter });
+    const configSymbol = exportedSymbols.find(s => s.name === 'Config');
+    expect(configSymbol).toBeDefined();
+    expect(configSymbol!.kind).toBe('interface');
+
+    // The export relation should exist
+    const exports = index.fileExportsGet(ifaceExporter);
+    const configExport = exports.find(e => e.exportedName === 'Config');
+    expect(configExport).toBeDefined();
+    expect(configExport!.symbolId).toBe(configSymbol!.id);
+
+    // The consumer should have an import binding that resolves to the exported interface
+    const bindings = index.importBindingsGet(ifaceConsumer);
+    const configBinding = bindings.find(b => b.importedName === 'Config');
+    expect(configBinding).toBeDefined();
+    expect(configBinding!.resolvedModulePath).toBe(ifaceExporter);
+    expect(configBinding!.resolvedExportId).toBe(configSymbol!.id);
+  });
+
+  it('should resolve cross-file type alias exports', () => {
+    const typeExporter = path.join(testDir, 'type_exporter.ts');
+    fs.writeFileSync(typeExporter, `
+export type Status = 'ok' | 'error' | 'pending';
+
+export type Pair<A, B> = { first: A; second: B };
+`);
+
+    const typeConsumer = path.join(testDir, 'type_consumer.ts');
+    fs.writeFileSync(typeConsumer, `
+import { Status, Pair } from './type_exporter';
+
+const s: Status = 'ok';
+const p: Pair<string, number> = { first: 'hello', second: 42 };
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [typeExporter, typeConsumer],
+      dir: testDir,
+    });
+
+    // The exporter should have both type symbols
+    const exportedSymbols = index.exportedSymbolsGet({ file: typeExporter });
+    const statusSymbol = exportedSymbols.find(s => s.name === 'Status');
+    const pairSymbol = exportedSymbols.find(s => s.name === 'Pair');
+    expect(statusSymbol).toBeDefined();
+    expect(statusSymbol!.kind).toBe('type');
+    expect(pairSymbol).toBeDefined();
+    expect(pairSymbol!.kind).toBe('type');
+
+    // The consumer's import bindings should resolve
+    const bindings = index.importBindingsGet(typeConsumer);
+    const statusBinding = bindings.find(b => b.importedName === 'Status');
+    const pairBinding = bindings.find(b => b.importedName === 'Pair');
+    expect(statusBinding).toBeDefined();
+    expect(statusBinding!.resolvedExportId).toBe(statusSymbol!.id);
+    expect(pairBinding).toBeDefined();
+    expect(pairBinding!.resolvedExportId).toBe(pairSymbol!.id);
+  });
+
+  it('should resolve cross-file enum exports', () => {
+    const enumExporter = path.join(testDir, 'enum_exporter.ts');
+    fs.writeFileSync(enumExporter, `
+export enum Color {
+  Red = 'red',
+  Green = 'green',
+  Blue = 'blue',
+}
+`);
+
+    const enumConsumer = path.join(testDir, 'enum_consumer.ts');
+    fs.writeFileSync(enumConsumer, `
+import { Color } from './enum_exporter';
+
+const favorite = Color.Red;
+const palette = [Color.Green, Color.Blue];
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [enumExporter, enumConsumer],
+      dir: testDir,
+    });
+
+    // The exporter should have the enum as an exported symbol
+    const exportedSymbols = index.exportedSymbolsGet({ file: enumExporter });
+    const colorSymbol = exportedSymbols.find(s => s.name === 'Color');
+    expect(colorSymbol).toBeDefined();
+    expect(colorSymbol!.kind).toBe('enum');
+
+    // Enum members should be extracted as symbols in the exporter
+    const allSymbols = index.symbolsInFileGet(enumExporter);
+    const memberNames = allSymbols
+      .filter(s => s.kind === 'enumMember')
+      .map(s => s.name);
+    expect(memberNames).toContain('Red');
+    expect(memberNames).toContain('Green');
+    expect(memberNames).toContain('Blue');
+
+    // The consumer's import binding should resolve
+    const bindings = index.importBindingsGet(enumConsumer);
+    const colorBinding = bindings.find(b => b.importedName === 'Color');
+    expect(colorBinding).toBeDefined();
+    expect(colorBinding!.resolvedExportId).toBe(colorSymbol!.id);
+  });
+
+  it('should resolve re-exported interfaces through chains', () => {
+    const reIfaceOrigin = path.join(testDir, 'reiface_origin.ts');
+    fs.writeFileSync(reIfaceOrigin, `
+export interface BaseModel {
+  id: string;
+  createdAt: Date;
+}
+`);
+
+    const reIfaceProxy = path.join(testDir, 'reiface_proxy.ts');
+    fs.writeFileSync(reIfaceProxy, `
+export { BaseModel } from './reiface_origin';
+`);
+
+    const reIfaceConsumer = path.join(testDir, 'reiface_consumer.ts');
+    fs.writeFileSync(reIfaceConsumer, `
+import { BaseModel } from './reiface_proxy';
+
+const model: BaseModel = { id: '1', createdAt: new Date() };
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [reIfaceOrigin, reIfaceProxy, reIfaceConsumer],
+      dir: testDir,
+    });
+
+    // Origin should have the interface symbol
+    const originExports = index.exportedSymbolsGet({ file: reIfaceOrigin });
+    const baseModelSym = originExports.find(s => s.name === 'BaseModel');
+    expect(baseModelSym).toBeDefined();
+    expect(baseModelSym!.kind).toBe('interface');
+
+    // Proxy should surface the re-exported interface
+    const proxyExports = index.fileExportsGet(reIfaceProxy);
+    const proxyExport = proxyExports.find(e => e.exportedName === 'BaseModel');
+    expect(proxyExport).toBeDefined();
+
+    // Consumer binding should resolve through the proxy
+    const bindings = index.importBindingsGet(reIfaceConsumer);
+    const baseModelBinding = bindings.find(b => b.importedName === 'BaseModel');
+    expect(baseModelBinding).toBeDefined();
+    expect(baseModelBinding!.resolvedModulePath).toBe(reIfaceProxy);
+    expect(baseModelBinding!.resolvedExportId).toBeDefined();
+
+    // The resolved export should trace back to the origin's symbol
+    const resolvedSym = index.symbolGet(baseModelBinding!.resolvedExportId!);
+    expect(resolvedSym).toBeDefined();
+    expect(resolvedSym!.name).toBe('BaseModel');
+    expect(resolvedSym!.file).toBe(reIfaceOrigin);
+  });
+
+  // ==========================================================================
+  // Type-only exports: export type { Foo }
+  // ==========================================================================
+
+  // TODO: Remove .skip once type-only named export extraction is implemented.
+  // `export type { Foo }` uses a different tree-sitter node structure than
+  // `export { Foo }`. The current export query only matches `export_clause`
+  // with `export_specifier`, but type-only exports may use a different
+  // grammar construct (e.g., `export_type_clause`). The symbol itself is
+  // extracted, but the export relation is not created.
+  it.skip('should resolve type-only named exports (export type { Foo })', () => {
+    const typeOnlySource = path.join(testDir, 'typeonly_source.ts');
+    fs.writeFileSync(typeOnlySource, `
+interface InternalConfig {
+  host: string;
+  port: number;
+}
+
+export type { InternalConfig };
+`);
+
+    const typeOnlyConsumer = path.join(testDir, 'typeonly_consumer.ts');
+    fs.writeFileSync(typeOnlyConsumer, `
+import { InternalConfig } from './typeonly_source';
+
+const cfg: InternalConfig = { host: 'localhost', port: 3000 };
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [typeOnlySource, typeOnlyConsumer],
+      dir: testDir,
+    });
+
+    // The source should have InternalConfig as an exported symbol
+    const exportedSymbols = index.exportedSymbolsGet({ file: typeOnlySource });
+    const configSymbol = exportedSymbols.find(s => s.name === 'InternalConfig');
+    expect(configSymbol).toBeDefined();
+
+    // The consumer's import binding should resolve
+    const bindings = index.importBindingsGet(typeOnlyConsumer);
+    const configBinding = bindings.find(b => b.importedName === 'InternalConfig');
+    expect(configBinding).toBeDefined();
+    expect(configBinding!.resolvedExportId).toBeDefined();
+  });
+
+  // ==========================================================================
+  // Anonymous default exports
+  // ==========================================================================
+
+  // TODO: Remove .skip once anonymous default export extraction is implemented.
+  // The tree-sitter export query currently only captures named defaults via
+  // export.default_name. Anonymous class/function defaults produce no symbol
+  // and no ExportsRelation because there is no name node to match.
+  it.skip('should resolve anonymous default class exports (export default class {})', () => {
+    const anonClassExporter = path.join(testDir, 'anon_class_exporter.ts');
+    fs.writeFileSync(anonClassExporter, `
+export default class {
+  greet() { return 'hello'; }
+}
+`);
+
+    const anonClassConsumer = path.join(testDir, 'anon_class_consumer.ts');
+    fs.writeFileSync(anonClassConsumer, `
+import MyClass from './anon_class_exporter';
+
+const instance = new MyClass();
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [anonClassExporter, anonClassConsumer],
+      dir: testDir,
+    });
+
+    // The exporter should have a default export
+    const exports = index.fileExportsGet(anonClassExporter);
+    const defaultExport = exports.find(e => e.isDefault);
+    expect(defaultExport).toBeDefined();
+
+    // The consumer's default import should resolve
+    const bindings = index.importBindingsGet(anonClassConsumer);
+    const defaultBinding = bindings.find(b => b.isDefault);
+    expect(defaultBinding).toBeDefined();
+    expect(defaultBinding!.resolvedExportId).toBeDefined();
+  });
+
+  // TODO: Remove .skip once anonymous default export extraction is implemented.
+  // Same issue as anonymous default class — no name node to capture.
+  it.skip('should resolve anonymous default function exports (export default function() {})', () => {
+    const anonFnExporter = path.join(testDir, 'anon_fn_exporter.ts');
+    fs.writeFileSync(anonFnExporter, `
+export default function() {
+  return 42;
+}
+`);
+
+    const anonFnConsumer = path.join(testDir, 'anon_fn_consumer.ts');
+    fs.writeFileSync(anonFnConsumer, `
+import compute from './anon_fn_exporter';
+
+const result = compute();
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [anonFnExporter, anonFnConsumer],
+      dir: testDir,
+    });
+
+    // The exporter should have a default export
+    const exports = index.fileExportsGet(anonFnExporter);
+    const defaultExport = exports.find(e => e.isDefault);
+    expect(defaultExport).toBeDefined();
+
+    // The consumer's default import should resolve
+    const bindings = index.importBindingsGet(anonFnConsumer);
+    const defaultBinding = bindings.find(b => b.isDefault);
+    expect(defaultBinding).toBeDefined();
+    expect(defaultBinding!.resolvedExportId).toBeDefined();
+  });
 });
