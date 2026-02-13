@@ -1,0 +1,166 @@
+name: Test
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Build — shared by all test jobs
+  # --------------------------------------------------------------------------
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install
+
+      - run: pnpm build
+
+      # Upload built artifacts so downstream jobs skip rebuilding
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-output
+          path: |
+            packages/*/dist/
+            packages/core/wasm/*.wasm
+
+  # --------------------------------------------------------------------------
+  # Stage 1: Typecheck
+  # --------------------------------------------------------------------------
+  typecheck:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-output
+          path: .
+
+      - run: pnpm typecheck
+
+  # --------------------------------------------------------------------------
+  # Stage 2: Unit Tests
+  # --------------------------------------------------------------------------
+  test-unit:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-output
+          path: .
+
+      - run: pnpm test:unit
+
+  # --------------------------------------------------------------------------
+  # Stage 3: Integration Tests
+  # --------------------------------------------------------------------------
+  test-integration:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-output
+          path: .
+
+      - run: pnpm test:integration
+
+  # --------------------------------------------------------------------------
+  # Stage 4: E2E Tests
+  # --------------------------------------------------------------------------
+  test-e2e:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-output
+          path: .
+
+      - run: pnpm test:e2e
+
+  # --------------------------------------------------------------------------
+  # Stage 5: Benchmarks (main branch only, non-blocking)
+  # --------------------------------------------------------------------------
+  bench:
+    needs: build
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-output
+          path: .
+
+      - run: pnpm bench

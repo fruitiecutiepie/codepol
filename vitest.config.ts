@@ -8,5 +8,8 @@ export default defineConfig({
     coverage: {
       enabled: false,
     },
+    benchmark: {
+      include: ['packages/**/*.bench.ts'],
+    },
   },
 });

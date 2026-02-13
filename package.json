@@ -6,8 +6,12 @@
   "scripts": {
     "build:wasm": "node scripts/build-wasm.mjs",
     "build": "pnpm run build:wasm && pnpm -r build",
-    "test": "pnpm build && vitest run",
+    "test": "pnpm build && vitest run --exclude '**/e2e.*.spec.ts'",
+    "test:unit": "vitest run packages/",
+    "test:integration": "vitest run tests/ --exclude '**/e2e.*.spec.ts'",
+    "test:e2e": "vitest run tests/e2e.",
     "test:watch": "vitest",
+    "bench": "vitest bench",
     "clean": "pnpm -r exec rm -rf dist && rm -rf packages/core/wasm/*.wasm",
     "lint": "eslint 'packages/*/src/**/*.ts'",
     "typecheck": "pnpm -r typecheck",
@@ -43,6 +47,7 @@
     "web-tree-sitter": "0.24.7",
     "yargs": "18.0.0"
   },
+  "packageManager": "pnpm@10.4.1",
   "engines": {
     "node": ">=18"
   },
