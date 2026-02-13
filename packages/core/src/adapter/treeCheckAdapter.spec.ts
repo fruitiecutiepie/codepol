@@ -34,12 +34,14 @@ describe('treeCheckAdapter', () => {
     it('should pass through fix data when present', () => {
       const violationWithFix: PolicyViolation = {
         ...baseViolation,
-        fix: { range: [100, 110], text: 'logger.enter();' },
+        fix: { byteRange: { start: 100, end: 110 }, text: 'logger.enter();' },
       };
 
       const diagnostic = violationToLintDiagnostic(violationWithFix);
 
-      expect(diagnostic.fix).toEqual({ range: [100, 110], text: 'logger.enter();' });
+      expect(diagnostic.fix).toEqual(
+        { byteRange: { start: 100, end: 110 }, text: 'logger.enter();' }
+      );
     });
   });
 

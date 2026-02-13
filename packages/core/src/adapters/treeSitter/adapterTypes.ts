@@ -13,6 +13,7 @@ import type {
   SymbolRecord,
   ScopeRecord,
   RelationRecord,
+  ByteRange,
 } from '../../index/indexTypes';
 
 // ============================================================================
@@ -180,7 +181,7 @@ export type RefFilterContext = {
   /** Grandparent node type */
   grandparentType?: string;
   /** Byte range of the identifier */
-  range: { start: number; end: number };
+  byteRange: ByteRange;
   /** Set of declaration ranges in the file (for filtering out decl sites) */
   declarationRanges: Set<string>;
 };

@@ -296,9 +296,64 @@ describe('CLI E2E', () => {
   // esbuild plugin fix:true scenario).
   it.skip('--fix applies fixes to disk', () => {});
 
-  // TODO: Remove .skip once --config <path> explicit config test is added.
-  // Lower priority — auto-discovery is already tested above.
-  it.skip('--config <path> uses explicit config', () => {});
+  describe('--config <path>', () => {
+    /**
+     * Separate temp dir with NO root config — auto-discovery would fail.
+     * Config is placed in a subdirectory and referenced via --config.
+     */
+    let configProjectDir: string;
+
+    beforeAll(() => {
+      configProjectDir = tempProjectCreate();
+      // Write config in a subdirectory (not auto-discoverable from root)
+      fs.mkdirSync(path.join(configProjectDir, 'config'), { recursive: true });
+      fs.writeFileSync(
+        path.join(configProjectDir, 'config', 'codepol.config.js'),
+        configContentCreate(),
+        'utf8',
+      );
+      // Ensure NO root-level config exists
+      const rootConfig = path.join(configProjectDir, 'codepol.config.js');
+      if (fs.existsSync(rootConfig)) {
+        fs.unlinkSync(rootConfig);
+      }
+    });
+
+    afterAll(() => {
+      fs.rmSync(configProjectDir, { recursive: true, force: true });
+    });
+
+    it('uses explicit config and exits 0 when no violations', async () => {
+      fs.mkdirSync(path.join(configProjectDir, 'src'), { recursive: true });
+      fs.writeFileSync(
+        path.join(configProjectDir, 'src', 'app.ts'),
+        SOURCE_VALID,
+        'utf8',
+      );
+
+      const configPath = path.join(configProjectDir, 'config', 'codepol.config.js');
+      const result = await runCli(['--config', configPath], configProjectDir);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Policy checks passed');
+    });
+
+    it('uses explicit config and detects violations', async () => {
+      fs.mkdirSync(path.join(configProjectDir, 'src'), { recursive: true });
+      fs.writeFileSync(
+        path.join(configProjectDir, 'src', 'app.ts'),
+        SOURCE_VIOLATION,
+        'utf8',
+      );
+
+      const configPath = path.join(configProjectDir, 'config', 'codepol.config.js');
+      const result = await runCli(['--config', configPath], configProjectDir);
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toContain('run');
+      expect(result.stdout).toContain('function-logging');
+    });
+  });
 
   // TODO: Remove .skip once --watch mode test is implemented.
   // --watch starts a chokidar file watcher with debounced re-runs.

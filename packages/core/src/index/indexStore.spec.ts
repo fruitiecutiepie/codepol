@@ -1,53 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import {
-  indexStoreNew,
-  type FileIndexDelta,
-} from './indexStore';
+import { indexStoreNew } from './indexStore';
 import {
   SymbolFlags,
-  type SymbolRecord,
-  type ScopeRecord,
   type ReferencesRelation,
   type CallsRelation,
   type ImportBindingRelation,
   type ExportsRelation,
 } from './indexTypes';
-
-// ============================================================================
-// Helpers
-// ============================================================================
-
-const range = (start: number, end: number) => ({ start, end });
-
-function makeScope(
-  id: string,
-  file: string,
-  kind: ScopeRecord['kind'] = 'file',
-  parent?: string,
-): ScopeRecord {
-  return { id, kind, file, range: range(0, 100), parent };
-}
-
-function makeSymbol(
-  id: string,
-  name: string,
-  file: string,
-  scopeId: string,
-  kind: SymbolRecord['kind'] = 'function',
-  flags: number = SymbolFlags.None,
-): SymbolRecord {
-  return { id, kind, name, file, range: range(0, 50), scopeId, qualName: name, flags };
-}
-
-function makeDelta(overrides: Partial<FileIndexDelta> & { file: string }): FileIndexDelta {
-  return {
-    revision: 'rev1',
-    symbols: [],
-    scopes: [],
-    relations: [],
-    ...overrides,
-  };
-}
+import { byteRangeGet, scopeRecordNew, symbolRecordNew, fileIndexDeltaNew } from './testHelpers';
 
 // ============================================================================
 // Tests
@@ -68,11 +28,11 @@ describe('IndexStore', () => {
   it('filePut / symbolsGet round-trip', () => {
     const store = indexStoreNew();
     const file = '/src/a.ts';
-    const scope = makeScope('scope-a', file);
-    const sym1 = makeSymbol('sym-1', 'foo', file, scope.id);
-    const sym2 = makeSymbol('sym-2', 'bar', file, scope.id, 'variable');
+    const scope = scopeRecordNew('scope-a', file);
+    const sym1 = symbolRecordNew('sym-1', 'foo', file, scope.id);
+    const sym2 = symbolRecordNew('sym-2', 'bar', file, scope.id, 'variable');
 
-    store.filePut(makeDelta({ file, symbols: [sym1, sym2], scopes: [scope] }));
+    store.filePut(fileIndexDeltaNew({ file, symbols: [sym1, sym2], scopes: [scope] }));
 
     const symbols = store.symbolsGet({ file });
     expect(symbols).toHaveLength(2);
@@ -82,10 +42,10 @@ describe('IndexStore', () => {
   it('filePut / scopesInFileGet round-trip', () => {
     const store = indexStoreNew();
     const file = '/src/b.ts';
-    const fileScope = makeScope('scope-file', file, 'file');
-    const fnScope = makeScope('scope-fn', file, 'function', fileScope.id);
+    const fileScope = scopeRecordNew('scope-file', file, 'file');
+    const fnScope = scopeRecordNew('scope-fn', file, 'function', fileScope.id);
 
-    store.filePut(makeDelta({ file, scopes: [fileScope, fnScope] }));
+    store.filePut(fileIndexDeltaNew({ file, scopes: [fileScope, fnScope] }));
 
     const scopes = store.scopesInFileGet(file);
     expect(scopes).toHaveLength(2);
@@ -95,17 +55,17 @@ describe('IndexStore', () => {
   it('filePut / referencesGet round-trip', () => {
     const store = indexStoreNew();
     const file = '/src/c.ts';
-    const scope = makeScope('scope-c', file);
-    const sym = makeSymbol('sym-target', 'target', file, scope.id);
+    const scope = scopeRecordNew('scope-c', file);
+    const sym = symbolRecordNew('sym-target', 'target', file, scope.id);
     const ref: ReferencesRelation = {
       kind: 'References',
       scopeId: scope.id,
       name: 'target',
-      range: range(10, 16),
+      byteRange: byteRangeGet(10, 16),
       resolvedSymbolId: sym.id,
     };
 
-    store.filePut(makeDelta({ file, symbols: [sym], scopes: [scope], relations: [ref] }));
+    store.filePut(fileIndexDeltaNew({ file, symbols: [sym], scopes: [scope], relations: [ref] }));
 
     const refs = store.referencesGet(sym.id);
     expect(refs).toHaveLength(1);
@@ -115,15 +75,15 @@ describe('IndexStore', () => {
   it('filePut / callsGet round-trip', () => {
     const store = indexStoreNew();
     const file = '/src/d.ts';
-    const scope = makeScope('scope-d', file, 'function');
+    const scope = scopeRecordNew('scope-d', file, 'function');
     const call: CallsRelation = {
       kind: 'Calls',
       scopeId: scope.id,
       calleeName: 'doWork',
-      range: range(20, 26),
+      byteRange: byteRangeGet(20, 26),
     };
 
-    store.filePut(makeDelta({ file, scopes: [scope], relations: [call] }));
+    store.filePut(fileIndexDeltaNew({ file, scopes: [scope], relations: [call] }));
 
     const calls = store.callsGet();
     expect(calls).toHaveLength(1);
@@ -133,8 +93,8 @@ describe('IndexStore', () => {
   it('filePut / importBindingsInFileGet round-trip', () => {
     const store = indexStoreNew();
     const file = '/src/e.ts';
-    const scope = makeScope('scope-e', file);
-    const importedSym = makeSymbol('sym-imported', 'utils', file, scope.id, 'variable');
+    const scope = scopeRecordNew('scope-e', file);
+    const importedSym = symbolRecordNew('sym-imported', 'utils', file, scope.id, 'variable');
     const binding: ImportBindingRelation = {
       kind: 'ImportBinding',
       localSymbolId: importedSym.id,
@@ -142,10 +102,10 @@ describe('IndexStore', () => {
       moduleSpec: './utils',
       isDefault: false,
       isNamespace: false,
-      range: range(0, 30),
+      byteRange: byteRangeGet(0, 30),
     };
 
-    store.filePut(makeDelta({
+    store.filePut(fileIndexDeltaNew({
       file,
       symbols: [importedSym],
       scopes: [scope],
@@ -160,17 +120,17 @@ describe('IndexStore', () => {
   it('filePut / exportsInFileGet round-trip', () => {
     const store = indexStoreNew();
     const file = '/src/f.ts';
-    const scope = makeScope('scope-f', file);
-    const sym = makeSymbol('sym-exported', 'myFunc', file, scope.id);
+    const scope = scopeRecordNew('scope-f', file);
+    const sym = symbolRecordNew('sym-exported', 'myFunc', file, scope.id);
     const exp: ExportsRelation = {
       kind: 'Exports',
       symbolId: sym.id,
       exportedName: 'myFunc',
       isDefault: false,
-      range: range(0, 40),
+      byteRange: byteRangeGet(0, 40),
     };
 
-    store.filePut(makeDelta({ file, symbols: [sym], scopes: [scope], relations: [exp] }));
+    store.filePut(fileIndexDeltaNew({ file, symbols: [sym], scopes: [scope], relations: [exp] }));
 
     const exports = store.exportsInFileGet(file);
     expect(exports).toHaveLength(1);
@@ -180,13 +140,13 @@ describe('IndexStore', () => {
   it('fileRemove clears all relations for file', () => {
     const store = indexStoreNew();
     const file = '/src/g.ts';
-    const scope = makeScope('scope-g', file);
-    const sym = makeSymbol('sym-g', 'gone', file, scope.id);
+    const scope = scopeRecordNew('scope-g', file);
+    const sym = symbolRecordNew('sym-g', 'gone', file, scope.id);
     const ref: ReferencesRelation = {
       kind: 'References',
       scopeId: scope.id,
       name: 'gone',
-      range: range(0, 4),
+      byteRange: byteRangeGet(0, 4),
       resolvedSymbolId: sym.id,
     };
     const exp: ExportsRelation = {
@@ -194,10 +154,10 @@ describe('IndexStore', () => {
       symbolId: sym.id,
       exportedName: 'gone',
       isDefault: false,
-      range: range(0, 20),
+      byteRange: byteRangeGet(0, 20),
     };
 
-    store.filePut(makeDelta({ file, symbols: [sym], scopes: [scope], relations: [ref, exp] }));
+    store.filePut(fileIndexDeltaNew({ file, symbols: [sym], scopes: [scope], relations: [ref, exp] }));
     store.fileRemove(file);
 
     expect(store.symbolsGet({ file })).toHaveLength(0);
@@ -212,29 +172,29 @@ describe('IndexStore', () => {
     const store = indexStoreNew();
 
     const fileA = '/src/a.ts';
-    const scopeA = makeScope('scope-ea', fileA);
-    const symA = makeSymbol('sym-ea', 'alpha', fileA, scopeA.id);
+    const scopeA = scopeRecordNew('scope-ea', fileA);
+    const symA = symbolRecordNew('sym-ea', 'alpha', fileA, scopeA.id);
     const expA: ExportsRelation = {
       kind: 'Exports',
       symbolId: symA.id,
       exportedName: 'alpha',
       isDefault: false,
-      range: range(0, 10),
+      byteRange: byteRangeGet(0, 10),
     };
 
     const fileB = '/src/b.ts';
-    const scopeB = makeScope('scope-eb', fileB);
-    const symB = makeSymbol('sym-eb', 'beta', fileB, scopeB.id);
+    const scopeB = scopeRecordNew('scope-eb', fileB);
+    const symB = symbolRecordNew('sym-eb', 'beta', fileB, scopeB.id);
     const expB: ExportsRelation = {
       kind: 'Exports',
       symbolId: symB.id,
       exportedName: 'beta',
       isDefault: false,
-      range: range(0, 10),
+      byteRange: byteRangeGet(0, 10),
     };
 
-    store.filePut(makeDelta({ file: fileA, symbols: [symA], scopes: [scopeA], relations: [expA] }));
-    store.filePut(makeDelta({ file: fileB, symbols: [symB], scopes: [scopeB], relations: [expB] }));
+    store.filePut(fileIndexDeltaNew({ file: fileA, symbols: [symA], scopes: [scopeA], relations: [expA] }));
+    store.filePut(fileIndexDeltaNew({ file: fileB, symbols: [symB], scopes: [scopeB], relations: [expB] }));
 
     const exportMap = store.exportMapBuild();
 
@@ -246,8 +206,8 @@ describe('IndexStore', () => {
   it('relationUpdate modifies an existing ImportBinding relation', () => {
     const store = indexStoreNew();
     const file = '/src/h.ts';
-    const scope = makeScope('scope-h', file);
-    const localSym = makeSymbol('sym-local', 'helper', file, scope.id, 'variable');
+    const scope = scopeRecordNew('scope-h', file);
+    const localSym = symbolRecordNew('sym-local', 'helper', file, scope.id, 'variable');
     const original: ImportBindingRelation = {
       kind: 'ImportBinding',
       localSymbolId: localSym.id,
@@ -255,10 +215,10 @@ describe('IndexStore', () => {
       moduleSpec: './helper',
       isDefault: false,
       isNamespace: false,
-      range: range(0, 30),
+      byteRange: byteRangeGet(0, 30),
     };
 
-    store.filePut(makeDelta({ file, symbols: [localSym], scopes: [scope], relations: [original] }));
+    store.filePut(fileIndexDeltaNew({ file, symbols: [localSym], scopes: [scope], relations: [original] }));
 
     // Retrieve the stored relation (same object identity)
     const storedBindings = store.importBindingsInFileGet(file);
@@ -282,10 +242,10 @@ describe('IndexStore', () => {
   it('symbolGet by ID returns the correct symbol', () => {
     const store = indexStoreNew();
     const file = '/src/i.ts';
-    const scope = makeScope('scope-i', file);
-    const sym = makeSymbol('sym-i', 'myVar', file, scope.id, 'const', SymbolFlags.Exported);
+    const scope = scopeRecordNew('scope-i', file);
+    const sym = symbolRecordNew('sym-i', 'myVar', file, scope.id, 'const', SymbolFlags.Exported);
 
-    store.filePut(makeDelta({ file, symbols: [sym], scopes: [scope] }));
+    store.filePut(fileIndexDeltaNew({ file, symbols: [sym], scopes: [scope] }));
 
     const found = store.symbolGet('sym-i');
     expect(found).toBeDefined();
@@ -297,13 +257,13 @@ describe('IndexStore', () => {
   it('symbolsGet with SymbolFilter filters by name, kind, file, and scopeId', () => {
     const store = indexStoreNew();
     const file = '/src/j.ts';
-    const scope1 = makeScope('scope-j1', file, 'file');
-    const scope2 = makeScope('scope-j2', file, 'function', scope1.id);
-    const symFn = makeSymbol('sym-fn', 'doStuff', file, scope1.id, 'function');
-    const symVar = makeSymbol('sym-var', 'count', file, scope2.id, 'variable');
-    const symConst = makeSymbol('sym-const', 'MAX', file, scope1.id, 'const');
+    const scope1 = scopeRecordNew('scope-j1', file, 'file');
+    const scope2 = scopeRecordNew('scope-j2', file, 'function', scope1.id);
+    const symFn = symbolRecordNew('sym-fn', 'doStuff', file, scope1.id, 'function');
+    const symVar = symbolRecordNew('sym-var', 'count', file, scope2.id, 'variable');
+    const symConst = symbolRecordNew('sym-const', 'MAX', file, scope1.id, 'const');
 
-    store.filePut(makeDelta({
+    store.filePut(fileIndexDeltaNew({
       file,
       symbols: [symFn, symVar, symConst],
       scopes: [scope1, scope2],
@@ -330,8 +290,8 @@ describe('IndexStore', () => {
     const fileA = '/src/x.ts';
     const fileB = '/src/y.ts';
 
-    store.filePut(makeDelta({ file: fileA, scopes: [makeScope('s-x', fileA)] }));
-    store.filePut(makeDelta({ file: fileB, scopes: [makeScope('s-y', fileB)] }));
+    store.filePut(fileIndexDeltaNew({ file: fileA, scopes: [scopeRecordNew('s-x', fileA)] }));
+    store.filePut(fileIndexDeltaNew({ file: fileB, scopes: [scopeRecordNew('s-y', fileB)] }));
 
     const files = store.filesGet();
     expect(files).toHaveLength(2);
@@ -341,10 +301,10 @@ describe('IndexStore', () => {
   it('clear() empties everything', () => {
     const store = indexStoreNew();
     const file = '/src/z.ts';
-    const scope = makeScope('scope-z', file);
-    const sym = makeSymbol('sym-z', 'z', file, scope.id);
+    const scope = scopeRecordNew('scope-z', file);
+    const sym = symbolRecordNew('sym-z', 'z', file, scope.id);
 
-    store.filePut(makeDelta({ file, symbols: [sym], scopes: [scope] }));
+    store.filePut(fileIndexDeltaNew({ file, symbols: [sym], scopes: [scope] }));
     expect(store.statsGet().files).toBe(1);
 
     store.clear();

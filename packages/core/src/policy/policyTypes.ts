@@ -1,5 +1,6 @@
 import { Result } from '../result/result';
 import type { ProjectIndex } from '../index/indexQuery';
+import type { ByteRange } from '../index/indexTypes';
 
 /**
  * Configuration for importing the logger module.
@@ -311,7 +312,7 @@ export type PluginRule = {
  */
 export type PolicyViolationFix = {
   /** Byte offset range [start, end) in the source text to replace */
-  range: [number, number];
+  byteRange: ByteRange;
   /** Replacement text (can be empty to delete the range) */
   text: string;
 };

@@ -194,7 +194,7 @@ export function unusedExportsCheck(
       const symbolKind = symbol?.kind ?? 'export';
       
       // Use the export's range, or fall back to symbol's range
-      const range = exp.range ?? symbol?.range ?? { start: 0, end: 0 };
+      const range = exp.byteRange ?? symbol?.byteRange ?? { start: 0, end: 0 };
       const { line, column } = byteOffsetToLineColumn(source, range.start);
 
       // Format message to show both the exported name and symbol name if they differ

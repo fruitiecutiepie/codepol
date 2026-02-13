@@ -93,7 +93,7 @@ function scopesBuild(
     id: scopeIdCreate(cfg.languageId, file, 'file', 0, tree.rootNode.endIndex),
     kind: 'file',
     file,
-    range: { start: 0, end: tree.rootNode.endIndex },
+    byteRange: { start: 0, end: tree.rootNode.endIndex },
   };
 
   const scopes: ScopeRecord[] = [fileScope];
@@ -112,16 +112,16 @@ function scopesBuild(
       id: scopeIdCreate(cfg.languageId, file, kind, node.startIndex, node.endIndex),
       kind,
       file,
-      range: { start: node.startIndex, end: node.endIndex },
+      byteRange: { start: node.startIndex, end: node.endIndex },
     });
   }
 
-  // Sort by range for parent assignment (smaller ranges come after their parents)
+  // Sort by byteRange for parent assignment (smaller ranges come after their parents)
   scopes.sort((a, b) => {
-    const startDiff = a.range.start - b.range.start;
+    const startDiff = a.byteRange.start - b.byteRange.start;
     if (startDiff !== 0) return startDiff;
-    // If same start, larger range (parent) comes first
-    return b.range.end - a.range.end;
+    // If same start, larger byteRange (parent) comes first
+    return b.byteRange.end - a.byteRange.end;
   });
 
   // Assign parents by finding smallest containing scope
@@ -143,9 +143,9 @@ function findParentScope(allScopes: ScopeRecord[], child: ScopeRecord): ScopeId 
     if (scope.id === child.id) continue;
 
     // Check if scope contains child
-    if (scope.range.start <= child.range.start && scope.range.end >= child.range.end) {
+    if (scope.byteRange.start <= child.byteRange.start && scope.byteRange.end >= child.byteRange.end) {
       // Pick smallest containing scope
-      if (!best || (scope.range.end - scope.range.start) < (best.range.end - best.range.start)) {
+      if (!best || (scope.byteRange.end - scope.byteRange.start) < (best.byteRange.end - best.byteRange.start)) {
         best = scope;
       }
     }
@@ -171,14 +171,14 @@ function scopeKindFromNode(cfg: LangConfig, nodeType: string): ScopeKind {
 }
 
 /**
- * Find the innermost scope containing a range.
+ * Find the innermost scope containing a byteRange.
  */
-function findInnermostScope(scopes: ScopeRecord[], range: ByteRange): ScopeId {
+function findInnermostScope(scopes: ScopeRecord[], byteRange: ByteRange): ScopeId {
   let best: ScopeRecord | undefined;
 
   for (const scope of scopes) {
-    if (scope.range.start <= range.start && scope.range.end >= range.end) {
-      if (!best || (scope.range.end - scope.range.start) < (best.range.end - best.range.start)) {
+    if (scope.byteRange.start <= byteRange.start && scope.byteRange.end >= byteRange.end) {
+      if (!best || (scope.byteRange.end - scope.byteRange.start) < (best.byteRange.end - best.byteRange.start)) {
         best = scope;
       }
     }
@@ -271,7 +271,7 @@ function symbolsExtract(
       kind,
       name,
       file,
-      range: declRange,
+      byteRange: declRange,
       scopeId,
       qualName,
       flags,
@@ -333,10 +333,10 @@ function refsExtract(
 
     const node = capture.node;
     const name = sliceText(source, node.startIndex, node.endIndex);
-    const range: ByteRange = { start: node.startIndex, end: node.endIndex };
+    const byteRange: ByteRange = { start: node.startIndex, end: node.endIndex };
 
     // Skip if this is a declaration site
-    const rangeKey = `${range.start}:${range.end}`;
+    const rangeKey = `${byteRange.start}:${byteRange.end}`;
     if (declRanges.has(rangeKey)) continue;
 
     // Apply custom filter if provided
@@ -346,13 +346,13 @@ function refsExtract(
         nodeType: node.type,
         parentType: node.parent?.type ?? '',
         grandparentType: node.parent?.parent?.type,
-        range,
+        byteRange,
         declarationRanges: declRanges,
       };
       if (!cfg.refFilter(ctx)) continue;
     }
 
-    const scopeId = findInnermostScope(scopes, range);
+    const scopeId = findInnermostScope(scopes, byteRange);
 
     // Try to resolve locally
     const resolved = resolveLocal(symbolsByName, name, scopeId, scopes);
@@ -361,7 +361,7 @@ function refsExtract(
       kind: 'References',
       scopeId,
       name,
-      range,
+      byteRange,
       resolvedSymbolId: resolved?.id,
     });
   }
@@ -467,8 +467,8 @@ function callsExtract(
 
     if (!calleeName || !calleeNode) continue;
 
-    const range: ByteRange = { start: calleeNode.startIndex, end: calleeNode.endIndex };
-    const scopeId = findInnermostScope(scopes, range);
+    const byteRange: ByteRange = { start: calleeNode.startIndex, end: calleeNode.endIndex };
+    const scopeId = findInnermostScope(scopes, byteRange);
 
     // Try to resolve simple names
     let resolved: SymbolRecord | undefined;
@@ -483,7 +483,7 @@ function callsExtract(
       kind: 'Calls',
       scopeId,
       calleeName,
-      range,
+      byteRange,
       resolvedSymbolId: resolved?.id,
     });
   }
@@ -525,14 +525,14 @@ function importsExtract(
       spec = spec.slice(1, -1);
     }
 
-    const range: ByteRange = { start: node.startIndex, end: node.endIndex };
-    const scopeId = findInnermostScope(scopes, range);
+    const byteRange: ByteRange = { start: node.startIndex, end: node.endIndex };
+    const scopeId = findInnermostScope(scopes, byteRange);
 
     imports.push({
       kind: 'Imports',
       scopeId,
       spec,
-      range,
+      byteRange,
     });
   }
 
@@ -565,8 +565,8 @@ function importBindingsExtract(
   // Build a map of symbol names to symbol IDs for linking import bindings
   const symbolsByNameAndRange = new Map<string, SymbolRecord>();
   for (const sym of symbols) {
-    // Use name + range start as key for more precise matching
-    const key = `${sym.name}:${sym.range.start}`;
+    // Use name + byteRange start as key for more precise matching
+    const key = `${sym.name}:${sym.byteRange.start}`;
     symbolsByNameAndRange.set(key, sym);
   }
 
@@ -601,7 +601,7 @@ function importBindingsExtract(
 
     if (!moduleSpec) continue;
 
-    // Determine range for the entire import statement
+    // Determine byteRange for the entire import statement
     let importRange: ByteRange = { start: 0, end: 0 };
     for (const capture of match.captures) {
       if (capture.name.startsWith('import.') && 
@@ -635,7 +635,7 @@ function importBindingsExtract(
           moduleSpec,
           isDefault: false,
           isNamespace: false,
-          range: importRange.end > 0 ? importRange : { start: bindingNameNode.startIndex, end: bindingNameNode.endIndex },
+          byteRange: importRange.end > 0 ? importRange : { start: bindingNameNode.startIndex, end: bindingNameNode.endIndex },
         });
       }
     }
@@ -653,7 +653,7 @@ function importBindingsExtract(
           moduleSpec,
           isDefault: true,
           isNamespace: false,
-          range: importRange.end > 0 ? importRange : { start: defaultNameNode.startIndex, end: defaultNameNode.endIndex },
+          byteRange: importRange.end > 0 ? importRange : { start: defaultNameNode.startIndex, end: defaultNameNode.endIndex },
         });
       }
     }
@@ -671,7 +671,7 @@ function importBindingsExtract(
           moduleSpec,
           isDefault: false,
           isNamespace: true,
-          range: importRange.end > 0 ? importRange : { start: namespaceNameNode.startIndex, end: namespaceNameNode.endIndex },
+          byteRange: importRange.end > 0 ? importRange : { start: namespaceNameNode.startIndex, end: namespaceNameNode.endIndex },
         });
       }
     }
@@ -689,7 +689,7 @@ function importBindingsExtract(
           moduleSpec,
           isDefault: true,
           isNamespace: false,
-          range: importRange.end > 0 ? importRange : { start: requireNameNode.startIndex, end: requireNameNode.endIndex },
+          byteRange: importRange.end > 0 ? importRange : { start: requireNameNode.startIndex, end: requireNameNode.endIndex },
         });
       }
     }
@@ -707,7 +707,7 @@ function importBindingsExtract(
           moduleSpec,
           isDefault: false,
           isNamespace: false,
-          range: importRange.end > 0 ? importRange : { start: requireBindingNode.startIndex, end: requireBindingNode.endIndex },
+          byteRange: importRange.end > 0 ? importRange : { start: requireBindingNode.startIndex, end: requireBindingNode.endIndex },
         });
       }
     }
@@ -735,7 +735,7 @@ function findImportSymbol(
   let closestDistance = Infinity;
 
   for (const sym of candidates) {
-    const distance = Math.abs(sym.range.start - nearPosition);
+    const distance = Math.abs(sym.byteRange.start - nearPosition);
     if (distance < closestDistance) {
       closestDistance = distance;
       closest = sym;
@@ -782,7 +782,7 @@ function exportsExtract(
       capturesByName.set(capture.name, capture.node);
     }
 
-    // Determine export range
+    // Determine export byteRange
     let exportRange: ByteRange = { start: 0, end: 0 };
     for (const capture of match.captures) {
       if (capture.name.startsWith('export.') && 
@@ -809,7 +809,7 @@ function exportsExtract(
           symbolId: symbol.id,
           exportedName,
           isDefault: false,
-          range: exportRange.end > 0 ? exportRange : { start: declNameNode.startIndex, end: declNameNode.endIndex },
+          byteRange: exportRange.end > 0 ? exportRange : { start: declNameNode.startIndex, end: declNameNode.endIndex },
         });
       }
     }
@@ -829,7 +829,7 @@ function exportsExtract(
           symbolId: symbol.id,
           exportedName,
           isDefault: false,
-          range: exportRange.end > 0 ? exportRange : { start: namedNode.startIndex, end: namedNode.endIndex },
+          byteRange: exportRange.end > 0 ? exportRange : { start: namedNode.startIndex, end: namedNode.endIndex },
         });
       }
     }
@@ -844,7 +844,7 @@ function exportsExtract(
           symbolId: symbol.id,
           exportedName: 'default',
           isDefault: true,
-          range: exportRange.end > 0 ? exportRange : { start: defaultNameNode.startIndex, end: defaultNameNode.endIndex },
+          byteRange: exportRange.end > 0 ? exportRange : { start: defaultNameNode.startIndex, end: defaultNameNode.endIndex },
         });
       }
     }
@@ -874,7 +874,7 @@ function exportsExtract(
         isDefault: false,
         sourceModule,
         sourceName,
-        range: exportRange.end > 0 ? exportRange : { start: reexportNameNode.startIndex, end: reexportNameNode.endIndex },
+        byteRange: exportRange.end > 0 ? exportRange : { start: reexportNameNode.startIndex, end: reexportNameNode.endIndex },
       });
     }
 
@@ -895,7 +895,7 @@ function exportsExtract(
         isDefault: false,
         sourceModule,
         sourceName: '*',
-        range: { start: starSourceNode.startIndex, end: starSourceNode.endIndex },
+        byteRange: { start: starSourceNode.startIndex, end: starSourceNode.endIndex },
       });
     }
   }
@@ -940,7 +940,7 @@ function findExportSymbol(
     let closest: SymbolRecord | undefined;
     let closestDistance = Infinity;
     for (const sym of fileLevel) {
-      const distance = Math.abs(sym.range.start - nearPosition);
+      const distance = Math.abs(sym.byteRange.start - nearPosition);
       if (distance < closestDistance) {
         closestDistance = distance;
         closest = sym;

@@ -255,8 +255,8 @@ export function projectIndexCreate(
               ) {
                 // Check if the symbol's range contains the scope's range
                 if (
-                  sym.range.start <= current.range.start &&
-                  sym.range.end >= current.range.end
+                  sym.byteRange.start <= current.byteRange.start &&
+                  sym.byteRange.end >= current.byteRange.end
                 ) {
                   callers.push(sym.id);
                   break;
@@ -292,8 +292,8 @@ export function projectIndexCreate(
       for (const scope of fileScopess) {
         // Check if scope is within symbol's range
         if (
-          scope.range.start >= symbol.range.start &&
-          scope.range.end <= symbol.range.end
+          scope.byteRange.start >= symbol.byteRange.start &&
+          scope.byteRange.end <= symbol.byteRange.end
         ) {
           relevantScopes.push(scope.id);
         }

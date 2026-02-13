@@ -1,55 +1,20 @@
 import { describe, it, expect } from 'vitest';
-import { indexStoreNew, type FileIndexDelta } from './indexStore';
+import { indexStoreNew } from './indexStore';
 import { projectIndexCreate } from './indexQuery';
 import {
   SymbolFlags,
-  type SymbolRecord,
-  type ScopeRecord,
   type IndexCapabilities,
   type ReferencesRelation,
   type CallsRelation,
-  type ImportBindingRelation,
   type ExportsRelation,
-  type ImportsRelation,
+  type ImportBindingRelation,
 } from './indexTypes';
-
-// ============================================================================
-// Helpers (same pattern as indexStore.spec.ts)
-// ============================================================================
-
-const range = (start: number, end: number) => ({ start, end });
-
-function scopeRecordNew(
-  id: string,
-  file: string,
-  kind: ScopeRecord['kind'] = 'file',
-  parent?: string,
-  scopeRange?: { start: number; end: number },
-): ScopeRecord {
-  return { id, kind, file, range: scopeRange ?? range(0, 100), parent };
-}
-
-function symbolRecordNew(
-  id: string,
-  name: string,
-  file: string,
-  scopeId: string,
-  kind: SymbolRecord['kind'] = 'function',
-  flags: number = SymbolFlags.None,
-  symbolRange?: { start: number; end: number },
-): SymbolRecord {
-  return { id, kind, name, file, range: symbolRange ?? range(0, 50), scopeId, qualName: name, flags };
-}
-
-function fileIndexDeltaNew(overrides: Partial<FileIndexDelta> & { file: string }): FileIndexDelta {
-  return {
-    revision: 'rev1',
-    symbols: [],
-    scopes: [],
-    relations: [],
-    ...overrides,
-  };
-}
+import {
+  byteRangeGet,
+  scopeRecordNew,
+  symbolRecordNew,
+  fileIndexDeltaNew,
+} from './testHelpers';
 
 const defaultCapabilities: IndexCapabilities = {
   crossFileResolution: true,
@@ -180,7 +145,7 @@ describe('ProjectIndex', () => {
         symbolId: sym.id,
         exportedName: 'doWork',
         isDefault: false,
-        range: range(0, 30),
+        byteRange: byteRangeGet(0, 30),
       };
 
       store.filePut(fileIndexDeltaNew({ file, symbols: [sym], scopes: [scope], relations: [exp] }));
@@ -202,7 +167,7 @@ describe('ProjectIndex', () => {
         kind: 'References',
         scopeId: scope.id,
         name: 'target',
-        range: range(60, 66),
+        byteRange: byteRangeGet(60, 66),
         resolvedSymbolId: sym.id,
       };
 
@@ -227,16 +192,16 @@ describe('ProjectIndex', () => {
       const store = indexStoreNew();
       const file = '/src/a.ts';
 
-      const fileScope = scopeRecordNew('scope-file', file, 'file', undefined, range(0, 500));
-      const fnBodyScope = scopeRecordNew('scope-fn', file, 'function', fileScope.id, range(10, 190));
-      const callerSym = symbolRecordNew('sym-caller', 'doStuff', file, fileScope.id, 'function', SymbolFlags.None, range(0, 200));
-      const calleeSym = symbolRecordNew('sym-callee', 'helper', file, fileScope.id, 'function', SymbolFlags.None, range(300, 400));
+      const fileScope = scopeRecordNew('scope-file', file, 'file', undefined, byteRangeGet(0, 500));
+      const fnBodyScope = scopeRecordNew('scope-fn', file, 'function', fileScope.id, byteRangeGet(10, 190));
+      const callerSym = symbolRecordNew('sym-caller', 'doStuff', file, fileScope.id, 'function', SymbolFlags.None, byteRangeGet(0, 200));
+      const calleeSym = symbolRecordNew('sym-callee', 'helper', file, fileScope.id, 'function', SymbolFlags.None, byteRangeGet(300, 400));
 
       const call: CallsRelation = {
         kind: 'Calls',
         scopeId: fnBodyScope.id,
         calleeName: 'helper',
-        range: range(50, 56),
+        byteRange: byteRangeGet(50, 56),
         resolvedSymbolId: calleeSym.id,
       };
 
@@ -262,16 +227,16 @@ describe('ProjectIndex', () => {
       const store = indexStoreNew();
       const file = '/src/a.ts';
 
-      const fileScope = scopeRecordNew('scope-file', file, 'file', undefined, range(0, 500));
-      const fnBodyScope = scopeRecordNew('scope-fn', file, 'function', fileScope.id, range(10, 190));
-      const callerSym = symbolRecordNew('sym-caller', 'doStuff', file, fileScope.id, 'function', SymbolFlags.None, range(0, 200));
-      const calleeSym = symbolRecordNew('sym-callee', 'helper', file, fileScope.id, 'function', SymbolFlags.None, range(300, 400));
+      const fileScope = scopeRecordNew('scope-file', file, 'file', undefined, byteRangeGet(0, 500));
+      const fnBodyScope = scopeRecordNew('scope-fn', file, 'function', fileScope.id, byteRangeGet(10, 190));
+      const callerSym = symbolRecordNew('sym-caller', 'doStuff', file, fileScope.id, 'function', SymbolFlags.None, byteRangeGet(0, 200));
+      const calleeSym = symbolRecordNew('sym-callee', 'helper', file, fileScope.id, 'function', SymbolFlags.None, byteRangeGet(300, 400));
 
       const call: CallsRelation = {
         kind: 'Calls',
         scopeId: fnBodyScope.id,
         calleeName: 'helper',
-        range: range(50, 56),
+        byteRange: byteRangeGet(50, 56),
         resolvedSymbolId: calleeSym.id,
       };
 
@@ -332,7 +297,7 @@ describe('ProjectIndex', () => {
         isDefault: false,
         isNamespace: false,
         resolvedExportId: 'sym-remote-utils',
-        range: range(0, 30),
+        byteRange: byteRangeGet(0, 30),
       };
 
       store.filePut(fileIndexDeltaNew({ file, symbols: [localSym], scopes: [scope], relations: [binding] }));
@@ -354,7 +319,7 @@ describe('ProjectIndex', () => {
         isDefault: true,
         isNamespace: false,
         resolvedExportId: 'sym-remote-comp',
-        range: range(0, 30),
+        byteRange: byteRangeGet(0, 30),
       };
 
       store.filePut(fileIndexDeltaNew({ file, symbols: [localSym], scopes: [scope], relations: [binding] }));
@@ -399,7 +364,7 @@ describe('ProjectIndex', () => {
         kind: 'References',
         scopeId: scope.id,
         name: 'foo',
-        range: range(60, 63),
+        byteRange: byteRangeGet(60, 63),
         resolvedSymbolId: sym.id,
       };
 

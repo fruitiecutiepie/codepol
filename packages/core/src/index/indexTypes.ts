@@ -111,7 +111,7 @@ export type SymbolRecord = {
   /** Absolute file path */
   file: string;
   /** Byte range of the declaration */
-  range: ByteRange;
+  byteRange: ByteRange;
   /** Scope that contains this symbol */
   scopeId: ScopeId;
   /** Qualified name for disambiguation (scope-based) */
@@ -132,7 +132,7 @@ export type ScopeRecord = {
   /** Absolute file path */
   file: string;
   /** Byte range of the scope */
-  range: ByteRange;
+  byteRange: ByteRange;
   /** Parent scope ID (undefined for file scope) */
   parent?: ScopeId;
 };
@@ -167,7 +167,7 @@ export type ReferencesRelation = {
   kind: 'References';
   scopeId: ScopeId;
   name: string;
-  range: ByteRange;
+  byteRange: ByteRange;
   /** Resolved symbol ID (file-local resolution only) */
   resolvedSymbolId?: SymbolId;
 };
@@ -180,7 +180,7 @@ export type ImportsRelation = {
   scopeId: ScopeId;
   /** Module specifier (e.g., './foo', 'lodash') */
   spec: string;
-  range: ByteRange;
+  byteRange: ByteRange;
 };
 
 /**
@@ -192,7 +192,7 @@ export type CallsRelation = {
   scopeId: ScopeId;
   /** Callee name (may include dots for member calls) */
   calleeName: string;
-  range: ByteRange;
+  byteRange: ByteRange;
   /** Resolved symbol ID (file-local resolution only) */
   resolvedSymbolId?: SymbolId;
 };
@@ -218,7 +218,7 @@ export type ImportBindingRelation = {
   /** Whether this is a namespace import (import * as X) */
   isNamespace: boolean;
   /** Byte range of the import statement */
-  range: ByteRange;
+  byteRange: ByteRange;
 };
 
 /**
@@ -238,7 +238,7 @@ export type ExportsRelation = {
   /** For re-exports: original name in source module */
   sourceName?: string;
   /** Byte range of the export statement */
-  range: ByteRange;
+  byteRange: ByteRange;
 };
 
 /**
