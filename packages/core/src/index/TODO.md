@@ -107,11 +107,11 @@ Implementation:
 - [x] `ProjectIndex` API: `cfgGet(scopeId)`, `cyclomaticComplexityGet(symbolId)` (V(G) = E - N + 2)
 - [x] `controlFlowGraph` field in `IndexCapabilities`
 - [x] Wired into `indexFileWithTreeSitter` extraction pipeline
-- [x] Supported patterns: sequential, if/else, while, for, do...while, for...in, for...of, return, throw, break/continue (nested + labeled), switch/case/default (with fallthrough), try/catch/finally, labeled statements, nested control flow, arrow functions (block + expression body)
-- [x] Unit tests (5 IndexStore + 3 ProjectIndex) and integration tests (32 in `tests/index.cfg.spec.ts`)
+- [x] Supported patterns: sequential, if/else, ternary expressions (nested supported), while, for, do...while, for...in, for...of, return, throw, break/continue (nested + labeled), switch/case/default (with fallthrough), try/catch/finally, labeled statements, nested control flow, arrow functions (block + expression body)
+- [x] Unit tests (5 IndexStore + 3 ProjectIndex) and integration tests (37 in `tests/index.cfg.spec.ts`)
+- [x] Ternary expressions within CFG — `ternaryExpressionFind` recursively scans statement subtrees for `ternary_expression` nodes; `ternaryProcess` models branch(condition) → true/false paths → merge, with `ternaryBranchProcess` handling nested ternaries recursively via `incomingEdgeLabel` propagation
 
-**What's remaining**:
-- [ ] Ternary expressions within CFG (minor — currently treated as simple expression statements)
+**No remaining gaps.**
 
 Use cases:
 - Cyclomatic complexity calculation
@@ -222,7 +222,7 @@ These are intentional constraints, not bugs:
 - [x] CommonJS require() — tested in `tests/index.cross-file-resolution.spec.ts` (whole-module, destructured, ESM interop, module graph, external packages)
 - [x] Dynamic import() binding resolution — tested in `tests/index.cross-file-resolution.spec.ts` (whole-module namespace binding, destructured named bindings, member access resolution, external package handling, `ImportsRelation` specifier resolution)
 - [x] Dynamic import() module graph integration — tested in `tests/index.module-graph.spec.ts` (dynamic import with binding, side-effect dynamic import, static side-effect import all create edges)
-- [x] Control flow graph extraction — tested in `tests/index.cfg.spec.ts` (32 tests: empty function, sequential, if/else, while/for/do-while/for-in/for-of, return/throw, break/continue with labels, switch/case/default with fallthrough, try/catch/finally, nested control flow, cyclomatic complexity, arrow functions)
+- [x] Control flow graph extraction — tested in `tests/index.cfg.spec.ts` (37 tests: empty function, sequential, if/else, ternary expressions (simple, expression statement, nested), while/for/do-while/for-in/for-of, return/throw, break/continue with labels, switch/case/default with fallthrough, try/catch/finally, nested control flow, cyclomatic complexity, arrow functions)
 - [x] CFG storage and queries — tested in `packages/core/src/index/indexStore.spec.ts` (put/get/remove/clear) and `packages/core/src/index/indexQuery.spec.ts` (cfgGet, cyclomaticComplexityGet)
 
 ## Documentation Needed

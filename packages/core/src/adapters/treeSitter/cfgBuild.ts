@@ -9,6 +9,7 @@
  * Supported patterns:
  * - Sequential statements (linear flow)
  * - if/else branching (branch + merge nodes)
+ * - Ternary expressions (branch + merge, nested supported)
  * - while, for, do...while, for...in, for...of loops (loop node + back-edge)
  * - return / throw (edge to exit node)
  * - break / continue (edge to loop exit / loop header, with label support)
@@ -189,8 +190,13 @@ function statementProcess(
       return labeledStatementProcess(builder, stmt, predecessors, exitId, loopCtx);
     case 'statement_block':
       return statementsProcess(builder, namedChildrenGet(stmt), predecessors, exitId, loopCtx);
-    default:
+    default: {
+      const ternary = ternaryExpressionFind(stmt);
+      if (ternary) {
+        return ternaryProcess(builder, stmt, ternary, predecessors);
+      }
       return simpleStatementProcess(builder, stmt, predecessors);
+    }
   }
 }
 
@@ -203,6 +209,107 @@ function simpleStatementProcess(
   for (const pred of predecessors) {
     edgeAdd(builder, pred, node.id, 'unconditional');
   }
+  return [node.id];
+}
+
+// ============================================================================
+// Ternary Expression
+// ============================================================================
+
+/**
+ * Recursively search a syntax node's subtree for a `ternary_expression`.
+ * Returns the first (outermost) ternary found via depth-first search, or null.
+ */
+function ternaryExpressionFind(node: Parser.SyntaxNode): Parser.SyntaxNode | null {
+  if (node.type === 'ternary_expression') return node;
+  for (let i = 0; i < node.namedChildCount; i++) {
+    const child = node.namedChild(i);
+    if (child) {
+      const found = ternaryExpressionFind(child);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+/**
+ * Process a statement containing a ternary expression as a branch point.
+ * Models `condition ? consequence : alternative` identically to if/else:
+ * branch(condition) → true-path(consequence) / false-path(alternative) → merge.
+ *
+ * Nested ternaries in consequence or alternative are handled recursively:
+ * each nested ternary produces its own branch/merge subgraph.
+ *
+ * @param incomingEdgeLabel - When called from a parent ternary branch, the
+ *   edge label ('true'/'false') to use for the edge from predecessors into
+ *   this ternary's branch node. Top-level calls use 'unconditional'.
+ */
+function ternaryProcess(
+  builder: CfgBuilder,
+  _stmt: Parser.SyntaxNode,
+  ternary: Parser.SyntaxNode,
+  predecessors: FlowNodeId[],
+  incomingEdgeLabel?: 'true' | 'false'
+): FlowNodeId[] {
+  const condition = ternary.childForFieldName('condition');
+  const consequence = ternary.childForFieldName('consequence');
+  const alternative = ternary.childForFieldName('alternative');
+
+  // Branch node on the condition
+  const branch = nodeAdd(
+    builder, 'branch',
+    condition ? byteRangeFromNode(condition) : byteRangeFromNode(ternary),
+    'ternary'
+  );
+  for (const pred of predecessors) {
+    edgeAdd(builder, pred, branch.id, incomingEdgeLabel ?? 'unconditional');
+  }
+
+  // True path — consequence expression (may contain nested ternary)
+  const trueLive = ternaryBranchProcess(builder, consequence, branch.id, 'true');
+
+  // False path — alternative expression (may contain nested ternary)
+  const falseLive = ternaryBranchProcess(builder, alternative, branch.id, 'false');
+
+  // Merge
+  const merge = nodeAdd(builder, 'merge', undefined, 'ternary-merge');
+  for (const id of trueLive) {
+    edgeAdd(builder, id, merge.id, 'unconditional');
+  }
+  for (const id of falseLive) {
+    edgeAdd(builder, id, merge.id, 'unconditional');
+  }
+  return [merge.id];
+}
+
+/**
+ * Process one branch (true or false) of a ternary expression.
+ * If the branch expression itself contains a nested ternary, recurse
+ * with the correct edge label so the parent→child edge is labeled properly.
+ * Otherwise, emit a simple statement node for the expression.
+ */
+function ternaryBranchProcess(
+  builder: CfgBuilder,
+  exprNode: Parser.SyntaxNode | null,
+  branchId: FlowNodeId,
+  edgeLabel: 'true' | 'false'
+): FlowNodeId[] {
+  if (!exprNode) {
+    // Shouldn't happen for valid ternaries, but handle gracefully
+    return [branchId];
+  }
+
+  // Check if this branch expression is itself a ternary
+  const nested = ternaryExpressionFind(exprNode);
+  if (nested) {
+    // Recurse: pass edgeLabel so the outer branch → inner branch edge
+    // is labeled 'true'/'false' instead of 'unconditional'
+    return ternaryProcess(builder, exprNode, nested, [branchId], edgeLabel);
+  }
+
+  // Leaf expression — emit a statement node
+  const node = nodeAdd(builder, 'statement', byteRangeFromNode(exprNode), `ternary-${edgeLabel}`);
+  edgeAdd(builder, branchId, node.id, edgeLabel);
   return [node.id];
 }
 

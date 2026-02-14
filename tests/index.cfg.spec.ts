@@ -801,4 +801,121 @@ function tryCatchCC() {
       expect(cc).toBe(2);
     });
   });
+
+  // ==========================================================================
+  // Ternary Expressions
+  // ==========================================================================
+
+  describe('ternary expressions', () => {
+    it('simple ternary in variable declaration — branch + merge with true/false edges', () => {
+      const cfg = cfgGet(`
+function ternarySimple(a: boolean) {
+  const x = a ? 1 : 2;
+}
+`, 'cfg_ternary_simple.ts');
+      expect(cfg).toBeDefined();
+
+      const branches = cfg!.nodes.filter(n => n.kind === 'branch');
+      expect(branches).toHaveLength(1);
+      expect(branches[0].label).toBe('ternary');
+
+      const merges = cfg!.nodes.filter(n => n.kind === 'merge');
+      expect(merges).toHaveLength(1);
+      expect(merges[0].label).toBe('ternary-merge');
+
+      const trueEdges = cfg!.edges.filter(e => e.label === 'true');
+      expect(trueEdges).toHaveLength(1);
+      expect(trueEdges[0].from).toBe(branches[0].id);
+
+      const falseEdges = cfg!.edges.filter(e => e.label === 'false');
+      expect(falseEdges).toHaveLength(1);
+      expect(falseEdges[0].from).toBe(branches[0].id);
+
+      // Both paths merge
+      const mergeIncoming = cfg!.edges.filter(e => e.to === merges[0].id);
+      expect(mergeIncoming).toHaveLength(2);
+    });
+
+    it('ternary in expression statement — branch + merge', () => {
+      const cfg = cfgGet(`
+function ternaryExpr(a: boolean) {
+  a ? console.log('yes') : console.log('no');
+}
+`, 'cfg_ternary_expr.ts');
+      expect(cfg).toBeDefined();
+
+      const branches = cfg!.nodes.filter(n => n.kind === 'branch');
+      expect(branches).toHaveLength(1);
+      expect(branches[0].label).toBe('ternary');
+
+      const trueEdges = cfg!.edges.filter(e => e.label === 'true');
+      expect(trueEdges).toHaveLength(1);
+
+      const falseEdges = cfg!.edges.filter(e => e.label === 'false');
+      expect(falseEdges).toHaveLength(1);
+
+      const merges = cfg!.nodes.filter(n => n.kind === 'merge');
+      expect(merges).toHaveLength(1);
+    });
+
+    it('nested ternary — 2 branch nodes with nested merge', () => {
+      const cfg = cfgGet(`
+function ternaryNested(a: boolean, b: boolean) {
+  const x = a ? (b ? 1 : 2) : 3;
+}
+`, 'cfg_ternary_nested.ts');
+      expect(cfg).toBeDefined();
+
+      // Two ternary branch nodes: outer (a) and inner (b)
+      const branches = cfg!.nodes.filter(n => n.kind === 'branch');
+      expect(branches).toHaveLength(2);
+      expect(branches.every(b => b.label === 'ternary')).toBe(true);
+
+      // Two merge nodes: inner ternary merge and outer ternary merge
+      const merges = cfg!.nodes.filter(n => n.kind === 'merge');
+      expect(merges).toHaveLength(2);
+
+      // 2 true + 2 false edges (one pair per ternary)
+      const trueEdges = cfg!.edges.filter(e => e.label === 'true');
+      expect(trueEdges).toHaveLength(2);
+
+      const falseEdges = cfg!.edges.filter(e => e.label === 'false');
+      expect(falseEdges).toHaveLength(2);
+    });
+
+    it('cyclomatic complexity: single ternary = 2', () => {
+      const { index, file } = cfgsGet(`
+function ternaryCC(a: boolean) {
+  const x = a ? 1 : 2;
+}
+`, 'cfg_cc_ternary.ts');
+
+      const symbols = index.symbolsInFileGet(file);
+      const fn = symbols.find(s => s.name === 'ternaryCC' && s.kind === 'function');
+      expect(fn).toBeDefined();
+
+      const cc = index.cyclomaticComplexityGet(fn!.id);
+      // One decision point (ternary) → V(G) = 2
+      expect(cc).toBe(2);
+    });
+
+    it('cyclomatic complexity: ternary + if = 3', () => {
+      const { index, file } = cfgsGet(`
+function ternaryPlusIf(a: boolean, b: boolean) {
+  if (a) {
+    console.log('a');
+  }
+  const x = b ? 1 : 2;
+}
+`, 'cfg_cc_ternary_if.ts');
+
+      const symbols = index.symbolsInFileGet(file);
+      const fn = symbols.find(s => s.name === 'ternaryPlusIf' && s.kind === 'function');
+      expect(fn).toBeDefined();
+
+      const cc = index.cyclomaticComplexityGet(fn!.id);
+      // Two decision points (if + ternary) → V(G) = 3
+      expect(cc).toBe(3);
+    });
+  });
 });
