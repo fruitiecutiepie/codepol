@@ -7,6 +7,7 @@ import {
   type ImportBindingRelation,
   type ExportsRelation,
   type TypeRelation,
+  type FlowGraph,
 } from './indexTypes';
 import { byteRangeGet, scopeRecordNew, symbolRecordNew, fileIndexDeltaNew } from './testHelpers';
 
@@ -470,6 +471,90 @@ describe('IndexStore', () => {
       expect(store.typeRelationsForSymbolGet(sym.id)).toHaveLength(0);
       expect(store.typeRelationsByTargetNameGet('Qux')).toHaveLength(0);
       expect(store.typeRelationsInFileGet(file)).toHaveLength(0);
+    });
+  });
+
+  // ============================================================================
+  // Control Flow Graph Storage
+  // ============================================================================
+
+  describe('control flow graph storage', () => {
+    function cfgCreate(scopeId: string): FlowGraph {
+      return {
+        scopeId,
+        nodes: [
+          { id: `${scopeId}:entry:0`, kind: 'entry', label: 'entry' },
+          { id: `${scopeId}:exit:1`, kind: 'exit', label: 'exit' },
+          { id: `${scopeId}:statement:2`, kind: 'statement', byteRange: byteRangeGet(10, 20) },
+        ],
+        edges: [
+          { from: `${scopeId}:entry:0`, to: `${scopeId}:statement:2`, label: 'unconditional' },
+          { from: `${scopeId}:statement:2`, to: `${scopeId}:exit:1`, label: 'unconditional' },
+        ],
+      };
+    }
+
+    it('filePut / cfgGet round-trip', () => {
+      const store = indexStoreNew();
+      const file = '/src/cfg1.ts';
+      const scope = scopeRecordNew('scope-fn', file, 'function');
+      const cfg = cfgCreate(scope.id);
+
+      store.filePut(fileIndexDeltaNew({ file, scopes: [scope], cfgs: [cfg] }));
+
+      const result = store.cfgGet(scope.id);
+      expect(result).toBeDefined();
+      expect(result!.scopeId).toBe(scope.id);
+      expect(result!.nodes).toHaveLength(3);
+      expect(result!.edges).toHaveLength(2);
+    });
+
+    it('cfgsInFileGet returns CFGs for file', () => {
+      const store = indexStoreNew();
+      const file = '/src/cfg2.ts';
+      const scope1 = scopeRecordNew('scope-fn1', file, 'function');
+      const scope2 = scopeRecordNew('scope-fn2', file, 'function');
+      const cfg1 = cfgCreate(scope1.id);
+      const cfg2 = cfgCreate(scope2.id);
+
+      store.filePut(fileIndexDeltaNew({ file, scopes: [scope1, scope2], cfgs: [cfg1, cfg2] }));
+
+      const result = store.cfgsInFileGet(file);
+      expect(result).toHaveLength(2);
+      expect(result.map(c => c.scopeId).sort()).toEqual([scope1.id, scope2.id].sort());
+    });
+
+    it('fileRemove clears CFGs', () => {
+      const store = indexStoreNew();
+      const file = '/src/cfg3.ts';
+      const scope = scopeRecordNew('scope-fn3', file, 'function');
+      const cfg = cfgCreate(scope.id);
+
+      store.filePut(fileIndexDeltaNew({ file, scopes: [scope], cfgs: [cfg] }));
+      expect(store.cfgGet(scope.id)).toBeDefined();
+
+      store.fileRemove(file);
+
+      expect(store.cfgGet(scope.id)).toBeUndefined();
+      expect(store.cfgsInFileGet(file)).toHaveLength(0);
+    });
+
+    it('clear() clears CFGs', () => {
+      const store = indexStoreNew();
+      const file = '/src/cfg4.ts';
+      const scope = scopeRecordNew('scope-fn4', file, 'function');
+      const cfg = cfgCreate(scope.id);
+
+      store.filePut(fileIndexDeltaNew({ file, scopes: [scope], cfgs: [cfg] }));
+      store.clear();
+
+      expect(store.cfgGet(scope.id)).toBeUndefined();
+      expect(store.cfgsInFileGet(file)).toHaveLength(0);
+    });
+
+    it('cfgGet returns undefined for unknown scope', () => {
+      const store = indexStoreNew();
+      expect(store.cfgGet('nonexistent-scope')).toBeUndefined();
     });
   });
 });

@@ -314,6 +314,39 @@ Methods that are thin wrappers over `IndexStore` can be unit-tested with a pre-p
 | Cross-file interface extends imported interface | Integration | `tests/index.type-relations.spec.ts` | Exists |
 | Interface extends multiple interfaces | Integration | `tests/index.type-relations.spec.ts` | Exists |
 
+#### Control Flow Graph (`adapters/treeSitter/cfgBuild.ts`, `index/indexStore.ts`, `index/indexQuery.ts`)
+
+| Method / Scenario | Layer | Test File | Status |
+|-------------------|-------|-----------|--------|
+| `filePut` / `cfgGet` round-trip | Unit | `packages/core/src/index/indexStore.spec.ts` | Exists |
+| `cfgsInFileGet` returns CFGs for file | Unit | `packages/core/src/index/indexStore.spec.ts` | Exists |
+| `fileRemove` clears CFGs | Unit | `packages/core/src/index/indexStore.spec.ts` | Exists |
+| `clear()` empties CFGs | Unit | `packages/core/src/index/indexStore.spec.ts` | Exists |
+| `cfgGet` returns undefined for unknown scope | Unit | `packages/core/src/index/indexStore.spec.ts` | Exists |
+| `cfgGet(scopeId)` via ProjectIndex | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
+| `cyclomaticComplexityGet(symbolId)` returns correct value | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
+| `cyclomaticComplexityGet` returns undefined for non-function | Unit | `packages/core/src/index/indexQuery.spec.ts` | Exists |
+| Empty function — entry + exit, 1 edge | Integration | `tests/index.cfg.spec.ts` | Exists |
+| Sequential statements — linear chain | Integration | `tests/index.cfg.spec.ts` | Exists |
+| Single `if` (no else) — branch + merge | Integration | `tests/index.cfg.spec.ts` | Exists |
+| `if/else` — branch with true/false paths + merge | Integration | `tests/index.cfg.spec.ts` | Exists |
+| `while` loop — loop node + back-edge | Integration | `tests/index.cfg.spec.ts` | Exists |
+| `for` loop — loop node + back-edge | Integration | `tests/index.cfg.spec.ts` | Exists |
+| `do...while` — body first, condition, back-edge | Integration | `tests/index.cfg.spec.ts` | Exists |
+| `return` inside function — edge to exit | Integration | `tests/index.cfg.spec.ts` | Exists |
+| `throw` inside function — edge to exit | Integration | `tests/index.cfg.spec.ts` | Exists |
+| Nested if inside while | Integration | `tests/index.cfg.spec.ts` | Exists |
+| Cyclomatic complexity: linear function = 1 | Integration | `tests/index.cfg.spec.ts` | Exists |
+| Cyclomatic complexity: if/else = 2 | Integration | `tests/index.cfg.spec.ts` | Exists |
+| Cyclomatic complexity: while + if = 3 | Integration | `tests/index.cfg.spec.ts` | Exists |
+| Arrow function with block body | Integration | `tests/index.cfg.spec.ts` | Exists |
+| Arrow function with expression body | Integration | `tests/index.cfg.spec.ts` | Exists |
+| Multiple functions — CFG per function scope | Integration | `tests/index.cfg.spec.ts` | Exists |
+| `switch/case` branching | Integration | `tests/index.cfg.spec.ts` | Skipped (deferred — requires multi-case branching logic) |
+| `break/continue` in loops | Integration | `tests/index.cfg.spec.ts` | Skipped (deferred — requires loop target tracking) |
+| `try/catch/finally` | Integration | `tests/index.cfg.spec.ts` | Skipped (deferred — complex exceptional flow) |
+| `for...in` / `for...of` | Integration | `tests/index.cfg.spec.ts` | Skipped (deferred — similar to `for` but different tree-sitter node type) |
+
 #### Policy Loading (`policyGet.ts`)
 
 | Function | Layer | Test File | Status |
@@ -540,11 +573,12 @@ Methods that are thin wrappers over `IndexStore` can be unit-tested with a pre-p
 |----------|----------|---------|----------|
 | Result utilities | 8 | 0 | 100% |
 | Module resolver | 9 | 0 | 100% |
-| IndexStore | 19 | 0 | 100% |
+| IndexStore | 24 | 0 | 100% |
 | Index builder | 54 | 0 | 100% |
-| Index query (ProjectIndex) | 20 | 0 | 100% |
+| Index query (ProjectIndex) | 23 | 0 | 100% |
 | Module graph | 19 | 0 | 100% |
 | Type relations | 23 | 0 | 100% |
+| Control flow graph | 20 | 4 | 80% |
 | Policy loading | 7 | 0 | 100% |
 | Policy tree check | 7 | 0 | 100% |
 | Policy check runner | 5 | 0 | 100% |
@@ -582,6 +616,7 @@ Ordered by risk (silent corruption potential) and effort (lower effort = do it s
 | 11 | esbuild plugin scenarios | Low | Medium (4 tests, each needs esbuild + temp project) | Existing tests cover the critical path. Additional scenarios (fix mode, auto-discovery) are nice-to-have. | Done (5 passing: auto-discovery, no-matching-files, multiple-rules, fix:true — esbuild plugin now loads plugins via `policyPluginsGet` and generates `overrideConfig` to enable codepol ESLint rules) |
 | 12 | Type relations (Extends/Implements) | Medium | Medium (23 tests: 8 unit + 15 integration) | Class hierarchy analysis and interface compliance checking. New `TypeRelation` relation type with full stack: tree-sitter queries, adapter extraction, IndexStore storage, ProjectIndex API. Cross-file `resolvedTargetId` resolution via `crossFileResolve` Step 6. | Done (5 IndexStore unit tests, 3 ProjectIndex unit tests, 15 integration tests covering class extends, implements, multiple implements, interface extends, abstract class, generics, subTypesGet, empty results, multi-interface extends, cross-file extends/implements/re-export chain/aliased import/interface extends. `resolvedTargetId` fully resolved to exported symbols via `crossFileResolve` Step 6 and `relationUpdate` TypeRelation support in IndexStore.) |
 | 13 | CommonJS require() + dynamic import() | Medium | Small (6 tests, query patterns only — adapter extraction already existed) | CommonJS `require()` is common in Node.js codebases and needed for mixed CJS/ESM projects. Dynamic `import()` specifier extraction enables module dependency awareness for lazy-loaded modules. | Done (5 require tests: whole-module, destructured, ESM interop, module graph inclusion, external package. 5 dynamic import tests: whole-module binding (`const mod = await import()`), destructured binding (`const { foo } = await import()`), member access resolution, external package, side-effect `ImportsRelation` specifier resolution. Dynamic import binding resolution via `import.dynamic_name`/`import.dynamic_source` query captures creates `ImportBindingRelation` with `isNamespace: true`; namespace member resolution resolves `mod.foo` accesses. `ImportsRelation.resolvedModulePath` set during `crossFileResolve` Step 7. Module graph integration: 3 tests for dynamic import edges, side-effect dynamic import edges, and static side-effect import edges via `ImportsRelation.resolvedModulePath`.) |
+| 14 | Control Flow Graph (CFG) | Medium | Medium (24 tests: 8 unit + 16 integration, new extraction module) | Per-function control flow graph construction enabling cyclomatic complexity calculation, dead code detection, and reachability analysis. Full stack: `FlowNode`/`FlowEdge`/`FlowGraph` types in `indexTypes.ts`, AST-walking extraction in `cfgBuild.ts`, `IndexStore` storage with `cfgByScope`/`cfgsByFile`, `ProjectIndex` API (`cfgGet`, `cyclomaticComplexityGet`). | Done — Phase 1 (5 IndexStore unit tests, 3 ProjectIndex unit tests, 16 integration tests covering empty function, sequential statements, if/else branching, while/for/do-while loops, return/throw, nested control flow, cyclomatic complexity, arrow functions, multiple functions. 4 skipped: switch/case, break/continue, try/catch/finally, for...in/for...of — deferred to Phase 2.) |
 
 ---
 
@@ -901,6 +936,8 @@ These were added as part of closing gaps identified in this plan.
 | `packages/core/src/index/indexBuilder.bench.ts` | Bench | Indexing throughput: `projectIndexBuildSync` on 100 and 500 generated files, plus a variant without cross-file resolution. |
 | `packages/core/src/index/indexQuery.bench.ts` | Bench | Query latency on a 100-file pre-built index: `symbolsGet`, `symbolsInFileGet`, `symbolsGetByName`, `exportedSymbolsGet`, `referencesGet`, `referencesInFileGet`, `callersGet`, `calleesGet`, `scopesInFileGet`, `importBindingsGet`, `fileExportsGet`, `statsGet`. |
 | `packages/plugin/src/unusedExportsCheck.bench.ts` | Bench | Per-file `unusedExportsCheck` latency on a 100-file index. Benchmarks checking a middle file, first file (likely all used), and last file (likely unused exports). |
+| `tests/index.cfg.spec.ts` | Integration | Control flow graph extraction: empty function, sequential statements, if/else branching (single if, if/else), while/for/do-while loops, return/throw termination, nested control flow, cyclomatic complexity (linear=1, if/else=2, while+if=3), arrow functions (block + expression body), multiple functions per file. 4 skipped: switch/case, break/continue, try/catch/finally, for...in/for...of. |
+| `packages/core/src/adapters/treeSitter/cfgBuild.ts` | — | CFG construction module: `cfgsExtract(tree, file, scopes)` walks function body ASTs to build per-function control flow graphs. Handles sequential flow, if/else branching (branch + merge nodes), while/for/do-while loops (loop node + back-edges), return/throw (edge to exit). Uses edge-count tracking for branch label assignment. |
 
 ### Known gaps discovered during testing
 
@@ -978,10 +1015,14 @@ These were added as part of closing gaps identified in this plan.
 
 No remaining planned test files. All identified gaps either have tests (possibly skipped) or are documented as known implementation gaps above. The shared `testHelpers.ts` has been created and is in use by `indexStore.spec.ts` and `indexQuery.spec.ts`.
 
-Remaining skipped tests (1 total across 1 file):
+Remaining skipped tests (5 total across 2 files):
 - `tests/e2e.cli.spec.ts`: `--watch` (complex async lifecycle — chokidar watcher with debounced re-runs)
+- `tests/index.cfg.spec.ts`: `switch/case` (deferred — requires multi-case branching logic)
+- `tests/index.cfg.spec.ts`: `break/continue` (deferred — requires loop target tracking)
+- `tests/index.cfg.spec.ts`: `try/catch/finally` (deferred — complex exceptional flow)
+- `tests/index.cfg.spec.ts`: `for...in/for...of` (deferred — similar to `for` but different tree-sitter node type)
 
-No remaining future work items — dynamic `import()` binding resolution and module graph integration are complete.
+Remaining future work items: CFG Phase 2 (switch/case, break/continue, try/catch/finally, for...in/for...of).
 
 ### Fixtures (current)
 

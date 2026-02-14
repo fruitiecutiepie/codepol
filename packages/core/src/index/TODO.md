@@ -94,28 +94,33 @@ Integration tests in `tests/index.module-graph.spec.ts`: linear chain, circular 
 ### Medium Priority
 
 #### 4. Control Flow Graph (CFG)
-**Status**: Not implemented  
-**What's missing**: The original spec's FlowNode/FlowEdge
+**Status**: Partially Implemented (Phase 1)  
+**What's done**: Per-function CFG construction, storage, querying, and cyclomatic complexity
 
-The spec outlined abstract control flow nodes:
-```typescript
-type FlowNode = {
-  id: FlowNodeId;
-  kind: 'entry' | 'exit' | 'branch' | 'merge' | 'loop' | 'call';
-};
+Phase 1 implementation:
+- [x] `FlowNode`, `FlowEdge`, `FlowGraph` types in `indexTypes.ts`
+- [x] `FlowNodeKind`: `'entry' | 'exit' | 'statement' | 'branch' | 'merge' | 'loop' | 'return' | 'throw'`
+- [x] `cfgsExtract()` in `packages/core/src/adapters/treeSitter/cfgBuild.ts` — AST walking for function body CFG construction
+- [x] `IndexStore` storage: `cfgByScope`, `cfgsByFile` with put/remove/clear/query
+- [x] `ProjectIndex` API: `cfgGet(scopeId)`, `cyclomaticComplexityGet(symbolId)` (V(G) = E - N + 2)
+- [x] `controlFlowGraph` field in `IndexCapabilities`
+- [x] Wired into `indexFileWithTreeSitter` extraction pipeline
+- [x] Supported patterns: sequential, if/else, while, for, do...while, return, throw, nested control flow, arrow functions (block + expression body)
+- [x] Unit tests (5 IndexStore + 3 ProjectIndex) and integration tests (16 in `tests/index.cfg.spec.ts`)
 
-type FlowEdge = {
-  from: FlowNodeId;
-  to: FlowNodeId;
-  condition?: ConditionId;
-};
-```
+**What's remaining (Phase 2)**:
+- [ ] `switch/case` — multi-case branching with fallthrough
+- [ ] `break/continue` — requires loop target tracking context
+- [ ] `try/catch/finally` — complex exceptional flow edges
+- [ ] `for...in` / `for...of` — different tree-sitter node type from `for_statement`
+- [ ] Labeled statements (`break label`, `continue label`)
+- [ ] Ternary expressions within CFG
 
-Use cases:
+Use cases enabled by Phase 1:
 - Cyclomatic complexity calculation
-- Path counting
-- Dead code detection
-- Reachability analysis
+- Basic dead code detection (unreachable after return/throw)
+- Path counting for common control flow patterns
+- Reachability analysis for functions without complex control flow
 
 #### 5. Type Relations
 **Status**: Implemented  
@@ -220,6 +225,9 @@ These are intentional constraints, not bugs:
 - [x] CommonJS require() — tested in `tests/index.cross-file-resolution.spec.ts` (whole-module, destructured, ESM interop, module graph, external packages)
 - [x] Dynamic import() binding resolution — tested in `tests/index.cross-file-resolution.spec.ts` (whole-module namespace binding, destructured named bindings, member access resolution, external package handling, `ImportsRelation` specifier resolution)
 - [x] Dynamic import() module graph integration — tested in `tests/index.module-graph.spec.ts` (dynamic import with binding, side-effect dynamic import, static side-effect import all create edges)
+- [x] Control flow graph extraction — tested in `tests/index.cfg.spec.ts` (empty function, sequential, if/else, while/for/do-while, return/throw, nested, cyclomatic complexity, arrow functions)
+- [x] CFG storage and queries — tested in `packages/core/src/index/indexStore.spec.ts` (put/get/remove/clear) and `packages/core/src/index/indexQuery.spec.ts` (cfgGet, cyclomaticComplexityGet)
+- [ ] CFG Phase 2: switch/case, break/continue, try/catch/finally, for...in/for...of (4 skipped tests in `tests/index.cfg.spec.ts`)
 
 ## Documentation Needed
 

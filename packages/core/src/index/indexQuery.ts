@@ -18,6 +18,7 @@ import type {
   ImportBindingRelation,
   ExportsRelation,
   TypeRelation,
+  FlowGraph,
 } from './indexTypes';
 import type { IndexStore } from './indexStore';
 import type { ModuleGraph } from './moduleGraph';
@@ -223,6 +224,24 @@ export type ProjectIndex = {
    * Sorted alphabetically for determinism.
    */
   moduleEntryPointsGet(): string[];
+
+  // ============================================================================
+  // Control Flow Graph Queries
+  // ============================================================================
+
+  /**
+   * Get the control flow graph for a scope.
+   * Returns undefined if no CFG is available (scope is not a function, or
+   * CFGs were not extracted).
+   */
+  cfgGet(scopeId: ScopeId): FlowGraph | undefined;
+
+  /**
+   * Get the cyclomatic complexity of a function/method symbol.
+   * Computed as V(G) = E - N + 2 where E = edges, N = nodes.
+   * Returns undefined if the symbol has no associated CFG.
+   */
+  cyclomaticComplexityGet(symbolId: SymbolId): number | undefined;
 
   // ============================================================================
   // Metadata
@@ -501,6 +520,45 @@ export function projectIndexCreate(
     moduleEntryPointsGet(): string[] {
       if (!graph) graph = moduleGraphBuild(store);
       return graph.moduleGraphEntryPointsGet();
+    },
+
+    // Control flow graph queries
+    cfgGet(scopeId: ScopeId): FlowGraph | undefined {
+      return store.cfgGet(scopeId);
+    },
+
+    cyclomaticComplexityGet(symbolId: SymbolId): number | undefined {
+      // Find the function symbol
+      const symbol = store.symbolGet(symbolId);
+      if (!symbol) return undefined;
+
+      // Find scopes in the same file that are function scopes
+      // containing this symbol's byte range
+      const scopes = store.scopesInFileGet(symbol.file);
+      let targetScope: { id: string; byteRange: { start: number; end: number } } | undefined;
+      let bestSize = Infinity;
+
+      for (const scope of scopes) {
+        if (scope.kind === 'function' &&
+            scope.byteRange.start <= symbol.byteRange.start &&
+            scope.byteRange.end >= symbol.byteRange.end) {
+          const size = scope.byteRange.end - scope.byteRange.start;
+          if (size < bestSize) {
+            targetScope = scope;
+            bestSize = size;
+          }
+        }
+      }
+
+      if (!targetScope) return undefined;
+
+      const cfg = store.cfgGet(targetScope.id);
+      if (!cfg) return undefined;
+
+      // V(G) = E - N + 2
+      const E = cfg.edges.length;
+      const N = cfg.nodes.length;
+      return E - N + 2;
     },
 
     // Metadata

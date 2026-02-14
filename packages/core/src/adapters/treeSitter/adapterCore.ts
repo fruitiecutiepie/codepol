@@ -34,6 +34,7 @@ import type {
   AdapterDiagnostic,
   RefFilterContext,
 } from './adapterTypes';
+import { cfgsExtract as cfgsExtractFromTree } from './cfgBuild';
 
 // ============================================================================
 // Stable ID Generation
@@ -1399,6 +1400,9 @@ export function indexFileWithTreeSitter(
   const typeRelations = typeRelationsExtract(cfg, tree, file, bytes, allSymbols, diags);
   relations.push(...typeRelations);
 
+  // Control flow graphs (per function scope)
+  const cfgs = cfgsExtractFromTree(tree, file, scopes);
+
   return {
     file,
     revision,
@@ -1406,6 +1410,7 @@ export function indexFileWithTreeSitter(
     scopes,
     relations,
     diagnostics: diags,
+    cfgs,
   };
 }
 

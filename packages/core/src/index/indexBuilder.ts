@@ -188,6 +188,7 @@ function projectIndexBuildImpl(options: IndexBuildOptions): IndexBuildResult {
   const capabilities: IndexCapabilities = {
     crossFileResolution: doCrossFileResolution,
     callGraph: 'heuristic',
+    controlFlowGraph: true,
     supportedLanguages: Array.from(supportedLanguages),
   };
 

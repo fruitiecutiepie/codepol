@@ -26,6 +26,11 @@ export type {
   TypeRelation,
   SymbolFilter,
   IndexCapabilities,
+  FlowNodeId,
+  FlowNode,
+  FlowEdge,
+  FlowGraph,
+  FlowNodeKind,
 } from './indexTypes';
 
 export { SymbolFlags } from './indexTypes';

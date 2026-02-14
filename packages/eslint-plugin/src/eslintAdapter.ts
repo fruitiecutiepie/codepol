@@ -271,6 +271,7 @@ function getOrBuildProjectIndex(
   const capabilities: IndexCapabilities = {
     crossFileResolution: true,
     callGraph: 'heuristic',
+    controlFlowGraph: true,
     supportedLanguages: ['typescript', 'tsx', 'javascript', 'jsx', 'python'],
   };
 

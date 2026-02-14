@@ -9,6 +9,7 @@ import {
   type ExportsRelation,
   type ImportBindingRelation,
   type TypeRelation,
+  type FlowGraph,
 } from './indexTypes';
 import {
   byteRangeGet,
@@ -20,6 +21,7 @@ import {
 const defaultCapabilities: IndexCapabilities = {
   crossFileResolution: true,
   callGraph: 'heuristic',
+  controlFlowGraph: false,
   supportedLanguages: ['typescript'],
 };
 
@@ -461,6 +463,7 @@ describe('ProjectIndex', () => {
       const caps: IndexCapabilities = {
         crossFileResolution: false,
         callGraph: 'none',
+        controlFlowGraph: false,
         supportedLanguages: [],
       };
 
@@ -492,6 +495,88 @@ describe('ProjectIndex', () => {
         scopes: 1,
         relations: 1,
       });
+    });
+  });
+
+  // ============================================================================
+  // Control Flow Graph Queries
+  // ============================================================================
+
+  describe('control flow graph queries', () => {
+    function simpleCfgCreate(scopeId: string, edgeCount: number, nodeCount: number): FlowGraph {
+      const nodes = [];
+      const edges = [];
+      for (let i = 0; i < nodeCount; i++) {
+        nodes.push({ id: `${scopeId}:n${i}`, kind: i === 0 ? 'entry' as const : i === nodeCount - 1 ? 'exit' as const : 'statement' as const });
+      }
+      for (let i = 0; i < edgeCount; i++) {
+        edges.push({ from: nodes[Math.min(i, nodeCount - 1)].id, to: nodes[Math.min(i + 1, nodeCount - 1)].id });
+      }
+      return { scopeId, nodes, edges };
+    }
+
+    it('cfgGet returns the CFG for a scope', () => {
+      const store = indexStoreNew();
+      const file = '/src/cfg.ts';
+      const scope = scopeRecordNew('scope-fn', file, 'function');
+      const cfg = simpleCfgCreate(scope.id, 2, 3);
+
+      store.filePut(fileIndexDeltaNew({ file, scopes: [scope], cfgs: [cfg] }));
+
+      const idx = projectIndexCreate(store, defaultCapabilities);
+      const result = idx.cfgGet(scope.id);
+      expect(result).toBeDefined();
+      expect(result!.scopeId).toBe(scope.id);
+      expect(result!.nodes).toHaveLength(3);
+    });
+
+    it('cyclomaticComplexityGet returns correct value for a function', () => {
+      const store = indexStoreNew();
+      const file = '/src/cc.ts';
+      const fileScope = scopeRecordNew('scope-file', file, 'file');
+      // Function scope contains the symbol
+      const fnScope = scopeRecordNew('scope-fn', file, 'function', fileScope.id, byteRangeGet(0, 100));
+      const sym = symbolRecordNew('sym-fn', 'myFunc', file, fnScope.id, 'function', SymbolFlags.None, byteRangeGet(0, 100));
+
+      // CFG with 4 nodes and 4 edges → V(G) = 4 - 4 + 2 = 2
+      const cfg: FlowGraph = {
+        scopeId: fnScope.id,
+        nodes: [
+          { id: 'n0', kind: 'entry' },
+          { id: 'n1', kind: 'branch', byteRange: byteRangeGet(10, 20) },
+          { id: 'n2', kind: 'merge' },
+          { id: 'n3', kind: 'exit' },
+        ],
+        edges: [
+          { from: 'n0', to: 'n1' },
+          { from: 'n1', to: 'n2', label: 'true' },
+          { from: 'n1', to: 'n2', label: 'false' },
+          { from: 'n2', to: 'n3' },
+        ],
+      };
+
+      store.filePut(fileIndexDeltaNew({
+        file,
+        symbols: [sym],
+        scopes: [fileScope, fnScope],
+        cfgs: [cfg],
+      }));
+
+      const idx = projectIndexCreate(store, defaultCapabilities);
+      const cc = idx.cyclomaticComplexityGet(sym.id);
+      expect(cc).toBe(2); // E(4) - N(4) + 2 = 2
+    });
+
+    it('cyclomaticComplexityGet returns undefined for non-function symbol', () => {
+      const store = indexStoreNew();
+      const file = '/src/cc2.ts';
+      const scope = scopeRecordNew('scope-file', file, 'file');
+      const sym = symbolRecordNew('sym-var', 'count', file, scope.id, 'variable');
+
+      store.filePut(fileIndexDeltaNew({ file, symbols: [sym], scopes: [scope] }));
+
+      const idx = projectIndexCreate(store, defaultCapabilities);
+      expect(idx.cyclomaticComplexityGet(sym.id)).toBeUndefined();
     });
   });
 });

@@ -391,8 +391,14 @@ export type {
   CallsRelation,
   ImportBindingRelation,
   ExportsRelation,
+  TypeRelation,
   SymbolFilter,
   IndexCapabilities,
+  FlowNodeId,
+  FlowNode,
+  FlowEdge,
+  FlowGraph,
+  FlowNodeKind,
 } from './index/indexTypes';
 
 export { SymbolFlags } from './index/indexTypes';

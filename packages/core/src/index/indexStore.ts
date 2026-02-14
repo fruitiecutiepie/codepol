@@ -20,6 +20,7 @@ import type {
   ImportBindingRelation,
   ExportsRelation,
   TypeRelation,
+  FlowGraph,
 } from './indexTypes';
 
 // ============================================================================
@@ -41,6 +42,8 @@ export type FileIndexDelta = {
   scopes: ScopeRecord[];
   /** Relations extracted from this file */
   relations: RelationRecord[];
+  /** Control flow graphs per function scope (optional) */
+  cfgs?: FlowGraph[];
 };
 
 // ============================================================================
@@ -80,6 +83,10 @@ export class IndexStore {
   private typeRelationsBySymbol = new Map<SymbolId, TypeRelation[]>();
   private typeRelationsByTargetName = new Map<string, TypeRelation[]>();
   private typeRelationsByFile = new Map<string, TypeRelation[]>();
+
+  // Control flow graph storage (per function scope)
+  private cfgByScope = new Map<string, FlowGraph>();
+  private cfgsByFile = new Map<string, FlowGraph[]>();
 
   // File revision tracking for incremental updates
   private fileRevisions = new Map<string, string>();
@@ -255,6 +262,18 @@ export class IndexStore {
         }
       }
     }
+
+    // Store control flow graphs
+    if (delta.cfgs) {
+      const fileCfgs: FlowGraph[] = [];
+      for (const cfg of delta.cfgs) {
+        this.cfgByScope.set(cfg.scopeId, cfg);
+        fileCfgs.push(cfg);
+      }
+      if (fileCfgs.length > 0) {
+        this.cfgsByFile.set(delta.file, fileCfgs);
+      }
+    }
   }
 
   /**
@@ -385,6 +404,15 @@ export class IndexStore {
       });
     }
 
+    // Remove control flow graphs for this file
+    const fileCfgs = this.cfgsByFile.get(file);
+    if (fileCfgs) {
+      for (const cfg of fileCfgs) {
+        this.cfgByScope.delete(cfg.scopeId);
+      }
+      this.cfgsByFile.delete(file);
+    }
+
     // Remove revision tracking
     this.fileRevisions.delete(file);
   }
@@ -412,6 +440,8 @@ export class IndexStore {
     this.typeRelationsBySymbol.clear();
     this.typeRelationsByTargetName.clear();
     this.typeRelationsByFile.clear();
+    this.cfgByScope.clear();
+    this.cfgsByFile.clear();
     this.fileRevisions.clear();
   }
 
@@ -794,6 +824,24 @@ export class IndexStore {
    */
   filesGet(): string[] {
     return Array.from(this.fileRevisions.keys());
+  }
+
+  // ============================================================================
+  // Control Flow Graph Queries
+  // ============================================================================
+
+  /**
+   * Get the control flow graph for a specific scope.
+   */
+  cfgGet(scopeId: string): FlowGraph | undefined {
+    return this.cfgByScope.get(scopeId);
+  }
+
+  /**
+   * Get all control flow graphs in a file.
+   */
+  cfgsInFileGet(file: string): FlowGraph[] {
+    return this.cfgsByFile.get(file) ?? [];
   }
 
   /**

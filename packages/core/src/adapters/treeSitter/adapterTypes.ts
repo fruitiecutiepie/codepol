@@ -14,6 +14,7 @@ import type {
   ScopeRecord,
   RelationRecord,
   ByteRange,
+  FlowGraph,
 } from '../../index/indexTypes';
 
 // ============================================================================
@@ -51,6 +52,8 @@ export type FileIndexDelta = {
   relations: RelationRecord[];
   /** Diagnostic messages from the adapter */
   diagnostics: AdapterDiagnostic[];
+  /** Control flow graphs per function scope (optional) */
+  cfgs?: FlowGraph[];
 };
 
 // ============================================================================

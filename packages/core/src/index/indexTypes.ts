@@ -279,6 +279,69 @@ export type RelationRecord =
   | TypeRelation;
 
 // ============================================================================
+// Control Flow Graph
+// ============================================================================
+
+/** Stable identifier for a flow graph node */
+export type FlowNodeId = string;
+
+/**
+ * Language-agnostic control flow node kinds.
+ * These represent the structural elements of a function's control flow.
+ */
+export type FlowNodeKind =
+  | 'entry'     // Function entry point (exactly one per CFG)
+  | 'exit'      // Function exit point (exactly one per CFG)
+  | 'statement'  // Basic statement (sequential flow)
+  | 'branch'    // Decision point (if condition, loop condition)
+  | 'merge'     // Where branches rejoin (after if/else, after loop)
+  | 'loop'      // Loop header (back-edge target)
+  | 'return'    // Return statement
+  | 'throw';    // Throw statement
+
+/**
+ * A node in a control flow graph.
+ * Nodes represent control flow points within a function body.
+ */
+export type FlowNode = {
+  /** Stable identifier */
+  id: FlowNodeId;
+  /** Node kind */
+  kind: FlowNodeKind;
+  /** Byte range of the corresponding source (undefined for synthetic entry/exit) */
+  byteRange?: ByteRange;
+  /** Human-readable label for debugging/display */
+  label?: string;
+};
+
+/**
+ * An edge in a control flow graph.
+ * Edges represent possible transitions between control flow points.
+ */
+export type FlowEdge = {
+  /** Source node */
+  from: FlowNodeId;
+  /** Target node */
+  to: FlowNodeId;
+  /** Edge label describing the transition condition */
+  label?: 'true' | 'false' | 'loop-back' | 'unconditional';
+};
+
+/**
+ * A control flow graph for a single function/method scope.
+ * Contains exactly one entry node and one exit node.
+ * Built during adapter extraction, stored per function scope.
+ */
+export type FlowGraph = {
+  /** The scope this CFG belongs to (a function/method scope) */
+  scopeId: ScopeId;
+  /** All nodes in the graph */
+  nodes: FlowNode[];
+  /** All edges in the graph */
+  edges: FlowEdge[];
+};
+
+// ============================================================================
 // Query Filter Types
 // ============================================================================
 
@@ -309,6 +372,8 @@ export type IndexCapabilities = {
   crossFileResolution: boolean;
   /** Call graph accuracy level */
   callGraph: 'none' | 'heuristic' | 'precise';
+  /** Whether control flow graphs are available */
+  controlFlowGraph: boolean;
   /** Languages that have been indexed */
   supportedLanguages: string[];
 };
