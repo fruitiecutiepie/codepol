@@ -324,7 +324,7 @@ export type FlowEdge = {
   /** Target node */
   to: FlowNodeId;
   /** Edge label describing the transition condition */
-  label?: 'true' | 'false' | 'loop-back' | 'unconditional';
+  label?: 'true' | 'false' | 'loop-back' | 'unconditional' | 'break' | 'continue' | 'case' | 'default' | 'exception' | 'finally';
 };
 
 /**
