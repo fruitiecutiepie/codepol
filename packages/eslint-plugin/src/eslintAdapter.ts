@@ -37,6 +37,7 @@ import {
   indexStoreNew,
   DEFAULT_EXTENSIONS,
   isErr,
+  workspacePackageMapDiscover,
 } from '@codepol/core';
 
 // Re-export cache clear
@@ -265,7 +266,8 @@ function getOrBuildProjectIndex(
 
   // Build index synchronously using a new store
   const store = indexStoreNew();
-  const { index } = projectIndexBuildSync({ files, dir: cwd, store });
+  const workspacePackages = workspacePackageMapDiscover(cwd);
+  const { index } = projectIndexBuildSync({ files, dir: cwd, store, workspacePackages });
 
   // Determine capabilities
   const capabilities: IndexCapabilities = {

@@ -3,6 +3,10 @@ node_modules/
 
 # Build output
 dist/
+tests/**/*.js
+tests/**/*.d.ts
+tests/**/*.d.ts.map
+tests/**/*.js.map
 
 # IDE and editors
 .idea/
@@ -33,3 +37,5 @@ docs/.vitepress/dist/
 
 # TypeScript incremental build cache
 *.tsbuildinfo
+
+.specstory/

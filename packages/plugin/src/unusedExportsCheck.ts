@@ -14,6 +14,7 @@ import type {
   PolicyViolationFix,
   ProjectIndex,
 } from '@codepol/core';
+import { workspacePackageMapDiscover } from '@codepol/core';
 
 /**
  * Rule arguments for configuring unused exports detection.
@@ -21,8 +22,8 @@ import type {
 type UnusedExportsArgs = {
   /** Glob patterns for files to skip */
   ignorePatterns?: string[];
-  /** Skip entry point files (index.ts, main.ts) */
-  ignoreEntryPoints?: boolean;
+  /** Skip files that are package entry points (resolved from package.json exports/main) */
+  ignorePackageEntryPoints?: boolean;
 };
 
 /**
@@ -41,17 +42,6 @@ function byteOffsetToLineColumn(
     line: lines.length,
     column: (lines[lines.length - 1]?.length ?? 0) + 1,
   };
-}
-
-/**
- * Check if a file path matches entry point patterns.
- */
-function isEntryPoint(filePath: string): boolean {
-  const entryPatterns = [
-    /[/\\]index\.(ts|tsx|js|jsx)$/,
-    /[/\\]main\.(ts|tsx|js|jsx)$/,
-  ];
-  return entryPatterns.some(pattern => pattern.test(filePath));
 }
 
 /**
@@ -207,9 +197,13 @@ export function unusedExportsCheck(
   // Parse rule arguments
   const args = (context.ruleArgs as UnusedExportsArgs) ?? {};
 
-  // Skip entry points if configured
-  if (args.ignoreEntryPoints && isEntryPoint(filePath)) {
-    return [];
+  // Skip package entry points if configured
+  if (args.ignorePackageEntryPoints) {
+    const packageEntryPoints = workspacePackageMapDiscover(context.dir);
+    const entryFiles = new Set(packageEntryPoints.values());
+    if (entryFiles.has(filePath)) {
+      return [];
+    }
   }
 
   const violations: PolicyViolation[] = [];

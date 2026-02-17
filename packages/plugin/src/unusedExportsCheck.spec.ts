@@ -278,56 +278,79 @@ const x = 1;
   // Configuration Options
   // ============================================
 
-  describe('ignoreEntryPoints option', () => {
-    it('should skip index.ts files when ignoreEntryPoints is true', () => {
-      // Create index.ts with unused export
-      const indexDir = path.join(testDir, 'entrypoint-test');
-      fs.mkdirSync(indexDir, { recursive: true });
-      const indexFile = path.join(indexDir, 'index.ts');
-      const indexContent = `export const unusedFromIndex = 1;`;
-      fs.writeFileSync(indexFile, indexContent);
+  describe('ignorePackageEntryPoints option', () => {
+    it('should skip package entry-point files when ignorePackageEntryPoints is true', () => {
+      // Create a workspace structure:
+      //   wsRoot/package.json          (workspaces: ["pkg"])
+      //   wsRoot/pkg/package.json      (name: "@test/pkg", main: "./dist/index.js")
+      //   wsRoot/pkg/src/index.ts      (entry point with unused export)
+      //   wsRoot/pkg/src/other.ts
+      const wsRoot = path.join(testDir, 'ws-entry-test');
+      fs.mkdirSync(path.join(wsRoot, 'pkg', 'src'), { recursive: true });
+      fs.writeFileSync(
+        path.join(wsRoot, 'package.json'),
+        JSON.stringify({ workspaces: ['pkg'] }),
+      );
+      fs.writeFileSync(
+        path.join(wsRoot, 'pkg', 'package.json'),
+        JSON.stringify({ name: '@test/pkg', main: './dist/index.js' }),
+      );
 
-      // Create another file to have something in the index
-      const otherFile = path.join(indexDir, 'other.ts');
+      const entryFile = path.join(wsRoot, 'pkg', 'src', 'index.ts');
+      const entryContent = `export const unusedFromEntry = 1;`;
+      fs.writeFileSync(entryFile, entryContent);
+
+      const otherFile = path.join(wsRoot, 'pkg', 'src', 'other.ts');
       fs.writeFileSync(otherFile, `const x = 1;`);
 
       const { index } = projectIndexBuildSync({
-        files: [indexFile, otherFile],
-        dir: indexDir,
+        files: [entryFile, otherFile],
+        dir: wsRoot,
       });
 
-      const { rule, context } = createContext(indexFile, indexContent, index, {
-        ignoreEntryPoints: true,
+      const { rule, context } = createContext(entryFile, entryContent, index, {
+        ignorePackageEntryPoints: true,
       });
+      context.dir = wsRoot;
 
       const violations = unusedExportsCheck(rule, context);
       expect(violations.length).toBe(0);
     });
 
-    it('should skip main.ts files when ignoreEntryPoints is true', () => {
-      const mainDir = path.join(testDir, 'main-test');
-      fs.mkdirSync(mainDir, { recursive: true });
-      const mainFile = path.join(mainDir, 'main.ts');
+    it('should skip non-index entry points referenced by package.json main', () => {
+      const wsRoot = path.join(testDir, 'ws-main-test');
+      fs.mkdirSync(path.join(wsRoot, 'lib', 'src'), { recursive: true });
+      fs.writeFileSync(
+        path.join(wsRoot, 'package.json'),
+        JSON.stringify({ workspaces: ['lib'] }),
+      );
+      fs.writeFileSync(
+        path.join(wsRoot, 'lib', 'package.json'),
+        JSON.stringify({ name: '@test/lib', main: './dist/main.js' }),
+      );
+
+      const mainFile = path.join(wsRoot, 'lib', 'src', 'main.ts');
       const mainContent = `export const unusedFromMain = 1;`;
       fs.writeFileSync(mainFile, mainContent);
 
-      const otherFile = path.join(mainDir, 'other.ts');
+      const otherFile = path.join(wsRoot, 'lib', 'src', 'other.ts');
       fs.writeFileSync(otherFile, `const x = 1;`);
 
       const { index } = projectIndexBuildSync({
         files: [mainFile, otherFile],
-        dir: mainDir,
+        dir: wsRoot,
       });
 
       const { rule, context } = createContext(mainFile, mainContent, index, {
-        ignoreEntryPoints: true,
+        ignorePackageEntryPoints: true,
       });
+      context.dir = wsRoot;
 
       const violations = unusedExportsCheck(rule, context);
       expect(violations.length).toBe(0);
     });
 
-    it('should check index.ts files when ignoreEntryPoints is false', () => {
+    it('should check files that are not package entry points', () => {
       const checkDir = path.join(testDir, 'check-index-test');
       fs.mkdirSync(checkDir, { recursive: true });
       const indexFile = path.join(checkDir, 'index.ts');
@@ -343,7 +366,7 @@ const x = 1;
       });
 
       const { rule, context } = createContext(indexFile, indexContent, index, {
-        ignoreEntryPoints: false,
+        ignorePackageEntryPoints: false,
       });
 
       const violations = unusedExportsCheck(rule, context);

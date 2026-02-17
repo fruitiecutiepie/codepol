@@ -42,6 +42,8 @@ export type IndexBuildOptions = {
   crossFileResolution?: boolean;
   /** Path aliases for module resolution (e.g., from tsconfig) */
   pathAliases?: Record<string, string[]>;
+  /** Workspace package name → source entry file (from package.json) */
+  workspacePackages?: Map<string, string>;
 };
 
 /**
@@ -181,6 +183,7 @@ function projectIndexBuildImpl(options: IndexBuildOptions): IndexBuildResult {
       baseDir: options.dir,
       extensions: DEFAULT_EXTENSIONS,
       pathAliases: options.pathAliases,
+      workspacePackages: options.workspacePackages,
     });
   }
 

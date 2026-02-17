@@ -98,7 +98,7 @@ const unusedExportsFixProvider: FixProvider = {
       source: readFileSync(filePath, 'utf8'),
     }));
 
-    for (const [filePath, fixed] of unusedExportsFix(fileSources)) {
+    for (const [filePath, fixed] of unusedExportsFix(fileSources, context.cwd)) {
       writeFileSync(filePath, fixed);
     }
   },

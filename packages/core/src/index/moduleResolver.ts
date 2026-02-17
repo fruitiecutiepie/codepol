@@ -29,6 +29,8 @@ export type ModuleResolveOptions = {
   pathAliases?: Record<string, string[]>;
   /** Set of indexed file paths for validation */
   indexedFiles?: Set<string>;
+  /** Workspace package name → source entry file (from package.json) */
+  workspacePackages?: Map<string, string>;
 };
 
 /**
@@ -165,6 +167,12 @@ export function moduleResolve(
   options: ModuleResolveOptions
 ): string | undefined {
   const extensions = options.extensions ?? DEFAULT_EXTENSIONS;
+
+  // Workspace packages resolve to their source entry file
+  if (options.workspacePackages) {
+    const wsEntry = options.workspacePackages.get(specifier);
+    if (wsEntry) return wsEntry;
+  }
 
   // External packages can't be resolved to local files
   if (isExternalPackage(specifier)) {

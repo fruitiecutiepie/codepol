@@ -1,5 +1,6 @@
 import path from 'node:path';
 import ts from 'typescript';
+import { workspacePackageMapDiscover } from '@codepol/core';
 
 type FileSource = {
   filePath: string;
@@ -18,12 +19,16 @@ const IMPORT_RE =
  * Fix all files by removing `export` keywords from declarations that are
  * not imported by any other file in the set.
  *
- * Returns a Map of filePath → fixed source, only for files that changed.
+ * @param files - Source files to analyze and fix
+ * @param cwd - Workspace root for discovering workspace package imports
+ * @returns Map of filePath → fixed source, only for files that changed.
  */
 export function unusedExportsFix(
   files: FileSource[],
+  cwd?: string,
 ): Map<string, string> {
-  const namesPerFile = importedNamesByFilePath(files);
+  const workspacePackages = cwd ? workspacePackageMapDiscover(cwd) : undefined;
+  const namesPerFile = importedNamesByFilePath(files, workspacePackages);
   const result = new Map<string, string>();
 
   for (const { filePath, source } of files) {
@@ -45,11 +50,11 @@ export function unusedExportsFix(
  * For each file in the set, collect the names that are imported by at least
  * one *other* file.  Returns a map: filePath → Set<imported names>.
  *
- * Only relative specifiers (starting with `.`) are resolved.  Package imports
- * are ignored because they cannot refer to files within the matched set.
+ * Resolves both relative specifiers and workspace package names.
  */
 function importedNamesByFilePath(
   files: FileSource[],
+  workspacePackages?: Map<string, string>,
 ): Map<string, Set<string>> {
   const result = new Map<string, Set<string>>();
   for (const file of files) {
@@ -60,7 +65,7 @@ function importedNamesByFilePath(
     const bindings = sourceImportBindings(file.source);
 
     for (const { importedName, moduleSpec } of bindings) {
-      const resolved = moduleSpecAbsolutePath(moduleSpec, file.filePath);
+      const resolved = moduleSpecAbsolutePath(moduleSpec, file.filePath, workspacePackages);
       if (!resolved) continue;
 
       for (const target of files) {
@@ -168,7 +173,14 @@ function sourceImportBindings(source: string): ImportBinding[] {
 function moduleSpecAbsolutePath(
   spec: string,
   fromFile: string,
+  workspacePackages?: Map<string, string>,
 ): string | undefined {
+  // Workspace package name → source entry file
+  if (workspacePackages) {
+    const wsEntry = workspacePackages.get(spec);
+    if (wsEntry) return wsEntry;
+  }
+
   if (!spec.startsWith('.')) return undefined;
   return path.resolve(path.dirname(fromFile), spec);
 }

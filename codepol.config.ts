@@ -17,7 +17,7 @@ export default defineConfig({
       ruleId: 'no-unused-exports',
       description: 'Detect exported symbols not imported by any other file',
       args: {
-        ignoreEntryPoints: true,
+        ignorePackageEntryPoints: true,
       },
       targets: ['codepol-src'],
     },
