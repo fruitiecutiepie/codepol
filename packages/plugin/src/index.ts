@@ -28,6 +28,12 @@ import {
 import { loggerTreeCheckProvider } from './policyPluginLogger';
 import { unusedExportsRule } from './unusedExportsRule';
 import { unusedExportsCheck } from './unusedExportsCheck';
+import { forbiddenWordsRule } from './forbiddenWordsRule';
+import { forbiddenPathWordsRule } from './forbiddenPathWordsRule';
+import { noInterfaceRule } from './noInterfaceRule';
+import { noVerbFunctionNameRule } from './noVerbFunctionNameRule';
+import { noDuplicateExportsRule } from './noDuplicateExportsRule';
+import { noStarExportCollisionsRule } from './noStarExportCollisionsRule';
 
 // Re-export cache clear for backwards compatibility
 export { policyCacheClear };
@@ -521,4 +527,13 @@ export const loggerEnterExitRule: CodepolPluginRule = pluginRuleNew({
   },
 });
 
-export default [loggerEnterExitRule, unusedExportsRule];
+export default [
+  loggerEnterExitRule,
+  unusedExportsRule,
+  forbiddenWordsRule,
+  forbiddenPathWordsRule,
+  noVerbFunctionNameRule,
+  noInterfaceRule,
+  noDuplicateExportsRule,
+  noStarExportCollisionsRule,
+];

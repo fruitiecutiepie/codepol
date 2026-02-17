@@ -1,6 +1,13 @@
 import tseslint from 'typescript-eslint';
 import { eslintPluginCreate } from '@codepol/eslint-plugin';
+import { langAdd, parserInit, providerRulesConfigGet } from '@codepol/core';
 import pluginRules from '@codepol/plugin';
+
+// Initialize tree-sitter so cross-file analysis rules (no-unused-exports)
+// can build the project index. Must happen before rules execute.
+langAdd({ langId: 'typescript', fileExtensions: ['.ts', '.mts', '.cts'] });
+langAdd({ langId: 'tsx', fileExtensions: ['.tsx'] });
+await parserInit();
 
 const codepol = eslintPluginCreate(pluginRules);
 
@@ -10,7 +17,7 @@ export default [
     files: ['packages/*/src/**/*.ts'],
     plugins: { codepol },
     rules: {
-      'codepol/no-unused-exports': 'warn',
+      ...await providerRulesConfigGet('eslint'),
       '@typescript-eslint/explicit-module-boundary-types': 'off',
       '@typescript-eslint/no-unused-vars': ['error', {
         argsIgnorePattern: '^_',

@@ -11,13 +11,14 @@ import type {
   PolicyRule,
   PolicyCheckContext,
   PolicyViolation,
+  PolicyViolationFix,
   ProjectIndex,
 } from '@codepol/core';
 
 /**
  * Rule arguments for configuring unused exports detection.
  */
-export type UnusedExportsArgs = {
+type UnusedExportsArgs = {
   /** Glob patterns for files to skip */
   ignorePatterns?: string[];
   /** Skip entry point files (index.ts, main.ts) */
@@ -139,6 +140,44 @@ function getImportedExportNames(
 }
 
 /**
+ * Matches an inline export declaration: `export [async] function|const|let|…`
+ * Captures: [1] leading whitespace, [2] "export " (keyword + trailing space)
+ */
+const INLINE_EXPORT_RE =
+  /^(\s*)(export\s+)(?:async\s+)?(?:function|const|let|var|type|interface|class|enum|abstract\s+class)\b/;
+
+/**
+ * Build fix data that removes the `export ` keyword from an inline declaration.
+ * Returns undefined for default exports, re-exports, and `export { … }` forms
+ * where stripping the keyword would produce invalid syntax.
+ */
+function exportKeywordRemovalFix(
+  source: string,
+  rangeStart: number,
+  exportedName: string,
+): PolicyViolationFix | undefined {
+  if (exportedName === 'default') return undefined;
+
+  const lineStart = source.lastIndexOf('\n', rangeStart - 1) + 1;
+  const lineEnd = source.indexOf('\n', lineStart);
+  const lineText = source.slice(lineStart, lineEnd === -1 ? source.length : lineEnd);
+
+  const m = INLINE_EXPORT_RE.exec(lineText);
+  if (!m) return undefined;
+
+  const indentLen = m[1]!.length;
+  const exportLen = m[2]!.length; // "export " including trailing whitespace
+
+  return {
+    byteRange: {
+      start: lineStart + indentLen,
+      end: lineStart + indentLen + exportLen,
+    },
+    text: '',
+  };
+}
+
+/**
  * Check for unused exports in a file using the project-wide semantic index.
  *
  * This function:
@@ -210,6 +249,7 @@ export function unusedExportsCheck(
         message: `Exported ${symbolKind} '${displayName}'${nameInfo} is not imported by any other file`,
         line,
         column,
+        fix: exportKeywordRemovalFix(source, range.start, exp.exportedName),
       });
     }
   }

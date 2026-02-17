@@ -512,6 +512,176 @@ Methods that are thin wrappers over `IndexStore` can be unit-tested with a pre-p
 | Incremental: rename export | Integration | `packages/plugin/src/unusedExportsCheck.spec.ts` | Exists |
 | Revision-based change detection | Integration | `packages/plugin/src/unusedExportsCheck.spec.ts` | Exists |
 
+#### Forbidden Words Check (`forbiddenWordsCheck.ts`)
+
+| Scenario | Layer | Test File | Status |
+|----------|-------|-----------|--------|
+| `identifierSplitByCasing` — simple lowercase | Unit | `packages/plugin/src/forbiddenWordsCheck.spec.ts` | Exists |
+| `identifierSplitByCasing` — camelCase | Unit | `packages/plugin/src/forbiddenWordsCheck.spec.ts` | Exists |
+| `identifierSplitByCasing` — PascalCase | Unit | `packages/plugin/src/forbiddenWordsCheck.spec.ts` | Exists |
+| `identifierSplitByCasing` — snake_case | Unit | `packages/plugin/src/forbiddenWordsCheck.spec.ts` | Exists |
+| `identifierSplitByCasing` — SCREAMING_SNAKE_CASE | Unit | `packages/plugin/src/forbiddenWordsCheck.spec.ts` | Exists |
+| `identifierSplitByCasing` — kebab-case | Unit | `packages/plugin/src/forbiddenWordsCheck.spec.ts` | Exists |
+| `identifierSplitByCasing` — acronyms followed by words | Unit | `packages/plugin/src/forbiddenWordsCheck.spec.ts` | Exists |
+| `identifierSplitByCasing` — words followed by acronyms | Unit | `packages/plugin/src/forbiddenWordsCheck.spec.ts` | Exists |
+| `identifierSplitByCasing` — compound words intact | Unit | `packages/plugin/src/forbiddenWordsCheck.spec.ts` | Exists |
+| `identifierSplitByCasing` — numbers | Unit | `packages/plugin/src/forbiddenWordsCheck.spec.ts` | Exists |
+| `identifierSplitByCasing` — leading/trailing underscores | Unit | `packages/plugin/src/forbiddenWordsCheck.spec.ts` | Exists |
+| `containsForbiddenWord` — exact segment match | Unit | `packages/plugin/src/forbiddenWordsCheck.spec.ts` | Exists |
+| `containsForbiddenWord` — compound word not matched | Unit | `packages/plugin/src/forbiddenWordsCheck.spec.ts` | Exists |
+| `containsForbiddenWord` — case insensitive | Unit | `packages/plugin/src/forbiddenWordsCheck.spec.ts` | Exists |
+| `containsForbiddenWord` — multiple forbidden words | Unit | `packages/plugin/src/forbiddenWordsCheck.spec.ts` | Exists |
+| `containsForbiddenWord` — no match returns null | Unit | `packages/plugin/src/forbiddenWordsCheck.spec.ts` | Exists |
+| Flags function with forbidden word | Unit | `packages/plugin/src/forbiddenWordsCheck.spec.ts` | Exists |
+| Flags variable with forbidden word | Unit | `packages/plugin/src/forbiddenWordsCheck.spec.ts` | Exists |
+| Flags type with forbidden word | Unit | `packages/plugin/src/forbiddenWordsCheck.spec.ts` | Exists |
+| Allows compound words | Unit | `packages/plugin/src/forbiddenWordsCheck.spec.ts` | Exists |
+| Reports correct line and column | Unit | `packages/plugin/src/forbiddenWordsCheck.spec.ts` | Exists |
+| Returns empty when no args provided | Unit | `packages/plugin/src/forbiddenWordsCheck.spec.ts` | Exists |
+| Returns empty when words array is empty | Unit | `packages/plugin/src/forbiddenWordsCheck.spec.ts` | Exists |
+
+#### Forbidden Path Words Check (`forbiddenPathWordsCheck.ts`)
+
+| Scenario | Layer | Test File | Status |
+|----------|-------|-----------|--------|
+| `pathSegmentContainsForbiddenWord` — exact segment match | Unit | `packages/plugin/src/forbiddenPathWordsCheck.spec.ts` | Exists |
+| `pathSegmentContainsForbiddenWord` — camelCase segment | Unit | `packages/plugin/src/forbiddenPathWordsCheck.spec.ts` | Exists |
+| `pathSegmentContainsForbiddenWord` — kebab-case segment | Unit | `packages/plugin/src/forbiddenPathWordsCheck.spec.ts` | Exists |
+| `pathSegmentContainsForbiddenWord` — snake_case segment | Unit | `packages/plugin/src/forbiddenPathWordsCheck.spec.ts` | Exists |
+| `pathSegmentContainsForbiddenWord` — PascalCase segment | Unit | `packages/plugin/src/forbiddenPathWordsCheck.spec.ts` | Exists |
+| `pathSegmentContainsForbiddenWord` — compound word not matched | Unit | `packages/plugin/src/forbiddenPathWordsCheck.spec.ts` | Exists |
+| `pathSegmentContainsForbiddenWord` — case insensitive | Unit | `packages/plugin/src/forbiddenPathWordsCheck.spec.ts` | Exists |
+| `pathSegmentContainsForbiddenWord` — no match returns null | Unit | `packages/plugin/src/forbiddenPathWordsCheck.spec.ts` | Exists |
+| File name with forbidden word (camelCase) | Unit | `packages/plugin/src/forbiddenPathWordsCheck.spec.ts` | Exists |
+| File name with forbidden word (kebab-case) | Unit | `packages/plugin/src/forbiddenPathWordsCheck.spec.ts` | Exists |
+| File name with forbidden word (snake_case) | Unit | `packages/plugin/src/forbiddenPathWordsCheck.spec.ts` | Exists |
+| Allows files without forbidden words | Unit | `packages/plugin/src/forbiddenPathWordsCheck.spec.ts` | Exists |
+| Allows compound words | Unit | `packages/plugin/src/forbiddenPathWordsCheck.spec.ts` | Exists |
+| Directory with forbidden word | Unit | `packages/plugin/src/forbiddenPathWordsCheck.spec.ts` | Exists |
+| Nested directory with forbidden word | Unit | `packages/plugin/src/forbiddenPathWordsCheck.spec.ts` | Exists |
+| Multiple directories with forbidden words | Unit | `packages/plugin/src/forbiddenPathWordsCheck.spec.ts` | Exists |
+| `ignoreExtensions` — ignores by default | Unit | `packages/plugin/src/forbiddenPathWordsCheck.spec.ts` | Exists |
+| `ignoreExtensions: false` — checks extension | Unit | `packages/plugin/src/forbiddenPathWordsCheck.spec.ts` | Exists |
+| `checkFiles: false` — skips file, still checks dirs | Unit | `packages/plugin/src/forbiddenPathWordsCheck.spec.ts` | Exists |
+| `checkDirectories: false` — skips dirs, still checks files | Unit | `packages/plugin/src/forbiddenPathWordsCheck.spec.ts` | Exists |
+| Returns empty when no args | Unit | `packages/plugin/src/forbiddenPathWordsCheck.spec.ts` | Exists |
+| Returns empty when words empty | Unit | `packages/plugin/src/forbiddenPathWordsCheck.spec.ts` | Exists |
+| Reports line 1 column 1 for path violations | Unit | `packages/plugin/src/forbiddenPathWordsCheck.spec.ts` | Exists |
+| Includes correct filePath in violation | Unit | `packages/plugin/src/forbiddenPathWordsCheck.spec.ts` | Exists |
+
+#### No Duplicate Exports Check (`noDuplicateExportsCheck.ts`)
+
+| Scenario | Layer | Test File | Status |
+|----------|-------|-----------|--------|
+| `extractExports` — function declaration | Unit | `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Exists |
+| `extractExports` — async function | Unit | `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Exists |
+| `extractExports` — const arrow function | Unit | `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Exists |
+| `extractExports` — const function expression | Unit | `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Exists |
+| `extractExports` — non-exported not included | Unit | `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Exists |
+| `extractExports` — const/let variables | Unit | `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Exists |
+| `extractExports` — multiple variables in one statement | Unit | `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Exists |
+| `extractExports` — distinguishes functions from variables | Unit | `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Exists |
+| `extractExports` — type alias, interface, class, enum | Unit | `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Exists |
+| `extractExports` — re-exports excluded by default | Unit | `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Exists |
+| `extractExports` — re-exports included when enabled | Unit | `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Exists |
+| `extractExports` — aliased re-exports | Unit | `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Exists |
+| `extractExports` — star re-exports ignored | Unit | `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Exists |
+| `extractExports` — mixed exports | Unit | `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Exists |
+| `extractExports` — position tracking | Unit | `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Exists |
+| `identifierTypesToCheck` — all types when undefined | Unit | `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Exists |
+| `identifierTypesToCheck` — only specified types | Unit | `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Exists |
+| `duplicateExportsDetect` — duplicate functions | Unit | `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Exists |
+| `duplicateExportsDetect` — duplicate types | Unit | `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Exists |
+| `duplicateExportsDetect` — duplicate variables | Unit | `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Exists |
+| `duplicateExportsDetect` — multiple duplicates (3+ files) | Unit | `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Exists |
+| `duplicateExportsDetect` — no duplicates returns empty | Unit | `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Exists |
+| `duplicateExportsDetect` — cross-type detection | Unit | `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Exists |
+| `duplicateExportsDetect` — filter by identifierTypes | Unit | `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Exists |
+| `duplicateExportsDetect` — re-exports excluded by default | Unit | `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Exists |
+| `duplicateExportsDetect` — re-exports included when enabled | Unit | `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Exists |
+| `duplicateExportsDetect` — deterministic ordering | Unit | `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Exists |
+| `noDuplicateExportsCheck` — detects duplicates across files | Unit | `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Exists |
+| `noDuplicateExportsCheck` — unique exports returns empty | Unit | `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Exists |
+| `noDuplicateExportsCheck` — respects identifierTypes filter | Unit | `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Exists |
+| `noDuplicateExportsCheck` — re-exports handling | Unit | `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Exists |
+| `noDuplicateExportsCheck` — empty files array | Unit | `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Exists |
+| `noDuplicateExportsCheck` — files with no exports | Unit | `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Exists |
+| `noDuplicateExportsCheck` — real-world name collisions | Unit | `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Exists |
+| `noDuplicateExportsCheck` — type name collisions | Unit | `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Exists |
+
+#### No Interface Check (`noInterfaceCheck.ts`, `noInterfaceFix.ts`)
+
+| Scenario | Layer | Test File | Status |
+|----------|-------|-----------|--------|
+| Flags simple interface declaration | Unit | `packages/plugin/src/noInterfaceCheck.spec.ts` | Exists |
+| Includes fix data with byteRange and replacement text | Unit | `packages/plugin/src/noInterfaceCheck.spec.ts` | Exists |
+| Flags generic interface | Unit | `packages/plugin/src/noInterfaceCheck.spec.ts` | Exists |
+| Flags interface with extends clause | Unit | `packages/plugin/src/noInterfaceCheck.spec.ts` | Exists |
+| Multiple interfaces produce multiple violations | Unit | `packages/plugin/src/noInterfaceCheck.spec.ts` | Exists |
+| No interfaces returns empty array | Unit | `packages/plugin/src/noInterfaceCheck.spec.ts` | Exists |
+| Empty source returns empty array | Unit | `packages/plugin/src/noInterfaceCheck.spec.ts` | Exists |
+| Correct line and column for non-first-line interface | Unit | `packages/plugin/src/noInterfaceCheck.spec.ts` | Exists |
+| Uses rule.id when available | Unit | `packages/plugin/src/noInterfaceCheck.spec.ts` | Exists |
+| Falls back to rule.ruleId | Unit | `packages/plugin/src/noInterfaceCheck.spec.ts` | Exists |
+| Uses provided filePath in violations | Unit | `packages/plugin/src/noInterfaceCheck.spec.ts` | Exists |
+| `interfaceToTypeAlias` — simple interface | Unit | `packages/plugin/src/noInterfaceCheck.spec.ts` | Exists |
+| `interfaceToTypeAlias` — generic interface | Unit | `packages/plugin/src/noInterfaceCheck.spec.ts` | Exists |
+| `interfaceToTypeAlias` — multi-param generic | Unit | `packages/plugin/src/noInterfaceCheck.spec.ts` | Exists |
+| `interfaceToTypeAlias` — single extends | Unit | `packages/plugin/src/noInterfaceCheck.spec.ts` | Exists |
+| `interfaceToTypeAlias` — multiple extends | Unit | `packages/plugin/src/noInterfaceCheck.spec.ts` | Exists |
+| `interfaceToTypeAlias` — empty body | Unit | `packages/plugin/src/noInterfaceCheck.spec.ts` | Exists |
+| `interfaceToTypeAlias` — extends with generics | Unit | `packages/plugin/src/noInterfaceCheck.spec.ts` | Exists |
+| `noInterfaceFix` — converts single interface | Unit | `packages/plugin/src/noInterfaceCheck.spec.ts` | Exists |
+| `noInterfaceFix` — converts multiple interfaces | Unit | `packages/plugin/src/noInterfaceCheck.spec.ts` | Exists |
+| `noInterfaceFix` — leaves non-interface declarations | Unit | `packages/plugin/src/noInterfaceCheck.spec.ts` | Exists |
+| `noInterfaceFix` — empty source | Unit | `packages/plugin/src/noInterfaceCheck.spec.ts` | Exists |
+| `noInterfaceFix` — no interfaces returns unchanged | Unit | `packages/plugin/src/noInterfaceCheck.spec.ts` | Exists |
+| `noInterfaceFix` — handles extends clause | Unit | `packages/plugin/src/noInterfaceCheck.spec.ts` | Exists |
+| `noInterfaceFix` — handles generics | Unit | `packages/plugin/src/noInterfaceCheck.spec.ts` | Exists |
+
+#### No Verb Function Name Check (`noVerbFunctionNameCheck.ts`)
+
+| Scenario | Layer | Test File | Status |
+|----------|-------|-----------|--------|
+| `startsWithVerb` — flags verb segment | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| `startsWithVerb` — allows compound word (doc vs do) | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| `startsWithVerb` — flags exact verb as first segment | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| `startsWithVerb` — flags get prefix | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| `startsWithVerb` — allows getaway (compound) | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| `startsWithVerb` — flags process prefix | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| `startsWithVerb` — allows processor (compound) | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| `startsWithVerb` — allows handlebar (compound) | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| `startsWithVerb` — acronym as first segment | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| `startsWithVerb` — verb before acronym | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| `startsWithVerb` — PascalCase matching | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| `startsWithVerb` — SCREAMING_SNAKE_CASE matching | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| `startsWithVerb` — snake_case matching | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| `startsWithVerb` — multiple verbs | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| `startsWithVerb` — empty verbs set | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| `startsWithVerb` — empty function name | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| `startsWithVerb` — single char function name | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| `startsWithVerb` — underscore prefix | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| `buildVerbSet` — creates set from array | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| `buildVerbSet` — lowercases all verbs | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| `buildVerbSet` — empty/undefined returns empty set | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| `extractFunctions` — simple/exported/async/generator declarations | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| `extractFunctions` — arrow functions (const/let/var/async) | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| `extractFunctions` — function expressions | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| `extractFunctions` — class/object methods | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| `extractFunctions` — nested functions | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| `extractFunctions` — non-function declarations excluded | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| `extractFunctions` — line and column positions | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| Flags function declaration starting with verb | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| Flags arrow function starting with verb | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| Flags class method starting with verb | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| Flags multiple functions with verbs | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| Allows compound words (doc, getaway, handlebar, processor) | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| Allows function not starting with verb | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| Allows verb in middle (not prefix) | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| Returns empty when no args/verbs | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| Reports correct line and column | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+| Handles empty source and comment-only source | Unit | `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Exists |
+
 ---
 
 ### 3.3 `@codepol/eslint-plugin`
@@ -605,6 +775,11 @@ Methods that are thin wrappers over `IndexStore` can be unit-tested with a pre-p
 | Plugin: logger tree check | 8 | 0 | 100% |
 | Plugin: logger ESLint rule | 8 | 0 | 100% |
 | Plugin: unused exports | 26 | 0 | 100% |
+| Plugin: forbidden words | 23 | 0 | 100% |
+| Plugin: forbidden path words | 26 | 0 | 100% |
+| Plugin: no duplicate exports | 47 | 0 | 100% |
+| Plugin: no interface | 25 | 0 | 100% |
+| Plugin: no verb function name | 63 | 0 | 100% |
 | ESLint plugin | 16 | 0 | 100% |
 | esbuild plugin | 6 | 0 | 100% |
 | CLI | 9 | 1 | 90% |
@@ -634,6 +809,11 @@ Ordered by risk (silent corruption potential) and effort (lower effort = do it s
 | 12 | Type relations (Extends/Implements) | Medium | Medium (23 tests: 8 unit + 15 integration) | Class hierarchy analysis and interface compliance checking. New `TypeRelation` relation type with full stack: tree-sitter queries, adapter extraction, IndexStore storage, ProjectIndex API. Cross-file `resolvedTargetId` resolution via `crossFileResolve` Step 6. | Done (5 IndexStore unit tests, 3 ProjectIndex unit tests, 15 integration tests covering class extends, implements, multiple implements, interface extends, abstract class, generics, subTypesGet, empty results, multi-interface extends, cross-file extends/implements/re-export chain/aliased import/interface extends. `resolvedTargetId` fully resolved to exported symbols via `crossFileResolve` Step 6 and `relationUpdate` TypeRelation support in IndexStore.) |
 | 13 | CommonJS require() + dynamic import() | Medium | Small (6 tests, query patterns only — adapter extraction already existed) | CommonJS `require()` is common in Node.js codebases and needed for mixed CJS/ESM projects. Dynamic `import()` specifier extraction enables module dependency awareness for lazy-loaded modules. | Done (5 require tests: whole-module, destructured, ESM interop, module graph inclusion, external package. 5 dynamic import tests: whole-module binding (`const mod = await import()`), destructured binding (`const { foo } = await import()`), member access resolution, external package, side-effect `ImportsRelation` specifier resolution. Dynamic import binding resolution via `import.dynamic_name`/`import.dynamic_source` query captures creates `ImportBindingRelation` with `isNamespace: true`; namespace member resolution resolves `mod.foo` accesses. `ImportsRelation.resolvedModulePath` set during `crossFileResolve` Step 7. Module graph integration: 3 tests for dynamic import edges, side-effect dynamic import edges, and static side-effect import edges via `ImportsRelation.resolvedModulePath`.) |
 | 14 | Control Flow Graph (CFG) | Medium | Medium (45 tests: 8 unit + 37 integration) | Per-function control flow graph construction enabling cyclomatic complexity calculation, dead code detection, and reachability analysis. Full stack: `FlowNode`/`FlowEdge`/`FlowGraph` types in `indexTypes.ts`, AST-walking extraction in `cfgBuild.ts` with `LoopContext` threading for break/continue, `IndexStore` storage with `cfgByScope`/`cfgsByFile`, `ProjectIndex` API (`cfgGet`, `cyclomaticComplexityGet`). | Done (5 IndexStore unit tests, 3 ProjectIndex unit tests, 37 integration tests covering: empty function, sequential, if/else, ternary expressions (simple, expression statement, nested, cyclomatic complexity), while/for/do-while loops, for...in/for...of, return/throw, nested control flow, break/continue (with labeled break), switch/case/default (with fallthrough), try/catch/finally, arrow functions, multiple functions, cyclomatic complexity for all patterns. No remaining CFG gaps.) |
+| 15 | Plugin: forbidden words | Low | Small (23 tests, pure functions) | Regex-based identifier extraction and segment-based forbidden word matching. Uses `identifierSplitByCasing` to split identifiers and check individual segments against a forbidden word list — compound words (e.g., `database`, `metadata`) are not false-positived. | Done (11 `identifierSplitByCasing` tests, 5 `containsForbiddenWord` tests, 7 `forbiddenWordsCheck` tests. Import path bug fixed.) |
+| 16 | Plugin: forbidden path words | Low | Small (26 tests, pure functions) | File/directory path segment checking against forbidden words. Supports `checkFiles`, `checkDirectories`, `ignoreExtensions` options. | Done (8 `pathSegmentContainsForbiddenWord` tests, 18 `forbiddenPathWordsCheck` tests covering file names, directories, nested dirs, all options, edge cases.) |
+| 17 | Plugin: no duplicate exports | Low | Small (47 tests, TypeScript compiler API) | Cross-file duplicate export name detection using TypeScript compiler API. Supports identifier type filtering and re-export handling. | Done (15 `extractExports` tests, 4 `identifierTypesToCheck` tests, 10 `duplicateExportsDetect` tests, 8 `noDuplicateExportsCheck` integration tests, plus 10 real-world scenario tests.) |
+| 18 | Plugin: no interface | Low | Small (25 tests, TypeScript compiler API) | Detects interface declarations and provides autofix to convert to type aliases. Handles generics, extends clauses, empty bodies. Includes both check and fix functions. | Done (11 `noInterfaceCheck` tests, 7 `interfaceToTypeAlias` tests, 7 `noInterfaceFix` tests. Spec file was entirely missing — created from scratch.) |
+| 19 | Plugin: no verb function name | Low | Small (63 tests, TypeScript compiler API) | Detects function names starting with verbs. Uses `identifierSplitByCasing` for compound word awareness — `getaway`, `handlebar`, `processor` are not false positives. Covers function declarations, arrow functions, methods. | Done (18 `startsWithVerb` tests, 4 `buildVerbSet` tests, 16 `extractFunctions` tests, 15 `noVerbFunctionNameCheck` tests, plus 10 edge case tests.) |
 
 ---
 
@@ -955,6 +1135,12 @@ These were added as part of closing gaps identified in this plan.
 | `packages/plugin/src/unusedExportsCheck.bench.ts` | Bench | Per-file `unusedExportsCheck` latency on a 100-file index. Benchmarks checking a middle file, first file (likely all used), and last file (likely unused exports). |
 | `tests/index.cfg.spec.ts` | Integration | Control flow graph extraction: 37 tests covering empty function, sequential statements, if/else branching, ternary expressions (simple variable declaration, expression statement, nested with recursive branch processing, cyclomatic complexity single=2, ternary+if=3), while/for/do-while/for-in/for-of loops, return/throw termination, break/continue (nested, labeled), switch/case/default (fallthrough, all-return), try/catch/finally (with/without catch, with/without finally), nested control flow, cyclomatic complexity (linear=1, if/else=2, while+if=3, switch-3-cases=3, try/catch=2), arrow functions (block + expression body), multiple functions per file. 0 skipped. |
 | `packages/core/src/adapters/treeSitter/cfgBuild.ts` | — | CFG construction module: `cfgsExtract(tree, file, scopes)` walks function body ASTs to build per-function control flow graphs. `LoopContext` type threaded through recursive processing for break/continue target resolution (including labeled break via parent chain). Handles: sequential flow, if/else branching (branch + merge nodes), ternary expressions (`ternaryExpressionFind` recursively scans statement subtrees; `ternaryProcess` models branch/merge with `ternaryBranchProcess` handling nested ternaries via `incomingEdgeLabel` propagation), while/for/do-while/for-in/for-of loops (loop node + back-edges), return/throw (edge to exit), break/continue (edge to loop merge/header), switch/case/default (multi-branch with fallthrough), try/catch/finally (conservative catch-always-reachable model), labeled statements. Uses edge-count tracking for branch label assignment. |
+| `packages/plugin/src/forbiddenWordsCheck.spec.ts` | Unit | `identifierSplitByCasing` (11 tests: casing variants, acronyms, compound words, numbers, underscores), `containsForbiddenWord` (5 tests: segment match, compound bypass, case insensitivity, multi-word, no match), `forbiddenWordsCheck` (7 tests: function/variable/type flagging, compound words allowed, line/column, empty args). Import path fixed (`../lib/` → `./lib/`). |
+| `packages/plugin/src/forbiddenPathWordsCheck.spec.ts` | Unit | `pathSegmentContainsForbiddenWord` (8 tests: exact segment, casing variants, compound bypass, case insensitivity), `forbiddenPathWordsCheck` (18 tests: file name flagging, directory flagging, `ignoreExtensions`, `checkFiles`, `checkDirectories` options, empty args, position reporting). |
+| `packages/plugin/src/noDuplicateExportsCheck.spec.ts` | Unit | `extractExports` (15 tests: functions, variables, types, re-exports, mixed, positions), `identifierTypesToCheck` (4 tests), `duplicateExportsDetect` (10 tests: functions/types/variables, multiple duplicates, cross-type, filters, re-exports, ordering), `noDuplicateExportsCheck` (8 tests: cross-file detection, filters, re-exports, edge cases, real-world scenarios). |
+| `packages/plugin/src/noInterfaceCheck.spec.ts` | Unit | `noInterfaceCheck` (11 tests: simple/generic/extends flagging, multiple interfaces, fix data, empty source, line/column, rule.id/ruleId fallback, filePath), `interfaceToTypeAlias` (7 tests: simple, generic, multi-param generic, single/multiple extends, empty body, extends with generics), `noInterfaceFix` (7 tests: single/multiple conversion, non-interface preservation, empty source, extends, generics). |
+| `packages/plugin/src/noVerbFunctionNameCheck.spec.ts` | Unit | `startsWithVerb` (18 tests: verb segment, compound word bypass for doc/getaway/handlebar/processor, acronyms, PascalCase/SCREAMING_SNAKE/snake_case, multiple verbs, edge cases), `buildVerbSet` (4 tests), `extractFunctions` (16 tests: declarations, arrow functions, function expressions, methods, nested, non-functions, positions), `noVerbFunctionNameCheck` (15 tests: flagging, compound bypass, non-prefix verbs, empty args, line/column, edge cases). |
+| `packages/plugin/src/lib/identifierSplitByCasing.ts` | — | Shared utility for splitting identifiers by casing (camelCase, PascalCase, snake_case, kebab-case, SCREAMING_SNAKE_CASE). Used by `forbiddenWordsCheck`, `forbiddenPathWordsCheck`, and `noVerbFunctionNameCheck`. |
 
 ### Known gaps discovered during testing
 
@@ -1027,6 +1213,13 @@ These were added as part of closing gaps identified in this plan.
 #### Pre-existing build error in eslint-plugin
 
 - **`ByteRange` type mismatch in `eslintAdapter.ts`**: **Fixed.** `fixer.replaceTextRange` expects `readonly [number, number]` but was receiving a `ByteRange` object (`{ start, end }`). Fixed by converting to `[byteRange.start, byteRange.end]` tuple.
+
+#### New plugin rule test gaps
+
+- **`forbiddenWordsCheck.spec.ts` import path bug**: **Fixed.** Import `'../lib/identifierSplitByCasing'` resolved to `packages/plugin/lib/` which does not exist. Corrected to `'./lib/identifierSplitByCasing'` (resolves to `packages/plugin/src/lib/`).
+- **`noInterfaceCheck` had no spec file**: **Fixed.** Created `packages/plugin/src/noInterfaceCheck.spec.ts` with 25 tests covering `noInterfaceCheck` (11 tests), `interfaceToTypeAlias` (7 tests), and `noInterfaceFix` (7 tests).
+- **`noDuplicateExportsCheck` hardcoded ruleId**: Known issue — `duplicateExportsDetect()` uses hardcoded `'codepol/no-duplicate-exports'` instead of the rule's configured ID.
+- **Duplicate utility file**: `packages/plugin/identifierSplitByCasing.ts` duplicates `packages/plugin/src/lib/identifierSplitByCasing.ts`. The root-level copy should be removed.
 
 ### Planned tests (not yet created)
 

@@ -60,7 +60,7 @@ All export patterns are handled. No remaining gaps.
 - [x] Anonymous default exports (`export default class {}`, `export default function() {}`) — AST walking in `exportsExtract` detects unhandled default exports and creates synthetic `SymbolRecord` (name `"default"`, appropriate kind, `Exported` flag). `indexFileWithTreeSitter` merges synthetic symbols into the delta.
 
 ### 3. Import Binding Relations
-**Status**: Mostly Implemented
+**Status**: Implemented
 
 - [x] `ImportBindingRelation` type defined
 - [x] Named imports (`import { foo }`)
@@ -226,6 +226,17 @@ These are intentional constraints, not bugs:
 - [x] Dynamic import() module graph integration — tested in `tests/index.module-graph.spec.ts` (dynamic import with binding, side-effect dynamic import, static side-effect import all create edges)
 - [x] Control flow graph extraction — tested in `tests/index.cfg.spec.ts` (37 tests: empty function, sequential, if/else, ternary expressions (simple, expression statement, nested), while/for/do-while/for-in/for-of, return/throw, break/continue with labels, switch/case/default with fallthrough, try/catch/finally, nested control flow, cyclomatic complexity, arrow functions)
 - [x] CFG storage and queries — tested in `packages/core/src/index/indexStore.spec.ts` (put/get/remove/clear) and `packages/core/src/index/indexQuery.spec.ts` (cfgGet, cyclomaticComplexityGet)
+
+## Plugin Rules Using the Semantic Index
+
+The following plugin rules in `@codepol/plugin` consume the `ProjectIndex` or use TypeScript compiler API for analysis:
+
+- **unusedExportsCheck** — uses `ProjectIndex` for cross-file import/export resolution to detect unused exports. Tested (26 tests in `unusedExportsCheck.spec.ts`).
+- **noDuplicateExportsCheck** — uses TypeScript compiler API to extract exports across files and detect duplicate export names. Tested (47 tests in `noDuplicateExportsCheck.spec.ts`).
+- **noInterfaceCheck** / **noInterfaceFix** — uses TypeScript compiler API to detect interface declarations and autofix them to type aliases. Tested (25 tests in `noInterfaceCheck.spec.ts`).
+- **forbiddenWordsCheck** — regex-based identifier extraction with compound-word-aware forbidden word matching. Tested (23 tests in `forbiddenWordsCheck.spec.ts`).
+- **forbiddenPathWordsCheck** — path segment analysis for forbidden words in file/directory names. Tested (26 tests in `forbiddenPathWordsCheck.spec.ts`).
+- **noVerbFunctionNameCheck** — function name analysis using `identifierSplitByCasing` to detect verb-prefixed names while allowing compound words. Tested (63 tests in `noVerbFunctionNameCheck.spec.ts`).
 
 ## Documentation Needed
 

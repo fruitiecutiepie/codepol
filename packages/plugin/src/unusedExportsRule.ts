@@ -6,10 +6,19 @@
  * in the project. It demonstrates cross-file analysis using the semantic index.
  */
 
-import type { CodepolPluginRule, LintProvider, EslintProviderConfig, LintProviderContext } from '@codepol/core';
+import type {
+  CodepolPluginRule,
+  LintProvider,
+  EslintProviderConfig,
+  LintProviderContext,
+  FixProvider,
+  FixProviderContext,
+} from '@codepol/core';
 import { pluginRuleNew, treeCheckProviderNew } from '@codepol/core';
 import { eslintAdapter } from '@codepol/eslint-plugin';
 import { unusedExportsCheck } from './unusedExportsCheck';
+import { unusedExportsFix } from './unusedExportsFix';
+import { readFileSync, writeFileSync } from 'node:fs';
 
 /**
  * Tree-sitter check provider for unused exports detection.
@@ -82,11 +91,25 @@ export const unusedExportsLintProvider: LintProvider = {
  * - Create a rule with ruleId: '@codepol/plugin/no-unused-exports'
  * - Set requiresProjectIndex: true triggers index building automatically
  */
+const unusedExportsFixProvider: FixProvider = {
+  apply: (context: FixProviderContext) => {
+    const fileSources = context.files.map(filePath => ({
+      filePath,
+      source: readFileSync(filePath, 'utf8'),
+    }));
+
+    for (const [filePath, fixed] of unusedExportsFix(fileSources)) {
+      writeFileSync(filePath, fixed);
+    }
+  },
+};
+
 export const unusedExportsRule: CodepolPluginRule = pluginRuleNew({
   id: ruleId,
   capabilities: {
     treeCheckProvider: unusedExportsTreeCheck,
     lintProviders: [unusedExportsLintProvider],
+    fixProvider: unusedExportsFixProvider,
     requiresProjectIndex: true,
   },
 });
