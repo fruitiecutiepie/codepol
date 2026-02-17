@@ -376,6 +376,57 @@ const x = 1;
   });
 
   // ============================================
+  // Package-name import resolution
+  // ============================================
+
+  describe('workspace package-name imports', () => {
+    it('should count imports via package name as used (not flag as unused)', () => {
+      // Build a workspace:
+      //   wsRoot/package.json                    (workspaces: ["packages/*"])
+      //   wsRoot/packages/lib/package.json       (name: "@ws/lib", main: "./dist/index.js")
+      //   wsRoot/packages/lib/src/index.ts       (exports helperFn)
+      //   wsRoot/packages/app/src/consumer.ts    (imports helperFn from "@ws/lib")
+      const wsRoot = path.join(testDir, 'ws-pkg-import-test');
+      fs.mkdirSync(path.join(wsRoot, 'packages', 'lib', 'src'), { recursive: true });
+      fs.mkdirSync(path.join(wsRoot, 'packages', 'app', 'src'), { recursive: true });
+
+      fs.writeFileSync(
+        path.join(wsRoot, 'package.json'),
+        JSON.stringify({ workspaces: ['packages/*'] }),
+      );
+      fs.writeFileSync(
+        path.join(wsRoot, 'packages', 'lib', 'package.json'),
+        JSON.stringify({ name: '@ws/lib', main: './dist/index.js' }),
+      );
+
+      const libEntry = path.join(wsRoot, 'packages', 'lib', 'src', 'index.ts');
+      const libContent = `export function helperFn() { return 1; }`;
+      fs.writeFileSync(libEntry, libContent);
+
+      const consumerFile = path.join(wsRoot, 'packages', 'app', 'src', 'consumer.ts');
+      const consumerContent = `import { helperFn } from '@ws/lib';\nhelperFn();`;
+      fs.writeFileSync(consumerFile, consumerContent);
+
+      // Build index WITH workspacePackages so cross-file resolution works
+      const { workspacePackageMapDiscover } = require('@codepol/core');
+      const workspacePackages = workspacePackageMapDiscover(wsRoot);
+      const { index } = projectIndexBuildSync({
+        files: [libEntry, consumerFile],
+        dir: wsRoot,
+        workspacePackages,
+      });
+
+      const { rule, context } = createContext(libEntry, libContent, index);
+      context.dir = wsRoot;
+
+      const violations = unusedExportsCheck(rule, context);
+
+      // helperFn is imported by consumer.ts via "@ws/lib" — should NOT be flagged
+      expect(violations.length).toBe(0);
+    });
+  });
+
+  // ============================================
   // Edge Cases
   // ============================================
 

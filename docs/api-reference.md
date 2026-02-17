@@ -704,6 +704,50 @@ function violationsToLintDiagnostics(
 
 ---
 
+## Workspace Package Discovery
+
+### workspacePackageMapDiscover
+
+Discovers all workspace packages in a monorepo and maps each package name to the absolute path of its source entry-point file. Supports pnpm, npm, and yarn workspace layouts.
+
+```typescript
+function workspacePackageMapDiscover(rootDir: string): Map<string, string>
+```
+
+**Parameters:**
+
+- `rootDir`: Absolute path to the monorepo root directory
+
+**Returns:** Map of package name to absolute source entry-point file path
+
+**Discovery order:**
+
+1. `pnpm-workspace.yaml` (pnpm)
+2. Root `package.json` `workspaces` field (npm / yarn)
+
+**Entry-point resolution per package:**
+
+1. Derive source path from `exports["."]` or `main` (`dist/` → `src/`, `.js` → `.ts`)
+2. Fallback to `src/index.ts` next to the package's `package.json`
+
+**Example:**
+
+```typescript
+import { workspacePackageMapDiscover } from '@codepol/core';
+
+const packages = workspacePackageMapDiscover('/path/to/monorepo');
+
+for (const [name, entryPoint] of packages) {
+  console.log(`${name} → ${entryPoint}`);
+}
+// @codepol/core → /path/to/monorepo/packages/core/src/index.ts
+// @codepol/plugin → /path/to/monorepo/packages/plugin/src/index.ts
+```
+
+This is used internally by the semantic index for monorepo-aware module resolution (resolving bare specifiers like `import { foo } from '@codepol/core'` to their source files).
+
+---
+
 ## @codepol/eslint-plugin
 
 ### eslintPluginCreate

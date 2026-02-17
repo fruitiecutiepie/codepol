@@ -350,7 +350,6 @@ export {
   isErr,
   resultFrom,
   resFrom,
-  resultFromAsync,
   resFromAsync,
 } from './result/result';
 
@@ -436,3 +435,6 @@ export {
 // Index store (advanced use)
 export type { FileIndexDelta } from './index/indexStore';
 export { IndexStore, indexStoreNew } from './index/indexStore';
+
+// Workspace package discovery
+export { workspacePackageMapDiscover } from './index/workspacePackages';

@@ -119,5 +119,46 @@ describe('moduleResolver', () => {
 
       expect(resolved).toBeUndefined();
     });
+
+    describe('workspacePackages option', () => {
+      it('should resolve a known workspace package to its entry file', () => {
+        const entryFile = path.join(srcDir, 'utils.ts');
+        const opts = {
+          ...resolveOpts(),
+          workspacePackages: new Map([['@org/utils', entryFile]]),
+        };
+
+        const resolved = moduleResolve('@org/utils', fromFile, opts);
+
+        expect(resolved).toBe(entryFile);
+      });
+
+      it('should return undefined for unknown packages even with workspacePackages set', () => {
+        const opts = {
+          ...resolveOpts(),
+          workspacePackages: new Map([['@org/utils', '/some/path.ts']]),
+        };
+
+        const resolved = moduleResolve('lodash', fromFile, opts);
+
+        expect(resolved).toBeUndefined();
+      });
+
+      it('should resolve scoped packages that isExternalPackage would normally reject', () => {
+        const entryFile = path.join(srcDir, 'helpers', 'index.ts');
+        const opts = {
+          ...resolveOpts(),
+          workspacePackages: new Map([['@codepol/core', entryFile]]),
+        };
+
+        // Without workspacePackages, @codepol/core would be treated as external
+        expect(isExternalPackage('@codepol/core')).toBe(true);
+
+        // With workspacePackages, it resolves
+        const resolved = moduleResolve('@codepol/core', fromFile, opts);
+
+        expect(resolved).toBe(entryFile);
+      });
+    });
   });
 });
