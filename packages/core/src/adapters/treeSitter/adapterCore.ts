@@ -200,7 +200,7 @@ function symbolsExtract(
   cfg: LangConfig,
   tree: Parser.Tree,
   file: string,
-  source: Uint8Array,
+  source: string,
   scopes: ScopeRecord[]
 ): { symbols: SymbolRecord[]; declRanges: Set<string> } {
   const symbols: SymbolRecord[] = [];
@@ -310,10 +310,15 @@ function buildQualifiedName(scopes: ScopeRecord[], scopeId: ScopeId, leafName: s
 }
 
 /**
- * Slice text from source bytes.
+ * Slice text from source string using character offsets.
+ *
+ * web-tree-sitter's `startIndex`/`endIndex` are character offsets into the
+ * parsed JavaScript string, NOT UTF-8 byte offsets. Using them to index a
+ * raw `Uint8Array` produces wrong results for files containing multi-byte
+ * UTF-8 characters (e.g., `→` is 3 bytes in UTF-8 but 1 JS character).
  */
-function sliceText(source: Uint8Array, start: number, end: number): string {
-  return Buffer.from(source.subarray(start, end)).toString('utf8');
+function sliceText(source: string, start: number, end: number): string {
+  return source.slice(start, end);
 }
 
 // ============================================================================
@@ -327,7 +332,7 @@ function refsExtract(
   cfg: LangConfig,
   tree: Parser.Tree,
   file: string,
-  source: Uint8Array,
+  source: string,
   scopes: ScopeRecord[],
   symbols: SymbolRecord[],
   declRanges: Set<string>,
@@ -401,7 +406,7 @@ function memberRefsExtract(
   cfg: LangConfig,
   tree: Parser.Tree,
   file: string,
-  source: Uint8Array,
+  source: string,
   scopes: ScopeRecord[],
   symbols: SymbolRecord[],
   declRanges: Set<string>
@@ -507,7 +512,7 @@ function callsExtract(
   cfg: LangConfig,
   tree: Parser.Tree,
   file: string,
-  source: Uint8Array,
+  source: string,
   scopes: ScopeRecord[],
   symbols: SymbolRecord[],
   _diags: AdapterDiagnostic[]
@@ -594,7 +599,7 @@ function importsExtract(
   cfg: LangConfig,
   tree: Parser.Tree,
   file: string,
-  source: Uint8Array,
+  source: string,
   scopes: ScopeRecord[],
   _diags: AdapterDiagnostic[]
 ): ImportsRelation[] {
@@ -643,7 +648,7 @@ function importBindingsExtract(
   cfg: LangConfig,
   tree: Parser.Tree,
   file: string,
-  source: Uint8Array,
+  source: string,
   scopes: ScopeRecord[],
   symbols: SymbolRecord[],
   _diags: AdapterDiagnostic[]
@@ -903,7 +908,7 @@ function exportsExtract(
   cfg: LangConfig,
   tree: Parser.Tree,
   file: string,
-  source: Uint8Array,
+  source: string,
   scopes: ScopeRecord[],
   symbols: SymbolRecord[],
   _diags: AdapterDiagnostic[]
@@ -1224,7 +1229,7 @@ function typeRelationsExtract(
   cfg: LangConfig,
   tree: Parser.Tree,
   file: string,
-  source: Uint8Array,
+  source: string,
   symbols: SymbolRecord[],
   _diags: AdapterDiagnostic[]
 ): TypeRelation[] {
@@ -1324,7 +1329,9 @@ export function indexFileWithTreeSitter(
   const parser = new Parser();
   parser.setLanguage(cfg.language);
 
-  // web-tree-sitter expects a string, not a Buffer
+  // web-tree-sitter expects a string; tree-sitter node indices (startIndex/endIndex)
+  // are character offsets into this string, NOT UTF-8 byte offsets. All extraction
+  // functions receive the string so sliceText can use string.slice() correctly.
   const sourceText = Buffer.from(bytes).toString('utf8');
   const tree = parser.parse(sourceText);
   const diags: AdapterDiagnostic[] = [];
@@ -1333,7 +1340,7 @@ export function indexFileWithTreeSitter(
   const scopes = scopesBuild(cfg, tree, file);
 
   // Extract symbols
-  const { symbols, declRanges } = symbolsExtract(cfg, tree, file, bytes, scopes);
+  const { symbols, declRanges } = symbolsExtract(cfg, tree, file, sourceText, scopes);
 
   // Build relations
   const relations: RelationRecord[] = [];
@@ -1359,27 +1366,27 @@ export function indexFileWithTreeSitter(
   }
 
   // References
-  const refs = refsExtract(cfg, tree, file, bytes, scopes, symbols, declRanges, diags);
+  const refs = refsExtract(cfg, tree, file, sourceText, scopes, symbols, declRanges, diags);
   relations.push(...refs);
 
   // Member expression references (e.g., utils.alpha for namespace import resolution)
-  const memberRefs = memberRefsExtract(cfg, tree, file, bytes, scopes, symbols, declRanges);
+  const memberRefs = memberRefsExtract(cfg, tree, file, sourceText, scopes, symbols, declRanges);
   relations.push(...memberRefs);
 
   // Calls
-  const calls = callsExtract(cfg, tree, file, bytes, scopes, symbols, diags);
+  const calls = callsExtract(cfg, tree, file, sourceText, scopes, symbols, diags);
   relations.push(...calls);
 
   // Imports (basic module specifier tracking)
-  const imports = importsExtract(cfg, tree, file, bytes, scopes, diags);
+  const imports = importsExtract(cfg, tree, file, sourceText, scopes, diags);
   relations.push(...imports);
 
   // Import bindings (for cross-file resolution)
-  const importBindings = importBindingsExtract(cfg, tree, file, bytes, scopes, symbols, diags);
+  const importBindings = importBindingsExtract(cfg, tree, file, sourceText, scopes, symbols, diags);
   relations.push(...importBindings);
 
   // Exports (for cross-file resolution)
-  const { exports: exportRelations, syntheticSymbols } = exportsExtract(cfg, tree, file, bytes, scopes, symbols, diags);
+  const { exports: exportRelations, syntheticSymbols } = exportsExtract(cfg, tree, file, sourceText, scopes, symbols, diags);
   relations.push(...exportRelations);
 
   // Merge synthetic symbols (from anonymous default exports) into the symbol list
@@ -1397,7 +1404,7 @@ export function indexFileWithTreeSitter(
   }
 
   // Type relations (extends/implements)
-  const typeRelations = typeRelationsExtract(cfg, tree, file, bytes, allSymbols, diags);
+  const typeRelations = typeRelationsExtract(cfg, tree, file, sourceText, allSymbols, diags);
   relations.push(...typeRelations);
 
   // Control flow graphs (per function scope)

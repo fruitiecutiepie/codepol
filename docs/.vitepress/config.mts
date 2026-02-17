@@ -21,6 +21,15 @@ export default withMermaid({
         ]
       },
       {
+        text: 'Semantic Index',
+        items: [
+          { text: 'Architecture', link: '/semantic-index' },
+          { text: 'ProjectIndex API', link: '/project-index-api' },
+          { text: 'Creating Language Adapters', link: '/creating-language-adapters' },
+          { text: 'Cross-File Analysis Rules', link: '/cross-file-analysis' }
+        ]
+      },
+      {
         text: 'Rules',
         items: [
           { text: 'require-logger-enter-exit', link: '/rules/require-logger-enter-exit' }

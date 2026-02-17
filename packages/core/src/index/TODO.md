@@ -5,22 +5,24 @@ This document tracks incomplete implementations and future work for the semantic
 ## Current State
 
 The semantic index provides:
-- Symbol extraction (functions, classes, variables)
+- Symbol extraction (functions, classes, variables, types, interfaces, enums, enum members)
 - Scope tree construction
 - File-local reference resolution
-- Cross-file reference resolution (basic - see status below)
+- Cross-file reference resolution (fully implemented — named, default, namespace, aliased imports/exports, re-export chains, star exports, namespace re-exports, CommonJS require, dynamic import)
 - Heuristic call detection
-- Import statement extraction (named, default, namespace)
-- Export statement extraction (basic patterns)
-- Type relations extraction (extends/implements, file-local resolution)
+- Import statement extraction (named, default, namespace, CommonJS require, dynamic import)
+- Export statement extraction (all patterns including anonymous defaults, type-only, aliases)
+- Type relations extraction (extends/implements, cross-file resolution)
+- Control flow graph construction (per-function, all common patterns)
+- Module graph (dependency order, cycle detection, entry points)
 - Query API for plugins (`ProjectIndex`)
 
 ## Implementation Status
 
 ### 1. Cross-File Symbol Resolution
-**Status**: Partially Implemented
+**Status**: Implemented
 
-Core infrastructure complete, some advanced features pending:
+All cross-file resolution features are complete:
 
 - [x] `ImportBindingRelation` type defined
 - [x] `crossFileResolve()` function in `indexBuilder.ts`
@@ -227,7 +229,7 @@ These are intentional constraints, not bugs:
 
 ## Documentation Needed
 
-- [ ] API reference for ProjectIndex
-- [ ] Guide for creating language adapters
-- [ ] Examples of cross-file analysis rules
-- [ ] Architecture documentation with diagrams
+- [x] API reference for ProjectIndex — `docs/project-index-api.md`
+- [x] Guide for creating language adapters — `docs/creating-language-adapters.md`
+- [x] Examples of cross-file analysis rules — `docs/cross-file-analysis.md`
+- [x] Architecture documentation with diagrams — `docs/semantic-index.md`
