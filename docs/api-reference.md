@@ -30,17 +30,19 @@ import type {
   LoggerImportConfig,
   LintSeverity,
   PolicyViolation,
+  PolicyViolationFix,
   TreeCheckProvider,
   PolicyPluginCapabilities,
+  PluginRuleConfig,
   CodepolPluginRule,
   PluginRule,
   PolicyPluginDeclaration,
-  PolicyPluginRuleDeclaration,
   PolicyCheckContext,
   LintProvider,
   LintProviderContext,
   EslintProviderConfig,
   FixProvider,
+  FixProviderContext,
   RuleMatch,
   PolicyCheckOptions,
   PolicyCheckResult,
@@ -50,6 +52,45 @@ import type {
   TreeCheckLintAdapter,
   // Result
   Result,
+  // Parser / Language
+  Lang,
+  // Plugin loading
+  PolicyPluginsMap,
+  // Semantic Index types
+  SymbolId,
+  ScopeId,
+  SymbolKind,
+  ScopeKind,
+  ByteRange,
+  SymbolRecord,
+  ScopeRecord,
+  RelationRecord,
+  DefinesRelation,
+  ContainsRelation,
+  ReferencesRelation,
+  ImportsRelation,
+  CallsRelation,
+  ImportBindingRelation,
+  ExportsRelation,
+  TypeRelation,
+  SymbolFilter,
+  IndexCapabilities,
+  FlowNodeId,
+  FlowNode,
+  FlowEdge,
+  FlowGraph,
+  FlowNodeKind,
+  // Module resolution
+  ModuleResolveOptions,
+  // Index query
+  ProjectIndex,
+  // Module graph
+  ModuleGraph,
+  // Index builder
+  IndexBuildOptions,
+  IndexBuildResult,
+  // Index store
+  FileIndexDelta,
 } from '@codepol/core';
 ```
 
@@ -153,6 +194,76 @@ function configFileDiscover(startDir: string): string | null
 - `startDir`: Directory to start searching from
 
 **Returns:** Absolute path to the config file, or `null` if not found
+
+---
+
+### configGetSync
+
+Synchronous version of `configGet`. Used by the ESLint adapter, which requires sync execution.
+
+```typescript
+function configGetSync(cwd?: string): ConfigFileResult
+```
+
+**Parameters:**
+
+- `cwd`: Working directory to start search from (default: `process.cwd()`)
+
+**Returns:** Object with `config` (CodepolConfig) and `configPath` (string)
+
+**Throws:** If no config file is found
+
+**Example:**
+
+```typescript
+import { configGetSync } from '@codepol/core';
+
+const { config, configPath } = configGetSync();
+```
+
+---
+
+### configGetFromPathSync
+
+Synchronous version of `configGetFromPath`. Used by the ESLint adapter, which requires sync execution.
+
+```typescript
+function configGetFromPathSync(configPath: string): ConfigFileResult
+```
+
+**Parameters:**
+
+- `configPath`: Path to the config file (absolute or relative)
+
+**Returns:** Object with `config` (CodepolConfig) and `configPath` (string)
+
+**Throws:** If the config file does not exist
+
+**Example:**
+
+```typescript
+import { configGetFromPathSync } from '@codepol/core';
+
+const { config } = configGetFromPathSync('./config/codepol.config.ts');
+```
+
+---
+
+### configCacheClear
+
+Clears the in-memory config cache. Useful for testing or when config files change at runtime.
+
+```typescript
+function configCacheClear(): void
+```
+
+**Example:**
+
+```typescript
+import { configCacheClear } from '@codepol/core';
+
+configCacheClear();
+```
 
 ---
 
@@ -295,6 +406,148 @@ If you want full control over ESLint configuration, run ESLint directly instead 
 
 ---
 
+## Parser and Language Registration
+
+Tree-sitter WASM parsers must be initialized before any policy checking or index building.
+
+### parserInit
+
+Initializes the web-tree-sitter WASM runtime and loads registered language grammars. Must be called before any scanning or indexing operations. Safe to call multiple times (subsequent calls load newly registered languages only).
+
+```typescript
+async function parserInit(): Promise<void>
+```
+
+**Example:**
+
+```typescript
+import { parserInit, langAdd } from '@codepol/core';
+
+langAdd({ langId: 'typescript', fileExtensions: ['.ts'] });
+langAdd({ langId: 'tsx', fileExtensions: ['.tsx'] });
+await parserInit();
+```
+
+---
+
+### parserGetForFile
+
+Creates a Tree-sitter parser configured for the given file's language.
+
+```typescript
+function parserGetForFile(filePath: string): Result<Parser, string>
+```
+
+**Parameters:**
+
+- `filePath`: Absolute path to the file
+
+**Returns:** `Ok(Parser)` on success, `Err(string)` if the parser is not initialized or no language is registered for the file extension
+
+**Example:**
+
+```typescript
+import { parserGetForFile, isOk } from '@codepol/core';
+
+const result = parserGetForFile('/path/to/file.ts');
+if (isOk(result)) {
+  const tree = result.Ok.parse(sourceCode);
+}
+```
+
+---
+
+### Lang
+
+Language registration configuration.
+
+```typescript
+type Lang = {
+  langId: string;
+  /** Path to WASM file. If omitted, uses bundled wasm/tree-sitter-{langId}.wasm */
+  wasmPath?: string;
+  fileExtensions: string[];
+};
+```
+
+---
+
+### langAdd
+
+Registers a language with its WASM grammar and file extensions. Merges extensions if the language is already registered. Must be called before `parserInit()`.
+
+```typescript
+function langAdd(lang: Lang): void
+```
+
+**Parameters:**
+
+- `lang`: Language registration config
+
+**Throws:** If `langId` is empty, no extensions are provided, an extension is already registered to a different language, or the language is re-registered with a different `wasmPath`
+
+**Example:**
+
+```typescript
+import { langAdd } from '@codepol/core';
+
+langAdd({ langId: 'typescript', fileExtensions: ['.ts'] });
+langAdd({ langId: 'tsx', fileExtensions: ['.tsx'] });
+
+// Custom WASM path
+langAdd({
+  langId: 'python',
+  wasmPath: '/path/to/tree-sitter-python.wasm',
+  fileExtensions: ['.py'],
+});
+```
+
+---
+
+### langsGet
+
+Returns all registered languages.
+
+```typescript
+function langsGet(): Required<Lang>[]
+```
+
+**Returns:** Array of language registrations with all fields populated (including resolved `wasmPath`)
+
+---
+
+### wasmPathGet
+
+Resolves the absolute path to a bundled WASM grammar file.
+
+```typescript
+function wasmPathGet(grammarName: string): string
+```
+
+**Parameters:**
+
+- `grammarName`: Grammar name (e.g., `'tree-sitter-typescript'`)
+
+**Returns:** Absolute path to the WASM file
+
+---
+
+### langIdGetForFile
+
+Returns the registered language ID for a file based on its extension.
+
+```typescript
+function langIdGetForFile(filePath: string): string | null
+```
+
+**Parameters:**
+
+- `filePath`: File path (can be relative or absolute)
+
+**Returns:** Language ID (e.g., `'typescript'`) or `null` if the extension is not registered
+
+---
+
 ### policyRuleTargetsResolve
 
 Resolves the targets for a policy rule by looking up each target name in the policy's named targets map.
@@ -408,6 +661,64 @@ const covered = policyFileGetChecked(
   process.cwd()
 );
 ```
+
+---
+
+### globPatternsGetMatchAny
+
+Checks if any glob pattern in the list matches the given file path. Used internally by policy matching and available for custom tooling.
+
+```typescript
+function globPatternsGetMatchAny(
+  patterns: string[] | undefined,
+  relativeFile: string
+): boolean
+```
+
+**Parameters:**
+
+- `patterns`: Array of glob patterns (returns `false` if undefined or empty)
+- `relativeFile`: Relative file path to check
+
+**Returns:** `true` if any pattern matches
+
+**Example:**
+
+```typescript
+import { globPatternsGetMatchAny } from '@codepol/core';
+
+globPatternsGetMatchAny(['src/**/*.ts', 'lib/**/*.ts'], 'src/utils.ts');
+// true
+
+globPatternsGetMatchAny(undefined, 'src/utils.ts');
+// false
+```
+
+---
+
+### ruleTargetMatchesLanguage
+
+Checks if a file matches the language specified in a rule target.
+
+```typescript
+function ruleTargetMatchesLanguage(
+  target: PolicyRuleTarget,
+  filePath: string
+): boolean
+```
+
+**Parameters:**
+
+- `target`: The policy rule target containing the language
+- `filePath`: File path to check (relative or absolute)
+
+**Returns:** `true` if the file matches the target language
+
+**Language matching rules:**
+
+- `"tsx"` -- matches `.tsx` files only
+- `"typescript"` -- matches `.ts` and `.tsx` files
+- Any other language -- always returns `true` (no extension filtering)
 
 ---
 
@@ -598,6 +909,87 @@ if (output) {
 
 ---
 
+## Plugin Loading
+
+### PolicyPluginsMap
+
+Map of loaded plugin rules, keyed by resolved (namespaced) rule ID.
+
+```typescript
+type PolicyPluginsMap = Map<string, PluginRule>;
+```
+
+---
+
+### policyPluginsGet
+
+Loads, validates, and namespaces all plugins declared in the policy. Each plugin module is dynamically imported, its rules are namespaced with the module specifier, and all policy rule references are validated against the loaded plugins.
+
+```typescript
+async function policyPluginsGet(
+  policy: PolicyFile,
+  cwd: string
+): Promise<Result<PolicyPluginsMap, string>>
+```
+
+**Parameters:**
+
+- `policy`: The loaded policy definition
+- `cwd`: Working directory for resolving plugin module specifiers
+
+**Returns:** `Ok(PolicyPluginsMap)` on success, `Err(string)` if a plugin fails to load, a rule references an unknown plugin, or language support validation fails
+
+**Example:**
+
+```typescript
+import { configGet, policyPluginsGet, isErr } from '@codepol/core';
+
+const { config } = await configGet();
+const result = await policyPluginsGet(config, process.cwd());
+
+if (isErr(result)) {
+  console.error(result.Err);
+  process.exit(1);
+}
+
+const pluginsMap = result.Ok;
+console.log(`Loaded ${pluginsMap.size} rule(s)`);
+```
+
+---
+
+### pluginGetForRule
+
+Looks up a plugin by rule ID. Supports both fully-qualified IDs (`@scope/plugin/rule`) and short IDs (`rule`), matching by suffix.
+
+```typescript
+function pluginGetForRule(
+  pluginsMap: PolicyPluginsMap,
+  ruleId: string
+): { plugin: PluginRule; resolvedId: string } | undefined
+```
+
+**Parameters:**
+
+- `pluginsMap`: Loaded plugins map (from `policyPluginsGet`)
+- `ruleId`: Rule ID (full or short)
+
+**Returns:** The matched plugin and its resolved ID, or `undefined` if not found or ambiguous (multiple short-ID matches)
+
+**Example:**
+
+```typescript
+import { pluginGetForRule } from '@codepol/core';
+
+const lookup = pluginGetForRule(pluginsMap, 'require-logger-enter-exit');
+if (lookup) {
+  console.log(lookup.resolvedId);
+  // '@codepol/plugin/require-logger-enter-exit'
+}
+```
+
+---
+
 ### Tree-Check Adapter Types
 
 The adapter layer enables converting `TreeCheckProvider` implementations into lint provider rules.
@@ -704,6 +1096,200 @@ function violationsToLintDiagnostics(
 
 ---
 
+## Plugin Authoring
+
+Primitives for creating codepol rule plugins.
+
+### pluginRuleNew
+
+Factory that validates and creates a `CodepolPluginRule`. This is the only way to create a rule plugin -- direct object literals will not type-check due to internal branding.
+
+```typescript
+function pluginRuleNew(config: PluginRuleConfig): CodepolPluginRule
+```
+
+**Parameters:**
+
+- `config`: Rule plugin configuration (see `PluginRuleConfig`)
+
+**Returns:** A branded `CodepolPluginRule`
+
+**Throws:** If the rule ID contains `/` (reserved for namespacing)
+
+**Example:**
+
+```typescript
+import { pluginRuleNew, treeCheckProviderNew } from '@codepol/core';
+
+const myProvider = treeCheckProviderNew({
+  languages: ['typescript', 'tsx'],
+  check: (rule, context) => {
+    const violations = [];
+    // ... check logic ...
+    return violations;
+  },
+});
+
+export const myRule = pluginRuleNew({
+  id: 'no-todo-comments',
+  capabilities: {
+    treeCheckProvider: myProvider,
+  },
+});
+
+export default [myRule];
+```
+
+---
+
+### PluginRuleConfig
+
+Input configuration for creating a rule plugin.
+
+```typescript
+type PluginRuleConfig = {
+  /** Must NOT contain '/' -- reserved for namespacing (e.g., "my-rule" becomes "@scope/plugin/my-rule") */
+  id: string;
+  /** Capability bundle for this rule */
+  capabilities: PolicyPluginCapabilities;
+};
+```
+
+---
+
+### PolicyViolationFix
+
+Fix data for an auto-fixable violation. Provides the byte range and replacement text for ESLint/IDE inline fixes.
+
+```typescript
+type PolicyViolationFix = {
+  /** Byte offset range [start, end) in the source text to replace */
+  byteRange: ByteRange;
+  /** Replacement text (can be empty to delete the range) */
+  text: string;
+};
+```
+
+Violations with a `fix` field are auto-fixable when running through ESLint with `--fix` or via IDE quick-fix actions.
+
+---
+
+### FixProviderContext
+
+Context passed to fix providers when applying fixes.
+
+```typescript
+type FixProviderContext = {
+  cwd: string;
+  policy: PolicyFile;
+  configPath: string;
+  files: string[];
+  ruleTargets?: PolicyRuleTargetContext[];
+};
+```
+
+---
+
+### TreeCheckFn
+
+Consumer-facing check function type. Returns a plain violations array; errors are thrown as exceptions (the `treeCheckProviderNew` factory wraps this with `resultFrom` to produce `Result`).
+
+```typescript
+type TreeCheckFn = (
+  rule: PolicyRule,
+  context: PolicyCheckContext
+) => PolicyViolation[];
+```
+
+---
+
+### treeCheckProviderNew
+
+Factory for creating a `TreeCheckProvider` from a plain check function. Wraps the function with `resultFrom` so that thrown exceptions are converted to `Result.Err` instead of propagating.
+
+```typescript
+function treeCheckProviderNew(config: {
+  languages: string[];
+  check: TreeCheckFn;
+}): TreeCheckProvider
+```
+
+**Parameters:**
+
+- `config.languages`: Languages this provider supports (e.g., `['typescript', 'tsx']`)
+- `config.check`: Check function that receives a rule and context, returns violations
+
+**Returns:** A `TreeCheckProvider` suitable for use in `PluginRuleConfig.capabilities`
+
+**Example:**
+
+```typescript
+import { treeCheckProviderNew } from '@codepol/core';
+
+const provider = treeCheckProviderNew({
+  languages: ['typescript', 'tsx'],
+  check: (rule, context) => {
+    const violations = [];
+    // ... tree-sitter analysis ...
+    return violations;
+  },
+});
+```
+
+---
+
+### eslintProviderCreate
+
+Factory for creating `LintProvider` objects with `platform: 'eslint'`.
+
+```typescript
+function eslintProviderCreate(config: {
+  languages: string[];
+  pluginName?: string;
+  rules: Record<string, unknown>;
+  configs?: Record<string, unknown>;
+  ruleOptions?: (ctx: LintProviderContext) => unknown;
+}): LintProvider
+```
+
+**Parameters:**
+
+- `config.languages`: Languages this provider supports
+- `config.pluginName`: ESLint plugin name (default: `'codepol'`)
+- `config.rules`: ESLint rule implementations
+- `config.configs`: Optional ESLint config presets
+- `config.ruleOptions`: Optional function to derive rule options from the policy context
+
+**Returns:** A `LintProvider` with `platform: 'eslint'`
+
+---
+
+### rulePluginLanguagesGet
+
+Derives all supported languages from a plugin's lint providers and tree-check provider.
+
+```typescript
+function rulePluginLanguagesGet(plugin: CodepolPluginRule): string[]
+```
+
+**Parameters:**
+
+- `plugin`: The rule plugin to inspect
+
+**Returns:** Deduplicated array of language IDs
+
+---
+
+### ESLINT_PLUGIN_NAME_DEFAULT
+
+Default ESLint plugin name used when none is specified in provider config.
+
+```typescript
+const ESLINT_PLUGIN_NAME_DEFAULT = 'codepol';
+```
+
+---
+
 ## Workspace Package Discovery
 
 ### workspacePackageMapDiscover
@@ -745,6 +1331,960 @@ for (const [name, entryPoint] of packages) {
 ```
 
 This is used internally by the semantic index for monorepo-aware module resolution (resolving bare specifiers like `import { foo } from '@codepol/core'` to their source files).
+
+---
+
+## Result Utilities
+
+Codepol uses a lightweight `Result` type instead of thrown exceptions for operations that can fail. This makes error handling explicit at the type level.
+
+### Result
+
+Discriminated union for success (`Ok`) or error (`Err`).
+
+```typescript
+type Result<T, E> = { Ok: T; Err?: never } | { Err: E; Ok?: never };
+```
+
+---
+
+### Ok / Err
+
+Constructors for creating `Result` values.
+
+```typescript
+function Ok<T>(value: T): Result<T, never>
+function Err<E>(error: E): Result<never, E>
+```
+
+**Example:**
+
+```typescript
+import { Ok, Err, type Result } from '@codepol/core';
+
+function divide(a: number, b: number): Result<number, string> {
+  if (b === 0) return Err('Division by zero');
+  return Ok(a / b);
+}
+```
+
+---
+
+### isOk / isErr
+
+Type guards for narrowing `Result` values.
+
+```typescript
+function isOk<T, E>(result: Result<T, E>): result is { Ok: T; Err?: never }
+function isErr<T, E>(result: Result<T, E>): result is { Err: E; Ok?: never }
+```
+
+**Example:**
+
+```typescript
+import { isOk, isErr } from '@codepol/core';
+
+const result = await policyViolationsGetFromDir(config, cwd);
+
+if (isOk(result)) {
+  console.log(`${result.Ok.length} violations`);
+}
+if (isErr(result)) {
+  console.error(result.Err);
+}
+```
+
+---
+
+### resultFrom / resFrom
+
+Wraps a synchronous function, converting thrown exceptions to `Result.Err`. `resFrom` is an alias.
+
+```typescript
+function resultFrom<T, E>(fn: () => T): Result<T, E>
+const resFrom = resultFrom;
+```
+
+**Example:**
+
+```typescript
+import { resultFrom } from '@codepol/core';
+
+const result = resultFrom(() => JSON.parse(rawJson));
+```
+
+---
+
+### resFromAsync
+
+Async version of `resultFrom`. Wraps an async function, converting rejections to `Result.Err`.
+
+```typescript
+async function resFromAsync<T, E>(
+  fn: () => Promise<T>
+): Promise<Result<T, E>>
+```
+
+**Example:**
+
+```typescript
+import { resFromAsync } from '@codepol/core';
+
+const result = await resFromAsync(() => fetch(url).then(r => r.json()));
+```
+
+---
+
+## Semantic Index (Cross-File Analysis)
+
+The semantic index provides project-wide cross-file analysis. It extracts symbols, scopes, and relations from source files using Tree-sitter, resolves cross-file imports/exports, and exposes a read-only query API for plugins.
+
+### Core Types
+
+#### SymbolId / ScopeId / FlowNodeId
+
+Stable string identifiers for index entities. IDs are deterministic and stable across re-indexing when content is unchanged.
+
+```typescript
+type SymbolId = string;
+type ScopeId = string;
+type FlowNodeId = string;
+```
+
+---
+
+#### ByteRange
+
+Byte range within a file. Uses byte offsets (not line/column) for precision and performance.
+
+```typescript
+type ByteRange = {
+  start: number;  // Inclusive
+  end: number;    // Exclusive
+};
+```
+
+---
+
+#### SymbolKind
+
+Language-agnostic symbol kinds. Adapters map language-specific node types to these canonical kinds.
+
+```typescript
+type SymbolKind =
+  | 'module'
+  | 'namespace'
+  | 'class'
+  | 'interface'
+  | 'type'
+  | 'function'
+  | 'method'
+  | 'variable'
+  | 'const'
+  | 'field'
+  | 'parameter'
+  | 'enum'
+  | 'enumMember';
+```
+
+---
+
+#### ScopeKind
+
+Language-agnostic scope kinds. Scopes form a tree for name resolution and visibility.
+
+```typescript
+type ScopeKind =
+  | 'file'
+  | 'module'
+  | 'type'
+  | 'function'
+  | 'block'
+  | 'class'
+  | 'namespace';
+```
+
+---
+
+#### SymbolFlags
+
+Symbol attribute flags as a bitset. Combine with bitwise OR.
+
+```typescript
+import { SymbolFlags } from '@codepol/core';
+
+SymbolFlags.None        // 0
+SymbolFlags.Exported    // 1
+SymbolFlags.Async       // 2
+SymbolFlags.Generator   // 4
+SymbolFlags.Static      // 8
+SymbolFlags.Abstract    // 16
+SymbolFlags.Readonly    // 32
+SymbolFlags.Optional    // 64
+SymbolFlags.Private     // 128
+SymbolFlags.Protected   // 256
+SymbolFlags.Public      // 512
+```
+
+**Example:**
+
+```typescript
+import { SymbolFlags } from '@codepol/core';
+
+const isExported = (symbol.flags & SymbolFlags.Exported) !== 0;
+const isAsyncExport = (symbol.flags & (SymbolFlags.Exported | SymbolFlags.Async)) ===
+  (SymbolFlags.Exported | SymbolFlags.Async);
+```
+
+---
+
+#### SymbolRecord
+
+A symbol (declaration) in the semantic index.
+
+```typescript
+type SymbolRecord = {
+  id: SymbolId;
+  kind: SymbolKind;
+  name: string;          // Declared name (local, not qualified)
+  file: string;          // Absolute file path
+  byteRange: ByteRange;
+  scopeId: ScopeId;      // Scope that contains this symbol
+  qualName: string;       // Qualified name for disambiguation
+  flags: number;          // SymbolFlags bitset
+};
+```
+
+---
+
+#### ScopeRecord
+
+A scope (lexical/semantic boundary). Scopes form a tree via the `parent` field.
+
+```typescript
+type ScopeRecord = {
+  id: ScopeId;
+  kind: ScopeKind;
+  file: string;
+  byteRange: ByteRange;
+  parent?: ScopeId;       // undefined for file scope
+};
+```
+
+---
+
+#### SymbolFilter
+
+Filter options for symbol queries.
+
+```typescript
+type SymbolFilter = {
+  file?: string;
+  kind?: SymbolKind;
+  name?: string;
+  scopeId?: ScopeId;
+};
+```
+
+---
+
+#### IndexCapabilities
+
+Declares what capabilities the index supports. Plugins should check this before attempting advanced queries.
+
+```typescript
+type IndexCapabilities = {
+  crossFileResolution: boolean;
+  callGraph: 'none' | 'heuristic' | 'precise';
+  controlFlowGraph: boolean;
+  supportedLanguages: string[];
+};
+```
+
+---
+
+### Relation Types
+
+Relations are append-only facts extracted by language adapters. `RelationRecord` is a union of all 8 relation types.
+
+#### DefinesRelation
+
+A scope declares a symbol.
+
+```typescript
+type DefinesRelation = {
+  kind: 'Defines';
+  scopeId: ScopeId;
+  symbolId: SymbolId;
+};
+```
+
+#### ContainsRelation
+
+A scope contains a child scope.
+
+```typescript
+type ContainsRelation = {
+  kind: 'Contains';
+  scopeId: ScopeId;
+  childScopeId: ScopeId;
+};
+```
+
+#### ReferencesRelation
+
+An identifier refers to a symbol. `resolvedSymbolId` is populated during file-local resolution; `undefined` if resolution failed.
+
+```typescript
+type ReferencesRelation = {
+  kind: 'References';
+  scopeId: ScopeId;
+  name: string;
+  byteRange: ByteRange;
+  resolvedSymbolId?: SymbolId;
+};
+```
+
+#### ImportsRelation
+
+A scope imports from a module specifier. `resolvedModulePath` is populated during cross-file resolution.
+
+```typescript
+type ImportsRelation = {
+  kind: 'Imports';
+  scopeId: ScopeId;
+  spec: string;
+  byteRange: ByteRange;
+  resolvedModulePath?: string;
+};
+```
+
+#### CallsRelation
+
+A call expression within a scope. `resolvedSymbolId` is populated during resolution.
+
+```typescript
+type CallsRelation = {
+  kind: 'Calls';
+  scopeId: ScopeId;
+  calleeName: string;
+  byteRange: ByteRange;
+  resolvedSymbolId?: SymbolId;
+};
+```
+
+#### ImportBindingRelation
+
+Links an imported name to its source module. This is the key relation for cross-file symbol resolution.
+
+```typescript
+type ImportBindingRelation = {
+  kind: 'ImportBinding';
+  localSymbolId: SymbolId;
+  importedName: string;
+  moduleSpec: string;
+  resolvedModulePath?: string;
+  resolvedExportId?: SymbolId;
+  isDefault: boolean;
+  isNamespace: boolean;
+  byteRange: ByteRange;
+};
+```
+
+#### ExportsRelation
+
+Marks a symbol as exported from its module.
+
+```typescript
+type ExportsRelation = {
+  kind: 'Exports';
+  symbolId: SymbolId;
+  exportedName: string;
+  isDefault: boolean;
+  sourceModule?: string;     // For re-exports
+  sourceName?: string;       // For re-exports
+  byteRange: ByteRange;
+};
+```
+
+#### TypeRelation
+
+Captures extends/implements relationships between classes and interfaces.
+
+```typescript
+type TypeRelation = {
+  kind: 'TypeRelation';
+  symbolId: SymbolId;
+  targetName: string;
+  relationKind: 'extends' | 'implements';
+  byteRange: ByteRange;
+  resolvedTargetId?: SymbolId;
+};
+```
+
+---
+
+### Control Flow Graph Types
+
+#### FlowNodeKind
+
+Language-agnostic control flow node kinds.
+
+```typescript
+type FlowNodeKind =
+  | 'entry'      // Function entry point (exactly one per CFG)
+  | 'exit'       // Function exit point (exactly one per CFG)
+  | 'statement'  // Basic statement
+  | 'branch'     // Decision point (if, loop condition)
+  | 'merge'      // Where branches rejoin
+  | 'loop'       // Loop header (back-edge target)
+  | 'return'
+  | 'throw';
+```
+
+#### FlowNode
+
+A node in a control flow graph.
+
+```typescript
+type FlowNode = {
+  id: FlowNodeId;
+  kind: FlowNodeKind;
+  byteRange?: ByteRange;    // undefined for synthetic entry/exit
+  label?: string;
+};
+```
+
+#### FlowEdge
+
+An edge representing a possible transition between control flow points.
+
+```typescript
+type FlowEdge = {
+  from: FlowNodeId;
+  to: FlowNodeId;
+  label?: 'true' | 'false' | 'loop-back' | 'unconditional'
+    | 'break' | 'continue' | 'case' | 'default'
+    | 'exception' | 'finally';
+};
+```
+
+#### FlowGraph
+
+A control flow graph for a single function/method scope. Contains exactly one entry node and one exit node.
+
+```typescript
+type FlowGraph = {
+  scopeId: ScopeId;
+  nodes: FlowNode[];
+  edges: FlowEdge[];
+};
+```
+
+---
+
+### Module Resolution
+
+#### ModuleResolveOptions
+
+Options for module resolution.
+
+```typescript
+type ModuleResolveOptions = {
+  baseDir: string;
+  extensions: string[];
+  pathAliases?: Record<string, string[]>;
+  indexedFiles?: Set<string>;
+  workspacePackages?: Map<string, string>;
+};
+```
+
+---
+
+#### moduleResolve
+
+Resolves a module specifier to an absolute file path.
+
+```typescript
+function moduleResolve(
+  specifier: string,
+  fromFile: string,
+  options: ModuleResolveOptions
+): string | undefined
+```
+
+**Parameters:**
+
+- `specifier`: The import specifier (e.g., `'./utils'`, `'lodash'`)
+- `fromFile`: Absolute path of the importing file
+- `options`: Resolution options
+
+**Returns:** Absolute file path if resolved, `undefined` for external packages or unresolvable specifiers
+
+**Resolution strategy:**
+
+1. Workspace packages: check `workspacePackages` map first
+2. External packages (`@org/pkg`, `lodash`): return `undefined`
+3. Relative imports: resolve relative to importing file, try exact path, then extensions, then directory index
+4. Path aliases: expand alias and resolve
+5. Absolute paths: try extensions and directory index
+
+---
+
+#### isRelativeImport
+
+```typescript
+function isRelativeImport(specifier: string): boolean
+```
+
+Returns `true` if the specifier starts with `./` or `../`.
+
+---
+
+#### isExternalPackage
+
+```typescript
+function isExternalPackage(specifier: string): boolean
+```
+
+Returns `true` if the specifier is likely an external package (not relative, not absolute).
+
+---
+
+#### DEFAULT_EXTENSIONS
+
+Default extensions tried when resolving modules.
+
+```typescript
+const DEFAULT_EXTENSIONS = [
+  '.ts', '.tsx', '.js', '.jsx',
+  '.mts', '.cts', '.mjs', '.cjs',
+];
+```
+
+---
+
+### Query API
+
+#### ProjectIndex
+
+Read-only query interface for the semantic index. This is the stable API exposed to plugins for cross-file analysis. All queries are total (return empty arrays, never null).
+
+```typescript
+type ProjectIndex = {
+  // Symbol Queries
+  symbolsGet(filter?: SymbolFilter): SymbolRecord[];
+  symbolGet(id: SymbolId): SymbolRecord | undefined;
+  symbolsInFileGet(file: string): SymbolRecord[];
+  symbolsGetByName(name: string): SymbolRecord[];
+
+  // Reference Queries
+  referencesGet(symbolId: SymbolId): ReferencesRelation[];
+  referencesInFileGet(file: string): ReferencesRelation[];
+
+  // Call Graph Queries (heuristic)
+  callersGet(symbolId: SymbolId): SymbolId[];
+  calleesGet(symbolId: SymbolId): SymbolId[];
+
+  // Scope Queries
+  scopeGet(id: ScopeId): ScopeRecord | undefined;
+  scopesInFileGet(file: string): ScopeRecord[];
+  symbolsInScopeGet(scopeId: ScopeId): SymbolRecord[];
+
+  // Import/Export Queries
+  importsGet(file: string): ImportsRelation[];
+  importBindingsGet(file: string): ImportBindingRelation[];
+  importBindingGetForSymbol(symbolId: SymbolId): ImportBindingRelation | undefined;
+  exportedSymbolsGet(filter?: { file?: string; name?: string }): SymbolRecord[];
+  exportersGet(symbolName: string): SymbolRecord[];
+  fileExportsGet(file: string): ExportsRelation[];
+  exportLocationsGet(symbolId: SymbolId): { file: string; exportedName: string }[];
+  importResolve(fromFile: string, specifier: string, name: string): SymbolId | undefined;
+
+  // Type Relation Queries
+  typeRelationsGet(symbolId: SymbolId): TypeRelation[];
+  subTypesGet(symbolId: SymbolId): TypeRelation[];
+  typeRelationsInFileGet(file: string): TypeRelation[];
+
+  // Module Graph Queries
+  moduleImportersGet(file: string): string[];
+  moduleImporteesGet(file: string): string[];
+  moduleDependencyOrderGet(): string[];
+  moduleCyclesGet(): string[][];
+  moduleEntryPointsGet(): string[];
+
+  // Control Flow Graph Queries
+  cfgGet(scopeId: ScopeId): FlowGraph | undefined;
+  cyclomaticComplexityGet(symbolId: SymbolId): number | undefined;
+
+  // Metadata
+  readonly capabilities: IndexCapabilities;
+  filesGet(): string[];
+  statsGet(): { files: number; symbols: number; scopes: number; relations: number };
+};
+```
+
+**Example:**
+
+```typescript
+import {
+  parserInit,
+  langAdd,
+  projectIndexBuild,
+  SymbolFlags,
+} from '@codepol/core';
+
+langAdd({ langId: 'typescript', fileExtensions: ['.ts'] });
+langAdd({ langId: 'tsx', fileExtensions: ['.tsx'] });
+await parserInit();
+
+const { index, stats } = await projectIndexBuild({
+  files: ['/src/index.ts', '/src/utils.ts'],
+  dir: '/project',
+});
+
+console.log(`Indexed ${stats.filesIndexed} files`);
+
+// Find all exported functions
+const exported = index.symbolsGet({ kind: 'function' })
+  .filter(s => (s.flags & SymbolFlags.Exported) !== 0);
+
+// Check for circular dependencies
+const cycles = index.moduleCyclesGet();
+if (cycles.length > 0) {
+  console.warn(`Found ${cycles.length} circular dependency cycle(s)`);
+}
+
+// Get cyclomatic complexity
+const fn = index.symbolsGet({ name: 'processData', kind: 'function' })[0];
+if (fn) {
+  const complexity = index.cyclomaticComplexityGet(fn.id);
+  console.log(`Complexity: ${complexity}`);
+}
+```
+
+---
+
+#### projectIndexCreate
+
+Creates a `ProjectIndex` from an `IndexStore`. This wraps the store in a read-only query interface.
+
+```typescript
+function projectIndexCreate(
+  store: IndexStore,
+  capabilities: IndexCapabilities
+): ProjectIndex
+```
+
+**Parameters:**
+
+- `store`: The `IndexStore` containing indexed data
+- `capabilities`: Capabilities descriptor for the index
+
+**Returns:** A `ProjectIndex` instance
+
+---
+
+### Module Graph
+
+#### ModuleGraph
+
+Module-level dependency graph. All file paths are absolute, matching the paths in `IndexStore`.
+
+```typescript
+type ModuleGraph = {
+  moduleGraphImportersGet(file: string): string[];
+  moduleGraphImporteesGet(file: string): string[];
+  moduleGraphDependencyOrderGet(): string[];
+  moduleGraphCyclesGet(): string[][];
+  moduleGraphEntryPointsGet(): string[];
+};
+```
+
+**Methods:**
+
+- `moduleGraphImportersGet(file)` -- files that import the given file (reverse edges)
+- `moduleGraphImporteesGet(file)` -- files that the given file imports (forward edges)
+- `moduleGraphDependencyOrderGet()` -- topological sort (dependencies first)
+- `moduleGraphCyclesGet()` -- circular dependency cycles (Tarjan's SCC algorithm)
+- `moduleGraphEntryPointsGet()` -- files with no importers (root files), sorted alphabetically
+
+---
+
+#### moduleGraphBuild
+
+Builds a `ModuleGraph` from an `IndexStore`.
+
+```typescript
+function moduleGraphBuild(store: IndexStore): ModuleGraph
+```
+
+**Parameters:**
+
+- `store`: The `IndexStore` containing indexed import/export data
+
+**Returns:** A `ModuleGraph` instance
+
+---
+
+### Index Builder
+
+#### IndexBuildOptions
+
+Options for building a project index.
+
+```typescript
+type IndexBuildOptions = {
+  files: string[];
+  dir: string;
+  languages?: string[];
+  store?: IndexStore;
+  crossFileResolution?: boolean;
+  pathAliases?: Record<string, string[]>;
+  workspacePackages?: Map<string, string>;
+};
+```
+
+**Fields:**
+
+- `files`: Files to index (absolute paths)
+- `dir`: Working directory for relative paths and module resolution
+- `languages`: Filter to specific languages (optional, indexes all supported languages if omitted)
+- `store`: Existing index store to update (creates new if not provided)
+- `crossFileResolution`: Enable cross-file symbol resolution (default: `true`)
+- `pathAliases`: Path aliases from tsconfig (e.g., `{ "@/*": ["src/*"] }`)
+- `workspacePackages`: Workspace package name to source entry file map
+
+---
+
+#### IndexBuildResult
+
+Result of building a project index.
+
+```typescript
+type IndexBuildResult = {
+  index: ProjectIndex;
+  stats: {
+    filesIndexed: number;
+    filesSkipped: number;
+    errors: string[];
+  };
+};
+```
+
+---
+
+#### projectIndexBuild
+
+Builds a project index from a list of files (async version).
+
+```typescript
+async function projectIndexBuild(
+  options: IndexBuildOptions
+): Promise<IndexBuildResult>
+```
+
+---
+
+#### projectIndexBuildSync
+
+Builds a project index from a list of files (sync version). Use this in ESLint rules where async is not supported.
+
+```typescript
+function projectIndexBuildSync(
+  options: IndexBuildOptions
+): IndexBuildResult
+```
+
+---
+
+#### projectIndexUpdate
+
+Incrementally updates the index for specific files. Only re-indexes files whose content has changed.
+
+```typescript
+async function projectIndexUpdate(
+  store: IndexStore,
+  files: string[]
+): Promise<{ updated: number; skipped: number; errors: string[] }>
+```
+
+**Parameters:**
+
+- `store`: The `IndexStore` to update
+- `files`: Absolute file paths to update
+
+**Returns:** Counts of updated/skipped files and any errors
+
+---
+
+#### projectIndexUpdateFileSync
+
+Updates a single file in the index (synchronous).
+
+```typescript
+function projectIndexUpdateFileSync(
+  store: IndexStore,
+  file: string
+): boolean
+```
+
+**Returns:** `true` if the file was re-indexed (content changed), `false` if unchanged
+
+---
+
+#### projectIndexUpdateFileFromSource
+
+Updates a single file using provided source content instead of reading from disk. Important when the in-memory source (e.g., from ESLint) may differ from the on-disk version.
+
+```typescript
+function projectIndexUpdateFileFromSource(
+  store: IndexStore,
+  file: string,
+  source: string
+): boolean
+```
+
+**Returns:** `true` if the file was re-indexed (content changed), `false` if unchanged
+
+---
+
+#### projectIndexRemoveFiles
+
+Removes files from the index.
+
+```typescript
+function projectIndexRemoveFiles(
+  store: IndexStore,
+  files: string[]
+): void
+```
+
+---
+
+#### crossFileResolveForFile
+
+Re-resolves cross-file imports and exports for a single file. Call this after updating a file to refresh its import binding resolutions.
+
+```typescript
+function crossFileResolveForFile(
+  store: IndexStore,
+  file: string,
+  resolveOptions: ModuleResolveOptions
+): void
+```
+
+**Parameters:**
+
+- `store`: The `IndexStore`
+- `file`: The file that was updated
+- `resolveOptions`: Module resolution options
+
+---
+
+#### adapterRegister
+
+Registers a language adapter factory for indexing. Built-in adapters for TypeScript, TSX, and Python are registered automatically.
+
+```typescript
+function adapterRegister(
+  languageId: string,
+  factory: (language: Language) => IndexAdapter
+): void
+```
+
+**Parameters:**
+
+- `languageId`: Language identifier (e.g., `'typescript'`, `'python'`)
+- `factory`: Function that creates an `IndexAdapter` from a Tree-sitter `Language`
+
+---
+
+### Index Store (Advanced Use)
+
+The `IndexStore` is the mutable backing store for the semantic index. Most users should use the builder functions (`projectIndexBuild`, etc.) and query through `ProjectIndex`. Direct store access is for advanced use cases like custom adapters or incremental tooling.
+
+#### FileIndexDelta
+
+Result of indexing a single file. Produced by language adapters, consumed by `IndexStore`.
+
+```typescript
+type FileIndexDelta = {
+  file: string;
+  revision: string;
+  symbols: SymbolRecord[];
+  scopes: ScopeRecord[];
+  relations: RelationRecord[];
+  cfgs?: FlowGraph[];
+};
+```
+
+---
+
+#### IndexStore / indexStoreNew
+
+In-memory store with secondary indexes for efficient lookups.
+
+```typescript
+class IndexStore {
+  filePut(delta: FileIndexDelta): void;
+  fileRemove(file: string): void;
+  clear(): void;
+
+  symbolGet(id: SymbolId): SymbolRecord | undefined;
+  symbolsGet(filter?: SymbolFilter): SymbolRecord[];
+  scopeGet(id: ScopeId): ScopeRecord | undefined;
+  scopesInFileGet(file: string): ScopeRecord[];
+  symbolsInScopeGet(scopeId: ScopeId): SymbolRecord[];
+
+  referencesGet(symbolId: SymbolId): ReferencesRelation[];
+  referencesInFileGet(file: string): ReferencesRelation[];
+  callsInScopeGet(scopeId: ScopeId): CallsRelation[];
+  callsGet(): CallsRelation[];
+
+  importsInFileGet(file: string): ImportsRelation[];
+  importBindingsInFileGet(file: string): ImportBindingRelation[];
+  importBindingForSymbolGet(symbolId: SymbolId): ImportBindingRelation | undefined;
+  importBindingsGet(): ImportBindingRelation[];
+
+  exportsInFileGet(file: string): ExportsRelation[];
+  exportsGet(): ExportsRelation[];
+  exportMapBuild(): Map<string, Map<string, SymbolId>>;
+
+  typeRelationsForSymbolGet(symbolId: SymbolId): TypeRelation[];
+  typeRelationsInFileGet(file: string): TypeRelation[];
+
+  relationUpdate<R extends RelationRecord>(oldRelation: R, newRelation: R): void;
+
+  fileHasRevision(file: string, revision: string): boolean;
+  filesGet(): string[];
+  cfgGet(scopeId: string): FlowGraph | undefined;
+  statsGet(): { files: number; symbols: number; scopes: number; relations: number };
+}
+
+function indexStoreNew(): IndexStore
+```
+
+**Example:**
+
+```typescript
+import { indexStoreNew, projectIndexCreate } from '@codepol/core';
+
+const store = indexStoreNew();
+
+// Use store with builder functions
+const { index } = await projectIndexBuild({
+  files: myFiles,
+  dir: projectRoot,
+  store,
+});
+
+// Later, incrementally update
+await projectIndexUpdate(store, changedFiles);
+
+// Rebuild query interface after updates
+const updatedIndex = projectIndexCreate(store, index.capabilities);
+```
 
 ---
 
