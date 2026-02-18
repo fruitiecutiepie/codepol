@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  extractExports,
+  exportMatchesGetFromTSSourceFile,
   identifierTypesToCheck,
   duplicateExportsDetect,
   noDuplicateExportsCheck,
@@ -9,11 +9,11 @@ import {
   type FileSource,
 } from './noDuplicateExportsCheck';
 
-describe('extractExports', () => {
+describe('exportMatchesGetFromTSSourceFile', () => {
   describe('function exports', () => {
     it('extracts export function declaration', () => {
       const source = 'export function foo() {}';
-      const exports = extractExports(source, 'test.ts');
+      const exports = exportMatchesGetFromTSSourceFile(source, 'test.ts');
       expect(exports).toHaveLength(1);
       expect(exports[0]).toMatchObject({
         name: 'foo',
@@ -25,7 +25,7 @@ describe('extractExports', () => {
 
     it('extracts export async function declaration', () => {
       const source = 'export async function fetchData() {}';
-      const exports = extractExports(source, 'test.ts');
+      const exports = exportMatchesGetFromTSSourceFile(source, 'test.ts');
       expect(exports).toHaveLength(1);
       expect(exports[0].name).toBe('fetchData');
       expect(exports[0].identifierType).toBe('function');
@@ -33,7 +33,7 @@ describe('extractExports', () => {
 
     it('extracts export const arrow function', () => {
       const source = 'export const handler = () => {}';
-      const exports = extractExports(source, 'test.ts');
+      const exports = exportMatchesGetFromTSSourceFile(source, 'test.ts');
       expect(exports).toHaveLength(1);
       expect(exports[0]).toMatchObject({
         name: 'handler',
@@ -44,7 +44,7 @@ describe('extractExports', () => {
 
     it('extracts export const function expression', () => {
       const source = 'export const handler = function() {}';
-      const exports = extractExports(source, 'test.ts');
+      const exports = exportMatchesGetFromTSSourceFile(source, 'test.ts');
       expect(exports).toHaveLength(1);
       expect(exports[0].name).toBe('handler');
       expect(exports[0].identifierType).toBe('function');
@@ -52,7 +52,7 @@ describe('extractExports', () => {
 
     it('does not extract non-exported functions', () => {
       const source = 'function internal() {}';
-      const exports = extractExports(source, 'test.ts');
+      const exports = exportMatchesGetFromTSSourceFile(source, 'test.ts');
       expect(exports).toHaveLength(0);
     });
   });
@@ -60,7 +60,7 @@ describe('extractExports', () => {
   describe('variable exports', () => {
     it('extracts export const variable', () => {
       const source = 'export const MAX_SIZE = 100';
-      const exports = extractExports(source, 'test.ts');
+      const exports = exportMatchesGetFromTSSourceFile(source, 'test.ts');
       expect(exports).toHaveLength(1);
       expect(exports[0]).toMatchObject({
         name: 'MAX_SIZE',
@@ -71,7 +71,7 @@ describe('extractExports', () => {
 
     it('extracts export let variable', () => {
       const source = 'export let counter = 0';
-      const exports = extractExports(source, 'test.ts');
+      const exports = exportMatchesGetFromTSSourceFile(source, 'test.ts');
       expect(exports).toHaveLength(1);
       expect(exports[0].name).toBe('counter');
       expect(exports[0].identifierType).toBe('variable');
@@ -79,7 +79,7 @@ describe('extractExports', () => {
 
     it('extracts multiple variables in one statement', () => {
       const source = 'export const a = 1, b = 2, c = 3';
-      const exports = extractExports(source, 'test.ts');
+      const exports = exportMatchesGetFromTSSourceFile(source, 'test.ts');
       expect(exports).toHaveLength(3);
       expect(exports.map(e => e.name)).toEqual(['a', 'b', 'c']);
     });
@@ -89,7 +89,7 @@ describe('extractExports', () => {
         export const fn = () => {};
         export const value = 42;
       `;
-      const exports = extractExports(source, 'test.ts');
+      const exports = exportMatchesGetFromTSSourceFile(source, 'test.ts');
       const fn = exports.find(e => e.name === 'fn');
       const value = exports.find(e => e.name === 'value');
       expect(fn?.identifierType).toBe('function');
@@ -100,7 +100,7 @@ describe('extractExports', () => {
   describe('type exports', () => {
     it('extracts export type alias', () => {
       const source = 'export type UserId = string';
-      const exports = extractExports(source, 'test.ts');
+      const exports = exportMatchesGetFromTSSourceFile(source, 'test.ts');
       expect(exports).toHaveLength(1);
       expect(exports[0]).toMatchObject({
         name: 'UserId',
@@ -111,7 +111,7 @@ describe('extractExports', () => {
 
     it('extracts export interface', () => {
       const source = 'export interface User { name: string }';
-      const exports = extractExports(source, 'test.ts');
+      const exports = exportMatchesGetFromTSSourceFile(source, 'test.ts');
       expect(exports).toHaveLength(1);
       expect(exports[0]).toMatchObject({
         name: 'User',
@@ -122,7 +122,7 @@ describe('extractExports', () => {
 
     it('extracts export class', () => {
       const source = 'export class UserService {}';
-      const exports = extractExports(source, 'test.ts');
+      const exports = exportMatchesGetFromTSSourceFile(source, 'test.ts');
       expect(exports).toHaveLength(1);
       expect(exports[0]).toMatchObject({
         name: 'UserService',
@@ -133,7 +133,7 @@ describe('extractExports', () => {
 
     it('extracts export enum', () => {
       const source = 'export enum Status { Active, Inactive }';
-      const exports = extractExports(source, 'test.ts');
+      const exports = exportMatchesGetFromTSSourceFile(source, 'test.ts');
       expect(exports).toHaveLength(1);
       expect(exports[0]).toMatchObject({
         name: 'Status',
@@ -146,13 +146,13 @@ describe('extractExports', () => {
   describe('re-exports', () => {
     it('does not extract re-exports by default', () => {
       const source = "export { foo } from './other'";
-      const exports = extractExports(source, 'test.ts', false);
+      const exports = exportMatchesGetFromTSSourceFile(source, 'test.ts', false);
       expect(exports).toHaveLength(0);
     });
 
     it('extracts named re-exports when enabled', () => {
       const source = "export { foo } from './other'";
-      const exports = extractExports(source, 'test.ts', true);
+      const exports = exportMatchesGetFromTSSourceFile(source, 'test.ts', true);
       expect(exports).toHaveLength(1);
       expect(exports[0]).toMatchObject({
         name: 'foo',
@@ -162,7 +162,7 @@ describe('extractExports', () => {
 
     it('extracts aliased re-exports with exported name', () => {
       const source = "export { foo as bar } from './other'";
-      const exports = extractExports(source, 'test.ts', true);
+      const exports = exportMatchesGetFromTSSourceFile(source, 'test.ts', true);
       expect(exports).toHaveLength(1);
       expect(exports[0].name).toBe('bar');
       expect(exports[0].isReexport).toBe(true);
@@ -170,14 +170,14 @@ describe('extractExports', () => {
 
     it('extracts multiple re-exports', () => {
       const source = "export { a, b, c } from './other'";
-      const exports = extractExports(source, 'test.ts', true);
+      const exports = exportMatchesGetFromTSSourceFile(source, 'test.ts', true);
       expect(exports).toHaveLength(3);
       expect(exports.map(e => e.name)).toEqual(['a', 'b', 'c']);
     });
 
     it('ignores export * from (star re-exports)', () => {
       const source = "export * from './other'";
-      const exports = extractExports(source, 'test.ts', true);
+      const exports = exportMatchesGetFromTSSourceFile(source, 'test.ts', true);
       expect(exports).toHaveLength(0);
     });
   });
@@ -192,7 +192,7 @@ describe('extractExports', () => {
         export class Database {}
         export enum LogLevel { Debug, Info, Error }
       `;
-      const exports = extractExports(source, 'test.ts');
+      const exports = exportMatchesGetFromTSSourceFile(source, 'test.ts');
       expect(exports).toHaveLength(6);
       
       const names = exports.map(e => e.name);
@@ -209,7 +209,7 @@ describe('extractExports', () => {
     it('reports correct line and column', () => {
       const source = `// header comment
 export function foo() {}`;
-      const exports = extractExports(source, 'test.ts');
+      const exports = exportMatchesGetFromTSSourceFile(source, 'test.ts');
       expect(exports[0].line).toBe(2);
       expect(exports[0].column).toBe(17); // position of 'foo'
     });
@@ -217,7 +217,7 @@ export function foo() {}`;
     it('reports correct position for each export', () => {
       const source = `export const a = 1;
 export const b = 2;`;
-      const exports = extractExports(source, 'test.ts');
+      const exports = exportMatchesGetFromTSSourceFile(source, 'test.ts');
       expect(exports[0].line).toBe(1);
       expect(exports[1].line).toBe(2);
     });

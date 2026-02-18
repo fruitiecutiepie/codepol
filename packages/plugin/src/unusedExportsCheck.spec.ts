@@ -1694,4 +1694,87 @@ mutableValue = "updated";
       expect(violations[0].message).toContain("'mutableValue'");
     });
   });
+
+  // ============================================
+  // Test/Spec File Imports
+  // ============================================
+
+  describe('test file imports', () => {
+    it('should not flag exports consumed only by spec files when spec files are indexed', () => {
+      const dir = path.join(testDir, 'spec-consumer-test');
+      fs.mkdirSync(dir, { recursive: true });
+
+      const libFile = path.join(dir, 'myLib.ts');
+      const libContent = `
+export function libOnlyUsedInTests() { return 1; }
+export function libUsedEverywhere() { return 2; }
+export function libTrulyUnused() { return 3; }
+`;
+      fs.writeFileSync(libFile, libContent);
+
+      const specFile = path.join(dir, 'myLib.spec.ts');
+      fs.writeFileSync(specFile, `
+import { libOnlyUsedInTests, libUsedEverywhere } from './myLib';
+describe('myLib', () => {
+  it('works', () => { libOnlyUsedInTests(); libUsedEverywhere(); });
+});
+`);
+
+      const prodFile = path.join(dir, 'consumer.ts');
+      fs.writeFileSync(prodFile, `
+import { libUsedEverywhere } from './myLib';
+libUsedEverywhere();
+`);
+
+      const { index } = projectIndexBuildSync({
+        files: [libFile, specFile, prodFile],
+        dir,
+      });
+
+      const { rule, context } = createContext(libFile, libContent, index);
+      const violations = unusedExportsCheck(rule, context);
+
+      expect(violations.length).toBe(1);
+      expect(violations[0].message).toContain("'libTrulyUnused'");
+      expect(violations.every(v => !v.message.includes('libOnlyUsedInTests'))).toBe(true);
+      expect(violations.every(v => !v.message.includes('libUsedEverywhere'))).toBe(true);
+    });
+
+    it('should flag exports as unused when spec files are NOT indexed', () => {
+      const dir = path.join(testDir, 'spec-not-indexed-test');
+      fs.mkdirSync(dir, { recursive: true });
+
+      const libFile = path.join(dir, 'myLib.ts');
+      const libContent = `
+export function onlyInSpec() { return 1; }
+export function inProd() { return 2; }
+`;
+      fs.writeFileSync(libFile, libContent);
+
+      const specFile = path.join(dir, 'myLib.spec.ts');
+      fs.writeFileSync(specFile, `
+import { onlyInSpec, inProd } from './myLib';
+onlyInSpec(); inProd();
+`);
+
+      const prodFile = path.join(dir, 'consumer.ts');
+      fs.writeFileSync(prodFile, `
+import { inProd } from './myLib';
+inProd();
+`);
+
+      // Intentionally exclude the spec file from the index
+      const { index } = projectIndexBuildSync({
+        files: [libFile, prodFile],
+        dir,
+      });
+
+      const { rule, context } = createContext(libFile, libContent, index);
+      const violations = unusedExportsCheck(rule, context);
+
+      // onlyInSpec appears unused because the spec file is not indexed
+      expect(violations.length).toBe(1);
+      expect(violations[0].message).toContain("'onlyInSpec'");
+    });
+  });
 });

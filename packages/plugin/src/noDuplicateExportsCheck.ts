@@ -34,7 +34,7 @@ function hasExportModifier(node: ts.Node): boolean {
 /**
  * Extract all exports from a TypeScript source file.
  */
-function extractExports(
+export function exportMatchesGetFromTSSourceFile(
   source: string,
   filePath: string,
   includeReexports: boolean = false
@@ -205,7 +205,7 @@ export function noDuplicateExportsCheck(
   // Collect all exports from all files
   const allExports: ExportMatch[] = [];
   for (const file of files) {
-    const fileExports = extractExports(file.source, file.filePath, includeReexports);
+    const fileExports = exportMatchesGetFromTSSourceFile(file.source, file.filePath, includeReexports);
     allExports.push(...fileExports);
   }
 

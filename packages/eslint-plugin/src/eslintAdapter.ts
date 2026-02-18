@@ -188,6 +188,12 @@ const INDEXABLE_EXTENSIONS = [
 /**
  * Discovers all indexable files from policy targets (synchronous).
  * Uses fast-glob sync for file discovery.
+ *
+ * Only applies the global policy exclude (dist, node_modules, etc.).
+ * Target-level excludes (e.g. test/spec patterns) are intentionally NOT
+ * applied here because the project index must see ALL potential consumers
+ * for accurate cross-file analysis.  Target excludes control which files
+ * get *checked*, not which files get *indexed*.
  */
 function discoverIndexableFiles(policy: PolicyFile, cwd: string): string[] {
   const filesSet = new Set<string>();
@@ -201,11 +207,10 @@ function discoverIndexableFiles(policy: PolicyFile, cwd: string): string[] {
         continue;
       }
 
-      const ignore = [...globalExclude, ...(target.exclude ?? [])];
       const files = fg.sync(target.files, {
         cwd,
         absolute: true,
-        ignore,
+        ignore: globalExclude,
         onlyFiles: true,
       });
 
