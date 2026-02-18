@@ -50,7 +50,7 @@ export const DEFAULT_EXTENSIONS = [
 /**
  * Default index file names.
  */
-export const INDEX_FILES = ['index'];
+const INDEX_FILES = ['index'];
 
 // ============================================================================
 // Helper Functions
@@ -59,7 +59,7 @@ export const INDEX_FILES = ['index'];
 /**
  * Check if a specifier is a relative import.
  */
-export function isRelativeImport(specifier: string): boolean {
+function isRelativeImport(specifier: string): boolean {
   return specifier.startsWith('./') || specifier.startsWith('../');
 }
 
@@ -67,7 +67,7 @@ export function isRelativeImport(specifier: string): boolean {
  * Check if a specifier is likely an external package.
  * External packages don't start with ./ or ../ and aren't absolute paths.
  */
-export function isExternalPackage(specifier: string): boolean {
+function isExternalPackage(specifier: string): boolean {
   if (isRelativeImport(specifier)) return false;
   if (path.isAbsolute(specifier)) return false;
   // Scoped packages like @org/package
@@ -250,7 +250,7 @@ export function moduleResolve(
  * Normalize a resolved path to match indexed file paths.
  * Ensures consistent path separators and casing.
  */
-export function normalizeModulePath(filePath: string): string {
+function normalizeModulePath(filePath: string): string {
   // Use forward slashes consistently
   return filePath.replace(/\\/g, '/');
 }
@@ -259,7 +259,7 @@ export function normalizeModulePath(filePath: string): string {
  * Get the module name from a file path (without extension).
  * Used for matching imports to files.
  */
-export function moduleNameFromPath(filePath: string): string {
+function moduleNameFromPath(filePath: string): string {
   const basename = path.basename(filePath);
   const ext = path.extname(basename);
   return basename.slice(0, -ext.length);

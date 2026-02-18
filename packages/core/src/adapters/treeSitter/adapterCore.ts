@@ -1320,7 +1320,7 @@ function typeRelationsExtract(
  * @param revision - Revision identifier (e.g., content hash)
  * @returns FileIndexDelta with symbols, scopes, and relations
  */
-export function indexFileWithTreeSitter(
+function indexFileWithTreeSitter(
   cfg: LangConfig,
   file: string,
   bytes: Uint8Array,

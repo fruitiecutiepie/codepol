@@ -22,7 +22,7 @@ import { noStarExportCollisionsCheck } from './noStarExportCollisionsCheck';
  * Tree-sitter check provider for star-export collision detection.
  * Supports TypeScript and TSX files.
  */
-export const noStarExportCollisionsTreeCheck = treeCheckProviderNew({
+const noStarExportCollisionsTreeCheck = treeCheckProviderNew({
   languages: ['typescript', 'tsx'],
   check: noStarExportCollisionsCheck,
 });
@@ -69,7 +69,7 @@ const eslintProviderConfig: EslintProviderConfig = {
 /**
  * ESLint lint provider for star export collision detection.
  */
-export const noStarExportCollisionsLintProvider: LintProvider = {
+const noStarExportCollisionsLintProvider: LintProvider = {
   platform: 'eslint',
   languages: ['typescript', 'tsx'],
   config: eslintProviderConfig,

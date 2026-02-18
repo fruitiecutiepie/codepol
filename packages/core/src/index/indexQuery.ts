@@ -254,6 +254,11 @@ export type ProjectIndex = {
   readonly capabilities: IndexCapabilities;
 
   /**
+   * Get all indexed file paths.
+   */
+  filesGet(): string[];
+
+  /**
    * Get statistics about the index.
    */
   statsGet(): {
@@ -563,6 +568,10 @@ export function projectIndexCreate(
 
     // Metadata
     capabilities,
+
+    filesGet() {
+      return store.filesGet();
+    },
 
     statsGet() {
       return store.statsGet();

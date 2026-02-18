@@ -8,7 +8,7 @@ import { eslintAdapter } from '@codepol/eslint-plugin';
 import { forbiddenPathWordsCheck } from './forbiddenPathWordsCheck';
 
 // Create the TreeCheckProvider using the factory
-export const forbiddenPathWordsTreeCheck = treeCheckProviderNew({
+const forbiddenPathWordsTreeCheck = treeCheckProviderNew({
   languages: ['typescript', 'tsx'],
   check: forbiddenPathWordsCheck,
 });

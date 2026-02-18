@@ -22,7 +22,7 @@ import type {
 /**
  * Rule arguments for configuring star export collision detection.
  */
-export type NoStarExportCollisionsArgs = {
+type NoStarExportCollisionsArgs = {
   /** If true, also flag collisions with the file's own named exports */
   includeLocalExports?: boolean;
 };

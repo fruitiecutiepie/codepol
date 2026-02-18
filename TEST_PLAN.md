@@ -512,6 +512,21 @@ Methods that are thin wrappers over `IndexStore` can be unit-tested with a pre-p
 | Incremental: rename export | Integration | `packages/plugin/src/unusedExportsCheck.spec.ts` | Exists |
 | Revision-based change detection | Integration | `packages/plugin/src/unusedExportsCheck.spec.ts` | Exists |
 
+#### Unused Exports Fix (`unusedExportsFix.ts`)
+
+| Scenario | Layer | Test File | Status |
+|----------|-------|-----------|--------|
+| Keep exports imported via workspace package name (with cwd) | Unit | `packages/plugin/src/unusedExportsFix.spec.ts` | Exists |
+| Strip exports when no cwd provided for package-name imports | Unit | `packages/plugin/src/unusedExportsFix.spec.ts` | Exists |
+| Keep exports imported via relative path | Unit | `packages/plugin/src/unusedExportsFix.spec.ts` | Exists |
+| Never modify barrel re-export statements (`export { X } from`, `export type { X } from`) | Unit | `packages/plugin/src/unusedExportsFix.spec.ts` | Exists |
+| Keep exports that are re-exported by a barrel file | Unit | `packages/plugin/src/unusedExportsFix.spec.ts` | Exists |
+| Keep exports re-exported with `type` keyword | Unit | `packages/plugin/src/unusedExportsFix.spec.ts` | Exists |
+| Track re-export with `as` rename as usage of original name | Unit | `packages/plugin/src/unusedExportsFix.spec.ts` | Exists |
+| Preserve exports through chained barrel re-exports | Unit | `packages/plugin/src/unusedExportsFix.spec.ts` | Exists |
+| Handle file with both declarations and re-exports | Unit | `packages/plugin/src/unusedExportsFix.spec.ts` | Exists |
+| Preserve `export default` declarations | Unit | `packages/plugin/src/unusedExportsFix.spec.ts` | Exists |
+
 #### Forbidden Words Check (`forbiddenWordsCheck.ts`)
 
 | Scenario | Layer | Test File | Status |
@@ -1088,6 +1103,7 @@ These tests existed in the repo before the test plan was written. They represent
 | File | Layer | What it tests |
 |------|-------|---------------|
 | `packages/plugin/src/unusedExportsCheck.spec.ts` | Unit | Unused exports check against ProjectIndex |
+| `packages/plugin/src/unusedExportsFix.spec.ts` | Unit | Unused exports fix: workspace resolution, re-export handling (barrel syntax preservation, re-export-as-usage tracking, chained barrels, mixed files, export default) |
 | `tests/policy.contract.spec.ts` | Integration | Real config: unique IDs, non-empty targets |
 | `tests/core.plugins.spec.ts` | Integration | Plugin capability validation (mock plugins) |
 | `tests/core.error-handling.spec.ts` | Integration | Error path for missing logger config |

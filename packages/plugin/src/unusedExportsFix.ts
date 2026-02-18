@@ -15,6 +15,9 @@ type ImportBinding = {
 const IMPORT_RE =
   /import\s+(?:type\s+)?\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]/g;
 
+const REEXPORT_RE =
+  /export\s+(?:type\s+)?\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]/g;
+
 /**
  * Fix all files by removing `export` keywords from declarations that are
  * not imported by any other file in the set.
@@ -107,6 +110,10 @@ function unusedExportKeywordSingleFileFix(
   const removals: { start: number; end: number }[] = [];
 
   for (const statement of sourceFile.statements) {
+    // Skip re-export statements (`export { X } from '...'`, `export type { X } from '...'`)
+    // Removing `export` from these produces invalid syntax.
+    if (ts.isExportDeclaration(statement)) continue;
+
     if (!ts.canHaveModifiers(statement)) continue;
     const modifiers = ts.getModifiers(statement);
     if (!modifiers) continue;
@@ -152,21 +159,25 @@ function unusedExportKeywordSingleFileFix(
 
 function sourceImportBindings(source: string): ImportBinding[] {
   const results: ImportBinding[] = [];
-  IMPORT_RE.lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = IMPORT_RE.exec(source)) !== null) {
-    const names = match[1]!;
-    const moduleSpec = match[2]!;
-    for (const part of names.split(',')) {
-      const trimmed = part.trim();
-      if (!trimmed) continue;
-      const asMatch = /^(\w+)\s+as\s+\w+$/.exec(trimmed);
-      results.push({
-        importedName: asMatch ? asMatch[1]! : trimmed,
-        moduleSpec,
-      });
+
+  for (const re of [IMPORT_RE, REEXPORT_RE]) {
+    re.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = re.exec(source)) !== null) {
+      const names = match[1]!;
+      const moduleSpec = match[2]!;
+      for (const part of names.split(',')) {
+        const trimmed = part.trim();
+        if (!trimmed) continue;
+        const asMatch = /^(\w+)\s+as\s+\w+$/.exec(trimmed);
+        results.push({
+          importedName: asMatch ? asMatch[1]! : trimmed,
+          moduleSpec,
+        });
+      }
     }
   }
+
   return results;
 }
 

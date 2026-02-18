@@ -84,57 +84,66 @@ function importMatchesFile(resolvedImport: string, targetFile: string): boolean 
 }
 
 /**
- * Get all exported names that are imported from a target file by other files.
- * 
- * Uses the ImportBinding relations which provide:
- * - importedName: the actual name being imported ("foo", "default", "*")
- * - moduleSpec: the module specifier
- * - resolvedModulePath: already resolved path (if available)
- * 
- * Returns the set of imported names (e.g., "foo", "default", "bar")
+ * Get all exported names that are consumed from a target file by other files.
+ *
+ * Checks three relationships:
+ * 1. Import bindings (`import { X } from './target'`)
+ * 2. Named re-exports (`export { X } from './target'`) via ExportsRelation.sourceModule
+ * 3. Star re-exports (`export * from './target'`) — marks ALL target exports as used
+ *
+ * Returns the set of consumed names, or `'*'` to indicate all exports are used.
  */
 function getImportedExportNames(
   projectIndex: ProjectIndex,
   targetFile: string
-): Set<string> {
+): Set<string> | '*' {
   const importedNames = new Set<string>();
-  
-  // Get all unique files from the index
-  const allSymbols = projectIndex.symbolsGet();
-  const files = new Set(allSymbols.map(s => s.file));
-  
-  // Check each file's import bindings
+
+  const files = new Set(projectIndex.filesGet());
+
   for (const file of files) {
-    if (file === targetFile) continue; // Skip self
-    
-    // Use the proper ImportBinding API
+    if (file === targetFile) continue;
+
+    // Check import bindings (`import { X } from './target'`)
     const bindings = projectIndex.importBindingsGet(file);
-    
     for (const binding of bindings) {
-      // Check if this import points to our target file
-      // Option 1: Use resolvedModulePath if available (from cross-file resolution)
       if (binding.resolvedModulePath === targetFile) {
         importedNames.add(binding.importedName);
         continue;
       }
-      
-      // Option 2: Resolve manually if not already resolved
       const resolved = resolveModuleSpecifier(binding.moduleSpec, file);
       if (resolved && importMatchesFile(resolved, targetFile)) {
         importedNames.add(binding.importedName);
       }
     }
+
+    // Check re-exports (`export { X } from './target'` and `export * from './target'`)
+    const exports = projectIndex.fileExportsGet(file);
+    for (const exp of exports) {
+      if (!exp.sourceModule) continue;
+      const resolved = resolveModuleSpecifier(exp.sourceModule, file);
+      if (!resolved || !importMatchesFile(resolved, targetFile)) continue;
+
+      // `export * from './target'` makes all target exports used
+      if (exp.exportedName === '*') return '*';
+
+      importedNames.add(exp.sourceName ?? exp.exportedName);
+    }
   }
-  
+
   return importedNames;
 }
 
 /**
  * Matches an inline export declaration: `export [async] function|const|let|…`
  * Captures: [1] leading whitespace, [2] "export " (keyword + trailing space)
+ *
+ * `type` uses a negative lookahead `(?!\s*\{)` to reject re-export syntax
+ * (`export type { X } from '...'`) which would produce invalid code if the
+ * `export` keyword were stripped.
  */
 const INLINE_EXPORT_RE =
-  /^(\s*)(export\s+)(?:async\s+)?(?:function|const|let|var|type|interface|class|enum|abstract\s+class)\b/;
+  /^(\s*)(export\s+)(?:async\s+)?(?:function|const|let|var|type(?!\s*\{)|interface|class|enum|abstract\s+class)\b/;
 
 /**
  * Build fix data that removes the `export ` keyword from an inline declaration.
@@ -211,8 +220,11 @@ export function unusedExportsCheck(
   // Get all exports from this file (ExportsRelation provides exportedName)
   const fileExports = projectIndex.fileExportsGet(filePath);
   
-  // Get all exported names that are imported from this file by other files
+  // Get all exported names that are imported from this file by other files.
+  // Returns '*' when another file does `export * from` this file (all exports used).
   const importedExportNames = getImportedExportNames(projectIndex, filePath);
+
+  if (importedExportNames === '*') return [];
 
   // For each export, check if its exportedName is imported by other files
   for (const exp of fileExports) {

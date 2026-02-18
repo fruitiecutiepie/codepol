@@ -24,7 +24,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
  * Tree-sitter check provider for unused exports detection.
  * Supports TypeScript and TSX files.
  */
-export const unusedExportsTreeCheck = treeCheckProviderNew({
+const unusedExportsTreeCheck = treeCheckProviderNew({
   languages: ['typescript', 'tsx'],
   check: unusedExportsCheck,
 });
@@ -69,7 +69,7 @@ const eslintProviderConfig: EslintProviderConfig = {
 /**
  * ESLint lint provider for unused exports detection.
  */
-export const unusedExportsLintProvider: LintProvider = {
+const unusedExportsLintProvider: LintProvider = {
   platform: 'eslint',
   languages: ['typescript', 'tsx'],
   config: eslintProviderConfig,

@@ -65,7 +65,7 @@ export type FileIndexDelta = {
  * Each query file contains S-expression patterns for capturing
  * specific syntactic constructs.
  */
-export type QueryPack = {
+type QueryPack = {
   /** Scope boundary patterns */
   scopes: string;
   /** Symbol declaration patterns */
@@ -90,7 +90,7 @@ export type QueryPack = {
  * Standard capture name conventions used in query patterns.
  * Adapters use these to interpret query results consistently.
  */
-export type CaptureNames = {
+type CaptureNames = {
   /** Capture name for scope nodes (default: "scope") */
   scopeNode: string;
   /** Capture name for symbol name nodes (default: "name") */
@@ -125,7 +125,7 @@ export const CAPTURE_NAMES_DEFAULT: CaptureNames = {
  * Maps Tree-sitter node types to semantic SymbolKind.
  * Each language adapter provides its own mapping.
  */
-export type SymbolKindMapping = {
+type SymbolKindMapping = {
   /** Map from capture suffix to SymbolKind (e.g., "class" -> "class") */
   byCaptureSuffix: Record<string, SymbolKind>;
   /** Map from node type to SymbolKind as fallback */
@@ -137,7 +137,7 @@ export type SymbolKindMapping = {
 /**
  * Maps Tree-sitter node types to semantic ScopeKind.
  */
-export type ScopeKindMapping = {
+type ScopeKindMapping = {
   /** Map from node type to ScopeKind */
   byNodeType: Record<string, ScopeKind>;
   /** Default kind if no match found */
@@ -199,7 +199,7 @@ export type RefFilterContext = {
  * Declares what the adapter can reliably extract.
  * Used to set expectations for consumers.
  */
-export type AdapterCapabilities = {
+type AdapterCapabilities = {
   /** Whether cross-file resolution is supported */
   crossFileResolution: boolean;
   /** Call graph accuracy */

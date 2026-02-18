@@ -12,7 +12,7 @@ import { noInterfaceFix } from './noInterfaceFix';
 import { readFileSync, writeFileSync } from 'node:fs';
 
 // Create the TreeCheckProvider using the factory
-export const noInterfaceTreeCheck = treeCheckProviderNew({
+const noInterfaceTreeCheck = treeCheckProviderNew({
   languages: ['typescript', 'tsx'],
   check: noInterfaceCheck,
 });

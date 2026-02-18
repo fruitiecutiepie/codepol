@@ -24,14 +24,14 @@ let lastCheckResult: PolicyViolation[] = [];
 /**
  * Get the violations from the last check run.
  */
-export function lastViolationsGet(): PolicyViolation[] {
+function lastViolationsGet(): PolicyViolation[] {
   return lastCheckResult;
 }
 
 /**
  * Clear the last check result.
  */
-export function lastViolationsClear(): void {
+function lastViolationsClear(): void {
   lastCheckResult = [];
 }
 

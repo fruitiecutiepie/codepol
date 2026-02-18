@@ -80,7 +80,7 @@ export const SymbolFlags = {
   Public: 1 << 9,
 } as const;
 
-export type SymbolFlagsType = (typeof SymbolFlags)[keyof typeof SymbolFlags];
+type SymbolFlagsType = (typeof SymbolFlags)[keyof typeof SymbolFlags];
 
 // ============================================================================
 // Core Records
