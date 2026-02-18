@@ -108,16 +108,12 @@ export function exportMatchesGetFromTSSourceFile(
       addExport(node.name.text, 'type', node.name);
     }
 
-    // Re-exports: export { foo } from './other' or export { foo as bar } from './other'
-    if (includeReexports && ts.isExportDeclaration(node)) {
-      // Only handle named re-exports (not export * from)
-      if (node.exportClause && ts.isNamedExports(node.exportClause)) {
+    if (ts.isExportDeclaration(node) && node.exportClause && ts.isNamedExports(node.exportClause)) {
+      const isReexport = node.moduleSpecifier !== undefined;
+      if (!isReexport || includeReexports) {
         for (const element of node.exportClause.elements) {
-          // Use the exported name (could be aliased via 'as')
           const exportedName = element.name.text;
-          // We don't know the type from a re-export, so default to 'variable'
-          // The duplicate check will match by name across all types anyway
-          addExport(exportedName, 'variable', element.name, true);
+          addExport(exportedName, 'variable', element.name, isReexport);
         }
       }
     }

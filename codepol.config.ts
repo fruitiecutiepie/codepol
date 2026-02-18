@@ -8,7 +8,7 @@ export default defineConfig({
     'codepol-src': {
       language: 'typescript',
       files: ['packages/*/src/**/*.ts'],
-      exclude: ['**/*.spec.ts', '**/*.test.ts', '**/__mocks__/**'],
+      // exclude: ['**/*.spec.ts', '**/*.test.ts', '**/__mocks__/**'],
     },
   },
   rules: [
@@ -73,15 +73,15 @@ export default defineConfig({
         ],
       },
     },
-    // {
-    //   ruleId: 'no-duplicate-exports',
-    //   targets: ['codepol-src'],
-    //   severity: 'error',
-    //   args: {
-    //     identifierTypes: ['function', 'variable', 'type'], // opt-in
-    //     includeReexports: false, // whether to count re-exports
-    //   },
-    // },
+    {
+      ruleId: 'no-duplicate-exports',
+      targets: ['codepol-src'],
+      severity: 'error',
+      args: {
+        identifierTypes: ['function', 'variable', 'type'],
+        includeReexports: true,
+      },
+    },
     {
       ruleId: 'no-interface',
       targets: ['codepol-src'],

@@ -181,6 +181,48 @@ describe('exportMatchesGetFromTSSourceFile', () => {
     });
   });
 
+  describe('local named exports', () => {
+    it('extracts export { foo } without from clause', () => {
+      const source = 'const foo = 1;\nexport { foo }';
+      const exports = exportMatchesGetFromTSSourceFile(source, 'test.ts', false);
+      expect(exports).toHaveLength(1);
+      expect(exports[0]).toMatchObject({
+        name: 'foo',
+        isReexport: false,
+      });
+    });
+
+    it('extracts export { foo as bar } without from clause using exported name', () => {
+      const source = 'const foo = 1;\nexport { foo as bar }';
+      const exports = exportMatchesGetFromTSSourceFile(source, 'test.ts', false);
+      expect(exports).toHaveLength(1);
+      expect(exports[0]).toMatchObject({
+        name: 'bar',
+        isReexport: false,
+      });
+    });
+
+    it('captures local named exports regardless of includeReexports flag', () => {
+      const source = 'const a = 1;\nexport { a }';
+      const withoutReexports = exportMatchesGetFromTSSourceFile(source, 'test.ts', false);
+      const withReexports = exportMatchesGetFromTSSourceFile(source, 'test.ts', true);
+      expect(withoutReexports).toHaveLength(1);
+      expect(withReexports).toHaveLength(1);
+      expect(withoutReexports[0].isReexport).toBe(false);
+      expect(withReexports[0].isReexport).toBe(false);
+    });
+
+    it('detects duplicate between local named export and direct declaration export', () => {
+      const files: FileSource[] = [
+        { filePath: 'a.ts', source: 'export function foo() {}' },
+        { filePath: 'b.ts', source: 'const foo = 1;\nexport { foo }' },
+      ];
+      const violations = noDuplicateExportsCheck(files, { includeReexports: false });
+      expect(violations).toHaveLength(1);
+      expect(violations[0].message).toContain('foo');
+    });
+  });
+
   describe('mixed exports', () => {
     it('extracts all export types from a file', () => {
       const source = `
