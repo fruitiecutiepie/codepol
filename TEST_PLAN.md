@@ -1234,7 +1234,7 @@ These were added as part of closing gaps identified in this plan.
 
 - **`forbiddenWordsCheck.spec.ts` import path bug**: **Fixed.** Import `'../lib/identifierSplitByCasing'` resolved to `packages/plugin/lib/` which does not exist. Corrected to `'./lib/identifierSplitByCasing'` (resolves to `packages/plugin/src/lib/`).
 - **`noInterfaceCheck` had no spec file**: **Fixed.** Created `packages/plugin/src/noInterfaceCheck.spec.ts` with 25 tests covering `noInterfaceCheck` (11 tests), `interfaceToTypeAlias` (7 tests), and `noInterfaceFix` (7 tests).
-- **`noDuplicateExportsCheck` hardcoded ruleId**: Known issue — `duplicateExportsDetect()` uses hardcoded `'codepol/no-duplicate-exports'` instead of the rule's configured ID.
+- **`noDuplicateExportsCheck` hardcoded ruleId**: **Fixed.** `duplicateExportsDetect()` and `noDuplicateExportsCheck()` now accept a `ruleId` parameter (default `'no-duplicate-exports'`). The rule's `FixProvider` passes the configured ID from `context.ruleTargets`.
 - **Duplicate utility file**: **Fixed.** `packages/plugin/identifierSplitByCasing.ts` was a duplicate of `packages/plugin/src/lib/identifierSplitByCasing.ts`. The root-level copy has been removed. All imports already referenced the canonical `src/lib/` path.
 
 ### Planned tests (not yet created)

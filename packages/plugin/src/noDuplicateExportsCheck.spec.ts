@@ -416,7 +416,25 @@ describe('noDuplicateExportsCheck', () => {
       ];
       const violations = noDuplicateExportsCheck(files, undefined);
       expect(violations).toHaveLength(1);
-      expect(violations[0].ruleId).toBe('codepol/no-duplicate-exports');
+      expect(violations[0].ruleId).toBe('no-duplicate-exports');
+    });
+
+    it('uses default ruleId when none provided', () => {
+      const files: FileSource[] = [
+        createFile('a.ts', 'export function dup() {}'),
+        createFile('b.ts', 'export function dup() {}'),
+      ];
+      const violations = noDuplicateExportsCheck(files, undefined);
+      expect(violations[0].ruleId).toBe('no-duplicate-exports');
+    });
+
+    it('uses caller-supplied ruleId', () => {
+      const files: FileSource[] = [
+        createFile('a.ts', 'export function dup() {}'),
+        createFile('b.ts', 'export function dup() {}'),
+      ];
+      const violations = noDuplicateExportsCheck(files, undefined, 'my-org/no-duplicate-exports');
+      expect(violations[0].ruleId).toBe('my-org/no-duplicate-exports');
     });
 
     it('returns empty for unique exports', () => {

@@ -1,9 +1,9 @@
 import type { PolicyViolation } from '@codepol/core';
 import ts from 'typescript';
 
-export type IdentifierType = 'function' | 'variable' | 'type';
+type IdentifierType = 'function' | 'variable' | 'type';
 
-export type ExportMatch = {
+type ExportMatch = {
   name: string;
   identifierType: IdentifierType;
   filePath: string;
@@ -34,7 +34,7 @@ function hasExportModifier(node: ts.Node): boolean {
 /**
  * Extract all exports from a TypeScript source file.
  */
-export function extractExports(
+function extractExports(
   source: string,
   filePath: string,
   includeReexports: boolean = false
@@ -132,7 +132,7 @@ export function extractExports(
 /**
  * Build the set of identifier types to check based on args.
  */
-export function identifierTypesToCheck(
+function identifierTypesToCheck(
   args: NoDuplicateExportsArgs | undefined
 ): Set<IdentifierType> {
   if (!args?.identifierTypes || args.identifierTypes.length === 0) {
@@ -145,9 +145,10 @@ export function identifierTypesToCheck(
 /**
  * Detect duplicate exports across multiple files.
  */
-export function duplicateExportsDetect(
+function duplicateExportsDetect(
   allExports: ExportMatch[],
-  args: NoDuplicateExportsArgs | undefined
+  args: NoDuplicateExportsArgs | undefined,
+  ruleId: string = 'no-duplicate-exports'
 ): PolicyViolation[] {
   const violations: PolicyViolation[] = [];
   const typesToCheck = identifierTypesToCheck(args);
@@ -178,7 +179,7 @@ export function duplicateExportsDetect(
       for (let i = 1; i < exps.length; i++) {
         const duplicate = exps[i];
         violations.push({
-          ruleId: 'codepol/no-duplicate-exports',
+          ruleId,
           filePath: duplicate.filePath,
           message: `'${name}' is already exported from '${firstExport.filePath}'`,
           line: duplicate.line,
@@ -196,7 +197,8 @@ export function duplicateExportsDetect(
  */
 export function noDuplicateExportsCheck(
   files: FileSource[],
-  args: NoDuplicateExportsArgs | undefined
+  args: NoDuplicateExportsArgs | undefined,
+  ruleId: string = 'no-duplicate-exports'
 ): PolicyViolation[] {
   const includeReexports = args?.includeReexports ?? false;
 
@@ -208,5 +210,5 @@ export function noDuplicateExportsCheck(
   }
 
   // Detect and return duplicates
-  return duplicateExportsDetect(allExports, args);
+  return duplicateExportsDetect(allExports, args, ruleId);
 }

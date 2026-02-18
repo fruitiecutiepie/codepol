@@ -43,6 +43,7 @@ function lastViolationsClear(): void {
 const noDuplicateExportsFixProvider: FixProvider = {
   apply: (context: FixProviderContext) => {
     const args = context.ruleTargets?.[0]?.args as NoDuplicateExportsArgs | undefined;
+    const resolvedRuleId = context.ruleTargets?.[0]?.ruleId ?? ruleId;
 
     // Read all files
     const files: FileSource[] = [];
@@ -57,7 +58,7 @@ const noDuplicateExportsFixProvider: FixProvider = {
     }
 
     // Run the duplicate check
-    const violations = noDuplicateExportsCheck(files, args);
+    const violations = noDuplicateExportsCheck(files, args, resolvedRuleId);
 
     // Store for programmatic access
     lastCheckResult = violations;
