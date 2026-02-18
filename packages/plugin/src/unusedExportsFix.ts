@@ -36,7 +36,8 @@ export function unusedExportsFix(
 
   for (const { filePath, source } of files) {
     const importedNames = namesPerFile.get(filePath) ?? new Set();
-    const fixed = unusedExportKeywordSingleFileFix(source, importedNames);
+    let fixed = unusedExportKeywordSingleFileFix(source, importedNames);
+    fixed = missingExportKeywordSingleFileFix(fixed, importedNames);
     if (fixed !== source) {
       result.set(filePath, fixed);
     }
@@ -148,6 +149,66 @@ function unusedExportKeywordSingleFileFix(
   let result = source;
   for (const { start, end } of removals) {
     result = result.slice(0, start) + result.slice(end);
+  }
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Single-file missing-export-keyword addition
+// ---------------------------------------------------------------------------
+
+/**
+ * Add `export` keyword to non-exported declarations whose names appear in
+ * `importedNames` (i.e., another file imports them).
+ *
+ * Skips statements that already have `export` or `default` modifiers, and
+ * skips `ExportDeclaration` nodes (re-exports).
+ */
+function missingExportKeywordSingleFileFix(
+  source: string,
+  importedNames: Set<string>,
+): string {
+  if (importedNames.size === 0) return source;
+
+  const sourceFile = ts.createSourceFile(
+    'temp.ts',
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+  );
+
+  const insertions: { position: number; text: string }[] = [];
+
+  for (const statement of sourceFile.statements) {
+    if (ts.isExportDeclaration(statement)) continue;
+
+    const modifiers = ts.canHaveModifiers(statement)
+      ? ts.getModifiers(statement)
+      : undefined;
+
+    const hasExport = modifiers?.some(m => m.kind === ts.SyntaxKind.ExportKeyword);
+    const hasDefault = modifiers?.some(m => m.kind === ts.SyntaxKind.DefaultKeyword);
+    if (hasExport || hasDefault) continue;
+
+    const names = declarationNames(statement);
+    if (names.length === 0) continue;
+
+    if (names.some(n => importedNames.has(n))) {
+      insertions.push({
+        position: statement.getStart(sourceFile),
+        text: 'export ',
+      });
+    }
+  }
+
+  if (insertions.length === 0) return source;
+
+  insertions.sort((a, b) => b.position - a.position);
+
+  let result = source;
+  for (const { position, text } of insertions) {
+    result = result.slice(0, position) + text + result.slice(position);
   }
 
   return result;

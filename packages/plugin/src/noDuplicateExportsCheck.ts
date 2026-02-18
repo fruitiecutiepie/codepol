@@ -3,7 +3,7 @@ import ts from 'typescript';
 
 type IdentifierType = 'function' | 'variable' | 'type';
 
-type ExportMatch = {
+export type ExportMatch = {
   name: string;
   identifierType: IdentifierType;
   filePath: string;
@@ -132,7 +132,7 @@ export function exportMatchesGetFromTSSourceFile(
 /**
  * Build the set of identifier types to check based on args.
  */
-function identifierTypesToCheck(
+export function identifierTypesToCheck(
   args: NoDuplicateExportsArgs | undefined
 ): Set<IdentifierType> {
   if (!args?.identifierTypes || args.identifierTypes.length === 0) {
@@ -145,7 +145,7 @@ function identifierTypesToCheck(
 /**
  * Detect duplicate exports across multiple files.
  */
-function duplicateExportsDetect(
+export function duplicateExportsDetect(
   allExports: ExportMatch[],
   args: NoDuplicateExportsArgs | undefined,
   ruleId: string = 'no-duplicate-exports'

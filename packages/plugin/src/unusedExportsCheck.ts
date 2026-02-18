@@ -14,7 +14,7 @@ import type {
   PolicyViolationFix,
   ProjectIndex,
 } from '@codepol/core';
-import { workspacePackageMapDiscover } from '@codepol/core';
+import { SymbolFlags, workspacePackageMapDiscover } from '@codepol/core';
 
 /**
  * Rule arguments for configuring unused exports detection.
@@ -177,6 +177,38 @@ function exportKeywordRemovalFix(
 }
 
 /**
+ * Matches a non-exported inline declaration: `[async] function|const|let|…`
+ * Used to identify where to insert the `export` keyword.
+ * Captures: [1] leading whitespace
+ */
+const INLINE_DECLARATION_RE =
+  /^(\s*)(?:async\s+)?(?:function|const|let|var|type(?!\s*\{)|interface|class|enum|abstract\s+class)\b/;
+
+/**
+ * Build fix data that inserts the `export ` keyword before an inline declaration.
+ * Returns undefined when the line doesn't look like a standard declaration.
+ */
+function exportKeywordAdditionFix(
+  source: string,
+  rangeStart: number,
+): PolicyViolationFix | undefined {
+  const lineStart = source.lastIndexOf('\n', rangeStart - 1) + 1;
+  const lineEnd = source.indexOf('\n', lineStart);
+  const lineText = source.slice(lineStart, lineEnd === -1 ? source.length : lineEnd);
+
+  if (INLINE_EXPORT_RE.test(lineText)) return undefined;
+
+  const m = INLINE_DECLARATION_RE.exec(lineText);
+  if (!m) return undefined;
+
+  const insertPos = lineStart + m[1]!.length;
+  return {
+    byteRange: { start: insertPos, end: insertPos },
+    text: 'export ',
+  };
+}
+
+/**
  * Check for unused exports in a file using the project-wide semantic index.
  *
  * This function:
@@ -258,6 +290,40 @@ export function unusedExportsCheck(
         fix: exportKeywordRemovalFix(source, range.start, exp.exportedName),
       });
     }
+  }
+
+  // Detect symbols that other files import but this file doesn't export.
+  const exportedNames = new Set(fileExports.map(e => e.exportedName));
+  const allFileSymbols = projectIndex.symbolsInFileGet(filePath);
+
+  for (const importedName of importedExportNames) {
+    if (importedName === 'default') continue;
+    if (exportedNames.has(importedName)) continue;
+
+    const localSymbol = allFileSymbols.find(s => {
+      if (s.name !== importedName) return false;
+      if (s.flags & SymbolFlags.Exported) return false;
+      const scope = projectIndex.scopeGet(s.scopeId);
+      if (!scope) return false;
+      if (scope.kind === 'file' || scope.kind === 'module' || scope.parent === undefined) return true;
+      // function/class declarations create their own scope, so the name
+      // lives one level below the file scope — check the parent.
+      const parentScope = scope.parent ? projectIndex.scopeGet(scope.parent) : undefined;
+      return parentScope !== undefined
+        && (parentScope.kind === 'file' || parentScope.kind === 'module' || parentScope.parent === undefined);
+    });
+
+    if (!localSymbol) continue;
+
+    const { line, column } = byteOffsetToLineColumn(source, localSymbol.byteRange.start);
+    violations.push({
+      ruleId: rule.id || rule.ruleId,
+      filePath,
+      message: `'${importedName}' is imported by another file but not exported`,
+      line,
+      column,
+      fix: exportKeywordAdditionFix(source, localSymbol.byteRange.start),
+    });
   }
 
   return violations;

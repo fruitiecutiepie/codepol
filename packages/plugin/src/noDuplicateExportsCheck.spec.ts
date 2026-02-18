@@ -5,7 +5,6 @@ import {
   duplicateExportsDetect,
   noDuplicateExportsCheck,
   type ExportMatch,
-  type NoDuplicateExportsArgs,
   type FileSource,
 } from './noDuplicateExportsCheck';
 

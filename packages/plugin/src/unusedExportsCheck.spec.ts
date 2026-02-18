@@ -1777,4 +1777,168 @@ inProd();
       expect(violations[0].message).toContain("'onlyInSpec'");
     });
   });
+
+  // ============================================
+  // Imported but not exported
+  // ============================================
+
+  describe('imported but not exported', () => {
+    it('should detect a local function imported by another file but not exported', () => {
+      const dir = path.join(testDir, 'missing-export-func-test');
+      fs.mkdirSync(dir, { recursive: true });
+
+      const libFile = path.join(dir, 'lib.ts');
+      const libContent = `function localHelper() { return 1; }\nexport const used = 2;\n`;
+      fs.writeFileSync(libFile, libContent);
+
+      const consumerFile = path.join(dir, 'consumer.ts');
+      fs.writeFileSync(consumerFile, `import { localHelper } from './lib';\nlocalHelper();\n`);
+
+      const { index } = projectIndexBuildSync({
+        files: [libFile, consumerFile],
+        dir,
+      });
+
+      const { rule, context } = createContext(libFile, libContent, index);
+      const violations = unusedExportsCheck(rule, context);
+
+      const missingExport = violations.find(v => v.message.includes("'localHelper'") && v.message.includes('not exported'));
+      expect(missingExport).toBeDefined();
+      expect(missingExport!.fix).toBeDefined();
+      expect(missingExport!.fix!.text).toBe('export ');
+      expect(missingExport!.fix!.byteRange.start).toBe(missingExport!.fix!.byteRange.end);
+    });
+
+    it('should detect a local const imported by another file but not exported', () => {
+      const dir = path.join(testDir, 'missing-export-const-test');
+      fs.mkdirSync(dir, { recursive: true });
+
+      const libFile = path.join(dir, 'lib.ts');
+      const libContent = `const SECRET = 42;\nexport const PUBLIC = 1;\n`;
+      fs.writeFileSync(libFile, libContent);
+
+      const consumerFile = path.join(dir, 'consumer.ts');
+      fs.writeFileSync(consumerFile, `import { SECRET } from './lib';\nconsole.log(SECRET);\n`);
+
+      const { index } = projectIndexBuildSync({
+        files: [libFile, consumerFile],
+        dir,
+      });
+
+      const { rule, context } = createContext(libFile, libContent, index);
+      const violations = unusedExportsCheck(rule, context);
+
+      const missingExport = violations.find(v => v.message.includes("'SECRET'") && v.message.includes('not exported'));
+      expect(missingExport).toBeDefined();
+      expect(missingExport!.fix).toBeDefined();
+      expect(missingExport!.fix!.text).toBe('export ');
+    });
+
+    it('should detect a local type imported by another file but not exported', () => {
+      const dir = path.join(testDir, 'missing-export-type-test');
+      fs.mkdirSync(dir, { recursive: true });
+
+      const libFile = path.join(dir, 'lib.ts');
+      const libContent = `type InternalType = string;\nexport type PublicType = number;\n`;
+      fs.writeFileSync(libFile, libContent);
+
+      const consumerFile = path.join(dir, 'consumer.ts');
+      fs.writeFileSync(consumerFile, `import type { InternalType } from './lib';\nconst x: InternalType = 'hi';\n`);
+
+      const { index } = projectIndexBuildSync({
+        files: [libFile, consumerFile],
+        dir,
+      });
+
+      const { rule, context } = createContext(libFile, libContent, index);
+      const violations = unusedExportsCheck(rule, context);
+
+      const missingExport = violations.find(v => v.message.includes("'InternalType'") && v.message.includes('not exported'));
+      expect(missingExport).toBeDefined();
+      expect(missingExport!.fix).toBeDefined();
+      expect(missingExport!.fix!.text).toBe('export ');
+    });
+
+    it('should not flag already-exported symbols', () => {
+      const dir = path.join(testDir, 'already-exported-test');
+      fs.mkdirSync(dir, { recursive: true });
+
+      const libFile = path.join(dir, 'lib.ts');
+      const libContent = `export function alreadyExported() { return 1; }\n`;
+      fs.writeFileSync(libFile, libContent);
+
+      const consumerFile = path.join(dir, 'consumer.ts');
+      fs.writeFileSync(consumerFile, `import { alreadyExported } from './lib';\nalreadyExported();\n`);
+
+      const { index } = projectIndexBuildSync({
+        files: [libFile, consumerFile],
+        dir,
+      });
+
+      const { rule, context } = createContext(libFile, libContent, index);
+      const violations = unusedExportsCheck(rule, context);
+
+      expect(violations.filter(v => v.message.includes('not exported')).length).toBe(0);
+    });
+
+    it('should handle a mix of unused exports and missing exports in the same file', () => {
+      const dir = path.join(testDir, 'mixed-unused-and-missing-test');
+      fs.mkdirSync(dir, { recursive: true });
+
+      const libFile = path.join(dir, 'lib.ts');
+      const libContent = [
+        'export function unusedExported() { return 1; }',
+        'function missingExport() { return 2; }',
+        'export function normalExported() { return 3; }',
+      ].join('\n') + '\n';
+      fs.writeFileSync(libFile, libContent);
+
+      const consumerFile = path.join(dir, 'consumer.ts');
+      fs.writeFileSync(consumerFile, [
+        "import { missingExport, normalExported } from './lib';",
+        'missingExport(); normalExported();',
+      ].join('\n') + '\n');
+
+      const { index } = projectIndexBuildSync({
+        files: [libFile, consumerFile],
+        dir,
+      });
+
+      const { rule, context } = createContext(libFile, libContent, index);
+      const violations = unusedExportsCheck(rule, context);
+
+      const unusedViolation = violations.find(v => v.message.includes("'unusedExported'") && v.message.includes('not imported by any other'));
+      expect(unusedViolation).toBeDefined();
+
+      const missingViolation = violations.find(v => v.message.includes("'missingExport'") && v.message.includes('not exported'));
+      expect(missingViolation).toBeDefined();
+
+      expect(violations.filter(v => v.message.includes("'normalExported'")).length).toBe(0);
+    });
+
+    it('should detect a local interface imported by another file but not exported', () => {
+      const dir = path.join(testDir, 'missing-export-interface-test');
+      fs.mkdirSync(dir, { recursive: true });
+
+      const libFile = path.join(dir, 'lib.ts');
+      const libContent = `interface LocalConfig { key: string; }\nexport const VERSION = 1;\n`;
+      fs.writeFileSync(libFile, libContent);
+
+      const consumerFile = path.join(dir, 'consumer.ts');
+      fs.writeFileSync(consumerFile, `import type { LocalConfig } from './lib';\nconst cfg: LocalConfig = { key: 'a' };\n`);
+
+      const { index } = projectIndexBuildSync({
+        files: [libFile, consumerFile],
+        dir,
+      });
+
+      const { rule, context } = createContext(libFile, libContent, index);
+      const violations = unusedExportsCheck(rule, context);
+
+      const missingExport = violations.find(v => v.message.includes("'LocalConfig'") && v.message.includes('not exported'));
+      expect(missingExport).toBeDefined();
+      expect(missingExport!.fix).toBeDefined();
+      expect(missingExport!.fix!.text).toBe('export ');
+    });
+  });
 });

@@ -59,7 +59,7 @@ const INDEX_FILES = ['index'];
 /**
  * Check if a specifier is a relative import.
  */
-function isRelativeImport(specifier: string): boolean {
+export function isRelativeImport(specifier: string): boolean {
   return specifier.startsWith('./') || specifier.startsWith('../');
 }
 
@@ -67,7 +67,7 @@ function isRelativeImport(specifier: string): boolean {
  * Check if a specifier is likely an external package.
  * External packages don't start with ./ or ../ and aren't absolute paths.
  */
-function isExternalPackage(specifier: string): boolean {
+export function isExternalPackage(specifier: string): boolean {
   if (isRelativeImport(specifier)) return false;
   if (path.isAbsolute(specifier)) return false;
   // Scoped packages like @org/package
