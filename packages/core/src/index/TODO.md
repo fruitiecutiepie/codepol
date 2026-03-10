@@ -72,11 +72,7 @@ All export patterns are handled. No remaining gaps.
 - [x] Dynamic import binding resolution (`const mod = await import("./module")`) — tree-sitter query patterns capture the `await_expression` > `call_expression` > `import` pattern inside `variable_declarator`. Whole-module creates namespace-like `ImportBindingRelation`; destructured creates named bindings. Cross-file resolution, namespace member resolution, and external package handling all work via existing pipelines.
 - [x] Dynamic import module graph integration — `ImportsRelation.resolvedModulePath` resolved during `crossFileResolve` Step 7. `moduleGraphBuild` reads both `ImportBindingRelation` and `ImportsRelation` resolved paths to build edges. Covers dynamic imports with bindings, bare dynamic imports, and static side-effect imports.
 
-## Not Yet Implemented
-
-### High Priority
-
-#### 1. Module Graph
+### 4. Module Graph
 **Status**: Implemented
 
 Module-level dependency graph built from import relations in `packages/core/src/index/moduleGraph.ts`.
@@ -93,13 +89,11 @@ Exposed on `ProjectIndex` as `moduleImportersGet()`, `moduleImporteesGet()`, `mo
 
 Integration tests in `tests/index.module-graph.spec.ts`: linear chain, circular imports, diamond dependencies, isolated files, external package filtering, unknown files, multi-import deduplication, entry point detection (linear chain root, diamond root, isolated files, circular imports, external-only imports), dynamic import module graph edges (binding-based, side-effect dynamic, static side-effect).
 
-### Medium Priority
+### 5. Control Flow Graph (CFG)
+**Status**: Implemented
 
-#### 4. Control Flow Graph (CFG)
-**Status**: Implemented  
-**What's done**: Per-function CFG construction, storage, querying, cyclomatic complexity, and all common control flow patterns
+Per-function CFG construction, storage, querying, cyclomatic complexity, and all common control flow patterns.
 
-Implementation:
 - [x] `FlowNode`, `FlowEdge`, `FlowGraph` types in `indexTypes.ts`
 - [x] `FlowNodeKind`: `'entry' | 'exit' | 'statement' | 'branch' | 'merge' | 'loop' | 'return' | 'throw'`
 - [x] `FlowEdge` labels: `'true' | 'false' | 'loop-back' | 'unconditional' | 'break' | 'continue' | 'case' | 'default' | 'exception' | 'finally'`
@@ -113,19 +107,11 @@ Implementation:
 - [x] Unit tests (5 IndexStore + 3 ProjectIndex) and integration tests (37 in `tests/index.cfg.spec.ts`)
 - [x] Ternary expressions within CFG — `ternaryExpressionFind` recursively scans statement subtrees for `ternary_expression` nodes; `ternaryProcess` models branch(condition) → true/false paths → merge, with `ternaryBranchProcess` handling nested ternaries recursively via `incomingEdgeLabel` propagation
 
-**No remaining gaps.**
+### 6. Type Relations
+**Status**: Implemented
 
-Use cases:
-- Cyclomatic complexity calculation
-- Dead code detection (unreachable after return/throw/break/continue)
-- Path counting
-- Reachability analysis
+Extends/implements extraction, querying, and cross-file resolution.
 
-#### 5. Type Relations
-**Status**: Implemented  
-**What's done**: Extends/implements extraction, querying, and cross-file resolution
-
-Implemented in the full stack:
 - [x] `TypeRelation` type in `indexTypes.ts` — captures `extends` and `implements` relationships with `symbolId`, `targetName`, `relationKind`, `byteRange`, and optional `resolvedTargetId`
 - [x] Tree-sitter query (`typeRelations.ts`) — patterns for class extends, class implements, abstract class extends/implements, interface extends
 - [x] `typeRelationsExtract()` in `adapterCore.ts` — extracts type relations from query captures, resolves file-local targets
@@ -135,74 +121,152 @@ Implemented in the full stack:
 - [x] Cross-file `resolvedTargetId` resolution — Step 6 in `crossFileResolve` (`indexBuilder.ts`) follows import bindings to resolve `resolvedTargetId` to the actual exported symbol from the source module. Works with re-export chains and aliased imports.
 - [x] Unit tests (5 IndexStore + 3 ProjectIndex) and integration tests (15 in `tests/index.type-relations.spec.ts`)
 
-**What's remaining**:
-- [ ] `TypeOf` relation — value-to-type mapping requires type inference beyond tree-sitter's capabilities. Deferred.
+---
 
-#### 6. Persistence / Caching
-**Status**: In-memory only  
-**What's missing**: Disk persistence for large projects
+## Remaining TODOs
+
+### Python adapter
+
+See [TODO_ADAPTER_PY.md](TODO_ADAPTER_PY.md) for Python-specific remaining work (cross-file module resolution, exports adapter gap, CFG support).
+
+---
+
+### 1. `TypeOf` relation
+
+**Priority**: Low (deferred)
+**Status**: Not implemented
+**Effort**: Large
+
+Value-to-type mapping (e.g., `const x: Foo = ...` → `x` has type `Foo`) requires type inference beyond what tree-sitter can provide. Tree-sitter gives syntax structure but not type resolution. This would require either:
+- TypeScript compiler API integration (heavy dependency)
+- Heuristic inference from annotations only (limited utility)
+
+Intentionally deferred — the ROI is low for the current use cases (policy enforcement, unused exports).
+
+---
+
+### 2. Index persistence / caching
+
+**Priority**: Medium
+**Status**: In-memory only
+**Effort**: Large
+
+The `IndexStore` is entirely in-memory. For large projects, this means:
+- Full re-indexing on every startup
+- High memory usage for large codebases
+- No sharing between processes (ESLint, CLI, IDE)
 
 Options:
-- SQLite-based storage
-- Binary serialization
-- LSP-style caching
+- SQLite-based storage (structured queries, proven durability)
+- Binary serialization (fast load, custom format)
+- LSP-style caching (editor integration)
 
-Benefits:
-- Faster startup for unchanged files
-- Reduced memory for large codebases
-- Shareable between processes
+---
 
-#### 7. Watch Mode / Incremental Updates
-**Status**: API exists, no integration  
-**What's missing**: File watcher integration
+### 3. Watch mode / incremental index updates
 
-`projectIndexUpdate()` exists but nothing calls it automatically. Need:
-- File system watcher
+**Priority**: Medium
+**Status**: API exists, no integration
+**Effort**: Medium
+
+`projectIndexUpdate()` and `crossFileResolveForFile()` exist and are tested, but nothing calls them automatically on file changes. Need:
+- File system watcher integration (chokidar already a dependency)
 - Debounced re-indexing
 - Dirty file tracking
+- Integration with the CLI `--watch` mode (which itself is tested but skipped — see item 5)
 
-### Lower Priority
+---
 
-#### 8. Additional Language Adapters
-**Status**: TypeScript (full), Python (single-file tested, cross-file pending)
+### 4. Additional language adapters
 
-Python adapter: query packs, config, and `pythonRefFilter` are fully implemented. Single-file integration tests exist in `tests/index.python.spec.ts` (18 tests covering symbols, scopes, refs, calls, imports, exports). Cross-file resolution requires Python-specific module resolution (`__init__.py` packages, no file extensions) which is not yet implemented in `moduleResolver.ts` (3 skipped tests).
+**Priority**: Low
+**Status**: TypeScript (full), Python (single-file only)
+**Effort**: Medium per language
 
-Adapter core fixes for Python support:
-- `memberRefsExtract` now gracefully handles grammars without `member_expression` (Python uses `attribute`)
-- Python exports query `#eq?` predicate syntax corrected (capture must precede predicate)
+Each new language requires:
+- Tree-sitter grammar WASM file
+- Query packs: `scopes.ts`, `symbols.ts`, `refs.ts`, `calls.ts`, `imports.ts`, `exports.ts`
+- Kind mappings (symbol kinds, scope kinds)
+- Language-specific ref filter (to exclude definition sites from references)
+- Tests
 
-Candidates for future adapters:
-- JavaScript (can reuse TS adapter mostly)
-- Rust
-- Go
-- Java
+Candidates:
+- **JavaScript**: can mostly reuse the TypeScript adapter (already works via `languageIdFromFile` fallback that routes `.js`/`.jsx` to TS/TSX parsers)
+- **Rust, Go, Java**: would need full adapter implementations
 
-Each needs:
-- Tree-sitter grammar WASM
-- Query packs (scopes.ts, symbols.ts, refs.ts, calls.ts, imports.ts)
-- Kind mappings
-- Language-specific ref filtering
+---
 
-#### 9. Query Optimization
-**Status**: Naive implementation  
-**What's missing**: Efficient queries for large codebases
+### 5. CLI `--watch` mode test
 
-Current implementation uses linear scans in some cases. Could add:
+**Priority**: Low
+**Status**: 1 skipped test in `tests/e2e.cli.spec.ts`
+**Effort**: Medium
+
+The `--watch` command starts a chokidar file watcher with debounced re-runs. Testing requires:
+- Spawning a long-running CLI process
+- Modifying source files while the process is running
+- Asserting on incremental stdout output
+- Graceful process cleanup
+
+The test is currently `it.skip` with a TODO comment.
+
+---
+
+### 6. Query optimization
+
+**Priority**: Low
+**Status**: Naive implementation
+**Effort**: Medium-Large
+
+Current `IndexStore` queries use linear scans in some cases. Potential optimizations:
 - Bloom filters for name existence checks
-- Interval trees for range queries
-- Lazy loading of relations
+- Interval trees for byte-range queries
+- Lazy loading of relations (only materialize when queried)
 
-#### 10. LSP Integration
-**Status**: Not implemented  
-**What's missing**: Language Server Protocol bridge
+Not a bottleneck at current scale — benchmarks exist in `indexBuilder.bench.ts` and `indexQuery.bench.ts`.
 
-The original spec mentioned "LSP++ sidecar":
+---
+
+### 7. LSP integration
+
+**Priority**: Low
+**Status**: Not implemented
+**Effort**: Large
+
+The original spec mentioned an "LSP++ sidecar":
 - Expose index via LSP custom methods
-- Editor-agnostic navigation
+- Editor-agnostic navigation (go-to-definition, find-references)
 - Headless CI usage
 
-### Known Limitations
+This would make the semantic index available to IDEs without the ESLint adapter overhead.
+
+---
+
+### 8. ESM/CJS dual-publish for `@codepol/plugin`
+
+**Priority**: Low
+**Status**: Workaround in place
+**Effort**: Small
+
+Two `TODO` comments reference this:
+- `packages/core/src/policy/policyPluginsGet.ts:103` — `pluginExported` unwrapping handles nested `default` from CJS→ESM interop
+- `packages/eslint-plugin/src/index.ts:36` — `pluginRulesNormalize` handles the same interop for ESLint plugin assembly
+
+The workaround is stable and tested but adds complexity. Fix by adding proper `exports` field to `@codepol/plugin`'s `package.json` with separate CJS and ESM entry points.
+
+---
+
+### 9. Unit tests for adapter query execution
+
+**Priority**: Low
+**Status**: Unchecked item in Testing Status
+**Effort**: Medium
+
+The adapter core's query execution (running tree-sitter queries against parse trees and processing captures) is exercised indirectly through integration tests (`index.builder.spec.ts`, `index.python.spec.ts`, etc.) but has no dedicated unit tests that test query execution in isolation with mocked parse trees.
+
+---
+
+## Known Limitations
 
 These are intentional constraints, not bugs:
 
@@ -245,9 +309,10 @@ The following plugin rules in `@codepol/plugin` consume the `ProjectIndex` or us
 - **forbiddenPathWordsCheck** — path segment analysis for forbidden words in file/directory names. Tested (26 tests in `forbiddenPathWordsCheck.spec.ts`).
 - **noVerbFunctionNameCheck** — function name analysis using `identifierSplitByCasing` to detect verb-prefixed names while allowing compound words. Tested (63 tests in `noVerbFunctionNameCheck.spec.ts`).
 
-## Documentation Needed
+## Documentation Status
 
 - [x] API reference for ProjectIndex — `docs/project-index-api.md`
 - [x] Guide for creating language adapters — `docs/creating-language-adapters.md`
 - [x] Examples of cross-file analysis rules — `docs/cross-file-analysis.md`
 - [x] Architecture documentation with diagrams — `docs/semantic-index.md`
+- [x] Full API reference including Semantic Index — `docs/api-reference.md`
