@@ -17,15 +17,15 @@ export const EXPORTS_QUERY = `
 (assignment
   left: (identifier) @export.all_name
   right: (list
-    (string) @export.all_item))
-  (#eq? @export.all_name "__all__") @export.all
+    (string) @export.all_item)) @export.all
+  (#eq? @export.all_name "__all__")
 
 ; __all__ = ("foo", "bar")
 (assignment
   left: (identifier) @export.all_name
   right: (tuple
-    (string) @export.all_item))
-  (#eq? @export.all_name "__all__") @export.all_tuple
+    (string) @export.all_item)) @export.all_tuple
+  (#eq? @export.all_name "__all__")
 
 ; =========================
 ;  Module-level Definitions

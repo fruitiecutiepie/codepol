@@ -235,6 +235,34 @@ Examples:
 | File with parse errors — graceful skip | Integration | `tests/index.cross-file-resolution.spec.ts` | Exists |
 | Empty file — no crash | Integration | `tests/index.cross-file-resolution.spec.ts` | Exists |
 
+#### Python Adapter (`adapters/treeSitter/languages/python/`)
+
+The Python adapter is fully coded with query packs for scopes, symbols, refs, calls, imports, and exports, plus `pythonRefFilter`. Single-file integration tests validate the adapter end-to-end. Cross-file resolution requires Python-specific module resolution (`__init__.py`, no file extensions) which is not yet implemented in `moduleResolver.ts`.
+
+| What | Layer | Test File | Status |
+|------|-------|-----------|--------|
+| Symbol extraction — class definitions | Integration | `tests/index.python.spec.ts` | Exists |
+| Symbol extraction — function definitions + async flag | Integration | `tests/index.python.spec.ts` | Exists |
+| Symbol extraction — variable assignments | Integration | `tests/index.python.spec.ts` | Exists |
+| Symbol extraction — parameters (simple, typed, default, *args, **kwargs) | Integration | `tests/index.python.spec.ts` | Exists |
+| Symbol extraction — import bindings | Integration | `tests/index.python.spec.ts` | Exists |
+| Symbol extraction — methods inside classes | Integration | `tests/index.python.spec.ts` | Exists |
+| Scope tree — module-level file scope | Integration | `tests/index.python.spec.ts` | Exists |
+| Scope tree — nested class and function scopes | Integration | `tests/index.python.spec.ts` | Exists |
+| Scope tree — lambda expressions | Integration | `tests/index.python.spec.ts` | Exists |
+| Reference resolution — file-local refs to variables and functions | Integration | `tests/index.python.spec.ts` | Exists |
+| Reference resolution — definition-site filtering (pythonRefFilter) | Integration | `tests/index.python.spec.ts` | Exists |
+| Call detection — simple function calls | Integration | `tests/index.python.spec.ts` | Exists |
+| Call detection — method calls with dotted notation | Integration | `tests/index.python.spec.ts` | Exists |
+| Import extraction — from-imports with binding names | Integration | `tests/index.python.spec.ts` | Exists |
+| Import extraction — aliased from-import (symbol creation) | Integration | `tests/index.python.spec.ts` | Exists |
+| Import extraction — ImportsRelation for from-import statements | Integration | `tests/index.python.spec.ts` | Exists |
+| Export extraction — module-level function definitions | Integration | `tests/index.python.spec.ts` | Exists |
+| Export extraction — module-level class definitions | Integration | `tests/index.python.spec.ts` | Exists |
+| Cross-file — relative imports (`from .sibling import foo`) | Integration | `tests/index.python.spec.ts` | Skipped (Python module resolution not implemented) |
+| Cross-file — package imports (`from package import module`) | Integration | `tests/index.python.spec.ts` | Skipped (Python module resolution not implemented) |
+| Cross-file — cross-file reference resolution | Integration | `tests/index.python.spec.ts` | Skipped (Python module resolution not implemented) |
+
 #### Index Query / ProjectIndex (`index/indexQuery.ts`)
 
 Methods that are thin wrappers over `IndexStore` can be unit-tested with a pre-populated store (no parser). Methods that depend on cross-file resolution or real parse output need integration tests.
@@ -798,6 +826,8 @@ Methods that are thin wrappers over `IndexStore` can be unit-tested with a pre-p
 | ESLint plugin | 16 | 0 | 100% |
 | esbuild plugin | 6 | 0 | 100% |
 | CLI | 9 | 1 | 90% |
+| Python adapter (single-file) | 18 | 0 | 100% |
+| Python adapter (cross-file) | 0 | 3 | 0% (skipped, needs Python module resolution) |
 | Policy contract | 5 | 0 | 100% |
 
 ### Priority order for closing gaps
@@ -1141,6 +1171,7 @@ These were added as part of closing gaps identified in this plan.
 | `tests/index.builder.spec.ts` (expanded) | Integration | Added: `adapterRegister` — registers spy adapter for 'typescript', verifies factory and indexFile calls, validates spy delta in resulting index. Documents `languageIdFromFile` hardcoded switch as known gap for custom languages. Un-skipped: async flag detection (adapter now checks for `async` keyword child on declaration nodes), enum member extraction (symbols query now captures `enum_assignment` nodes as `enumMember` kind). Un-skipped: `callersGet`/`calleesGet` via ProjectIndex API — symbol `byteRange` expanded to full declaration span in `adapterCore.ts`; `callersGet` algorithm fixed to use file-scoped symbol range containment instead of scopeId-based lookup. |
 | `tests/eslint.unused-exports-adapter.spec.ts` | Integration | ESLint adapter with `requiresProjectIndex: true`: adapts `unusedExportsRule`, builds ProjectIndex from multi-file temp dir, verifies unused exports detected via treeCheckViolation. Valid cases: all-exports-consumed file, consumer-only file. Invalid case: file with unused export. Exercises `getOrBuildProjectIndex`, `discoverIndexableFiles`, and cross-file import resolution through the ESLint adapter pipeline. |
 | `tests/index.type-relations.spec.ts` (expanded) | Integration | Type relation extraction and query: class extends class, class implements interface (single/multiple), interface extends interface, abstract class extends + implements, generic type parameter, subTypesGet reverse lookup, empty results for no relations, interface extends multiple interfaces. Cross-file type relation resolution: extends, implements, re-export chain, aliased import, interface extends — all verify `resolvedTargetId` points to the actual exported symbol via `crossFileResolve` Step 6. 15 tests exercising full stack from tree-sitter extraction through ProjectIndex API. |
+| `tests/index.python.spec.ts` | Integration | Python adapter: symbol extraction (classes, functions, variables, parameters, import bindings, methods), scope tree (module, nested class/function, lambda), reference resolution with pythonRefFilter, call detection (simple + dotted), import extraction (from-imports, aliased, ImportsRelation), export extraction (module-level functions/classes). 3 skipped cross-file tests pending Python module resolution in moduleResolver.ts. Required fixes: `memberRefsExtract` now gracefully skips grammars without `member_expression`; Python exports query `#eq?` predicate syntax corrected. |
 | `packages/core/src/index/testHelpers.ts` | — | Shared test helper for building `FileIndexDelta`, `SymbolRecord`, and `ScopeRecord` objects without tree-sitter. Extracted from duplicate helpers in `indexStore.spec.ts` and `indexQuery.spec.ts`. Exports: `byteRangeGet`, `scopeRecordNew`, `symbolRecordNew`, `fileIndexDeltaNew`. |
 | `tests/index.cross-file-resolution.spec.ts` (expanded) | Integration | Un-skipped: re-export chain (consumer import traced through proxy to origin symbol via `exportMapAddReexportedSymbols`), star export expansion (imports from `export *` proxy mapped to origin symbols, references updated). TS export query extended with `export.reexport_name` and `export.reexport_source` captures for `export { foo } from "module"` patterns. Un-skipped: namespace import member resolution — `memberRefsExtract` creates dotted references for member expressions, `crossFileResolve` sets `resolvedModulePath` on namespace bindings and resolves dotted references against the namespace's module export map. Added: import alias test tightened to verify `importedName === 'originalName'` and local symbol named `'renamedFn'`. Added: export alias test (`export { foo as bar }`) verifying aliased export name and consumer resolution. Added: namespace re-export resolution (`export * as ns from './mod'`) — consumer named import converted to namespace binding, member accesses resolved to origin symbols. Added: chained namespace re-export (through star-export intermediary). Added: cross-file interface exports, type alias exports, enum exports (all verified working via `export.decl_name` capture). Added: re-exported interface through chain (resolvedExportId traces to origin symbol). Un-skipped: type-only named exports (`export type { Foo }` — tree-sitter produces identical `export_clause` structure; `Exported` flag now set by `exportsExtract`), anonymous default class export (synthetic symbol via AST walking), anonymous default function export (same mechanism). Added: CommonJS require() support — whole-module (`const mod = require('./module')`), destructured (`const { a, b } = require('./module')`), ESM interop, module graph inclusion, external package handling. Tree-sitter query patterns with `#eq?` predicate for `require` identifier; adapter extraction pre-existed in `adapterCore.ts`. Added: dynamic `import()` binding resolution — whole-module (`const mod = await import('./module')`) creates namespace binding, destructured (`const { foo } = await import('./module')`) creates named bindings, member access resolution via namespace pass, external package handling, `ImportsRelation` specifier resolution for side-effect imports. All 36 tests passing, 0 skipped. |
 | `tests/index.module-graph.spec.ts` (expanded) | Integration | Module graph API: linear chain (importers/importees, dependency order, no cycles), circular imports (cycle detection, bidirectional edges), diamond dependency (no false cycles, correct ordering), isolated files (included in graph), external packages filtered out, unknown files return empty, multi-import deduplication. Entry point detection — linear chain (only root), diamond (only root), isolated files (both entry points), circular imports (no entry points), external-only imports (entry points). Dynamic import module graph integration — dynamic import with binding creates edges, side-effect dynamic import creates edges via `ImportsRelation.resolvedModulePath`, static side-effect import creates edges. 17 tests exercising `moduleImportersGet`, `moduleImporteesGet`, `moduleDependencyOrderGet`, `moduleCyclesGet`, `moduleEntryPointsGet` via `ProjectIndex`. |

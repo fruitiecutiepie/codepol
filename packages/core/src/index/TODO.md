@@ -164,10 +164,15 @@ Benefits:
 ### Lower Priority
 
 #### 8. Additional Language Adapters
-**Status**: TypeScript/Python only  
-**What's missing**: Other languages
+**Status**: TypeScript (full), Python (single-file tested, cross-file pending)
 
-Candidates:
+Python adapter: query packs, config, and `pythonRefFilter` are fully implemented. Single-file integration tests exist in `tests/index.python.spec.ts` (18 tests covering symbols, scopes, refs, calls, imports, exports). Cross-file resolution requires Python-specific module resolution (`__init__.py` packages, no file extensions) which is not yet implemented in `moduleResolver.ts` (3 skipped tests).
+
+Adapter core fixes for Python support:
+- `memberRefsExtract` now gracefully handles grammars without `member_expression` (Python uses `attribute`)
+- Python exports query `#eq?` predicate syntax corrected (capture must precede predicate)
+
+Candidates for future adapters:
 - JavaScript (can reuse TS adapter mostly)
 - Rust
 - Go
@@ -226,6 +231,8 @@ These are intentional constraints, not bugs:
 - [x] Dynamic import() module graph integration — tested in `tests/index.module-graph.spec.ts` (dynamic import with binding, side-effect dynamic import, static side-effect import all create edges)
 - [x] Control flow graph extraction — tested in `tests/index.cfg.spec.ts` (37 tests: empty function, sequential, if/else, ternary expressions (simple, expression statement, nested), while/for/do-while/for-in/for-of, return/throw, break/continue with labels, switch/case/default with fallthrough, try/catch/finally, nested control flow, cyclomatic complexity, arrow functions)
 - [x] CFG storage and queries — tested in `packages/core/src/index/indexStore.spec.ts` (put/get/remove/clear) and `packages/core/src/index/indexQuery.spec.ts` (cfgGet, cyclomaticComplexityGet)
+- [x] Python adapter single-file tests — tested in `tests/index.python.spec.ts` (18 tests: symbols, scopes, refs, calls, imports, exports)
+- [ ] Python adapter cross-file tests — 3 skipped tests pending Python module resolution in `moduleResolver.ts`
 
 ## Plugin Rules Using the Semantic Index
 

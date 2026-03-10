@@ -19,8 +19,9 @@ const wasmOutputDir = join(rootDir, 'packages', 'core', 'wasm');
 
 const require = createRequire(import.meta.url);
 
-// tree-sitter-typescript version to download pre-built WASM for
+// Versions for downloading pre-built WASM files
 const TREE_SITTER_TS_VERSION = '0.23.2';
+const TREE_SITTER_PYTHON_VERSION = '0.23.6';
 
 /**
  * Find the tree-sitter-typescript package directory
@@ -81,13 +82,14 @@ async function downloadFile(url, destPath) {
 }
 
 /**
- * Download pre-built WASM from GitHub releases
+ * Download pre-built WASM from GitHub releases.
+ * @param {string} repoName - GitHub repo name under tree-sitter org (e.g., 'tree-sitter-typescript')
+ * @param {string} version - Release version tag (without 'v' prefix)
+ * @param {string} wasmFileName - WASM file name in the release assets
+ * @param {string} outputPath - Local output path
  */
-async function downloadPrebuiltWasm(langName, outputPath) {
-  // tree-sitter-typescript releases include pre-built WASM files
-  const baseUrl = `https://github.com/tree-sitter/tree-sitter-typescript/releases/download/v${TREE_SITTER_TS_VERSION}`;
-  const wasmFileName = `tree-sitter-${langName}.wasm`;
-  const url = `${baseUrl}/${wasmFileName}`;
+async function downloadPrebuiltWasm(repoName, version, wasmFileName, outputPath) {
+  const url = `https://github.com/tree-sitter/${repoName}/releases/download/v${version}/${wasmFileName}`;
 
   try {
     await downloadFile(url, outputPath);
@@ -108,40 +110,48 @@ async function main() {
 
   const tsWasmPath = join(wasmOutputDir, 'tree-sitter-typescript.wasm');
   const tsxWasmPath = join(wasmOutputDir, 'tree-sitter-tsx.wasm');
+  const pyWasmPath = join(wasmOutputDir, 'tree-sitter-python.wasm');
 
-  // Check if WASM files already exist
-  if (existsSync(tsWasmPath) && existsSync(tsxWasmPath)) {
+  const allExist = existsSync(tsWasmPath) && existsSync(tsxWasmPath) && existsSync(pyWasmPath);
+  if (allExist) {
     console.log('WASM files already exist, skipping build.');
     console.log(`  ${tsWasmPath}`);
     console.log(`  ${tsxWasmPath}`);
+    console.log(`  ${pyWasmPath}`);
     return;
   }
 
-  let success = false;
+  let tsSuccess = existsSync(tsWasmPath) && existsSync(tsxWasmPath);
+  let pySuccess = existsSync(pyWasmPath);
 
-  // Try local build first if tools are available
-  if (canBuildLocally()) {
+  // Try local build for TypeScript/TSX if tools are available and files missing
+  if (!tsSuccess && canBuildLocally()) {
     const tsPackageDir = findTreeSitterTypescriptDir();
     console.log(`\nFound tree-sitter-typescript at: ${tsPackageDir}\n`);
 
     const typescriptDir = join(tsPackageDir, 'typescript');
     const tsxDir = join(tsPackageDir, 'tsx');
 
-    const tsSuccess = buildWasmLocally(typescriptDir, tsWasmPath);
-    const tsxSuccess = buildWasmLocally(tsxDir, tsxWasmPath);
-    success = tsSuccess && tsxSuccess;
+    const tsBuild = buildWasmLocally(typescriptDir, tsWasmPath);
+    const tsxBuild = buildWasmLocally(tsxDir, tsxWasmPath);
+    tsSuccess = tsBuild && tsxBuild;
   }
 
-  // Fall back to downloading pre-built WASM
-  if (!success) {
-    console.log('\nLocal build not available. Downloading pre-built WASM files...\n');
-
-    const tsSuccess = await downloadPrebuiltWasm('typescript', tsWasmPath);
-    const tsxSuccess = await downloadPrebuiltWasm('tsx', tsxWasmPath);
-    success = tsSuccess && tsxSuccess;
+  // Fall back to downloading pre-built WASM for TypeScript/TSX
+  if (!tsSuccess) {
+    console.log('\nDownloading pre-built TypeScript/TSX WASM files...\n');
+    const tsDl = await downloadPrebuiltWasm('tree-sitter-typescript', TREE_SITTER_TS_VERSION, 'tree-sitter-typescript.wasm', tsWasmPath);
+    const tsxDl = await downloadPrebuiltWasm('tree-sitter-typescript', TREE_SITTER_TS_VERSION, 'tree-sitter-tsx.wasm', tsxWasmPath);
+    tsSuccess = tsDl && tsxDl;
   }
 
-  if (success) {
+  // Download pre-built Python WASM (no local build — the npm package doesn't ship grammar source)
+  if (!pySuccess) {
+    console.log('\nDownloading pre-built Python WASM file...\n');
+    pySuccess = await downloadPrebuiltWasm('tree-sitter-python', TREE_SITTER_PYTHON_VERSION, 'tree-sitter-python.wasm', pyWasmPath);
+  }
+
+  if (tsSuccess && pySuccess) {
     console.log('\n✓ All WASM grammars ready!');
     console.log(`  Output: ${wasmOutputDir}`);
   } else {
