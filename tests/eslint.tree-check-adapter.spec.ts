@@ -2,7 +2,7 @@ import path from 'node:path';
 import { RuleTester } from 'eslint';
 import tseslint from 'typescript-eslint';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { eslintAdapter, policyCacheClear } from '@codepol/eslint-plugin';
+import { eslintAdapter, policyCacheClear } from '@codepol/plugin-eslint';
 import { loggerEnterExitRule } from '@codepol/plugin';
 import { langAdd, parserInit } from '@codepol/core';
 

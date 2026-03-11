@@ -5,7 +5,7 @@ esbuild plugin for enforcing codepol policies during builds.
 ## Installation
 
 ```bash
-pnpm add -D @codepol/esbuild-plugin @codepol/core @codepol/eslint-plugin esbuild eslint
+pnpm add -D @codepol/esbuild-plugin @codepol/core @codepol/plugin-eslint esbuild eslint
 ```
 
 ## Features

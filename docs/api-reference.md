@@ -333,7 +333,7 @@ async function providerRulesConfigGet(
 ```javascript
 // eslint.config.js
 import { providerRulesConfigGet } from '@codepol/core';
-import codepol from '@codepol/eslint-plugin';
+import codepol from '@codepol/plugin-eslint';
 
 export default [{
   plugins: { codepol },
@@ -385,7 +385,7 @@ If `providers` is omitted or empty, the rule applies to all providers. This is u
 
 ```javascript
 // eslint.config.js
-import codepol from '@codepol/eslint-plugin';
+import codepol from '@codepol/plugin-eslint';
 
 export default [{
   plugins: { codepol },
@@ -2288,12 +2288,12 @@ const updatedIndex = projectIndexCreate(store, index.capabilities);
 
 ---
 
-## @codepol/eslint-plugin
+## @codepol/plugin-eslint
 
 ### eslintPluginCreate
 
 ```typescript
-import { eslintPluginCreate } from '@codepol/eslint-plugin';
+import { eslintPluginCreate } from '@codepol/plugin-eslint';
 import pluginRules from '@codepol/plugin';
 
 const plugin = eslintPluginCreate(pluginRules);
@@ -2310,7 +2310,7 @@ Converts a `TreeCheckProvider` into an ESLint rule module. This enables tree-sit
 to run within ESLint's infrastructure without duplicating the check logic.
 
 ```typescript
-import { eslintAdapter } from '@codepol/eslint-plugin';
+import { eslintAdapter } from '@codepol/plugin-eslint';
 
 const eslintAdapter: TreeCheckLintAdapter<TSESLint.RuleModule<string, unknown[]>>
 ```
@@ -2323,7 +2323,7 @@ const eslintAdapter: TreeCheckLintAdapter<TSESLint.RuleModule<string, unknown[]>
 **Example:**
 
 ```typescript
-import { eslintAdapter } from '@codepol/eslint-plugin';
+import { eslintAdapter } from '@codepol/plugin-eslint';
 import { loggerEnterExitRule } from '@codepol/plugin';
 
 // Convert tree-check provider to ESLint rule
@@ -2368,7 +2368,7 @@ async function eslintAdapterInit(
 **Example:**
 
 ```typescript
-import { eslintAdapterInit, eslintAdapter } from '@codepol/eslint-plugin';
+import { eslintAdapterInit, eslintAdapter } from '@codepol/plugin-eslint';
 import { configGet, parserInit, langAdd } from '@codepol/core';
 import { loggerEnterExitRule } from '@codepol/plugin';
 
@@ -2391,7 +2391,7 @@ const rule = eslintAdapter.adapt(loggerEnterExitRule);
 Utility functions for clearing cached state (useful for testing).
 
 ```typescript
-import { policyCacheClear, providerInitStateClear } from '@codepol/eslint-plugin';
+import { policyCacheClear, providerInitStateClear } from '@codepol/plugin-eslint';
 
 // Clear cached policy files
 policyCacheClear();

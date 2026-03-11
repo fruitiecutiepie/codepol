@@ -19,7 +19,7 @@ Choose the packages you need:
 pnpm add -D @codepol/cli
 
 # For ESLint integration
-pnpm add -D @codepol/eslint-plugin @codepol/plugin @typescript-eslint/utils
+pnpm add -D @codepol/plugin-eslint @codepol/plugin @typescript-eslint/utils
 
 # For esbuild integration
 pnpm add -D @codepol/esbuild-plugin esbuild
@@ -28,7 +28,7 @@ pnpm add -D @codepol/esbuild-plugin esbuild
 ### Minimal Setup (ESLint only)
 
 ```bash
-pnpm add -D @codepol/eslint-plugin @codepol/core @codepol/plugin
+pnpm add -D @codepol/plugin-eslint @codepol/core @codepol/plugin
 ```
 
 ## Step 2: Create a Config File
@@ -92,7 +92,7 @@ The config file is auto-discovered from your project root. Supported formats:
 ### Flat Config (eslint.config.js) - Recommended
 
 ```javascript
-import { eslintPluginCreate } from '@codepol/eslint-plugin';
+import { eslintPluginCreate } from '@codepol/plugin-eslint';
 import codepolPlugin from '@codepol/plugin';
 import tseslint from 'typescript-eslint';
 
@@ -120,7 +120,7 @@ export default [
 ### Legacy Config (.eslintrc.cjs)
 
 ```javascript
-const { eslintPluginCreate } = require('@codepol/eslint-plugin');
+const { eslintPluginCreate } = require('@codepol/plugin-eslint');
 const codepolPlugin = require('@codepol/plugin').default;
 const tseslint = require('typescript-eslint');
 

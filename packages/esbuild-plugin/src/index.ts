@@ -45,7 +45,7 @@ import {
   type LintSeverity,
   type EslintProviderConfig,
 } from '@codepol/core';
-import { eslintPluginCreate } from '@codepol/eslint-plugin';
+import { eslintPluginCreate } from '@codepol/plugin-eslint';
 
 const ESLINT_CONFIG_EXTENSIONS = ['.js', '.mjs', '.cjs', '.ts', '.mts', '.cts'];
 

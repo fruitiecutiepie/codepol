@@ -21,7 +21,7 @@ import {
   eslintAdapter,
   policyCacheClear,
   projectIndexCacheClear,
-} from '@codepol/eslint-plugin';
+} from '@codepol/plugin-eslint';
 import { unusedExportsRule } from '@codepol/plugin';
 import { langAdd, parserInit, configCacheClear } from '@codepol/core';
 

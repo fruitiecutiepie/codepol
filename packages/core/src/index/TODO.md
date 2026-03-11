@@ -250,7 +250,7 @@ This would make the semantic index available to IDEs without the ESLint adapter 
 
 Two `TODO` comments reference this:
 - `packages/core/src/policy/policyPluginsGet.ts:103` — `pluginExported` unwrapping handles nested `default` from CJS→ESM interop
-- `packages/eslint-plugin/src/index.ts:36` — `pluginRulesNormalize` handles the same interop for ESLint plugin assembly
+- `packages/plugin-eslint/src/index.ts:36` — `pluginRulesNormalize` handles the same interop for ESLint plugin assembly
 
 The workaround is stable and tested but adds complexity. Fix by adding proper `exports` field to `@codepol/plugin`'s `package.json` with separate CJS and ESM entry points.
 

@@ -727,25 +727,25 @@ Methods that are thin wrappers over `IndexStore` can be unit-tested with a pre-p
 
 ---
 
-### 3.3 `@codepol/eslint-plugin`
+### 3.3 `@codepol/plugin-eslint`
 
 | Function / Scenario | Layer | Test File | Status |
 |---------------------|-------|-----------|--------|
-| `eslintPluginCreate` — assembles rules from `lintProviders` | Unit | `packages/eslint-plugin/src/eslintPluginCreate.spec.ts` | Exists |
-| `eslintPluginCreate` — adapts `treeCheckProvider`-only rules | Unit | `packages/eslint-plugin/src/eslintPluginCreate.spec.ts` | Exists |
-| `eslintPluginCreate` — handles CJS/ESM interop (`default` export) | Unit | `packages/eslint-plugin/src/eslintPluginCreate.spec.ts` | Exists |
-| `eslintPluginCreate` — handles `{ pluginRules: [...] }` format | Unit | `packages/eslint-plugin/src/eslintPluginCreate.spec.ts` | Exists |
-| `eslintPluginCreate` — skips non-eslint platforms | Unit | `packages/eslint-plugin/src/eslintPluginCreate.spec.ts` | Exists |
-| `eslintPluginCreate` — does not auto-adapt when eslint lintProvider exists | Unit | `packages/eslint-plugin/src/eslintPluginCreate.spec.ts` | Exists |
-| `eslintPluginCreate` — collects from multiple plugin rules | Unit | `packages/eslint-plugin/src/eslintPluginCreate.spec.ts` | Exists |
-| `eslintPluginCreate` — throws for invalid input | Unit | `packages/eslint-plugin/src/eslintPluginCreate.spec.ts` | Exists |
+| `eslintPluginCreate` — assembles rules from `lintProviders` | Unit | `packages/plugin-eslint/src/eslintPluginCreate.spec.ts` | Exists |
+| `eslintPluginCreate` — adapts `treeCheckProvider`-only rules | Unit | `packages/plugin-eslint/src/eslintPluginCreate.spec.ts` | Exists |
+| `eslintPluginCreate` — handles CJS/ESM interop (`default` export) | Unit | `packages/plugin-eslint/src/eslintPluginCreate.spec.ts` | Exists |
+| `eslintPluginCreate` — handles `{ pluginRules: [...] }` format | Unit | `packages/plugin-eslint/src/eslintPluginCreate.spec.ts` | Exists |
+| `eslintPluginCreate` — skips non-eslint platforms | Unit | `packages/plugin-eslint/src/eslintPluginCreate.spec.ts` | Exists |
+| `eslintPluginCreate` — does not auto-adapt when eslint lintProvider exists | Unit | `packages/plugin-eslint/src/eslintPluginCreate.spec.ts` | Exists |
+| `eslintPluginCreate` — collects from multiple plugin rules | Unit | `packages/plugin-eslint/src/eslintPluginCreate.spec.ts` | Exists |
+| `eslintPluginCreate` — throws for invalid input | Unit | `packages/plugin-eslint/src/eslintPluginCreate.spec.ts` | Exists |
 | `eslintAdapter.adapt` — valid code passes | Integration | `tests/eslint.tree-check-adapter.spec.ts` | Exists |
 | `eslintAdapter.adapt` — invalid code reports `treeCheckViolation` | Integration | `tests/eslint.tree-check-adapter.spec.ts` | Exists |
 | `eslintAdapter.adapt` — excluded file skipped | Integration | `tests/eslint.tree-check-adapter.spec.ts` | Exists |
 | `eslintAdapter.adapt` — custom severity | Integration | `tests/eslint.tree-check-adapter.spec.ts` | Exists |
 | `eslintAdapter.platform` identifier | Unit | `tests/eslint.tree-check-adapter.spec.ts` | Exists |
-| `policyCacheClear` / `providerInitStateClear` | Unit | `packages/eslint-plugin/src/eslintAdapter.spec.ts` | Exists |
-| `projectIndexCacheClear` | Unit | `packages/eslint-plugin/src/eslintAdapter.spec.ts` | Exists |
+| `policyCacheClear` / `providerInitStateClear` | Unit | `packages/plugin-eslint/src/eslintAdapter.spec.ts` | Exists |
+| `projectIndexCacheClear` | Unit | `packages/plugin-eslint/src/eslintAdapter.spec.ts` | Exists |
 | Adapter with `requiresProjectIndex: true` | Integration | `tests/eslint.unused-exports-adapter.spec.ts` | Exists |
 
 ---
@@ -1103,7 +1103,7 @@ pnpm vitest run --coverage
 | `@codepol/core` (indexBuilder, indexQuery) | 80% |
 | `@codepol/core` (policy*, config*) | 80% |
 | `@codepol/plugin` | 85% |
-| `@codepol/eslint-plugin` | 75% |
+| `@codepol/plugin-eslint` | 75% |
 | `@codepol/esbuild-plugin` | 70% |
 | `@codepol/cli` | 70% |
 
@@ -1158,8 +1158,8 @@ These were added as part of closing gaps identified in this plan.
 | `packages/core/src/adapter/treeCheckAdapter.spec.ts` | Unit | violationToLintDiagnostic (field mapping, severity, fix pass-through), violationsToLintDiagnostics (empty, multi-element, custom severity) |
 | `packages/core/src/policy/policyCheck.spec.ts` | Unit | policyViolationsGetOutputPretty (empty, single violation, multi-file grouped output with relative paths) |
 | `packages/core/src/config/configDiscover.spec.ts` | Unit/Integration | configFileDiscover (direct, walk-up, not found, precedence), configGet error path, configGetFromPath/Sync (JS loading, error paths), configCacheClear, defineConfig identity |
-| `packages/eslint-plugin/src/eslintPluginCreate.spec.ts` | Unit | eslintPluginCreate: CJS/ESM interop (array, __esModule, default, pluginRules), lint provider rule assembly, treeCheckProvider auto-adaptation, platform filtering, multi-rule collection, invalid input rejection |
-| `packages/eslint-plugin/src/eslintAdapter.spec.ts` | Unit | Cache/state clearing: policyCacheClear, providerInitStateClear, projectIndexCacheClear (smoke tests for singleton Map clearing) |
+| `packages/plugin-eslint/src/eslintPluginCreate.spec.ts` | Unit | eslintPluginCreate: CJS/ESM interop (array, __esModule, default, pluginRules), lint provider rule assembly, treeCheckProvider auto-adaptation, platform filtering, multi-rule collection, invalid input rejection |
+| `packages/plugin-eslint/src/eslintAdapter.spec.ts` | Unit | Cache/state clearing: policyCacheClear, providerInitStateClear, projectIndexCacheClear (smoke tests for singleton Map clearing) |
 | `tests/esbuild.policy-plugin.spec.ts` (expanded) | Integration | Added: config auto-discovery, no matching files, multiple rules, fix:true (un-skipped — esbuild plugin now loads plugins via `policyPluginsGet` and generates `overrideConfig`). Temp dirs now symlink `node_modules` for module resolution. Existing: build fail/succeed with policy plugin |
 | `packages/core/src/parser/parserLangs.spec.ts` | Unit | langAdd (register, normalize, default/custom wasmPath, error paths for empty langId, no extensions, wasmPath conflict, extension conflict, duplicate merge), langsGet, wasmPathGet, langExists, langGetForFile (known/unknown/no extension, case-insensitive, unloaded language) |
 | `packages/core/src/parser/parserInit.spec.ts` | Integration | parserInit (successful init, idempotent), parserGetForFile (Ok for known extension, Err before init, Err for unknown extension) |
@@ -1257,7 +1257,7 @@ These were added as part of closing gaps identified in this plan.
 
 - **`Exported` flag not set for named export clauses**: **Fixed.** Symbols referenced by `export { foo }` or `export type { Foo }` (where the declaration is separate from the export statement) did not have `SymbolFlags.Exported` set, because the flag was only applied when the declaration's ancestor chain includes `export_statement`. Fixed by setting `symbol.flags |= SymbolFlags.Exported` in the named export handler within `exportsExtract`. This also fixes `exportedSymbolsGet()` which filters by the `Exported` flag. The tree-sitter grammar produces an identical `export_clause` > `export_specifier` structure for both `export type { }` and `export { }` — the `type` keyword is just an extra unnamed child node — so no query change was needed.
 
-#### Pre-existing build error in eslint-plugin
+#### Pre-existing build error in plugin-eslint
 
 - **`ByteRange` type mismatch in `eslintAdapter.ts`**: **Fixed.** `fixer.replaceTextRange` expects `readonly [number, number]` but was receiving a `ByteRange` object (`{ start, end }`). Fixed by converting to `[byteRange.start, byteRange.end]` tuple.
 

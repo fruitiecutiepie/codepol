@@ -9,7 +9,7 @@
     "baseUrl": ".",
     "paths": {
       "@codepol/core": ["./packages/core/src/index.ts"],
-      "@codepol/eslint-plugin": ["./packages/eslint-plugin/src/index.ts"],
+      "@codepol/plugin-eslint": ["./packages/plugin-eslint/src/index.ts"],
       "@codepol/esbuild-plugin": ["./packages/esbuild-plugin/src/index.ts"],
       "@codepol/plugin": ["./packages/plugin/src/index.ts"]
     }
@@ -18,7 +18,7 @@
   "exclude": ["dist", "node_modules", "packages", "apps"],
   "references": [
     { "path": "./packages/core" },
-    { "path": "./packages/eslint-plugin" },
+    { "path": "./packages/plugin-eslint" },
     { "path": "./packages/esbuild-plugin" },
     { "path": "./packages/plugin" },
     { "path": "./apps/cli" }

@@ -22,13 +22,13 @@
   "peerDependencies": {
     "@codepol/core": "^1.0.0",
     "@codepol/plugin": "^1.0.0",
-    "@codepol/eslint-plugin": "^1.0.0",
+    "@codepol/plugin-eslint": "^1.0.0",
     "esbuild": ">=0.17.0",
     "eslint": "^9.0.0"
   },
   "devDependencies": {
     "@codepol/core": "workspace:*",
-    "@codepol/eslint-plugin": "workspace:*",
+    "@codepol/plugin-eslint": "workspace:*",
     "@codepol/plugin": "workspace:*",
     "@types/node": "^25.0.3",
     "esbuild": "^0.27.2",

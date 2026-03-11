@@ -35,7 +35,7 @@ Codepol is a policy enforcement framework for TypeScript that combines ESLint ru
 | Package | Description |
 | ------- | ----------- |
 | [@codepol/core](./packages/core) | Core policy loading, Tree-sitter checks, and enforcement |
-| [@codepol/eslint-plugin](./packages/eslint-plugin) | ESLint rule with autofix for logger instrumentation |
+| [@codepol/plugin-eslint](./packages/plugin-eslint) | ESLint rule with autofix for logger instrumentation |
 | [@codepol/esbuild-plugin](./packages/esbuild-plugin) | esbuild plugin for build-time enforcement |
 | [@codepol/plugin](./packages/plugin/README.md) | Logger plugin with Tree-sitter + ESLint capabilities |
 | [@codepol/cli](./apps/cli) | Command-line interface for running checks |
@@ -49,7 +49,7 @@ Codepol is a policy enforcement framework for TypeScript that combines ESLint ru
 pnpm add -D @codepol/cli
 
 # Or install individual packages
-pnpm add -D @codepol/core @codepol/eslint-plugin @codepol/plugin
+pnpm add -D @codepol/core @codepol/plugin-eslint @codepol/plugin
 ```
 
 ### Create a Config File
@@ -96,7 +96,7 @@ export default defineConfig({
 Add to your `eslint.config.js`:
 
 ```javascript
-import { eslintPluginCreate } from '@codepol/eslint-plugin';
+import { eslintPluginCreate } from '@codepol/plugin-eslint';
 import pluginRules from '@codepol/plugin';
 
 export default [
@@ -117,7 +117,7 @@ Codepol loads rule-level plugin capabilities from `codepol.config.ts` declaratio
 to decide which ESLint rules and fix providers to run, while Tree-sitter checking continues to use the policy rules
 and their associated tree check providers.
 
-The `@codepol/eslint-plugin` package is a thin adapter that aggregates rules from capability plugins such as
+The `@codepol/plugin-eslint` package is a thin adapter that aggregates rules from capability plugins such as
 `@codepol/plugin`. Use `eslintPluginCreate(pluginRules)` to assemble the ESLint adapter from any set of
 `CodepolPluginRule` instances.
 

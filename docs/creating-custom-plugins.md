@@ -33,28 +33,28 @@ flowchart TD
 mkdir your-plugin
 cd your-plugin
 pnpm init
-pnpm add -D @codepol/core @codepol/eslint-plugin typescript
+pnpm add -D @codepol/core @codepol/plugin-eslint typescript
 ```
 
 ```bash [npm]
 mkdir your-plugin
 cd your-plugin
 npm init -y
-npm install -D @codepol/core @codepol/eslint-plugin typescript
+npm install -D @codepol/core @codepol/plugin-eslint typescript
 ```
 
 ```bash [yarn]
 mkdir your-plugin
 cd your-plugin
 yarn init -y
-yarn add -D @codepol/core @codepol/eslint-plugin typescript
+yarn add -D @codepol/core @codepol/plugin-eslint typescript
 ```
 
 ```bash [bun]
 mkdir your-plugin
 cd your-plugin
 bun init
-bun add -D @codepol/core @codepol/eslint-plugin typescript
+bun add -D @codepol/core @codepol/plugin-eslint typescript
 ```
 
 :::
@@ -131,7 +131,7 @@ import type {
   EslintProviderConfig,
 } from '@codepol/core';
 import { pluginRuleNew, treeCheckProviderNew } from '@codepol/core';
-import { eslintAdapter } from '@codepol/eslint-plugin';
+import { eslintAdapter } from '@codepol/plugin-eslint';
 import { noDuplicateExportsCheck } from './noDuplicateExportsCheck';
 
 // Create the TreeCheckProvider using the factory
@@ -415,7 +415,7 @@ There are two approaches to integrate your plugin with ESLint:
 For simple rules without autofix, use the adapter to automatically convert your TreeCheckProvider:
 
 ```typescript
-import { eslintAdapter } from '@codepol/eslint-plugin';
+import { eslintAdapter } from '@codepol/plugin-eslint';
 
 const eslintRule = eslintAdapter.adapt(rulePlugin, {
   ruleName: 'no-duplicate-exports',
@@ -444,7 +444,7 @@ Key steps for manual rules:
 Add to your `eslint.config.js`:
 
 ```javascript
-import { eslintPluginCreate } from '@codepol/eslint-plugin';
+import { eslintPluginCreate } from '@codepol/plugin-eslint';
 import pluginRules from '@codepol/plugin';       // Built-in rules
 import customRules from './your-plugin';         // Your custom rules
 

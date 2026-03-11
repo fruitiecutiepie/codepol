@@ -2,7 +2,7 @@ import path from 'node:path';
 import { RuleTester } from 'eslint';
 import tseslint from 'typescript-eslint';
 import { beforeAll } from 'vitest';
-import { eslintPluginCreate, policyCacheClear } from '@codepol/eslint-plugin';
+import { eslintPluginCreate, policyCacheClear } from '@codepol/plugin-eslint';
 import pluginRules from '@codepol/plugin';
 import { langAdd, parserInit } from '@codepol/core';
 

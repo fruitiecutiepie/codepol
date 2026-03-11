@@ -1,6 +1,6 @@
 /**
  * @packageDocumentation
- * @codepol/eslint-plugin - ESLint plugin adapter for codepol plugins.
+ * @codepol/plugin-eslint - ESLint plugin adapter for codepol plugins.
  */
 
 import type { CodepolPluginRule, EslintProviderConfig } from '@codepol/core';
@@ -111,7 +111,7 @@ function collectRules(pluginRules: CodepolPluginRule[]): EslintRuleMap {
  *
  * @example
  * ```typescript
- * import { eslintPluginCreate } from '@codepol/eslint-plugin';
+ * import { eslintPluginCreate } from '@codepol/plugin-eslint';
  * import type { CodepolPluginRule } from '@codepol/core';
  * import pluginRules from '@codepol/plugin';
  *

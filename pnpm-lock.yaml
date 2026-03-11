@@ -18,12 +18,12 @@ importers:
       '@codepol/esbuild-plugin':
         specifier: workspace:*
         version: link:packages/esbuild-plugin
-      '@codepol/eslint-plugin':
-        specifier: workspace:*
-        version: link:packages/eslint-plugin
       '@codepol/plugin':
         specifier: workspace:*
         version: link:packages/plugin
+      '@codepol/plugin-eslint':
+        specifier: workspace:*
+        version: link:packages/plugin-eslint
       '@codepol/plugin-ruff':
         specifier: workspace:*
         version: link:packages/plugin-ruff
@@ -155,36 +155,18 @@ importers:
       '@codepol/core':
         specifier: workspace:*
         version: link:../core
-      '@codepol/eslint-plugin':
-        specifier: workspace:*
-        version: link:../eslint-plugin
       '@codepol/plugin':
         specifier: workspace:*
         version: link:../plugin
+      '@codepol/plugin-eslint':
+        specifier: workspace:*
+        version: link:../plugin-eslint
       '@types/node':
         specifier: ^25.0.3
         version: 25.0.3
       esbuild:
         specifier: ^0.27.2
         version: 0.27.2
-      eslint:
-        specifier: ^9.39.2
-        version: 9.39.2(jiti@2.6.1)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-
-  packages/eslint-plugin:
-    devDependencies:
-      '@codepol/core':
-        specifier: workspace:*
-        version: link:../core
-      '@types/node':
-        specifier: ^25.0.3
-        version: 25.0.3
-      '@typescript-eslint/utils':
-        specifier: ^8.53.0
-        version: 8.53.0(eslint@9.39.2(jiti@2.6.1))(typescript@5.9.3)
       eslint:
         specifier: ^9.39.2
         version: 9.39.2(jiti@2.6.1)
@@ -204,6 +186,24 @@ importers:
       '@types/node':
         specifier: ^25.0.3
         version: 25.0.3
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
+  packages/plugin-eslint:
+    devDependencies:
+      '@codepol/core':
+        specifier: workspace:*
+        version: link:../core
+      '@types/node':
+        specifier: ^25.0.3
+        version: 25.0.3
+      '@typescript-eslint/utils':
+        specifier: ^8.53.0
+        version: 8.53.0(eslint@9.39.2(jiti@2.6.1))(typescript@5.9.3)
+      eslint:
+        specifier: ^9.39.2
+        version: 9.39.2(jiti@2.6.1)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3

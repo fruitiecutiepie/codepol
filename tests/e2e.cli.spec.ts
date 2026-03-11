@@ -6,7 +6,7 @@
  * these tests (`pnpm build` does this).
  *
  * Temp directories symlink the monorepo's `node_modules` so that
- * `@codepol/plugin` and `@codepol/eslint-plugin` resolve correctly
+ * `@codepol/plugin` and `@codepol/plugin-eslint` resolve correctly
  * from the subprocess.
  */
 import { spawn } from 'node:child_process';
@@ -89,7 +89,7 @@ function tempProjectCreate(): string {
   // plugin rules (including ones not referenced in the policy).
   fs.writeFileSync(
     path.join(dir, 'eslint.config.mjs'),
-    `import { eslintPluginCreate } from '@codepol/eslint-plugin';
+    `import { eslintPluginCreate } from '@codepol/plugin-eslint';
 import pluginRules from '@codepol/plugin';
 const codepol = eslintPluginCreate(pluginRules);
 export default [{ files: ['**/*.ts'], plugins: { codepol } }];

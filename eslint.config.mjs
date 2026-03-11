@@ -1,5 +1,5 @@
 import tseslint from 'typescript-eslint';
-import { eslintPluginCreate } from '@codepol/eslint-plugin';
+import { eslintPluginCreate } from '@codepol/plugin-eslint';
 import { langAdd, parserInit, providerRulesConfigGet } from '@codepol/core';
 import pluginRules from '@codepol/plugin';
 

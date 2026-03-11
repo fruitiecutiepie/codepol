@@ -1,11 +1,11 @@
-# @codepol/eslint-plugin
+# @codepol/plugin-eslint
 
 ESLint plugin for enforcing logger instrumentation with autofix support.
 
 ## Installation
 
 ```bash
-pnpm add -D @codepol/eslint-plugin @codepol/core @codepol/plugin eslint @typescript-eslint/utils
+pnpm add -D @codepol/plugin-eslint @codepol/core @codepol/plugin eslint @typescript-eslint/utils
 ```
 
 ## Features
@@ -21,7 +21,7 @@ pnpm add -D @codepol/eslint-plugin @codepol/core @codepol/plugin eslint @typescr
 ### ESLint Flat Config (eslint.config.js)
 
 ```javascript
-import { eslintPluginCreate } from '@codepol/eslint-plugin';
+import { eslintPluginCreate } from '@codepol/plugin-eslint';
 import pluginRules from '@codepol/plugin';
 
 export default [
@@ -40,7 +40,7 @@ export default [
 ### With Custom Config Path
 
 ```javascript
-import { eslintPluginCreate } from '@codepol/eslint-plugin';
+import { eslintPluginCreate } from '@codepol/plugin-eslint';
 import pluginRules from '@codepol/plugin';
 
 export default [
@@ -60,7 +60,7 @@ export default [
 ### Legacy Config (.eslintrc.cjs)
 
 ```javascript
-const { eslintPluginCreate } = require('@codepol/eslint-plugin');
+const { eslintPluginCreate } = require('@codepol/plugin-eslint');
 const pluginRules = require('@codepol/plugin').default;
 
 module.exports = {

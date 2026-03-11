@@ -1,6 +1,6 @@
 /**
  * @packageDocumentation
- * @codepol/eslint-plugin - ESLint adapter for TreeCheckProvider.
+ * @codepol/plugin-eslint - ESLint adapter for TreeCheckProvider.
  *
  * Converts a TreeCheckProvider into an ESLint rule module, enabling
  * tree-sitter based checks to run within ESLint's infrastructure.

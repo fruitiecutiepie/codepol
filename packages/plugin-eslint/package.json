@@ -1,5 +1,5 @@
 {
-  "name": "@codepol/eslint-plugin",
+  "name": "@codepol/plugin-eslint",
   "version": "1.0.0",
   "description": "ESLint plugin for enforcing logger instrumentation with autofix support",
   "type": "commonjs",
@@ -38,7 +38,7 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/fruitiecutiepie/codepol",
-    "directory": "packages/eslint-plugin"
+    "directory": "packages/plugin-eslint"
   },
   "license": "MIT",
   "keywords": [

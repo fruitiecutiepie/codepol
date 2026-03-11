@@ -22,7 +22,7 @@
   "devDependencies": {
     "@codepol/core": "workspace:*",
     "@codepol/esbuild-plugin": "workspace:*",
-    "@codepol/eslint-plugin": "workspace:*",
+    "@codepol/plugin-eslint": "workspace:*",
     "@codepol/plugin": "workspace:*",
     "@codepol/plugin-ruff": "workspace:*",
     "@types/node": "25.0.3",
