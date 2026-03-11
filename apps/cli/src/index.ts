@@ -33,15 +33,18 @@ import {
   ESLINT_PLUGIN_NAME_DEFAULT,
   configGet,
   configGetFromPath,
+  isErr,
   type LintProvider,
   type LintSeverity,
   type EslintProviderConfig,
+  type RuffProviderConfig,
   type FixProvider,
   type PolicyFile,
   type PolicyViolation,
   type PolicyRuleTargetContext,
   type CodepolConfig,
 } from '@codepol/core';
+import { ruffCheck, ruffFix } from '@codepol/plugin-ruff';
 
 type CliOptions = {
   fix: boolean;
@@ -244,17 +247,38 @@ async function policyCheck(options: {
     }
   }
 
+  // Run ruff on Python files
+  const ruffProviders = lintProviderEntries.filter(
+    entry => entry.provider.platform === 'ruff'
+  );
+
+  const ruffViolations: PolicyViolation[] = [];
+  const pythonFiles = files.filter(f => f.endsWith('.py') || f.endsWith('.pyw'));
+  if (pythonFiles.length > 0 && ruffProviders.length > 0) {
+    const ruffConfig = ruffProviders[0]?.provider.config as RuffProviderConfig | undefined;
+
+    if (fix) {
+      ruffFix(pythonFiles, ruffConfig);
+    }
+
+    const ruffResult = ruffCheck(pythonFiles, ruffConfig);
+    if (isErr(ruffResult)) {
+      console.warn(`ruff check failed: ${ruffResult.Err}`);
+    } else {
+      ruffViolations.push(...ruffResult.Ok);
+    }
+  }
+
   const violationsResult = await policyViolationsGetFromDir(policy, cwd);
 
   if ('Err' in violationsResult) {
-    // Error already logged in core
     throw new Error(violationsResult.Err);
   }
 
   return {
     policy,
     files,
-    violations: [...eslintViolations, ...violationsResult.Ok],
+    violations: [...eslintViolations, ...ruffViolations, ...violationsResult.Ok],
   };
 }
 
@@ -336,6 +360,7 @@ function fsSubNew(options: CliOptions, files: string[], patterns: string[]): voi
 async function main(): Promise<void> {
   langAdd({ langId: 'typescript', fileExtensions: ['.ts'] });
   langAdd({ langId: 'tsx', fileExtensions: ['.tsx'] });
+  langAdd({ langId: 'python', fileExtensions: ['.py', '.pyw'] });
   await parserInit();
 
   const cwd = process.cwd();

@@ -1,12 +1,16 @@
 {
-  "name": "@codepol/cli",
+  "name": "@codepol/plugin-ruff",
   "version": "1.0.0",
-  "description": "Command-line interface for running codepol policy checks",
+  "description": "Ruff lint adapter for codepol – runs tree-sitter checks on Python files and integrates ruff CLI",
   "type": "commonjs",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "bin": {
-    "codepol": "./dist/index.js"
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.js"
+    }
   },
   "files": [
     "dist"
@@ -15,17 +19,13 @@
     "build": "tsc --project tsconfig.json",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {
-    "@codepol/core": "workspace:*",
-    "@codepol/plugin": "workspace:*",
-    "@codepol/plugin-ruff": "workspace:*",
-    "chokidar": "^5.0.0",
-    "yargs": "^18.0.0"
+  "dependencies": {},
+  "peerDependencies": {
+    "@codepol/core": "^1.0.0"
   },
   "devDependencies": {
+    "@codepol/core": "workspace:*",
     "@types/node": "^25.0.3",
-    "@types/yargs": "^17.0.35",
-    "eslint": "^9.39.2",
     "typescript": "^5.9.3"
   },
   "engines": {
@@ -34,14 +34,14 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/fruitiecutiepie/codepol",
-    "directory": "apps/cli"
+    "directory": "packages/plugin-ruff"
   },
   "license": "MIT",
   "keywords": [
-    "cli",
     "codepol",
-    "policy",
-    "linting",
-    "typescript"
+    "ruff",
+    "python",
+    "linter",
+    "adapter"
   ]
 }

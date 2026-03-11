@@ -197,6 +197,24 @@ export type EslintProviderConfig = {
 };
 
 /**
+ * Ruff-specific provider configuration.
+ */
+export type RuffProviderConfig = {
+  /** Path to the ruff binary (default: 'ruff') */
+  ruffBin?: string;
+  /** Ruff rule codes to enable (e.g., ['E', 'F', 'I']) */
+  select?: string[];
+  /** Ruff rule codes to ignore */
+  ignore?: string[];
+  /** Path to ruff.toml or pyproject.toml */
+  configPath?: string;
+  /** Fixable rule codes */
+  fixable?: string[];
+  /** Extra CLI arguments */
+  extraArgs?: string[];
+};
+
+/**
  * Context passed to fix providers.
  */
 export type FixProviderContext = {

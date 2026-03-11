@@ -44,6 +44,7 @@ export type {
   LintProviderContext,
   LintProvider,
   EslintProviderConfig,
+  RuffProviderConfig,
   FixProviderContext,
   FixProvider,
   PolicyPluginCapabilities,
