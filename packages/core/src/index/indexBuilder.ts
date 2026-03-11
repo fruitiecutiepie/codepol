@@ -20,7 +20,7 @@ import { indexAdapterCreate } from '../adapters/treeSitter/adapterCore';
 import { typescriptConfigCreate } from '../adapters/treeSitter/languages/typescript/config';
 import { pythonConfigCreate } from '../adapters/treeSitter/languages/python/config';
 import { langGetForFile, langIdGetForFile } from '../parser/parserLangs';
-import { moduleResolve, DEFAULT_EXTENSIONS, type ModuleResolveOptions } from './moduleResolver';
+import { moduleResolve, pythonSubmoduleResolve, DEFAULT_EXTENSIONS, type ModuleResolveOptions } from './moduleResolver';
 
 // ============================================================================
 // Types
@@ -712,26 +712,28 @@ function crossFileResolve(
 
     // Look up the export in the resolved file
     const fileExports = exportMap.get(resolvedPath);
-    if (!fileExports) continue;
 
-    let resolvedExportId: string | undefined;
-
-    if (binding.isDefault) {
-      // Default import: look for 'default' export
-      resolvedExportId = fileExports.get('default');
-    } else if (binding.isNamespace) {
+    if (binding.isNamespace) {
       // Namespace import: doesn't resolve to a single symbol, but we still
       // set resolvedModulePath so namespace member accesses can be resolved later
-      const updatedBinding: ImportBindingRelation = {
-        ...binding,
-        resolvedModulePath: resolvedPath,
-        // No resolvedExportId — namespace doesn't map to a single export
-      };
-      store.relationUpdate(binding, updatedBinding);
+      if (fileExports) {
+        const updatedBinding: ImportBindingRelation = {
+          ...binding,
+          resolvedModulePath: resolvedPath,
+        };
+        store.relationUpdate(binding, updatedBinding);
+      }
       continue;
-    } else {
-      // Named import: look for the specific exported name
-      resolvedExportId = fileExports.get(binding.importedName);
+    }
+
+    // Try to find the exported name in the resolved file
+    let resolvedExportId: string | undefined;
+    if (fileExports) {
+      if (binding.isDefault) {
+        resolvedExportId = fileExports.get('default');
+      } else {
+        resolvedExportId = fileExports.get(binding.importedName);
+      }
     }
 
     if (resolvedExportId) {
@@ -747,7 +749,6 @@ function crossFileResolve(
           ...binding,
           resolvedModulePath: nsSourcePath,
           isNamespace: true,
-          // No resolvedExportId — namespace doesn't map to a single export
         };
         store.relationUpdate(binding, updatedBinding);
         continue;
@@ -760,6 +761,22 @@ function crossFileResolve(
         resolvedExportId,
       };
       store.relationUpdate(binding, updatedBinding);
+    } else if (
+      fromFile.endsWith('.py') &&
+      resolvedPath.endsWith('__init__.py')
+    ) {
+      // Python submodule fallback: `from package import submodule` where
+      // `submodule` is a file (package/submodule.py) rather than an exported
+      // name from package/__init__.py.
+      const submodulePath = pythonSubmoduleResolve(resolvedPath, binding.importedName);
+      if (submodulePath && indexedFiles.has(submodulePath)) {
+        const updatedBinding: ImportBindingRelation = {
+          ...binding,
+          resolvedModulePath: submodulePath,
+          isNamespace: true,
+        };
+        store.relationUpdate(binding, updatedBinding);
+      }
     }
   }
 

@@ -856,5 +856,122 @@ msg = greet("world")
       expect(greetBinding).toBeDefined();
       expect(greetBinding!.resolvedExportId).toBe(greetSymbol!.id);
     });
+
+    it('should resolve submodule imports (from package import submodule)', () => {
+      const pkgDir = path.join(testDir, 'subpkg');
+      fs.mkdirSync(pkgDir, { recursive: true });
+
+      const initFile = path.join(pkgDir, '__init__.py');
+      fs.writeFileSync(initFile, '');
+
+      const submodFile = path.join(pkgDir, 'helpers.py');
+      fs.writeFileSync(submodFile, `
+def assist():
+    return 1
+`);
+
+      const consumerFile = path.join(testDir, 'sub_consumer.py');
+      fs.writeFileSync(consumerFile, `
+from subpkg import helpers
+`);
+
+      const store = indexStoreNew();
+      projectIndexBuildSync({
+        files: [initFile, submodFile, consumerFile],
+        dir: testDir,
+        store,
+      });
+
+      const bindings = store.importBindingsInFileGet(consumerFile);
+      const helpersBinding = bindings.find(b => b.importedName === 'helpers');
+      expect(helpersBinding).toBeDefined();
+      expect(helpersBinding!.resolvedModulePath).toBe(submodFile);
+      expect(helpersBinding!.isNamespace).toBe(true);
+    });
+
+    // TODO: remove .skip once memberRefsExtract handles Python `attribute` nodes
+    //       (currently only handles JS/TS `member_expression`)
+    it.skip('should resolve submodule member access (submodule.func)', () => {
+      const pkgDir = path.join(testDir, 'subpkg2');
+      fs.mkdirSync(pkgDir, { recursive: true });
+
+      const initFile = path.join(pkgDir, '__init__.py');
+      fs.writeFileSync(initFile, '');
+
+      const submodFile = path.join(pkgDir, 'tools.py');
+      fs.writeFileSync(submodFile, `
+def hammer():
+    return "bang"
+`);
+
+      const consumerFile = path.join(testDir, 'sub_consumer2.py');
+      fs.writeFileSync(consumerFile, `
+from subpkg2 import tools
+
+result = tools.hammer()
+`);
+
+      const store = indexStoreNew();
+      const { index } = projectIndexBuildSync({
+        files: [initFile, submodFile, consumerFile],
+        dir: testDir,
+        store,
+      });
+
+      const bindings = store.importBindingsInFileGet(consumerFile);
+      const toolsBinding = bindings.find(b => b.importedName === 'tools');
+      expect(toolsBinding).toBeDefined();
+      expect(toolsBinding!.resolvedModulePath).toBe(submodFile);
+
+      const refs = store.referencesInFileGet(consumerFile);
+      const dottedRef = refs.find(r => r.name.includes('hammer'));
+      expect(dottedRef).toBeDefined();
+
+      const exportedSymbols = index.exportedSymbolsGet({ file: submodFile });
+      const hammerSymbol = exportedSymbols.find(s => s.name === 'hammer');
+      expect(hammerSymbol).toBeDefined();
+      expect(dottedRef!.resolvedSymbolId).toBe(hammerSymbol!.id);
+    });
+
+    it('should prefer export map over submodule fallback', () => {
+      const pkgDir = path.join(testDir, 'subpkg3');
+      fs.mkdirSync(pkgDir, { recursive: true });
+
+      const initFile = path.join(pkgDir, '__init__.py');
+      fs.writeFileSync(initFile, `
+def utils():
+    return "from init"
+`);
+
+      const submodFile = path.join(pkgDir, 'utils.py');
+      fs.writeFileSync(submodFile, `
+def other():
+    return "from submod"
+`);
+
+      const consumerFile = path.join(testDir, 'sub_consumer3.py');
+      fs.writeFileSync(consumerFile, `
+from subpkg3 import utils
+`);
+
+      const store = indexStoreNew();
+      const { index } = projectIndexBuildSync({
+        files: [initFile, submodFile, consumerFile],
+        dir: testDir,
+        store,
+      });
+
+      const bindings = store.importBindingsInFileGet(consumerFile);
+      const utilsBinding = bindings.find(b => b.importedName === 'utils');
+      expect(utilsBinding).toBeDefined();
+      // Should resolve to the export from __init__.py, NOT the submodule file
+      expect(utilsBinding!.resolvedModulePath).toBe(initFile);
+      expect(utilsBinding!.resolvedExportId).toBeDefined();
+
+      const exportedSymbols = index.exportedSymbolsGet({ file: initFile });
+      const utilsSymbol = exportedSymbols.find(s => s.name === 'utils');
+      expect(utilsSymbol).toBeDefined();
+      expect(utilsBinding!.resolvedExportId).toBe(utilsSymbol!.id);
+    });
   });
 });

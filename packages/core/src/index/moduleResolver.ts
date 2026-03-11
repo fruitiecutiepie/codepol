@@ -47,8 +47,6 @@ export const DEFAULT_EXTENSIONS = [
   '.cjs',
 ];
 
-const PYTHON_EXTENSIONS = ['.py'];
-
 /**
  * Default index file names.
  */
@@ -276,6 +274,20 @@ function tryResolvePythonModule(basePath: string): string | undefined {
   if (fileExists(asInit)) return asInit;
 
   return undefined;
+}
+
+/**
+ * Resolve a Python submodule path given a package's `__init__.py` and a
+ * submodule name.  Used as a fallback when `from package import name` doesn't
+ * find `name` in the package's export map — `name` might be a child module
+ * file (`package/name.py`) or sub-package (`package/name/__init__.py`).
+ */
+export function pythonSubmoduleResolve(
+  packageInitPath: string,
+  submoduleName: string
+): string | undefined {
+  const packageDir = path.dirname(packageInitPath);
+  return tryResolvePythonModule(path.join(packageDir, submoduleName));
 }
 
 /**

@@ -4,7 +4,7 @@ Tracks incomplete implementations for the Python language adapter in `packages/c
 
 ## Current State
 
-The Python adapter is fully coded with query packs for scopes, symbols, refs, calls, imports, and exports, plus `pythonRefFilter`. It is registered in `indexBuilder.ts` (line 92–94). Integration tests exist in `tests/index.python.spec.ts` (38 passing, 0 skipped).
+The Python adapter is fully coded with query packs for scopes, symbols, refs, calls, imports, and exports, plus `pythonRefFilter`. It is registered in `indexBuilder.ts` (line 92–94). Integration tests exist in `tests/index.python.spec.ts` (40 passing, 1 skipped).
 
 Adapter core fixes already applied:
 - `memberRefsExtract` gracefully handles grammars without `member_expression` (Python uses `attribute`)
@@ -20,22 +20,30 @@ Adapter core fixes already applied:
 - CFG builder `forProcess` detects Python's `for_statement` (`right` field) and delegates to `pythonForProcess`, which uses the iterable expression as the loop node's byte range
 - `pythonModuleResolve` in `moduleResolver.ts` handles Python import resolution: dot-prefix relative imports (`.foo`, `..bar`), `__init__.py` as directory entry points, dotted absolute imports resolved relative to `baseDir`
 - Cross-file resolution works for Python: relative imports, dotted package imports, and reference resolution through imports
+- `crossFileResolve` in `indexBuilder.ts` handles submodule-style package imports (`from package import submodule`) via `pythonSubmoduleResolve` fallback: when a named import isn't found in a package's `__init__.py` export map, it resolves the name as a submodule file (e.g., `package/submodule.py`) and treats it as a namespace import
 
 ---
 
 ## Remaining Items
 
-### 1. Submodule-style package imports
+### 1. Python member expression references (`attribute` node support in `memberRefsExtract`)
 
-**Priority**: Low
+**Priority**: Medium
 **Status**: Not implemented
-**Effort**: Medium
+**Effort**: Low
 
-Python supports `from package import submodule` where `submodule` refers to a file (`package/submodule.py`) rather than a name exported from `package/__init__.py`. The current resolution resolves `package` → `package/__init__.py` and looks for `submodule` as an exported name. If `__init__.py` doesn't re-export `submodule`, the resolution fails.
+`memberRefsExtract` in `adapterCore.ts` currently only queries for JavaScript/TypeScript `member_expression` nodes. Python uses `attribute` nodes for dotted access (`obj.prop`). The function gracefully returns an empty array for Python, but this means namespace member accesses (e.g., `submodule.func()` after `from package import submodule`) cannot be resolved to the exported symbol in the submodule.
 
-A full fix would require fallback logic in `crossFileResolve`: when a named import isn't found in the resolved module's export map, try resolving `moduleSpec.importedName` as a submodule path (e.g., `package/submodule.py`).
+A fix would add a fallback query for Python's `attribute` node type in `memberRefsExtract`:
+```
+(attribute
+  object: (identifier) @member.obj
+  attribute: (identifier) @member.prop)
+```
 
-Workaround: use dotted imports (`from package.submodule import name`) which resolve correctly.
+This would enable Step 5 (namespace member resolution) in `crossFileResolve` to resolve dotted accesses through submodule imports.
+
+Test: `tests/index.python.spec.ts` has a skipped test "should resolve submodule member access (submodule.func)" — remove `.skip` once this is implemented.
 
 ---
 
@@ -56,4 +64,6 @@ Workaround: use dotted imports (`from package.submodule import name`) which reso
 - [x] Cross-file relative imports (`from .sibling import helper`) — `tests/index.python.spec.ts`
 - [x] Cross-file dotted package imports (`from mypkg.utils import compute`) — `tests/index.python.spec.ts`
 - [x] Cross-file reference resolution through imports — `tests/index.python.spec.ts`
-- [ ] Cross-file submodule imports (`from package import submodule`) — not implemented, see remaining item above
+- [x] Cross-file submodule imports (`from package import submodule`) — `tests/index.python.spec.ts`
+- [x] Export-takes-precedence over submodule fallback — `tests/index.python.spec.ts`
+- [ ] Cross-file submodule member access (`submodule.func()`) — skipped, needs `memberRefsExtract` Python support (see remaining item above)
