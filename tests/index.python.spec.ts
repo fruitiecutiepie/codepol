@@ -5,6 +5,7 @@ import {
   projectIndexBuildSync,
   indexStoreNew,
   SymbolFlags,
+  type FlowGraph,
 } from '@codepol/core';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -359,6 +360,75 @@ from json import loads, dumps
 
       expect(specs).toContain('os');
     });
+
+    it('should create ImportBindingRelation for bare import foo', () => {
+      const file = path.join(testDir, 'imports_bare.py');
+      fs.writeFileSync(file, `
+import os
+import json
+`);
+
+      const store = indexStoreNew();
+      projectIndexBuildSync({ files: [file], dir: testDir, store });
+
+      const bindings = store.importBindingsInFileGet(file);
+      const osBinding = bindings.find(b => b.moduleSpec === 'os');
+      expect(osBinding).toBeDefined();
+      expect(osBinding!.isNamespace).toBe(true);
+      expect(osBinding!.importedName).toBe('*');
+
+      const jsonBinding = bindings.find(b => b.moduleSpec === 'json');
+      expect(jsonBinding).toBeDefined();
+      expect(jsonBinding!.isNamespace).toBe(true);
+    });
+
+    it('should create ImportBindingRelation for aliased import foo as f', () => {
+      const file = path.join(testDir, 'imports_bare_alias.py');
+      fs.writeFileSync(file, `
+import json as j
+import os as operating_system
+`);
+
+      const store = indexStoreNew();
+      const { index } = projectIndexBuildSync({ files: [file], dir: testDir, store });
+
+      const bindings = store.importBindingsInFileGet(file);
+      const jsonBinding = bindings.find(b => b.moduleSpec === 'json');
+      expect(jsonBinding).toBeDefined();
+      expect(jsonBinding!.isNamespace).toBe(true);
+
+      const symbols = index.symbolsInFileGet(file);
+      const jSym = symbols.find(s => s.name === 'j');
+      expect(jSym).toBeDefined();
+      expect(jsonBinding!.localSymbolId).toBe(jSym!.id);
+    });
+
+    it('should create ImportBindingRelation with correct alias for from-import', () => {
+      const file = path.join(testDir, 'imports_from_alias.py');
+      fs.writeFileSync(file, `
+from os import path as p
+from collections import OrderedDict as OD
+`);
+
+      const store = indexStoreNew();
+      const { index } = projectIndexBuildSync({ files: [file], dir: testDir, store });
+
+      const bindings = store.importBindingsInFileGet(file);
+
+      const pathBinding = bindings.find(b => b.importedName === 'path' && b.moduleSpec === 'os');
+      expect(pathBinding).toBeDefined();
+
+      const symbols = index.symbolsInFileGet(file);
+      const pSym = symbols.find(s => s.name === 'p');
+      expect(pSym).toBeDefined();
+      expect(pathBinding!.localSymbolId).toBe(pSym!.id);
+
+      const odBinding = bindings.find(b => b.importedName === 'OrderedDict');
+      expect(odBinding).toBeDefined();
+      const odSym = symbols.find(s => s.name === 'OD');
+      expect(odSym).toBeDefined();
+      expect(odBinding!.localSymbolId).toBe(odSym!.id);
+    });
   });
 
   // ==========================================================================
@@ -400,6 +470,266 @@ class _InternalClass:
 
       expect(classes.find(s => s.name === 'PublicClass')).toBeDefined();
       expect(classes.find(s => s.name === '_InternalClass')).toBeDefined();
+    });
+
+    it('should create ExportsRelation for module-level functions', () => {
+      const file = path.join(testDir, 'exports_rel_funcs.py');
+      fs.writeFileSync(file, `
+def alpha():
+    return 1
+
+def beta():
+    return 2
+`);
+
+      const store = indexStoreNew();
+      const { index } = projectIndexBuildSync({ files: [file], dir: testDir, store });
+
+      const exports = store.exportsInFileGet(file);
+      const exportedNames = exports.map(e => e.exportedName);
+
+      expect(exportedNames).toContain('alpha');
+      expect(exportedNames).toContain('beta');
+      expect(exports.every(e => !e.isDefault)).toBe(true);
+    });
+
+    it('should create ExportsRelation for module-level classes', () => {
+      const file = path.join(testDir, 'exports_rel_classes.py');
+      fs.writeFileSync(file, `
+class MyService:
+    pass
+
+class MyModel:
+    pass
+`);
+
+      const store = indexStoreNew();
+      projectIndexBuildSync({ files: [file], dir: testDir, store });
+
+      const exports = store.exportsInFileGet(file);
+      const exportedNames = exports.map(e => e.exportedName);
+
+      expect(exportedNames).toContain('MyService');
+      expect(exportedNames).toContain('MyModel');
+    });
+
+    it('should create ExportsRelation for module-level variables', () => {
+      const file = path.join(testDir, 'exports_rel_vars.py');
+      fs.writeFileSync(file, `
+VERSION = "1.0.0"
+MAX_RETRIES = 3
+`);
+
+      const store = indexStoreNew();
+      projectIndexBuildSync({ files: [file], dir: testDir, store });
+
+      const exports = store.exportsInFileGet(file);
+      const exportedNames = exports.map(e => e.exportedName);
+
+      expect(exportedNames).toContain('VERSION');
+      expect(exportedNames).toContain('MAX_RETRIES');
+    });
+
+    it('should set Exported flag on exported symbols', () => {
+      const file = path.join(testDir, 'exports_flags.py');
+      fs.writeFileSync(file, `
+def exported_func():
+    pass
+
+class ExportedClass:
+    pass
+`);
+
+      const { index } = projectIndexBuildSync({ files: [file], dir: testDir });
+      const symbols = index.symbolsInFileGet(file);
+
+      const func = symbols.find(s => s.name === 'exported_func');
+      expect(func).toBeDefined();
+      expect(func!.flags & SymbolFlags.Exported).toBeTruthy();
+
+      const cls = symbols.find(s => s.name === 'ExportedClass');
+      expect(cls).toBeDefined();
+      expect(cls!.flags & SymbolFlags.Exported).toBeTruthy();
+    });
+
+    it('should create ExportsRelation from __all__ list', () => {
+      const file = path.join(testDir, 'exports_all.py');
+      fs.writeFileSync(file, `
+def alpha():
+    pass
+
+def beta():
+    pass
+
+def _internal():
+    pass
+
+__all__ = ["alpha", "beta"]
+`);
+
+      const store = indexStoreNew();
+      projectIndexBuildSync({ files: [file], dir: testDir, store });
+
+      const exports = store.exportsInFileGet(file);
+      const allExportNames = exports.map(e => e.exportedName);
+
+      expect(allExportNames).toContain('alpha');
+      expect(allExportNames).toContain('beta');
+    });
+
+    it('should create ExportsRelation from __all__ tuple', () => {
+      const file = path.join(testDir, 'exports_all_tuple.py');
+      fs.writeFileSync(file, `
+def foo():
+    pass
+
+def bar():
+    pass
+
+__all__ = ("foo", "bar")
+`);
+
+      const store = indexStoreNew();
+      projectIndexBuildSync({ files: [file], dir: testDir, store });
+
+      const exports = store.exportsInFileGet(file);
+      const allExportNames = exports.map(e => e.exportedName);
+
+      expect(allExportNames).toContain('foo');
+      expect(allExportNames).toContain('bar');
+    });
+  });
+
+  // ==========================================================================
+  // Control Flow Graph Extraction
+  // ==========================================================================
+
+  describe('CFG extraction', () => {
+    function pyCfgGet(source: string, fileName: string): FlowGraph | undefined {
+      const file = path.join(testDir, fileName);
+      fs.writeFileSync(file, source);
+      const { index } = projectIndexBuildSync({ files: [file], dir: testDir });
+      const scopes = index.scopesInFileGet(file);
+      const fnScope = scopes.find(s => s.kind === 'function');
+      if (!fnScope) return undefined;
+      return index.cfgGet(fnScope.id);
+    }
+
+    it('should produce a CFG for a simple Python function', () => {
+      const cfg = pyCfgGet(`
+def hello():
+    x = 1
+    y = 2
+    return x + y
+`, 'cfg_simple.py');
+
+      expect(cfg).toBeDefined();
+      expect(cfg!.nodes.some(n => n.kind === 'entry')).toBe(true);
+      expect(cfg!.nodes.some(n => n.kind === 'exit')).toBe(true);
+      expect(cfg!.nodes.some(n => n.kind === 'return')).toBe(true);
+    });
+
+    it('should produce CFG with branching for if/else', () => {
+      const cfg = pyCfgGet(`
+def check(x):
+    if x > 0:
+        return "positive"
+    else:
+        return "non-positive"
+`, 'cfg_ifelse.py');
+
+      expect(cfg).toBeDefined();
+      const branchNodes = cfg!.nodes.filter(n => n.kind === 'branch');
+      expect(branchNodes.length).toBeGreaterThanOrEqual(1);
+
+      const returnNodes = cfg!.nodes.filter(n => n.kind === 'return');
+      expect(returnNodes.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('should produce CFG with throw node for raise statement', () => {
+      const cfg = pyCfgGet(`
+def validate(x):
+    if x < 0:
+        raise ValueError("negative")
+    return x
+`, 'cfg_raise.py');
+
+      expect(cfg).toBeDefined();
+      const throwNodes = cfg!.nodes.filter(n => n.kind === 'throw');
+      expect(throwNodes.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('should produce CFG with loop for while statement', () => {
+      const cfg = pyCfgGet(`
+def count_down(n):
+    while n > 0:
+        n = n - 1
+    return n
+`, 'cfg_while.py');
+
+      expect(cfg).toBeDefined();
+      const loopNodes = cfg!.nodes.filter(n => n.kind === 'loop');
+      expect(loopNodes.length).toBeGreaterThanOrEqual(1);
+
+      const backEdges = cfg!.edges.filter(e => e.label === 'loop-back');
+      expect(backEdges.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('should produce separate CFGs for multiple functions', () => {
+      const file = path.join(testDir, 'cfg_multi.py');
+      fs.writeFileSync(file, `
+def first():
+    return 1
+
+def second():
+    return 2
+
+def third():
+    return 3
+`);
+
+      const { index } = projectIndexBuildSync({ files: [file], dir: testDir });
+      const scopes = index.scopesInFileGet(file);
+      const fnScopes = scopes.filter(s => s.kind === 'function');
+      const cfgs = fnScopes
+        .map(s => index.cfgGet(s.id))
+        .filter((c): c is FlowGraph => c !== undefined);
+
+      expect(cfgs.length).toBe(3);
+    });
+
+    it('should produce CFG for methods inside classes', () => {
+      const file = path.join(testDir, 'cfg_methods.py');
+      fs.writeFileSync(file, `
+class Calculator:
+    def add(self, a, b):
+        return a + b
+
+    def subtract(self, a, b):
+        return a - b
+`);
+
+      const { index } = projectIndexBuildSync({ files: [file], dir: testDir });
+      const scopes = index.scopesInFileGet(file);
+      const fnScopes = scopes.filter(s => s.kind === 'function');
+      const cfgs = fnScopes
+        .map(s => index.cfgGet(s.id))
+        .filter((c): c is FlowGraph => c !== undefined);
+
+      expect(cfgs.length).toBe(2);
+    });
+
+    it('should handle try/except in CFG', () => {
+      const cfg = pyCfgGet(`
+def safe_divide(a, b):
+    try:
+        return a / b
+    except ZeroDivisionError:
+        return 0
+`, 'cfg_tryexcept.py');
+
+      expect(cfg).toBeDefined();
+      expect(cfg!.nodes.length).toBeGreaterThan(2);
     });
   });
 

@@ -181,6 +181,7 @@ function statementProcess(
     case 'return_statement':
       return terminatorProcess(builder, stmt, predecessors, exitId, 'return');
     case 'throw_statement':
+    case 'raise_statement':
       return terminatorProcess(builder, stmt, predecessors, exitId, 'throw');
     case 'break_statement':
       return breakProcess(builder, stmt, predecessors, loopCtx);
@@ -189,6 +190,7 @@ function statementProcess(
     case 'labeled_statement':
       return labeledStatementProcess(builder, stmt, predecessors, exitId, loopCtx);
     case 'statement_block':
+    case 'block':
       return statementsProcess(builder, namedChildrenGet(stmt), predecessors, exitId, loopCtx);
     default: {
       const ternary = ternaryExpressionFind(stmt);
@@ -957,6 +959,7 @@ const FUNCTION_NODE_TYPES = new Set([
   'method_definition',
   'function',
   'generator_function',
+  'function_definition',
 ]);
 
 function functionNodesCollect(rootNode: Parser.SyntaxNode): Parser.SyntaxNode[] {
@@ -1036,7 +1039,7 @@ export function cfgsExtract(
 
     const builder = cfgBuilderCreate(scope.id);
 
-    if (body.type === 'statement_block') {
+    if (body.type === 'statement_block' || body.type === 'block') {
       const stmts = namedChildrenGet(body);
       if (stmts.length === 0) {
         edgeAdd(builder, builder.entryId, builder.exitId, 'unconditional');

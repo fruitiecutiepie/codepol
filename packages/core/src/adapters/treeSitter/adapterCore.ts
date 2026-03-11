@@ -693,7 +693,8 @@ function importBindingsExtract(
                        capturesByName.get('import.require_source') ??
                        capturesByName.get('import.dynamic_source') ??
                        capturesByName.get('import.from_module') ??
-                       capturesByName.get('import.relative_module');
+                       capturesByName.get('import.relative_module') ??
+                       capturesByName.get('import.module_name');
     if (sourceNode) {
       moduleSpec = sliceText(source, sourceNode.startIndex, sourceNode.endIndex);
       // Remove quotes
@@ -713,8 +714,13 @@ function importBindingsExtract(
            capture.name.endsWith('.default') || 
            capture.name.endsWith('.namespace') ||
            capture.name.endsWith('.module') ||
+           capture.name.endsWith('.module_aliased') ||
            capture.name.endsWith('.from') ||
-           capture.name.endsWith('.relative'))) {
+           capture.name.endsWith('.from_aliased') ||
+           capture.name.endsWith('.from_star') ||
+           capture.name.endsWith('.relative') ||
+           capture.name.endsWith('.relative_from') ||
+           capture.name.endsWith('.relative_parent'))) {
         importRange = { start: capture.node.startIndex, end: capture.node.endIndex };
         break;
       }
@@ -724,9 +730,10 @@ function importBindingsExtract(
     const bindingNameNode = capturesByName.get('import.binding_name');
     if (bindingNameNode) {
       const importedName = sliceText(source, bindingNameNode.startIndex, bindingNameNode.endIndex);
-      // Check for alias via the tree-sitter node (import { foo as bar } -> alias field = "bar")
+      // Check for alias via capture (Python) or tree structure (TypeScript)
+      const aliasCaptureNode = capturesByName.get('import.binding_alias');
       const specifierNode = bindingNameNode.parent;
-      const aliasNode = specifierNode?.childForFieldName('alias');
+      const aliasNode = aliasCaptureNode ?? specifierNode?.childForFieldName('alias');
       const localName = aliasNode 
         ? sliceText(source, aliasNode.startIndex, aliasNode.endIndex)
         : importedName;
@@ -854,6 +861,28 @@ function importBindingsExtract(
         });
       }
     }
+
+    // Handle bare module imports: import foo / import foo as f (Python)
+    const moduleNameNode = capturesByName.get('import.module_name');
+    if (moduleNameNode && !capturesByName.get('import.binding_name') && !capturesByName.get('import.from_module')) {
+      const moduleName = sliceText(source, moduleNameNode.startIndex, moduleNameNode.endIndex);
+      const aliasNode = capturesByName.get('import.module_alias');
+      const localName = aliasNode
+        ? sliceText(source, aliasNode.startIndex, aliasNode.endIndex)
+        : moduleName;
+      const localSymbol = findImportSymbol(symbolsByName, localName, (aliasNode ?? moduleNameNode).startIndex);
+      if (localSymbol) {
+        bindings.push({
+          kind: 'ImportBinding',
+          localSymbolId: localSymbol.id,
+          importedName: '*',
+          moduleSpec,
+          isDefault: false,
+          isNamespace: true,
+          byteRange: importRange.end > 0 ? importRange : { start: moduleNameNode.startIndex, end: moduleNameNode.endIndex },
+        });
+      }
+    }
   }
 
   return bindings;
@@ -947,7 +976,12 @@ function exportsExtract(
            capture.name.endsWith('.named') || 
            capture.name.endsWith('.default') ||
            capture.name.endsWith('.reexport') ||
-           capture.name.endsWith('.star'))) {
+           capture.name.endsWith('.star') ||
+           capture.name.endsWith('.func') ||
+           capture.name.endsWith('.class') ||
+           capture.name.endsWith('.var') ||
+           capture.name.endsWith('.all') ||
+           capture.name.endsWith('.all_tuple'))) {
         exportRange = { start: capture.node.startIndex, end: capture.node.endIndex };
         break;
       }
@@ -1090,6 +1124,49 @@ function exportsExtract(
         sourceName: '*',
         byteRange: { start: nsNameNode.startIndex, end: nsSourceNode.endIndex },
       });
+    }
+
+    // Handle Python module-level exports: functions, classes, variables
+    const pyExportNameNode = capturesByName.get('export.func_name') ??
+                             capturesByName.get('export.class_name') ??
+                             capturesByName.get('export.var_name');
+    if (pyExportNameNode) {
+      const exportedName = sliceText(source, pyExportNameNode.startIndex, pyExportNameNode.endIndex);
+      const symbol = findExportSymbol(symbolsByName, exportedName, pyExportNameNode.startIndex);
+      if (symbol) {
+        symbol.flags |= SymbolFlags.Exported;
+        exports.push({
+          kind: 'Exports',
+          symbolId: symbol.id,
+          exportedName,
+          isDefault: false,
+          byteRange: exportRange.end > 0 ? exportRange : { start: pyExportNameNode.startIndex, end: pyExportNameNode.endIndex },
+        });
+      }
+    }
+
+    // Handle Python __all__ exports: __all__ = ["foo", "bar"]
+    const allNameNode = capturesByName.get('export.all_name');
+    if (allNameNode) {
+      for (const capture of match.captures) {
+        if (capture.name !== 'export.all_item') continue;
+        let itemName = sliceText(source, capture.node.startIndex, capture.node.endIndex);
+        if ((itemName.startsWith('"') && itemName.endsWith('"')) ||
+            (itemName.startsWith("'") && itemName.endsWith("'"))) {
+          itemName = itemName.slice(1, -1);
+        }
+        const symbol = findExportSymbol(symbolsByName, itemName, capture.node.startIndex);
+        if (symbol) {
+          symbol.flags |= SymbolFlags.Exported;
+          exports.push({
+            kind: 'Exports',
+            symbolId: symbol.id,
+            exportedName: itemName,
+            isDefault: false,
+            byteRange: { start: allNameNode.startIndex, end: allNameNode.endIndex },
+          });
+        }
+      }
     }
   }
 
