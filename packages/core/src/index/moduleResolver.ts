@@ -47,6 +47,8 @@ export const DEFAULT_EXTENSIONS = [
   '.cjs',
 ];
 
+const PYTHON_EXTENSIONS = ['.py'];
+
 /**
  * Default index file names.
  */
@@ -166,13 +168,18 @@ export function moduleResolve(
   fromFile: string,
   options: ModuleResolveOptions
 ): string | undefined {
-  const extensions = options.extensions ?? DEFAULT_EXTENSIONS;
-
   // Workspace packages resolve to their source entry file
   if (options.workspacePackages) {
     const wsEntry = options.workspacePackages.get(specifier);
     if (wsEntry) return wsEntry;
   }
+
+  // Python files use a different resolution strategy
+  if (fromFile.endsWith('.py')) {
+    return pythonModuleResolve(specifier, fromFile, options);
+  }
+
+  const extensions = options.extensions ?? DEFAULT_EXTENSIONS;
 
   // External packages can't be resolved to local files
   if (isExternalPackage(specifier)) {
@@ -246,21 +253,79 @@ export function moduleResolve(
   return undefined;
 }
 
+// ============================================================================
+// Python Module Resolution
+// ============================================================================
+
 /**
- * Normalize a resolved path to match indexed file paths.
- * Ensures consistent path separators and casing.
+ * Check if a Python import specifier is relative (starts with dots).
+ * Python uses `.` for current package and `..` for parent, etc.
  */
-function normalizeModulePath(filePath: string): string {
-  // Use forward slashes consistently
-  return filePath.replace(/\\/g, '/');
+export function isPythonRelativeImport(specifier: string): boolean {
+  return specifier.startsWith('.');
 }
 
 /**
- * Get the module name from a file path (without extension).
- * Used for matching imports to files.
+ * Try to resolve a Python module path — checks `path.py` then `path/__init__.py`.
  */
-function moduleNameFromPath(filePath: string): string {
-  const basename = path.basename(filePath);
-  const ext = path.extname(basename);
-  return basename.slice(0, -ext.length);
+function tryResolvePythonModule(basePath: string): string | undefined {
+  const asPy = basePath + '.py';
+  if (fileExists(asPy)) return asPy;
+
+  const asInit = path.join(basePath, '__init__.py');
+  if (fileExists(asInit)) return asInit;
+
+  return undefined;
+}
+
+/**
+ * Resolve a Python import specifier to an absolute file path.
+ *
+ * Handles:
+ * - Relative imports: `.foo` (sibling), `..foo` (parent), `.` (package __init__)
+ * - Absolute imports: `mypkg.sub` resolved relative to project baseDir
+ * - Extension-free specifiers with `.py` and `__init__.py` resolution
+ */
+function pythonModuleResolve(
+  specifier: string,
+  fromFile: string,
+  options: ModuleResolveOptions
+): string | undefined {
+  if (isPythonRelativeImport(specifier)) {
+    // Count leading dots to determine traversal depth
+    let dotCount = 0;
+    while (dotCount < specifier.length && specifier[dotCount] === '.') {
+      dotCount++;
+    }
+    const rest = specifier.slice(dotCount);
+
+    // Each dot means one directory up from the current file's directory.
+    // `.foo`  → same directory, resolve `foo`
+    // `..foo` → one directory up, resolve `foo`
+    // `.`     → same directory, resolve `__init__.py`
+    let baseDir = path.dirname(fromFile);
+    for (let i = 1; i < dotCount; i++) {
+      baseDir = path.dirname(baseDir);
+    }
+
+    if (!rest) {
+      // Bare relative: `from . import foo` — specifier is just dots,
+      // the actual binding comes from the import query, not the specifier.
+      // Resolve to the package's __init__.py.
+      const initPath = path.join(baseDir, '__init__.py');
+      if (fileExists(initPath)) return initPath;
+      return undefined;
+    }
+
+    // Convert dotted module path to filesystem path: `foo.bar` → `foo/bar`
+    const modulePath = rest.replace(/\./g, '/');
+    const targetPath = path.join(baseDir, modulePath);
+    return tryResolvePythonModule(targetPath);
+  }
+
+  // Absolute (non-relative) import — resolve relative to baseDir
+  // Converts dotted path: `mypkg.sub` → `mypkg/sub`
+  const modulePath = specifier.replace(/\./g, '/');
+  const targetPath = path.resolve(options.baseDir, modulePath);
+  return tryResolvePythonModule(targetPath);
 }

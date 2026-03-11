@@ -555,6 +555,12 @@ function forProcess(
   exitId: FlowNodeId,
   parentCtx?: LoopContext
 ): FlowNodeId[] {
+  // Python for: `for left in right: body` — delegate to iterator-style handler
+  const rightNode = stmt.childForFieldName('right');
+  if (rightNode) {
+    return pythonForProcess(builder, stmt, rightNode, predecessors, exitId, parentCtx);
+  }
+
   const initializer = stmt.childForFieldName('initializer');
   const condition = stmt.childForFieldName('condition');
   const increment = stmt.childForFieldName('increment');
@@ -639,6 +645,60 @@ function forProcess(
     const hasBackEdge = builder.edges.some(e => e.from === incNode!.id && e.to === loop.id);
     if (!hasBackEdge) {
       edgeAdd(builder, incNode.id, loop.id, 'loop-back');
+    }
+  }
+
+  edgeAdd(builder, loop.id, merge.id, 'false');
+  return [merge.id];
+}
+
+/**
+ * Handle Python's `for left in right: body` — semantically an iterator loop
+ * like JS for-in/for-of. Uses the iterable (`right`) as the loop node range.
+ */
+function pythonForProcess(
+  builder: CfgBuilder,
+  stmt: Parser.SyntaxNode,
+  rightNode: Parser.SyntaxNode,
+  predecessors: FlowNodeId[],
+  exitId: FlowNodeId,
+  parentCtx?: LoopContext
+): FlowNodeId[] {
+  const body = stmt.childForFieldName('body');
+
+  const loop = nodeAdd(builder, 'loop', byteRangeFromNode(rightNode), 'for');
+  for (const pred of predecessors) {
+    edgeAdd(builder, pred, loop.id, 'unconditional');
+  }
+
+  const merge = nodeAdd(builder, 'merge', undefined, 'for-exit');
+  const label = labelForStatementGet(stmt);
+
+  const loopCtx: LoopContext = {
+    breakTarget: merge.id,
+    continueTarget: loop.id,
+    label,
+    parent: parentCtx,
+  };
+
+  if (body) {
+    const bodyStmts = body.type === 'statement_block' || body.type === 'block'
+      ? namedChildrenGet(body)
+      : [body];
+    if (bodyStmts.length > 0) {
+      const edgeCountBefore = builder.edges.length;
+      const bodyLive = statementsProcess(builder, bodyStmts, [loop.id], exitId, loopCtx);
+      for (let i = edgeCountBefore; i < builder.edges.length; i++) {
+        if (builder.edges[i].from === loop.id) {
+          builder.edges[i].label = 'true';
+          break;
+        }
+      }
+      for (const live of bodyLive) {
+        edgeAdd(builder, live, loop.id, 'loop-back');
+      }
+    } else {
+      edgeAdd(builder, loop.id, loop.id, 'true');
     }
   }
 

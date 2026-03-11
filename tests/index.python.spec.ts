@@ -719,6 +719,26 @@ class Calculator:
       expect(cfgs.length).toBe(2);
     });
 
+    it('should produce CFG with loop for Python for-in statement', () => {
+      const cfg = pyCfgGet(`
+def process(items):
+    total = 0
+    for item in items:
+        total = total + item
+    return total
+`, 'cfg_for.py');
+
+      expect(cfg).toBeDefined();
+      const loopNodes = cfg!.nodes.filter(n => n.kind === 'loop');
+      expect(loopNodes.length).toBeGreaterThanOrEqual(1);
+
+      const backEdges = cfg!.edges.filter(e => e.label === 'loop-back');
+      expect(backEdges.length).toBeGreaterThanOrEqual(1);
+
+      const falseEdges = cfg!.edges.filter(e => e.label === 'false');
+      expect(falseEdges.length).toBeGreaterThanOrEqual(1);
+    });
+
     it('should handle try/except in CFG', () => {
       const cfg = pyCfgGet(`
 def safe_divide(a, b):
@@ -738,20 +758,103 @@ def safe_divide(a, b):
   // ==========================================================================
 
   describe('cross-file resolution', () => {
-    // TODO: remove .skip once Python module resolution is implemented in moduleResolver.ts
-    // Python requires __init__.py package detection, no file extensions, and
-    // a different path resolution algorithm than TypeScript.
+    it('should resolve relative imports (from .sibling import foo)', () => {
+      const pkgDir = path.join(testDir, 'relpkg');
+      fs.mkdirSync(pkgDir, { recursive: true });
 
-    it.skip('should resolve relative imports (from .sibling import foo)', () => {
-      // Python relative imports: from .sibling import foo
+      const initFile = path.join(pkgDir, '__init__.py');
+      fs.writeFileSync(initFile, '');
+
+      const siblingFile = path.join(pkgDir, 'sibling.py');
+      fs.writeFileSync(siblingFile, `
+def helper():
+    return 42
+`);
+
+      const mainFile = path.join(pkgDir, 'main.py');
+      fs.writeFileSync(mainFile, `
+from .sibling import helper
+
+result = helper()
+`);
+
+      const { index } = projectIndexBuildSync({
+        files: [initFile, siblingFile, mainFile],
+        dir: testDir,
+      });
+
+      const importBindings = index.importBindingsGet(mainFile);
+      const helperBinding = importBindings.find(b => b.importedName === 'helper');
+      expect(helperBinding).toBeDefined();
+      expect(helperBinding!.resolvedModulePath).toBe(siblingFile);
+      expect(helperBinding!.resolvedExportId).toBeDefined();
     });
 
-    it.skip('should resolve package imports (from package import module)', () => {
-      // Python package imports with __init__.py
+    it('should resolve package imports (from mypkg.utils import compute)', () => {
+      const pkgDir = path.join(testDir, 'mypkg');
+      fs.mkdirSync(pkgDir, { recursive: true });
+
+      const initFile = path.join(pkgDir, '__init__.py');
+      fs.writeFileSync(initFile, '');
+
+      const subFile = path.join(pkgDir, 'utils.py');
+      fs.writeFileSync(subFile, `
+def compute():
+    return 99
+`);
+
+      const consumerFile = path.join(testDir, 'consumer.py');
+      fs.writeFileSync(consumerFile, `
+from mypkg.utils import compute
+`);
+
+      const store = indexStoreNew();
+      projectIndexBuildSync({
+        files: [initFile, subFile, consumerFile],
+        dir: testDir,
+        store,
+      });
+
+      const bindings = store.importBindingsInFileGet(consumerFile);
+      const computeBinding = bindings.find(b => b.importedName === 'compute' && b.moduleSpec === 'mypkg.utils');
+      expect(computeBinding).toBeDefined();
+      expect(computeBinding!.resolvedModulePath).toBe(subFile);
+      expect(computeBinding!.resolvedExportId).toBeDefined();
     });
 
-    it.skip('should resolve cross-file references through imports', () => {
-      // Cross-file reference resolution via import bindings
+    it('should resolve cross-file references through imports', () => {
+      const pkgDir = path.join(testDir, 'refpkg');
+      fs.mkdirSync(pkgDir, { recursive: true });
+
+      const initFile = path.join(pkgDir, '__init__.py');
+      fs.writeFileSync(initFile, '');
+
+      const libFile = path.join(pkgDir, 'lib.py');
+      fs.writeFileSync(libFile, `
+def greet(name):
+    return "hello " + name
+`);
+
+      const appFile = path.join(pkgDir, 'app.py');
+      fs.writeFileSync(appFile, `
+from .lib import greet
+
+msg = greet("world")
+`);
+
+      const { index } = projectIndexBuildSync({
+        files: [initFile, libFile, appFile],
+        dir: testDir,
+      });
+
+      const exportedSymbols = index.exportedSymbolsGet({ file: libFile });
+      const greetSymbol = exportedSymbols.find(s => s.name === 'greet');
+      expect(greetSymbol).toBeDefined();
+
+      const importBindings = index.importBindingsGet(appFile);
+      const greetBinding = importBindings.find(b => b.importedName === 'greet');
+      expect(greetBinding).toBeDefined();
+      expect(greetBinding!.resolvedExportId).toBe(greetSymbol!.id);
     });
   });
 });
