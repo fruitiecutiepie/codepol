@@ -889,9 +889,7 @@ from subpkg import helpers
       expect(helpersBinding!.isNamespace).toBe(true);
     });
 
-    // TODO: remove .skip once memberRefsExtract handles Python `attribute` nodes
-    //       (currently only handles JS/TS `member_expression`)
-    it.skip('should resolve submodule member access (submodule.func)', () => {
+    it('should resolve submodule member access (submodule.func)', () => {
       const pkgDir = path.join(testDir, 'subpkg2');
       fs.mkdirSync(pkgDir, { recursive: true });
 

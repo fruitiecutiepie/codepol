@@ -4,10 +4,10 @@ Tracks incomplete implementations for the Python language adapter in `packages/c
 
 ## Current State
 
-The Python adapter is fully coded with query packs for scopes, symbols, refs, calls, imports, and exports, plus `pythonRefFilter`. It is registered in `indexBuilder.ts` (line 92–94). Integration tests exist in `tests/index.python.spec.ts` (40 passing, 1 skipped).
+The Python adapter is fully coded with query packs for scopes, symbols, refs, calls, imports, and exports, plus `pythonRefFilter`. It is registered in `indexBuilder.ts` (line 92–94). Integration tests exist in `tests/index.python.spec.ts` (41 passing, 0 skipped).
 
 Adapter core fixes already applied:
-- `memberRefsExtract` gracefully handles grammars without `member_expression` (Python uses `attribute`)
+- `memberRefsExtract` supports Python's `attribute` node type as a fallback when `member_expression` (JS/TS) is not in the grammar, enabling dotted access resolution (e.g., `submodule.func()`)
 - Python exports query `#eq?` predicate syntax corrected (capture must precede predicate)
 - `importBindingsExtract` handles `import.module_name` (bare `import foo`) and `import.module_alias` (`import foo as f`) captures
 - `importBindingsExtract` handles `import.binding_alias` capture for `from foo import bar as b` aliased imports
@@ -26,24 +26,7 @@ Adapter core fixes already applied:
 
 ## Remaining Items
 
-### 1. Python member expression references (`attribute` node support in `memberRefsExtract`)
-
-**Priority**: Medium
-**Status**: Not implemented
-**Effort**: Low
-
-`memberRefsExtract` in `adapterCore.ts` currently only queries for JavaScript/TypeScript `member_expression` nodes. Python uses `attribute` nodes for dotted access (`obj.prop`). The function gracefully returns an empty array for Python, but this means namespace member accesses (e.g., `submodule.func()` after `from package import submodule`) cannot be resolved to the exported symbol in the submodule.
-
-A fix would add a fallback query for Python's `attribute` node type in `memberRefsExtract`:
-```
-(attribute
-  object: (identifier) @member.obj
-  attribute: (identifier) @member.prop)
-```
-
-This would enable Step 5 (namespace member resolution) in `crossFileResolve` to resolve dotted accesses through submodule imports.
-
-Test: `tests/index.python.spec.ts` has a skipped test "should resolve submodule member access (submodule.func)" — remove `.skip` once this is implemented.
+No remaining items. All planned Python adapter features are implemented and tested.
 
 ---
 
@@ -66,4 +49,4 @@ Test: `tests/index.python.spec.ts` has a skipped test "should resolve submodule 
 - [x] Cross-file reference resolution through imports — `tests/index.python.spec.ts`
 - [x] Cross-file submodule imports (`from package import submodule`) — `tests/index.python.spec.ts`
 - [x] Export-takes-precedence over submodule fallback — `tests/index.python.spec.ts`
-- [ ] Cross-file submodule member access (`submodule.func()`) — skipped, needs `memberRefsExtract` Python support (see remaining item above)
+- [x] Cross-file submodule member access (`submodule.func()`) — `tests/index.python.spec.ts`

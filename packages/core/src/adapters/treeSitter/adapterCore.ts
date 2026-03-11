@@ -413,19 +413,28 @@ function memberRefsExtract(
 ): ReferencesRelation[] {
   const refs: ReferencesRelation[] = [];
 
-  // Query for member expressions: obj.prop
-  // Not all grammars have member_expression (e.g., Python uses 'attribute')
-  let matches: ReturnType<ReturnType<typeof cfg.language.query>['matches']>;
-  try {
-    const memberQuery = cfg.language.query(
-      `(member_expression
-         object: (identifier) @member.obj
-         property: (property_identifier) @member.prop)`
-    );
-    matches = memberQuery.matches(tree.rootNode);
-  } catch {
-    return refs;
+  const queries = [
+    `(member_expression
+       object: (identifier) @member.obj
+       property: (property_identifier) @member.prop)`,
+    `(attribute
+       object: (identifier) @member.obj
+       attribute: (identifier) @member.prop)`,
+  ];
+  let matches: ReturnType<ReturnType<typeof cfg.language.query>['matches']> = [];
+  for (const qs of queries) {
+    try {
+      const q = cfg.language.query(qs);
+      const m = q.matches(tree.rootNode);
+      if (m.length > 0) {
+        matches = m;
+        break;
+      }
+    } catch {
+      // Node type not in grammar — try next query
+    }
   }
+  if (matches.length === 0) return refs;
 
   // Build name -> symbol map for local resolution of the object part
   const symbolsByName = new Map<string, SymbolRecord[]>();
