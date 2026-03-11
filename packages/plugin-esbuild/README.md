@@ -1,11 +1,11 @@
-# @codepol/esbuild-plugin
+# @codepol/plugin-esbuild
 
 esbuild plugin for enforcing codepol policies during builds.
 
 ## Installation
 
 ```bash
-pnpm add -D @codepol/esbuild-plugin @codepol/core @codepol/plugin-eslint esbuild eslint
+pnpm add -D @codepol/plugin-esbuild @codepol/core @codepol/plugin-eslint esbuild eslint
 ```
 
 ## Features
@@ -21,7 +21,7 @@ pnpm add -D @codepol/esbuild-plugin @codepol/core @codepol/plugin-eslint esbuild
 
 ```typescript
 import { build } from 'esbuild';
-import { policyPlugin } from '@codepol/esbuild-plugin';
+import { policyPlugin } from '@codepol/plugin-esbuild';
 
 await build({
   entryPoints: ['src/index.ts'],
@@ -34,7 +34,7 @@ await build({
 ### With Options
 
 ```typescript
-import { esbuildPluginCreate } from '@codepol/esbuild-plugin';
+import { esbuildPluginCreate } from '@codepol/plugin-esbuild';
 
 plugins: [
   esbuildPluginCreate({
@@ -51,7 +51,7 @@ plugins: [
 ```typescript
 // build.ts
 import { build } from 'esbuild';
-import { policyPlugin } from '@codepol/esbuild-plugin';
+import { policyPlugin } from '@codepol/plugin-esbuild';
 
 async function main() {
   try {

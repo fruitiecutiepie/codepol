@@ -1,5 +1,5 @@
 {
-  "name": "@codepol/esbuild-plugin",
+  "name": "@codepol/plugin-esbuild",
   "version": "1.0.0",
   "description": "esbuild plugin for enforcing codepol policies during builds",
   "type": "commonjs",
@@ -41,7 +41,7 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/fruitiecutiepie/codepol",
-    "directory": "packages/esbuild-plugin"
+    "directory": "packages/plugin-esbuild"
   },
   "license": "MIT",
   "keywords": [

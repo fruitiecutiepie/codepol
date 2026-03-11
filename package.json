@@ -21,7 +21,7 @@
   },
   "devDependencies": {
     "@codepol/core": "workspace:*",
-    "@codepol/esbuild-plugin": "workspace:*",
+    "@codepol/plugin-esbuild": "workspace:*",
     "@codepol/plugin-eslint": "workspace:*",
     "@codepol/plugin": "workspace:*",
     "@codepol/plugin-ruff": "workspace:*",

@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync, readFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { esbuildPluginCreate } from '@codepol/esbuild-plugin';
+import { esbuildPluginCreate } from '@codepol/plugin-esbuild';
 
 /** Workspace root — used to symlink node_modules into temp dirs. */
 const WORKSPACE_ROOT = path.resolve(__dirname, '..');

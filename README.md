@@ -36,7 +36,7 @@ Codepol is a policy enforcement framework for TypeScript that combines ESLint ru
 | ------- | ----------- |
 | [@codepol/core](./packages/core) | Core policy loading, Tree-sitter checks, and enforcement |
 | [@codepol/plugin-eslint](./packages/plugin-eslint) | ESLint rule with autofix for logger instrumentation |
-| [@codepol/esbuild-plugin](./packages/esbuild-plugin) | esbuild plugin for build-time enforcement |
+| [@codepol/plugin-esbuild](./packages/plugin-esbuild) | esbuild plugin for build-time enforcement |
 | [@codepol/plugin](./packages/plugin/README.md) | Logger plugin with Tree-sitter + ESLint capabilities |
 | [@codepol/cli](./apps/cli) | Command-line interface for running checks |
 

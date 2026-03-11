@@ -15,12 +15,12 @@ importers:
       '@codepol/core':
         specifier: workspace:*
         version: link:packages/core
-      '@codepol/esbuild-plugin':
-        specifier: workspace:*
-        version: link:packages/esbuild-plugin
       '@codepol/plugin':
         specifier: workspace:*
         version: link:packages/plugin
+      '@codepol/plugin-esbuild':
+        specifier: workspace:*
+        version: link:packages/plugin-esbuild
       '@codepol/plugin-eslint':
         specifier: workspace:*
         version: link:packages/plugin-eslint
@@ -150,7 +150,23 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
-  packages/esbuild-plugin:
+  packages/plugin:
+    dependencies:
+      minimatch:
+        specifier: ^10.1.1
+        version: 10.1.1
+    devDependencies:
+      '@codepol/core':
+        specifier: workspace:*
+        version: link:../core
+      '@types/node':
+        specifier: ^25.0.3
+        version: 25.0.3
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
+  packages/plugin-esbuild:
     devDependencies:
       '@codepol/core':
         specifier: workspace:*
@@ -170,22 +186,6 @@ importers:
       eslint:
         specifier: ^9.39.2
         version: 9.39.2(jiti@2.6.1)
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-
-  packages/plugin:
-    dependencies:
-      minimatch:
-        specifier: ^10.1.1
-        version: 10.1.1
-    devDependencies:
-      '@codepol/core':
-        specifier: workspace:*
-        version: link:../core
-      '@types/node':
-        specifier: ^25.0.3
-        version: 25.0.3
       typescript:
         specifier: ^5.9.3
         version: 5.9.3

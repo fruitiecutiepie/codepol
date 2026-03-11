@@ -22,7 +22,7 @@ pnpm add -D @codepol/cli
 pnpm add -D @codepol/plugin-eslint @codepol/plugin @typescript-eslint/utils
 
 # For esbuild integration
-pnpm add -D @codepol/esbuild-plugin esbuild
+pnpm add -D @codepol/plugin-esbuild esbuild
 ```
 
 ### Minimal Setup (ESLint only)
@@ -259,7 +259,7 @@ If you use esbuild, add build-time enforcement:
 ```typescript
 // build.ts
 import { build } from 'esbuild';
-import { esbuildPluginCreate } from '@codepol/esbuild-plugin';
+import { esbuildPluginCreate } from '@codepol/plugin-esbuild';
 
 await build({
   entryPoints: ['src/index.ts'],

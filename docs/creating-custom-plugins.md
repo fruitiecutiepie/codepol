@@ -467,7 +467,7 @@ Enforce policies at build time with the esbuild plugin:
 
 ```typescript
 import { build } from 'esbuild';
-import { esbuildPluginCreate } from '@codepol/esbuild-plugin';
+import { esbuildPluginCreate } from '@codepol/plugin-esbuild';
 
 await build({
   entryPoints: ['src/index.ts'],

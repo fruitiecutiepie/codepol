@@ -1,6 +1,6 @@
 /**
  * @packageDocumentation
- * @codepol/esbuild-plugin - esbuild plugin for enforcing codepol policies.
+ * @codepol/plugin-esbuild - esbuild plugin for enforcing codepol policies.
  *
  * This plugin runs policy checks as part of your esbuild build process,
  * failing the build if any violations are found.
@@ -8,7 +8,7 @@
  * @example
  * ```typescript
  * import { build } from 'esbuild';
- * import { esbuildPluginCreate } from '@codepol/esbuild-plugin';
+ * import { esbuildPluginCreate } from '@codepol/plugin-esbuild';
  *
  * await build({
  *   entryPoints: ['src/index.ts'],
@@ -262,7 +262,7 @@ async function policyCheck(options: {
  *
  * @example Basic usage (auto-discovers config)
  * ```typescript
- * import { esbuildPluginCreate } from '@codepol/esbuild-plugin';
+ * import { esbuildPluginCreate } from '@codepol/plugin-esbuild';
  *
  * plugins: [esbuildPluginCreate()]
  * ```

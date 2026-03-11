@@ -750,7 +750,7 @@ Methods that are thin wrappers over `IndexStore` can be unit-tested with a pre-p
 
 ---
 
-### 3.4 `@codepol/esbuild-plugin`
+### 3.4 `@codepol/plugin-esbuild`
 
 `esbuild.build()` is called in-process as a library function, making these integration tests (not E2E).
 
@@ -1104,7 +1104,7 @@ pnpm vitest run --coverage
 | `@codepol/core` (policy*, config*) | 80% |
 | `@codepol/plugin` | 85% |
 | `@codepol/plugin-eslint` | 75% |
-| `@codepol/esbuild-plugin` | 70% |
+| `@codepol/plugin-esbuild` | 70% |
 | `@codepol/cli` | 70% |
 
 ### Coverage ratchet
