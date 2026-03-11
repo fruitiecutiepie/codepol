@@ -20,7 +20,6 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   eslintAdapter,
   policyCacheClear,
-  providerInitStateClear,
   projectIndexCacheClear,
 } from '@codepol/eslint-plugin';
 import { unusedExportsRule } from '@codepol/plugin';
@@ -99,7 +98,6 @@ beforeAll(async () => {
   // Clear all caches so the adapter loads config and builds index fresh
   configCacheClear();
   policyCacheClear();
-  providerInitStateClear();
   projectIndexCacheClear();
 
   // Mock process.cwd() to the temp dir so the adapter can:
@@ -164,6 +162,10 @@ ruleTester.run('adapted-unused-exports', eslintRule as any, {
       options: ruleOptions,
       code: exporterSource,
       errors: [{ messageId: 'treeCheckViolation' }],
+      output: `\
+export function usedFn() { return 1; }
+function unusedFn() { return 2; }
+`,
     },
   ],
 });

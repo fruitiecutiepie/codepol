@@ -2,7 +2,7 @@ import path from 'node:path';
 import { RuleTester } from 'eslint';
 import tseslint from 'typescript-eslint';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { eslintAdapter, policyCacheClear, providerInitStateClear } from '@codepol/eslint-plugin';
+import { eslintAdapter, policyCacheClear } from '@codepol/eslint-plugin';
 import { loggerEnterExitRule } from '@codepol/plugin';
 import { langAdd, parserInit } from '@codepol/core';
 
@@ -12,7 +12,6 @@ beforeAll(async () => {
   langAdd({ langId: 'tsx', fileExtensions: ['.tsx'] });
   await parserInit();
   policyCacheClear();
-  providerInitStateClear();
 });
 
 // RuleTester must be run at module level, not inside vitest it() blocks

@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
   policyCacheClear,
-  providerInitStateClear,
   projectIndexCacheClear,
 } from './eslintAdapter';
 
@@ -21,19 +20,6 @@ describe('eslintAdapter cache and state clearing', () => {
       policyCacheClear();
       policyCacheClear();
       // No assertion beyond "doesn't throw" — the Maps are private
-    });
-  });
-
-  describe('providerInitStateClear', () => {
-    it('clears the provider initialization state without error', () => {
-      // providerInitStateClear clears the internal providerInitState Map.
-      // After clearing, providers will be re-initialized on next use.
-      expect(() => providerInitStateClear()).not.toThrow();
-    });
-
-    it('can be called multiple times safely', () => {
-      providerInitStateClear();
-      providerInitStateClear();
     });
   });
 

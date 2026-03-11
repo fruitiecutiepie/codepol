@@ -140,9 +140,6 @@ function diagnosticToEslintLoc(diagnostic: LintDiagnostic): TSESLint.ReportDescr
   };
 }
 
-// Singleton for provider initialization state
-const providerInitState = new Map<string, Promise<void> | true>();
-
 // ============================================================================
 // Project Index Caching for Cross-File Analysis
 // ============================================================================
@@ -302,45 +299,6 @@ export function projectIndexCacheClear(): void {
 }
 
 /**
- * Ensures a provider is initialized (handles async init).
- */
-async function ensureProviderInit(
-  provider: CodepolPluginRule,
-  _policy: PolicyFile,
-  _cwd: string
-): Promise<void> {
-  const key = provider.id;
-  const state = providerInitState.get(key);
-  
-  if (state === true) {
-    return; // Already initialized
-  }
-  
-  if (state instanceof Promise) {
-    await state; // Wait for in-progress initialization
-    return;
-  }
-  
-  // Note: CodepolPluginRule does not have init method currently in type definition?
-  // I removed init from PolicyPlugin and CodepolPluginRule in core/policyTypes.ts?
-  // Let's check.
-  // If removed, then this logic is obsolete.
-  // But wait, WASM parser init is global. Plugin specific init?
-  // The plan said "Deprecate/Remove monolithic PolicyPlugin type".
-  // If plugins need init, how?
-  // Maybe explicit init in the plugin module?
-  // For now, let's assume no per-rule-plugin init is needed or handled elsewhere.
-  // If so, I can remove this ensureProviderInit or make it no-op.
-  
-  // For backward compatibility or future use, let's keep it but check if init exists.
-  // But TS will complain if property doesn't exist.
-  // I'll cast to any for now to be safe if I add it back, or just remove.
-  // Since I removed init from types, I should remove it here.
-  
-  providerInitState.set(key, true);
-}
-
-/**
  * Creates an ESLint rule from a TreeCheckProvider.
  */
 function createAdaptedRule(
@@ -472,12 +430,6 @@ function createAdaptedRule(
             targets: ['_synthetic'],
           };
 
-          // Ensure provider is initialized (blocking for ESLint sync context)
-          // Since we removed init, we just ensure the map has it for tracking?
-          if (!providerInitState.has(plugin.id)) {
-             providerInitState.set(plugin.id, true);
-          }
-
           // Run the tree-check
           const checkResult = treeCheckProvider.check(syntheticRule, checkContext);
           
@@ -529,26 +481,3 @@ export const eslintAdapter: TreeCheckLintAdapter<TSESLint.RuleModule<string, unk
   adapt: (plugin, options) => createAdaptedRule(plugin, options) as TSESLint.RuleModule<string, unknown[]>,
 };
 
-/**
- * Pre-initialize a TreeCheckProvider for use with ESLint.
- * Call this before running ESLint to ensure async initialization completes.
- *
- * @param provider - The TreeCheckProvider to initialize
- * @param policy - The policy file
- * @param cwd - Current working directory
- */
-export async function eslintAdapterInit(
-  provider: CodepolPluginRule,
-  policy: PolicyFile,
-  cwd: string
-): Promise<void> {
-  await ensureProviderInit(provider, policy, cwd);
-}
-
-/**
- * Clears the provider initialization state.
- * Useful for testing or when reinitializing providers.
- */
-export function providerInitStateClear(): void {
-  providerInitState.clear();
-}

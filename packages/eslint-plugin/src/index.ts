@@ -8,18 +8,14 @@ import type { ESLint } from 'eslint';
 
 import {
   eslintAdapter,
-  eslintAdapterInit,
   policyCacheClear,
-  providerInitStateClear,
   projectIndexCacheClear,
 } from './eslintAdapter';
 
 // Re-export adapter utilities
 export {
   eslintAdapter,
-  eslintAdapterInit,
   policyCacheClear,
-  providerInitStateClear,
   projectIndexCacheClear,
 };
 

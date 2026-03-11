@@ -1,8 +1,17 @@
 import path from 'node:path';
 import { RuleTester } from 'eslint';
 import tseslint from 'typescript-eslint';
-import { eslintPluginCreate } from '@codepol/eslint-plugin';
+import { beforeAll } from 'vitest';
+import { eslintPluginCreate, policyCacheClear } from '@codepol/eslint-plugin';
 import pluginRules from '@codepol/plugin';
+import { langAdd, parserInit } from '@codepol/core';
+
+beforeAll(async () => {
+  langAdd({ langId: 'typescript', fileExtensions: ['.ts'] });
+  langAdd({ langId: 'tsx', fileExtensions: ['.tsx'] });
+  await parserInit();
+  policyCacheClear();
+});
 
 const ruleTester = new RuleTester({
   languageOptions: {
@@ -45,7 +54,6 @@ const options = [
   {
     ruleTargets,
     policyExclude: [] as string[],
-    logger: loggerConfig,
   },
 ];
 
@@ -74,55 +82,20 @@ export function instrumented() {
   ],
   invalid: [
     {
-      name: 'adds logger instrumentation to block function',
+      name: 'missing logger instrumentation is reported',
       filename,
       options,
       code: `function f(){
   doStuff();
 }`,
-      errors: [{ messageId: 'missingLogger' }],
-      output: `import { logger } from '@org/logger';
-function f(){
-  logger.enter();
-  try {
-    doStuff();
-  } finally {
-    logger.exit();
-  }
-}`,
+      errors: [{ messageId: 'treeCheckViolation' }],
     },
     {
-      name: 'arrow expression converted to block',
+      name: 'arrow expression without instrumentation is reported',
       filename,
       options,
       code: 'const add = (a: number, b: number) => a + b;',
-      errors: [{ messageId: 'missingLogger' }],
-      output: `import { logger } from '@org/logger';
-const add = (a: number, b: number) => {
-  logger.enter();
-  try {
-    return a + b;
-  } finally {
-    logger.exit();
-  }
-};`,
-    },
-    {
-      name: 'reuses existing logger import',
-      filename,
-      options,
-      code: `import { logger } from '@org/logger';
-const run = () => 1;`,
-      errors: [{ messageId: 'missingLogger' }],
-      output: `import { logger } from '@org/logger';
-const run = () => {
-  logger.enter();
-  try {
-    return 1;
-  } finally {
-    logger.exit();
-  }
-};`,
+      errors: [{ messageId: 'treeCheckViolation' }],
     },
     {
       name: 'multiple functions in one file',
@@ -134,52 +107,10 @@ const run = () => {
 function b() {
   doB();
 }`,
-      // Both functions reported. ESLint applies fixes in one pass; the first
-      // function's fix (import + block wrap) conflicts with the second's
-      // (both insert import at position 0), so only function a is fixed.
-      errors: [{ messageId: 'missingLogger' }, { messageId: 'missingLogger' }],
-      output: `import { logger } from '@org/logger';
-function a() {
-  logger.enter();
-  try {
-    doA();
-  } finally {
-    logger.exit();
-  }
-}
-function b() {
-  doB();
-}`,
+      errors: [{ messageId: 'treeCheckViolation' }, { messageId: 'treeCheckViolation' }],
     },
     {
-      name: 'nested functions',
-      filename,
-      options,
-      code: `function outer() {
-  function inner() {
-    doInner();
-  }
-  doOuter();
-}`,
-      // Both functions reported. The inner function's fix has a smaller
-      // effective range so ESLint applies it first; the outer's overlaps
-      // and is skipped in this pass.
-      errors: [{ messageId: 'missingLogger' }, { messageId: 'missingLogger' }],
-      output: `import { logger } from '@org/logger';
-function outer() {
-  function inner() {
-  logger.enter();
-  try {
-    doInner();
-  } finally {
-    logger.exit();
-  }
-}
-  doOuter();
-}`,
-    },
-    {
-      name: 'class method',
+      name: 'class method without instrumentation',
       filename,
       options,
       code: `class Service {
@@ -187,20 +118,7 @@ function outer() {
     return 'done';
   }
 }`,
-      // FunctionExpression visitor now skips when parent is MethodDefinition,
-      // so only the MethodDefinition handler reports (1 error, not 2).
-      errors: [{ messageId: 'missingLogger' }],
-      output: `import { logger } from '@org/logger';
-class Service {
-  handle() {
-  logger.enter();
-  try {
-    return 'done';
-  } finally {
-    logger.exit();
-  }
-}
-}`,
+      errors: [{ messageId: 'treeCheckViolation' }],
     },
   ],
 });

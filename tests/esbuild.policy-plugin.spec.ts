@@ -145,33 +145,25 @@ describe('esbuild policy plugin', () => {
     expect(result.errors.length).toBe(0);
   });
 
-  it('fix: true applies ESLint autofixes to disk', async () => {
+  it('fix: true still reports tree-sitter violations when no ESLint autofix is available', async () => {
     const { dir, outfile } = tempProjectCreate();
     const entryPath = path.join(dir, 'index.ts');
 
     writeFileSync(entryPath, violatingSource);
-    const originalContent = readFileSync(entryPath, 'utf8');
 
-    // Build with fix: true — ESLint autofix should write the fixed file,
-    // then tree-sitter reads the (now fixed) file from disk
-    const result = await build({
+    // The logger rule is tree-sitter-only (no ESLint autofix).
+    // fix: true should not crash, but tree-sitter violations remain.
+    const failure = await build({
       absWorkingDir: dir,
       entryPoints: [entryPath],
       outfile,
       bundle: false,
       logLevel: 'silent',
       plugins: [esbuildPluginCreate({ configPath: 'codepol.config.mjs', fix: true })],
-    });
+    }).catch(error => error);
 
-    expect(result.errors.length).toBe(0);
-
-    // Verify the file on disk was modified by the ESLint autofix
-    const fixedContent = readFileSync(entryPath, 'utf8');
-    expect(fixedContent).not.toBe(originalContent);
-    expect(fixedContent).toContain('logger.enter');
-    expect(fixedContent).toContain('logger.exit');
-    expect(fixedContent).toContain('try');
-    expect(fixedContent).toContain('finally');
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain('logger.enter');
   });
 
   it('auto-discovers config when configPath is not specified', async () => {

@@ -15,25 +15,37 @@ type IdentifierMatch = {
   column: number;
 };
 
-const IDENTIFIER_PATTERNS: RegExp[] = [
-  /\bfunction\s+(\w+)/g,                    // function declarations
-  /\b(?:const|let|var)\s+(\w+)/g,           // variable declarations
-  /\b(?:type|interface|class|enum)\s+(\w+)/g, // type declarations
+const JS_TS_PATTERNS: RegExp[] = [
+  /\bfunction\s+(\w+)/g,
+  /\b(?:const|let|var)\s+(\w+)/g,
+  /\b(?:type|interface|class|enum)\s+(\w+)/g,
 ];
 
-function extractIdentifiers(source: string): IdentifierMatch[] {
+const PYTHON_PATTERNS: RegExp[] = [
+  /\bdef\s+(\w+)/g,
+  /\bclass\s+(\w+)/g,
+  /^(\w+)\s*(?::\s*\w[^\n]*)?\s*=/gm,
+];
+
+function patternsForFile(filePath: string): RegExp[] {
+  return filePath.endsWith('.py') ? PYTHON_PATTERNS : JS_TS_PATTERNS;
+}
+
+function extractIdentifiers(
+  source: string,
+  filePath: string
+): IdentifierMatch[] {
   const matches: IdentifierMatch[] = [];
   const lines = source.split('\n');
+  const patterns = patternsForFile(filePath);
 
   lines.forEach((line, lineIndex) => {
-    for (const pattern of IDENTIFIER_PATTERNS) {
-      // Reset regex state for each line
+    for (const pattern of patterns) {
       pattern.lastIndex = 0;
       let match: RegExpExecArray | null;
 
       while ((match = pattern.exec(line)) !== null) {
         const identifierName = match[1];
-        // Column is the position of the identifier itself, not the keyword
         const identifierStart = match.index + match[0].indexOf(identifierName);
 
         matches.push({
@@ -74,7 +86,7 @@ export function forbiddenWordsCheck(
     return violations;
   }
 
-  const identifiers = extractIdentifiers(context.source);
+  const identifiers = extractIdentifiers(context.source, context.filePath);
 
   for (const identifier of identifiers) {
     const matchedWord = containsForbiddenWord(identifier.name, args.words);
@@ -92,5 +104,3 @@ export function forbiddenWordsCheck(
 
   return violations;
 }
-
-const a = 'b';
