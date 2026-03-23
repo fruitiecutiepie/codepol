@@ -21,7 +21,6 @@ import path from 'node:path';
 import chokidar from 'chokidar';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
-import { ESLint } from 'eslint';
 import {
   langAdd,
   parserInit,
@@ -30,6 +29,7 @@ import {
   policyViolationsGetFromDir,
   policyViolationsGetOutputPretty,
   policyPluginsGet,
+  pluginModuleRegister,
   ESLINT_PLUGIN_NAME_DEFAULT,
   configGet,
   configGetFromPath,
@@ -45,6 +45,9 @@ import {
   type CodepolConfig,
 } from '@codepol/core';
 import { ruffCheck, ruffFix } from '@codepol/plugin-ruff';
+import codepolPlugin from '@codepol/plugin';
+
+pluginModuleRegister('@codepol/plugin', { default: codepolPlugin });
 
 type CliOptions = {
   fix: boolean;
@@ -113,7 +116,7 @@ function policyRuleTargetsGet(policy: PolicyFile): PolicyRuleTargetContext[] {
 function eslintConfigGet(
   providers: LintProviderEntry[],
   context: { policy: PolicyFile; configPath: string; cwd: string; ruleTargets: PolicyRuleTargetContext[] }
-): ESLint.Options['overrideConfig'] {
+): Record<string, unknown> {
   const rules: Record<string, unknown> = {};
 
   for (const entry of providers) {
@@ -142,7 +145,7 @@ function eslintConfigGet(
     rules[configKey] = [severity, options];
   }
 
-  return { rules } as ESLint.Options['overrideConfig'];
+  return { rules };
 }
 
 async function fixProvidersApply(
@@ -223,26 +226,40 @@ async function policyCheck(options: {
 
   const eslintViolations: PolicyViolation[] = [];
   if (eslintProviders.length > 0) {
-    const eslint = new ESLint({
-      overrideConfigFile: eslintConfigPath,
-      overrideConfig: eslintConfigGet(eslintProviders, { policy, configPath, cwd, ruleTargets }),
-      fix,
-      cwd,
-    });
-
-    const lintResults = files.length > 0 ? await eslint.lintFiles(files) : [];
-    if (fix) {
-      await ESLint.outputFixes(lintResults);
+    let ESLint: typeof import('eslint').ESLint;
+    try {
+      const eslintModule = await import('eslint');
+      ESLint = eslintModule.ESLint;
+    } catch {
+      console.warn(
+        'ESLint is not installed. Skipping ESLint-based rules.\n' +
+        'Install eslint to enable: npm install -D eslint'
+      );
+      ESLint = undefined!;
     }
-    for (const result of lintResults) {
-      for (const msg of result.messages) {
-        eslintViolations.push({
-          ruleId: msg.ruleId ?? 'unknown',
-          filePath: result.filePath,
-          message: msg.message,
-          line: msg.line,
-          column: msg.column,
-        });
+
+    if (ESLint) {
+      const eslint = new ESLint({
+        overrideConfigFile: eslintConfigPath,
+        overrideConfig: eslintConfigGet(eslintProviders, { policy, configPath, cwd, ruleTargets }),
+        fix,
+        cwd,
+      });
+
+      const lintResults = files.length > 0 ? await eslint.lintFiles(files) : [];
+      if (fix) {
+        await ESLint.outputFixes(lintResults);
+      }
+      for (const result of lintResults) {
+        for (const msg of result.messages) {
+          eslintViolations.push({
+            ruleId: msg.ruleId ?? 'unknown',
+            filePath: result.filePath,
+            message: msg.message,
+            line: msg.line,
+            column: msg.column,
+          });
+        }
       }
     }
   }

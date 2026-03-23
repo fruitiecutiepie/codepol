@@ -14,6 +14,17 @@ pnpm add -D @codepol/cli
 
 ## Usage
 
+### Quick Start
+
+```bash
+# 1) Create codepol.config.ts in your project root
+# 2) Register codepol plugin in eslint.config.*
+# 3) Run:
+codepol
+```
+
+Codepol auto-discovers `codepol.config.ts`. Use `--config` to point to a custom path.
+
 ### Basic Check
 
 ```bash
@@ -48,6 +59,40 @@ codepol --config ./config/codepol.config.ts
 
 ```bash
 codepol --eslint-config ./config/eslint.config.js
+```
+
+### Standalone Binary Usage
+
+If you are using a prebuilt standalone binary, download it from [GitHub Releases](https://github.com/fruitiecutiepie/codepol/releases) (or CI artifacts) and keep these files in the same directory as the executable:
+
+- `codepol`
+- `tree-sitter.wasm`
+- `tree-sitter-typescript.wasm`
+- `tree-sitter-tsx.wasm`
+- `tree-sitter-python.wasm`
+- `codepol-core-stub.cjs`
+
+Example:
+
+```bash
+# Pick a release tag, for example v1.2.3
+TAG=v1.2.3
+
+# Download published release bundle (update filename to your release asset name)
+curl -fL -o codepol-binary.tar.gz \
+  "https://github.com/fruitiecutiepie/codepol/releases/download/${TAG}/codepol-binary-${TAG}-linux-x64.tar.gz"
+
+# Extract bundle
+tar -xzf codepol-binary.tar.gz
+
+# Alternative: download from a workflow artifact (requires gh auth)
+# gh run download <run-id> --name codepol-binary --dir ./codepol-binary
+```
+
+Then run:
+
+```bash
+/path/to/codepol
 ```
 
 ## Options

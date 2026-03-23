@@ -1,12 +1,17 @@
 # Getting Started with Codepol
 
-This guide walks you through setting up codepol in your TypeScript project.
+This guide walks you through setting up codepol in your project.
 
 ## Prerequisites
 
-- Node.js 18 or later
-- A TypeScript project
-- pnpm, npm, or yarn
+- A project with source code you want to enforce policy on
+- For package-based usage (`@codepol/cli`): Node.js 18+ and pnpm/npm/yarn
+- For standalone binary usage: no Node.js runtime is required in the target project
+
+## Choose a Usage Path
+
+- **Node-capable projects (recommended):** install `@codepol/cli` and run `codepol`/`npx codepol`.
+- **Non-Node projects:** use the standalone binary bundle.
 
 ## Step 1: Install Packages
 
@@ -141,7 +146,7 @@ Rule keys use the ESLint plugin name `codepol` (for example, `codepol/require-lo
 ::: tip Severity Precedence
 When running ESLint directly (`eslint .`), your eslint.config.js rules apply.
 
-When running `codepol check`, severity is read from `codepol.config.ts` and passed via ESLint's `overrideConfig`, which takes precedence over your eslint.config.js for codepol rules.
+When running `codepol`, severity is read from `codepol.config.ts` and passed via ESLint's `overrideConfig`, which takes precedence over your eslint.config.js for codepol rules.
 :::
 
 ## Step 4: Create Your Logger
@@ -313,6 +318,50 @@ pnpm add -D husky
 npx husky init
 echo "pnpm lint:policy" > .husky/pre-commit
 ```
+
+## Use the Standalone Binary (Recommended for Non-Node Projects)
+
+For projects that do not use a JS/TS toolchain, use the standalone binary bundle.
+This is the recommended path for non-Node repositories.
+Download binaries from [GitHub Releases](https://github.com/fruitiecutiepie/codepol/releases) (or CI artifacts) rather than committing `dist-binary`.
+
+After downloading and extracting a release asset, keep these files in the same directory:
+
+- `codepol`
+- `tree-sitter.wasm`
+- `tree-sitter-typescript.wasm`
+- `tree-sitter-tsx.wasm`
+- `tree-sitter-python.wasm`
+- `codepol-core-stub.cjs`
+
+Example:
+
+```bash
+# Pick a release tag, for example v1.2.3
+TAG=v1.2.3
+
+# Download published release bundle (update filename to your release asset name)
+curl -fL -o codepol-binary.tar.gz \
+  "https://github.com/fruitiecutiepie/codepol/releases/download/${TAG}/codepol-binary-${TAG}-linux-x64.tar.gz"
+
+# Extract bundle
+tar -xzf codepol-binary.tar.gz
+
+# Alternative: download from a workflow artifact (requires gh auth)
+# gh run download <run-id> --name codepol-binary --dir ./codepol-binary
+```
+
+Then in the consumer project:
+
+```bash
+# Run from project root (auto-discovers codepol.config.ts)
+/path/to/codepol
+
+# Or pass explicit paths
+/path/to/codepol --config ./codepol.config.ts --eslint-config ./eslint.config.js
+```
+
+> **Note:** Keep the WASM files next to the `codepol` executable at runtime.
 
 ## Next Steps
 

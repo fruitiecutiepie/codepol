@@ -3,6 +3,26 @@ import path from 'node:path';
 import type { CodepolConfig, ConfigFileResult } from './configTypes';
 
 /**
+ * Returns jiti alias config that maps '@codepol/core' to a stub file
+ * so config files can `import { defineConfig } from '@codepol/core'`
+ * without needing node_modules.
+ */
+function coreModuleAlias(): Record<string, string> {
+  const stubName = 'codepol-core-stub.cjs';
+  const candidates = [
+    path.resolve(__dirname, stubName),
+    path.resolve(__dirname, '..', stubName),
+    path.resolve(path.dirname(process.execPath), stubName),
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return { '@codepol/core': candidate };
+    }
+  }
+  return {};
+}
+
+/**
  * Supported config file names in order of precedence.
  * First match wins when walking up the directory tree.
  */
@@ -74,10 +94,10 @@ export function configFileDiscover(startDir: string): string | null {
  * Loads a JS/TS config file using jiti for TypeScript support (async).
  */
 async function loadJsConfigAsync(configPath: string): Promise<CodepolConfig> {
-  // Dynamic import jiti to load TS/JS configs
   const { createJiti } = await import('jiti');
   const jiti = createJiti(configPath, {
     interopDefault: true,
+    alias: coreModuleAlias(),
   });
 
   const loaded = await jiti.import(configPath);
@@ -96,6 +116,7 @@ function loadJsConfigSync(configPath: string): CodepolConfig {
   const { createJiti } = require('jiti') as typeof import('jiti');
   const jiti = createJiti(configPath, {
     interopDefault: true,
+    alias: coreModuleAlias(),
   });
 
   // Use jiti as a function for synchronous require

@@ -10,6 +10,11 @@ export default defineConfig({
       files: ['packages/*/src/**/*.ts'],
       // exclude: ['**/*.spec.ts', '**/*.test.ts', '**/__mocks__/**'],
     },
+    'python-src': {
+      language: 'python',
+      files: ['**/*.py'],
+      exclude: ['**/venv/**', '**/.venv/**', '**/dist/**', '**/node_modules/**'],
+    },
   },
   rules: [
     {
@@ -24,7 +29,7 @@ export default defineConfig({
     {
       ruleId: 'forbidden-words',
       severity: 'error',
-      targets: ['codepol-src'],
+      targets: ['codepol-src', 'python-src'],
       args: {
         words: [
           // Too vague - tells you nothing

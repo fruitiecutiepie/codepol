@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import Parser from 'web-tree-sitter';
 import { Result, Ok, Err } from '../result/result';
 import {
@@ -10,12 +12,23 @@ import {
 let parserInitialized = false;
 
 /**
+ * Resolves the web-tree-sitter core WASM file.
+ * Checks next to the executable first (standalone binary mode),
+ * then falls back to the web-tree-sitter package location.
+ */
+function treeSitterWasmLocate(filename: string, scriptDir: string): string {
+  const besideExe = path.resolve(path.dirname(process.execPath), filename);
+  if (fs.existsSync(besideExe)) return besideExe;
+  return path.join(scriptDir, filename);
+}
+
+/**
  * Initializes the web-tree-sitter parser and loads language grammars.
  * Must be called before any scanning operations.
  */
 export async function parserInit(): Promise<void> {
   if (!parserInitialized) {
-    await Parser.init();
+    await Parser.init({ locateFile: treeSitterWasmLocate });
     parserInitialized = true;
   }
 

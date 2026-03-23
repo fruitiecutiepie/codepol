@@ -323,6 +323,7 @@ export type { PolicyPluginsMap } from './policy/policyPluginsGet';
 export {
   policyPluginsGet,
   pluginGetForRule,
+  pluginModuleRegister,
 } from './policy/policyPluginsGet';
 
 // Runner

@@ -13,6 +13,20 @@ import { policyRuleTargetsResolve } from './policyGet';
 export type PolicyPluginsMap = Map<string, PluginRule>;
 
 /**
+ * Pre-registered plugin modules keyed by module specifier.
+ * Allows the CLI binary to bundle plugins statically and skip dynamic import().
+ */
+const preRegisteredPlugins = new Map<string, unknown>();
+
+/**
+ * Pre-registers a plugin module so policyPluginsGet skips dynamic import for it.
+ * Used by the standalone binary to bundle built-in plugins.
+ */
+export function pluginModuleRegister(moduleSpecifier: string, moduleExports: unknown): void {
+  preRegisteredPlugins.set(moduleSpecifier, moduleExports);
+}
+
+/**
  * Resolves a rule ID by prefixing with module specifier if not already namespaced.
  * Plugin authors can define short IDs (e.g., "require-logger-enter-exit") and
  * codepol will namespace them (e.g., "@codepol/plugin/require-logger-enter-exit").
@@ -76,24 +90,27 @@ export async function policyPluginsGet(
   for (const declaration of declarations) {
     const moduleSpecifier = typeof declaration === 'string' ? declaration : declaration.module;
     
-    let moduleSource: string;
-    if (moduleSpecifier.startsWith('.') || moduleSpecifier.startsWith('/')) {
-      // Relative or absolute paths resolve from cwd
-      moduleSource = pathToFileURL(path.resolve(cwd, moduleSpecifier)).href;
-    } else {
-      // Bare package specifiers resolve from consumer's node_modules
-      try {
-        moduleSource = pathToFileURL(requireFromCwd.resolve(moduleSpecifier)).href;
-      } catch (e) {
-        return Err(`Failed to resolve plugin module ${moduleSpecifier}: ${e}`);
-      }
-    }
-    
     let moduleLoaded;
-    try {
-      moduleLoaded = await import(moduleSource);
-    } catch (e) {
-      return Err(`Failed to load plugin module ${moduleSpecifier}: ${e}`);
+    const preRegistered = preRegisteredPlugins.get(moduleSpecifier);
+    if (preRegistered !== undefined) {
+      moduleLoaded = preRegistered;
+    } else {
+      let moduleSource: string;
+      if (moduleSpecifier.startsWith('.') || moduleSpecifier.startsWith('/')) {
+        moduleSource = pathToFileURL(path.resolve(cwd, moduleSpecifier)).href;
+      } else {
+        try {
+          moduleSource = pathToFileURL(requireFromCwd.resolve(moduleSpecifier)).href;
+        } catch (e) {
+          return Err(`Failed to resolve plugin module ${moduleSpecifier}: ${e}`);
+        }
+      }
+      
+      try {
+        moduleLoaded = await import(moduleSource);
+      } catch (e) {
+        return Err(`Failed to load plugin module ${moduleSpecifier}: ${e}`);
+      }
     }
 
     // Handle CommonJS/ESM interop: when dynamically importing a CommonJS module

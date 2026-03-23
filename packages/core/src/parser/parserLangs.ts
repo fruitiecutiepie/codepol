@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { Language } from 'web-tree-sitter';
 
@@ -14,9 +15,25 @@ const langsMap = new Map<string, Language>();
 
 /**
  * Resolves the path to a bundled WASM grammar file.
+ * Checks multiple locations in order:
+ *   1. packages/core/wasm/ (standard npm mode)
+ *   2. Next to the current script file (esbuild bundle mode)
+ *   3. Next to the executable (standalone binary mode)
  */
 export function wasmPathGet(grammarName: string): string {
-  return path.resolve(__dirname, '..', '..', 'wasm', `${grammarName}.wasm`);
+  const filename = `${grammarName}.wasm`;
+
+  const candidates = [
+    path.resolve(__dirname, '..', '..', 'wasm', filename),
+    path.resolve(__dirname, filename),
+    path.resolve(path.dirname(process.execPath), filename),
+  ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+
+  return candidates[0];
 }
 
 function fileExtensionsSetForLang(langId: string, extensions: string[]): string[] {

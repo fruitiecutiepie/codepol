@@ -60,7 +60,7 @@ function extractIdentifiers(
   return matches;
 }
 
-function containsForbiddenWord(
+export function containsForbiddenWord(
   identifier: string,
   forbiddenWords: string[]
 ): string | null {

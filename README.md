@@ -52,6 +52,30 @@ pnpm add -D @codepol/cli
 pnpm add -D @codepol/core @codepol/plugin-eslint @codepol/plugin
 ```
 
+### Choose Your Runtime
+
+- **Node-capable projects (JS/TS toolchain available):** use `@codepol/cli` via `npx codepol`.
+- **Non-Node projects:** use the standalone binary bundle (see "Use the Standalone Binary").
+
+### Use Codepol in 3 Steps
+
+1) Add a `codepol.config.ts` file in your project root.
+2) Register the `codepol` ESLint plugin in `eslint.config.*`.
+3) Run checks with:
+
+```bash
+# Run once
+npx codepol
+
+# Apply fixes
+npx codepol --fix
+
+# Watch mode
+npx codepol --watch
+```
+
+Codepol auto-discovers `codepol.config.ts` from the current directory upward. Use `--config` if your config is elsewhere.
+
 ### Create a Config File
 
 Create `codepol.config.ts` in your project root:
@@ -132,6 +156,46 @@ npx codepol --fix
 
 # Watch mode
 npx codepol --watch
+```
+
+### Use the Standalone Binary (Recommended for Non-Node Projects)
+
+For non-Node projects, this is the recommended way to run codepol.
+For Node-capable projects, you can use either this binary bundle or `npx codepol`.
+Download binaries from [GitHub Releases](https://github.com/fruitiecutiepie/codepol/releases) (or CI artifacts) instead of committing `dist-binary` to your repo.
+
+Download and extract a release bundle, then keep these files in the same directory:
+
+- `codepol`
+- `tree-sitter.wasm`
+- `tree-sitter-typescript.wasm`
+- `tree-sitter-tsx.wasm`
+- `tree-sitter-python.wasm`
+- `codepol-core-stub.cjs`
+
+Example download flow:
+
+```bash
+# Pick a release tag, for example v1.2.3
+TAG=v1.2.3
+
+# Download published release bundle (update filename to your release asset name)
+curl -fL -o codepol-binary.tar.gz \
+  "https://github.com/fruitiecutiepie/codepol/releases/download/${TAG}/codepol-binary-${TAG}-linux-x64.tar.gz"
+
+# Extract bundle
+tar -xzf codepol-binary.tar.gz
+
+# Alternative: download from a workflow artifact (requires gh auth)
+# gh run download <run-id> --name codepol-binary --dir ./codepol-binary
+```
+
+Run from your project root:
+
+```bash
+/path/to/codepol
+# or
+/path/to/codepol --config ./codepol.config.ts
 ```
 
 ## What It Enforces
