@@ -164,36 +164,36 @@ For non-Node projects, this is the recommended way to run codepol.
 For Node-capable projects, you can use either this binary bundle or `npx codepol`.
 Download binaries from [GitHub Releases](https://github.com/fruitiecutiepie/codepol/releases) (or CI artifacts) instead of committing `dist-binary` to your repo.
 
-Download and extract a release bundle, then keep these files in the same directory:
+The release bundle contains the binary and required WASM files (must stay in the same directory):
 
 - `codepol`
 - `tree-sitter.wasm`
 - `tree-sitter-typescript.wasm`
 - `tree-sitter-tsx.wasm`
 - `tree-sitter-python.wasm`
-Example download flow:
+
+Install to `~/.local/bin` so `codepol` is available on PATH:
 
 ```bash
 # Pick a release tag, for example v1.2.3
 TAG=v1.2.3
 
-# Download published release bundle (update filename to your release asset name)
-curl -fL -o codepol-binary.tar.gz \
-  "https://github.com/fruitiecutiepie/codepol/releases/download/${TAG}/codepol-binary-${TAG}-linux-x64.tar.gz"
-
-# Extract bundle
-tar -xzf codepol-binary.tar.gz
+# Download and install to ~/.local/bin
+curl -fL "https://github.com/fruitiecutiepie/codepol/releases/download/${TAG}/codepol-binary-${TAG}-linux-x64.tar.gz" \
+  | tar -xz -C ~/.local/bin
 
 # Alternative: download from a workflow artifact (requires gh auth)
-# gh run download <run-id> --name codepol-binary --dir ./codepol-binary
+# gh run download <run-id> --name codepol-binary --dir ~/.local/bin
 ```
+
+Make sure `~/.local/bin` is on your PATH (most systems include it by default).
 
 Run from your project root:
 
 ```bash
-/path/to/codepol
+codepol
 # or
-/path/to/codepol --config ./codepol.toml
+codepol --config ./codepol.toml
 ```
 
 ## What It Enforces

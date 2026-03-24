@@ -304,41 +304,39 @@ For projects that do not use a JS/TS toolchain, use the standalone binary bundle
 This is the recommended path for non-Node repositories.
 Download binaries from [GitHub Releases](https://github.com/fruitiecutiepie/codepol/releases) (or CI artifacts) rather than committing `dist-binary`.
 
-After downloading and extracting a release asset, keep these files in the same directory:
+The release bundle contains the binary and required WASM files (must stay in the same directory):
 
 - `codepol`
 - `tree-sitter.wasm`
 - `tree-sitter-typescript.wasm`
 - `tree-sitter-tsx.wasm`
 - `tree-sitter-python.wasm`
-Example:
+
+Install to `~/.local/bin` so `codepol` is available on PATH:
 
 ```bash
 # Pick a release tag, for example v1.2.3
 TAG=v1.2.3
 
-# Download published release bundle (update filename to your release asset name)
-curl -fL -o codepol-binary.tar.gz \
-  "https://github.com/fruitiecutiepie/codepol/releases/download/${TAG}/codepol-binary-${TAG}-linux-x64.tar.gz"
-
-# Extract bundle
-tar -xzf codepol-binary.tar.gz
+# Download and install to ~/.local/bin
+curl -fL "https://github.com/fruitiecutiepie/codepol/releases/download/${TAG}/codepol-binary-${TAG}-linux-x64.tar.gz" \
+  | tar -xz -C ~/.local/bin
 
 # Alternative: download from a workflow artifact (requires gh auth)
-# gh run download <run-id> --name codepol-binary --dir ./codepol-binary
+# gh run download <run-id> --name codepol-binary --dir ~/.local/bin
 ```
+
+Make sure `~/.local/bin` is on your PATH (most systems include it by default).
 
 Then in the consumer project:
 
 ```bash
 # Run from project root (auto-discovers codepol.toml)
-/path/to/codepol
+codepol
 
 # Or pass explicit paths
-/path/to/codepol --config ./codepol.toml --eslint-config ./eslint.config.js
+codepol --config ./codepol.toml --eslint-config ./eslint.config.js
 ```
-
-> **Note:** Keep the WASM files next to the `codepol` executable at runtime.
 
 ## Next Steps
 
