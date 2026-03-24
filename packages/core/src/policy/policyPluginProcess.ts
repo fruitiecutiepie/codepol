@@ -25,7 +25,7 @@ export type ProcessPluginRuntimeContext = {
 
 export type ProcessPluginRuleDescriptor = {
   id: string;
-  languages: string[];
+  languages?: string[];
   hasFixProvider?: boolean;
   requiresProjectIndex?: boolean;
 };
@@ -140,6 +140,13 @@ function stringArrayExpect(value: unknown, pathLabel: string): string[] {
   return value.map((entry, index) => stringExpect(entry, `${pathLabel}[${index}]`));
 }
 
+function stringArrayOptional(value: unknown, pathLabel: string): string[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  return stringArrayExpect(value, pathLabel);
+}
+
 function booleanOptional(value: unknown, pathLabel: string): boolean | undefined {
   if (value === undefined) {
     return undefined;
@@ -196,7 +203,7 @@ function describeResultParse(value: unknown): ProcessPluginDescribeResult {
       const ruleRecord = recordExpect(rule, `result.rules[${index}]`);
       return {
         id: stringExpect(ruleRecord.id, `result.rules[${index}].id`),
-        languages: stringArrayExpect(ruleRecord.languages, `result.rules[${index}].languages`),
+        languages: stringArrayOptional(ruleRecord.languages, `result.rules[${index}].languages`),
         hasFixProvider: booleanOptional(
           ruleRecord.hasFixProvider,
           `result.rules[${index}].hasFixProvider`

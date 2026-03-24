@@ -67,6 +67,59 @@ describe('plugin capability validation', () => {
     }
   });
 
+  it('allows target language when plugin omits languages list', () => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-plugin-any-language-'));
+      const filePath = path.join(tempDir, 'script.py');
+      writeFileSync(filePath, 'print("ok")\n');
+
+      try {
+        const mockPlugin: PluginRule = {
+          pluginRule: pluginRuleNew({
+            id: 'mock-plugin-any-language',
+            capabilities: {
+              treeCheckProvider: {
+                check: () => Ok([]),
+              },
+            },
+          }),
+        };
+
+        const pluginsMap = new Map();
+        pluginsMap.set('mock-plugin-any-language', mockPlugin);
+
+        const target: PolicyRuleTarget = {
+          language: 'python',
+          files: ['**/*.py'],
+        };
+
+        const rule: PolicyRule = {
+          id: 'test-rule',
+          ruleId: 'mock-plugin-any-language',
+          description: 'test',
+          targets: ['py-files'],
+        };
+
+        const policy: PolicyFile = {
+          targets: { 'py-files': target },
+          rules: [rule],
+        };
+
+        const result = policyViolationsGetForFile(
+          filePath,
+          rule,
+          target,
+          policy,
+          pluginsMap,
+          tempDir
+        );
+
+        expect(isOk(result)).toBe(true);
+        expect(result.Ok!).toHaveLength(0);
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+
   it('returns Err when plugin does not support target language', () => {
       // Create a mock plugin with treeCheckProvider but wrong language
       const mockPlugin: PluginRule = {

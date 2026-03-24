@@ -20,7 +20,18 @@ import {
 
 const processPluginPath = path.resolve(__dirname, 'fixtures', 'process-plugin.cjs');
 
-function processPluginConfigCreate(ruleBlocks: string): string {
+type ProcessPluginTargetConfig = {
+  language: string;
+  files: string[];
+};
+
+function processPluginConfigCreate(
+  ruleBlocks: string,
+  target: ProcessPluginTargetConfig = {
+    language: 'typescript',
+    files: ['src/**/*.ts'],
+  }
+): string {
   return `[[plugins]]
 id = "fixture/process-plugin"
 
@@ -31,8 +42,8 @@ args = [${JSON.stringify(processPluginPath)}]
 timeoutMs = 5000
 
 [targets.src]
-language = "typescript"
-files = ["src/**/*.ts"]
+language = ${JSON.stringify(target.language)}
+files = ${JSON.stringify(target.files)}
 
 ${ruleBlocks}
 `;
@@ -58,6 +69,7 @@ describe('process plugins', () => {
   let tempDirs: string[] = [];
 
   beforeAll(async () => {
+    langAdd({ langId: 'python', fileExtensions: ['.py'] });
     langAdd({ langId: 'typescript', fileExtensions: ['.ts'] });
     await parserInit();
   });
@@ -121,6 +133,36 @@ targets = ["src"]
     }
 
     expect(result.Ok.treeViolations).toHaveLength(0);
+  });
+
+  it('allows subprocess rules that omit languages to match python targets', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-process-plugin-python-'));
+    tempDirs.push(dir);
+
+    fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'src', 'app.py'), '# TODO fix\nvalue = 1\n', 'utf8');
+
+    const configPath = path.join(dir, 'codepol.toml');
+    fs.writeFileSync(
+      configPath,
+      processPluginConfigCreate(`[[rules]]
+id = "todo-comment-any-language"
+ruleId = "fixture/process-plugin/no-todo-comment-any-language"
+targets = ["src"]
+`, {
+        language: 'python',
+        files: ['src/**/*.py'],
+      }),
+      'utf8',
+    );
+
+    const result = await policyCheck({ configPath, cwd: dir });
+    if (isErr(result)) {
+      throw new Error(result.Err);
+    }
+
+    expect(result.Ok.treeViolations).toHaveLength(1);
+    expect(result.Ok.treeViolations[0].message).toContain('TODO comment');
   });
 
   it('applies subprocess-provided fixes through wrapped fix providers', async () => {

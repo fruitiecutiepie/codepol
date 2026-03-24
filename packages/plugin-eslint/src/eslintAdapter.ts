@@ -27,6 +27,7 @@ import {
   policyRuleTargetsResolve,
   globPatternsGetMatchAny,
   ruleTargetMatchesLanguage,
+  treeCheckProviderSupportsLanguage,
   configGetSync,
   configGetFromPathSync,
   projectIndexBuildSync,
@@ -385,6 +386,20 @@ function createAdaptedRule(
       const matchedTarget = fileMatchesPolicy(ruleTargets, policyExclude, filename, plugin.id);
       if (!matchedTarget) {
         return {};
+      }
+
+      if (!treeCheckProviderSupportsLanguage(treeCheckProvider, matchedTarget.target.language)) {
+        return {
+          Program(node) {
+            context.report({
+              node,
+              messageId: 'treeCheckViolation',
+              data: {
+                message: `Plugin ${plugin.id} does not support language ${matchedTarget.target.language}`,
+              },
+            });
+          },
+        };
       }
 
       // Get args from matched target (policy rule args)

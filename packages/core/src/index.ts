@@ -62,7 +62,7 @@ export type {
   TreeCheckLintAdapter,
 } from './types';
 
-export { pluginRuleNew } from './types';
+export { pluginRuleNew, treeCheckProviderSupportsLanguage } from './types';
 
 /** Default ESLint plugin name for codepol rules */
 export const ESLINT_PLUGIN_NAME_DEFAULT = 'codepol';
@@ -132,13 +132,12 @@ export function eslintProviderCreate(config: {
  * }
  *
  * export const myProvider = treeCheckProviderNew({
- *   languages: ['typescript', 'tsx'],
  *   check: myCheck,
  * });
  * ```
  */
 export function treeCheckProviderNew(config: {
-  languages: string[];
+  languages?: string[];
   check: TreeCheckFn;
 }): TreeCheckProvider {
   return {
@@ -159,7 +158,9 @@ export function rulePluginLanguagesGet(plugin: CodepolPluginRule): string[] {
     }
   }
   const treeCheckProvider = plugin.capabilities.treeCheckProvider;
-  if (treeCheckProvider) {
+  if (treeCheckProvider?.languages === undefined) {
+    languages.add('*');
+  } else if (treeCheckProvider) {
     for (const lang of treeCheckProvider.languages) {
       languages.add(lang);
     }

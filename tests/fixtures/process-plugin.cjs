@@ -47,10 +47,16 @@ try {
           languages: ['typescript'],
           requiresProjectIndex: true,
         },
+        {
+          id: 'no-todo-comment-any-language',
+        },
       ],
     });
   } else if (request.method === 'check') {
-    if (request.ruleId === 'no-todo-comment') {
+    if (
+      request.ruleId === 'no-todo-comment' ||
+      request.ruleId === 'no-todo-comment-any-language'
+    ) {
       const hasTodo = request.context.source.includes('TODO');
       respondSuccess({
         violations: hasTodo

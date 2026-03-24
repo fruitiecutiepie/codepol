@@ -4,6 +4,7 @@ import type {
   PluginRule,
   FixProvider,
 } from './policyTypes';
+import { treeCheckProviderSupportsLanguage } from './policyTypes';
 import { Result, Ok, Err, isErr } from '../result/result';
 import { policyRuleTargetsResolve } from './policyGet';
 import {
@@ -237,7 +238,7 @@ export async function policyPluginsGet(
     if (treeCheckProvider) {
       const targets = policyRuleTargetsResolve(rule, policy);
       for (const target of targets) {
-        if (!treeCheckProvider.languages.includes(target.language)) {
+        if (!treeCheckProviderSupportsLanguage(treeCheckProvider, target.language)) {
           return Err(`Plugin ${resolvedId} does not support language ${target.language} for rule ${rule.id || ruleId}.`);
         }
       }

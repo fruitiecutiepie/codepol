@@ -6,7 +6,6 @@ export const forbiddenPathWordsRule: CodepolPluginRule = pluginRuleNew({
   id: 'forbidden-path-words',
   capabilities: {
     treeCheckProvider: treeCheckProviderNew({
-      languages: ['typescript', 'tsx', 'python'],
       check: forbiddenPathWordsCheck,
     }),
   },

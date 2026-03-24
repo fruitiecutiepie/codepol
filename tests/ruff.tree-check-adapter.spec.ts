@@ -235,34 +235,36 @@ describe('ruffDiagnosticToViolation', () => {
   });
 });
 
-describe('ruff adapter with custom TreeCheckProvider', () => {
-  it('works with a custom provider targeting Python', () => {
-    const customRule = pluginRuleNew({
-      id: 'no-pass-statement',
-      capabilities: {
-        treeCheckProvider: treeCheckProviderNew({
-          languages: ['python'],
-          check: (_rule, ctx) => {
-            const violations = [];
-            const lines = ctx.source.split('\n');
-            for (let i = 0; i < lines.length; i++) {
-              if (lines[i].trim() === 'pass') {
-                violations.push({
-                  ruleId: 'no-pass-statement',
-                  filePath: ctx.filePath,
-                  message: 'Avoid empty pass statements',
-                  line: i + 1,
-                  column: lines[i].indexOf('pass') + 1,
-                });
-              }
+function noPassStatementRuleCreate(languages?: string[]) {
+  return pluginRuleNew({
+    id: 'no-pass-statement',
+    capabilities: {
+      treeCheckProvider: treeCheckProviderNew({
+        ...(languages ? { languages } : {}),
+        check: (_rule, ctx) => {
+          const violations = [];
+          const lines = ctx.source.split('\n');
+          for (let i = 0; i < lines.length; i++) {
+            if (lines[i].trim() === 'pass') {
+              violations.push({
+                ruleId: 'no-pass-statement',
+                filePath: ctx.filePath,
+                message: 'Avoid empty pass statements',
+                line: i + 1,
+                column: lines[i].indexOf('pass') + 1,
+              });
             }
-            return violations;
-          },
-        }),
-      },
-    });
+          }
+          return violations;
+        },
+      }),
+    },
+  });
+}
 
-    const adapted = ruffAdapter.adapt(customRule);
+describe('ruff adapter with custom TreeCheckProvider', () => {
+  it('works with a custom provider when languages are omitted', () => {
+    const adapted = ruffAdapter.adapt(noPassStatementRuleCreate());
 
     const diagnostics = adapted.check(
       '/src/empty.py',
@@ -272,5 +274,29 @@ describe('ruff adapter with custom TreeCheckProvider', () => {
     expect(diagnostics).toHaveLength(1);
     expect(diagnostics[0].message).toBe('Avoid empty pass statements');
     expect(diagnostics[0].line).toBe(2);
+  });
+
+  it('works with a custom provider targeting Python', () => {
+    const adapted = ruffAdapter.adapt(noPassStatementRuleCreate(['python']));
+
+    const diagnostics = adapted.check(
+      '/src/empty.py',
+      'def noop():\n    pass\n\ndef real():\n    return 42\n'
+    );
+
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0].message).toBe('Avoid empty pass statements');
+    expect(diagnostics[0].line).toBe(2);
+  });
+
+  it('skips Python files when provider explicitly excludes python', () => {
+    const adapted = ruffAdapter.adapt(noPassStatementRuleCreate(['typescript']));
+
+    const diagnostics = adapted.check(
+      '/src/empty.py',
+      'def noop():\n    pass\n'
+    );
+
+    expect(diagnostics).toHaveLength(0);
   });
 });

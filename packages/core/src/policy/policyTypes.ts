@@ -185,11 +185,18 @@ export type PolicyCheckContext = {
  * Plugin struct for policy checks.
  */
 export type TreeCheckProvider = {
-  /** Supported languages */
-  languages: string[];
+  /** Supported languages. Omit to support all target languages. */
+  languages?: string[];
   /** Check a file against a rule */
   check: (rule: PolicyRule, context: PolicyCheckContext) => Result<PolicyViolation[], string>;
 };
+
+export function treeCheckProviderSupportsLanguage(
+  provider: TreeCheckProvider,
+  language: string
+): boolean {
+  return provider.languages === undefined || provider.languages.includes(language);
+}
 
 /**
  * Context passed to lint providers.

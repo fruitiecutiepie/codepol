@@ -1,5 +1,12 @@
 import fs from 'node:fs';
-import type { PolicyFile, PolicyRule, PolicyRuleTarget, PolicyViolation, PluginRule } from './policyTypes';
+import {
+  treeCheckProviderSupportsLanguage,
+  type PolicyFile,
+  type PolicyRule,
+  type PolicyRuleTarget,
+  type PolicyViolation,
+  type PluginRule,
+} from './policyTypes';
 import { ruleMatchesGet } from './policyGet';
 import { policyPluginsGet, pluginGetForRule, type PolicyPluginsMap } from './policyPluginsGet';
 import { Result, Ok, Err, isErr } from '../result/result';
@@ -25,7 +32,7 @@ function policyPluginGet(
     return Err(error);
   }
 
-  if (!treeCheckProvider.languages.includes(target.language)) {
+  if (!treeCheckProviderSupportsLanguage(treeCheckProvider, target.language)) {
     const error = `Plugin ${resolvedId} does not support language ${target.language} for rule ${rule.id || rule.ruleId}.`;
     return Err(error);
   }

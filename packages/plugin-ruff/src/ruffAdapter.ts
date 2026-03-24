@@ -21,6 +21,7 @@ import type {
 import {
   violationToLintDiagnostic,
   isErr,
+  treeCheckProviderSupportsLanguage,
 } from '@codepol/core';
 import type { RuffAdaptedRule } from './ruffTypes';
 
@@ -48,7 +49,7 @@ function createAdaptedRule(
         return [];
       }
 
-      if (!treeCheckProvider.languages.includes('python')) {
+      if (!treeCheckProviderSupportsLanguage(treeCheckProvider, 'python')) {
         return [];
       }
 
