@@ -259,7 +259,7 @@ export function moduleResolve(
  * Check if a Python import specifier is relative (starts with dots).
  * Python uses `.` for current package and `..` for parent, etc.
  */
-export function isPythonRelativeImport(specifier: string): boolean {
+function isPythonRelativeImport(specifier: string): boolean {
   return specifier.startsWith('.');
 }
 

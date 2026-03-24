@@ -6,15 +6,15 @@ import type {
 import ts from 'typescript';
 import { identifierSplitByCasing } from './lib/identifierSplitByCasing';
 
-interface NoVerbFunctionNameArgs {
+type NoVerbFunctionNameArgs = {
   verbs: string[];
-}
+};
 
-export interface FunctionMatch {
+type FunctionMatch = {
   name: string;
   line: number;
   column: number;
-}
+};
 
 export function extractFunctions(source: string): FunctionMatch[] {
   const matches: FunctionMatch[] = [];

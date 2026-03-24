@@ -19,12 +19,11 @@ import os from 'node:os';
 import path from 'node:path';
 
 describe('plugin capability validation', () => {
-  it('returns Err when plugin is missing treeCheckProvider capability', async () => {
-    // Create a mock plugin without treeCheckProvider
+  it('returns empty violations when plugin is missing treeCheckProvider capability', async () => {
     const mockPlugin: PluginRule = {
       pluginRule: pluginRuleNew({
         id: 'mock-plugin',
-        capabilities: {}, // Empty capabilities
+        capabilities: {},
       }),
     };
 
@@ -48,10 +47,8 @@ describe('plugin capability validation', () => {
       rules: [rule],
     };
 
-    // Use dummy file path since we expect failure before file access
     const filePath = path.join(process.cwd(), 'dummy.ts');
-    
-    // Test policyViolationsGetForFile
+
     const result = policyViolationsGetForFile(
       filePath,
       rule,
@@ -61,10 +58,8 @@ describe('plugin capability validation', () => {
       process.cwd()
     );
 
-    expect('Err' in result).toBe(true);
-    if ('Err' in result) {
-      expect(result.Err).toContain('does not support tree checks');
-    }
+    expect(isOk(result)).toBe(true);
+    expect(result.Ok!).toHaveLength(0);
   });
 
   it('allows target language when plugin omits languages list', () => {

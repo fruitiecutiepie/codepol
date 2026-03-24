@@ -17,7 +17,7 @@ function policyPluginGet(
   pluginsMap: PolicyPluginsMap,
   rule: PolicyRule,
   target: PolicyRuleTarget
-): Result<PluginRule, string> {
+): Result<PluginRule | null, string> {
   const ruleId = rule.ruleId;
   const lookup = pluginGetForRule(pluginsMap, ruleId);
   if (!lookup) {
@@ -28,8 +28,7 @@ function policyPluginGet(
 
   const treeCheckProvider = plugin.pluginRule.capabilities.treeCheckProvider;
   if (!treeCheckProvider) {
-    const error = `Plugin ${resolvedId} does not support tree checks (missing treeCheckProvider).`;
-    return Err(error);
+    return Ok(null);
   }
 
   if (!treeCheckProviderSupportsLanguage(treeCheckProvider, target.language)) {
@@ -65,6 +64,9 @@ export function policyViolationsGetForFile(
     return pluginResult;
   }
   const plugin = pluginResult.Ok;
+  if (!plugin) {
+    return Ok([]);
+  }
   const treeCheckProvider = plugin.pluginRule.capabilities.treeCheckProvider!;
 
   const source = fs.readFileSync(filePath, 'utf8');

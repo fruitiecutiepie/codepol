@@ -16,7 +16,7 @@ import {
 import { pluginRuleNew } from './policyTypes';
 
 export type PolicyPluginsMap = Map<string, PluginRule>;
-export type PolicyPluginsLoadOptions = {
+type PolicyPluginsLoadOptions = {
   configPath?: string;
 };
 

@@ -1,4 +1,4 @@
-/* eslint-disable codepol/no-unused-exports */
+ 
 export type Result<T, E> = { Ok: T; Err?: never } | { Err: E; Ok?: never };
 
 export function Ok<T>(value: T): Result<T, never> {
