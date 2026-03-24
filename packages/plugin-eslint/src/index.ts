@@ -93,7 +93,9 @@ function collectRules(pluginRules: CodepolPluginRule[]): EslintRuleMap {
     // If no ESLint lint provider but has treeCheckProvider, auto-adapt it
     if (!hasEslintLintProvider(pluginRule) && pluginRule.capabilities.treeCheckProvider) {
       const adaptedRule = eslintAdapter.adapt(pluginRule);
-      collectedRules[pluginRule.id] = adaptedRule;
+      const lastSlash = pluginRule.id.lastIndexOf('/');
+      const shortId = lastSlash !== -1 ? pluginRule.id.slice(lastSlash + 1) : pluginRule.id;
+      collectedRules[shortId] = adaptedRule;
     }
   }
 
