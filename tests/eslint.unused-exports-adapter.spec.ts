@@ -66,21 +66,17 @@ fs.writeFileSync(
 );
 
 // Write codepol config that targets src/**/*.ts with unused-exports rule
-const configPath = path.join(tempDir, 'codepol.config.js');
+const configPath = path.join(tempDir, 'codepol.toml');
 fs.writeFileSync(
   configPath,
-  `module.exports = {
-  targets: {
-    src: { language: 'typescript', files: ['src/**/*.ts'] },
-  },
-  rules: [
-    {
-      id: 'unused-exports',
-      ruleId: '@codepol/plugin/no-unused-exports',
-      targets: ['src'],
-    },
-  ],
-};
+  `[targets.src]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[[rules]]
+id = "unused-exports"
+ruleId = "@codepol/plugin/no-unused-exports"
+targets = ["src"]
 `,
 );
 

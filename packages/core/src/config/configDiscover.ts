@@ -1,38 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import * as TOML from '@iarna/toml';
 import type { CodepolConfig, ConfigFileResult } from './configTypes';
+import { configValidate } from './configValidate';
 
-/**
- * Returns jiti alias config that maps '@codepol/core' to a stub file
- * so config files can `import { defineConfig } from '@codepol/core'`
- * without needing node_modules.
- */
-function coreModuleAlias(): Record<string, string> {
-  const stubName = 'codepol-core-stub.cjs';
-  const candidates = [
-    path.resolve(__dirname, stubName),
-    path.resolve(__dirname, '..', stubName),
-    path.resolve(path.dirname(process.execPath), stubName),
-  ];
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
-      return { '@codepol/core': candidate };
-    }
-  }
-  return {};
-}
-
-/**
- * Supported config file names in order of precedence.
- * First match wins when walking up the directory tree.
- */
-const CONFIG_FILENAMES = [
-  'codepol.config.ts',
-  'codepol.config.mts',
-  'codepol.config.js',
-  'codepol.config.mjs',
-  'codepol.config.cjs',
-] as const;
+/** Supported config filename. */
+const CONFIG_FILENAME = 'codepol.toml' as const;
 
 /**
  * Cache for loaded configs by absolute path.
@@ -48,13 +21,13 @@ export function configCacheClear(): void {
 }
 
 /**
- * Walks up from the starting directory to find a config file.
+ * Walks up from the starting directory to find `codepol.toml`.
  *
  * @param startDir - Directory to start searching from
  * @returns Absolute path to the config file, or null if not found
  *
  * @example
- * ```typescript
+ * ```ts
  * const configPath = configFileDiscover(process.cwd());
  * if (configPath) {
  *   console.log(`Found config at: ${configPath}`);
@@ -66,11 +39,9 @@ export function configFileDiscover(startDir: string): string | null {
   const root = path.parse(currentDir).root;
 
   while (currentDir !== root) {
-    for (const filename of CONFIG_FILENAMES) {
-      const candidate = path.join(currentDir, filename);
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
+    const candidate = path.join(currentDir, CONFIG_FILENAME);
+    if (fs.existsSync(candidate)) {
+      return candidate;
     }
     const parentDir = path.dirname(currentDir);
     if (parentDir === currentDir) {
@@ -79,57 +50,30 @@ export function configFileDiscover(startDir: string): string | null {
     currentDir = parentDir;
   }
 
-  // Check root directory as well
-  for (const filename of CONFIG_FILENAMES) {
-    const candidate = path.join(root, filename);
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
+  const rootCandidate = path.join(root, CONFIG_FILENAME);
+  if (fs.existsSync(rootCandidate)) {
+    return rootCandidate;
   }
 
   return null;
 }
 
 /**
- * Loads a JS/TS config file using jiti for TypeScript support (async).
+ * Parses TOML from disk and validates it against the runtime config schema.
  */
-async function loadJsConfigAsync(configPath: string): Promise<CodepolConfig> {
-  const { createJiti } = await import('jiti');
-  const jiti = createJiti(configPath, {
-    interopDefault: true,
-    alias: coreModuleAlias(),
-  });
-
-  const loaded = await jiti.import(configPath);
-
-  // Handle default export
-  const config = (loaded as { default?: CodepolConfig }).default ?? loaded;
-  return config as CodepolConfig;
-}
-
-/**
- * Loads a JS/TS config file using jiti synchronously.
- * Used by ESLint adapter which requires sync execution.
- */
-function loadJsConfigSync(configPath: string): CodepolConfig {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { createJiti } = require('jiti') as typeof import('jiti');
-  const jiti = createJiti(configPath, {
-    interopDefault: true,
-    alias: coreModuleAlias(),
-  });
-
-  // Use jiti as a function for synchronous require
-  const loaded = jiti(configPath);
-
-  // Handle default export
-  const config = (loaded as { default?: CodepolConfig }).default ?? loaded;
-  return config as CodepolConfig;
+function configFileParse(configPath: string): CodepolConfig {
+  try {
+    const raw = fs.readFileSync(configPath, 'utf8');
+    const parsed = TOML.parse(raw) as unknown;
+    return configValidate(parsed);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to parse config file ${configPath}: ${message}`);
+  }
 }
 
 /**
  * Loads and parses a config file (async version).
- * Handles JS/TS formats.
  *
  * @param configPath - Absolute path to the config file
  * @returns The parsed config object
@@ -140,14 +84,13 @@ async function configFileLoadAsync(configPath: string): Promise<CodepolConfig> {
     return cached;
   }
 
-  const config = await loadJsConfigAsync(configPath);
+  const config = configFileParse(configPath);
   configCache.set(configPath, config);
   return config;
 }
 
 /**
  * Loads and parses a config file synchronously.
- * Handles JS/TS formats.
  * Used by ESLint adapter which requires sync execution.
  *
  * @param configPath - Absolute path to the config file
@@ -159,7 +102,7 @@ function configFileLoadSync(configPath: string): CodepolConfig {
     return cached;
   }
 
-  const config = loadJsConfigSync(configPath);
+  const config = configFileParse(configPath);
   configCache.set(configPath, config);
   return config;
 }
@@ -173,7 +116,7 @@ function configFileLoadSync(configPath: string): CodepolConfig {
  * @throws If no config file is found
  *
  * @example
- * ```typescript
+ * ```ts
  * import { configGet } from '@codepol/core';
  *
  * const { config, configPath } = await configGet();
@@ -186,10 +129,7 @@ export async function configGet(cwd?: string): Promise<ConfigFileResult> {
   const configPath = configFileDiscover(startDir);
 
   if (!configPath) {
-    throw new Error(
-      `No codepol config found. Create one of:\n` +
-        CONFIG_FILENAMES.map((f) => `  - ${f}`).join('\n')
-    );
+    throw new Error(`No codepol config found. Create ${CONFIG_FILENAME}.`);
   }
 
   const config = await configFileLoadAsync(configPath);
@@ -205,7 +145,7 @@ export async function configGet(cwd?: string): Promise<ConfigFileResult> {
  * @throws If no config file is found
  *
  * @example
- * ```typescript
+ * ```ts
  * import { configGetSync } from '@codepol/core';
  *
  * const { config, configPath } = configGetSync();
@@ -216,10 +156,7 @@ export function configGetSync(cwd?: string): ConfigFileResult {
   const configPath = configFileDiscover(startDir);
 
   if (!configPath) {
-    throw new Error(
-      `No codepol config found. Create one of:\n` +
-        CONFIG_FILENAMES.map((f) => `  - ${f}`).join('\n')
-    );
+    throw new Error(`No codepol config found. Create ${CONFIG_FILENAME}.`);
   }
 
   const config = configFileLoadSync(configPath);
@@ -234,8 +171,8 @@ export function configGetSync(cwd?: string): ConfigFileResult {
  * @returns The loaded config and its resolved path
  *
  * @example
- * ```typescript
- * const { config } = await configGetFromPath('./my-config.ts');
+ * ```ts
+ * const { config } = await configGetFromPath('./codepol.toml');
  * ```
  */
 export async function configGetFromPath(configPath: string): Promise<ConfigFileResult> {
@@ -257,8 +194,8 @@ export async function configGetFromPath(configPath: string): Promise<ConfigFileR
  * @returns The loaded config and its resolved path
  *
  * @example
- * ```typescript
- * const { config } = configGetFromPathSync('./my-config.ts');
+ * ```ts
+ * const { config } = configGetFromPathSync('./codepol.toml');
  * ```
  */
 export function configGetFromPathSync(configPath: string): ConfigFileResult {

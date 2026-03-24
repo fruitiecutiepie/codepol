@@ -50,6 +50,7 @@ export function policyViolationsGetForFile(
   policy: PolicyFile,
   pluginsMap: PolicyPluginsMap,
   dir: string,
+  configPath?: string,
   projectIndex?: ProjectIndex
 ): Result<PolicyViolation[], string> {
   const pluginResult = policyPluginGet(pluginsMap, rule, target);
@@ -66,6 +67,7 @@ export function policyViolationsGetForFile(
     source: source,
     policy: policy,
     dir: dir,
+    configPath,
     target: target,
     ruleArgs: rule.args,
     projectIndex: projectIndex,
@@ -94,9 +96,12 @@ function pluginsRequireProjectIndex(pluginsMap: PolicyPluginsMap): boolean {
  */
 export async function policyViolationsGetFromDir(
   policy: PolicyFile,
-  dir: string
+  dir: string,
+  options: { configPath?: string } = {}
 ): Promise<Result<PolicyViolation[], string>> {
-  const pluginsMapResult = await policyPluginsGet(policy, dir);
+  const pluginsMapResult = await policyPluginsGet(policy, dir, {
+    configPath: options.configPath,
+  });
   if (isErr(pluginsMapResult)) {
     return pluginsMapResult;
   }
@@ -139,6 +144,7 @@ export async function policyViolationsGetFromDir(
         policy,
         pluginsMap,
         dir,
+        options.configPath,
         projectIndex
       );
       if (isErr(violationsResult)) {

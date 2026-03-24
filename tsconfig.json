@@ -14,7 +14,7 @@
       "@codepol/plugin": ["./packages/plugin/src/index.ts"]
     }
   },
-  "include": ["tests/**/*.ts", "codepol.config.ts"],
+  "include": ["tests/**/*.ts"],
   "exclude": ["dist", "node_modules", "packages", "apps"],
   "references": [
     { "path": "./packages/core" },

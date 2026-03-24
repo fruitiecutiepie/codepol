@@ -21,8 +21,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@iarna/toml": "^2.2.5",
     "fast-glob": "^3.3.3",
-    "jiti": "^2.6.1",
     "minimatch": "^10.1.1",
     "web-tree-sitter": "^0.24.7"
   },

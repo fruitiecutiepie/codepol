@@ -11,7 +11,7 @@ const policyCacheStore = new Map<string, PolicyFile>();
  * Results are cached by absolute path for performance.
  *
  * @deprecated Use `configGet()` or `configGetFromPath()` instead, which support
- * TypeScript config files (codepol.config.ts). This function is kept for
+ * TOML config files (`codepol.toml`). This function is kept for
  * backward compatibility with JSON config files.
  *
  * @param policyPath - Path to the JSON config file (absolute or relative)

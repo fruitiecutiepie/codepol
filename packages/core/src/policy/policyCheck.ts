@@ -29,6 +29,7 @@ export async function policyCheck(options: PolicyCheckOptions): Promise<Result<P
   
   // Load config: explicit path or auto-discover
   let config;
+  let resolvedConfigPath: string;
   try {
     if (options.configPath) {
       const resolvedPath = path.isAbsolute(options.configPath)
@@ -36,9 +37,11 @@ export async function policyCheck(options: PolicyCheckOptions): Promise<Result<P
         : path.resolve(cwd, options.configPath);
       const result = await configGetFromPath(resolvedPath);
       config = result.config;
+      resolvedConfigPath = result.configPath;
     } else {
       const result = await configGet(cwd);
       config = result.config;
+      resolvedConfigPath = result.configPath;
     }
   } catch (error) {
     return Err(error instanceof Error ? error.message : String(error));
@@ -47,7 +50,9 @@ export async function policyCheck(options: PolicyCheckOptions): Promise<Result<P
   const policy = config as PolicyFile;
   const matches = await ruleMatchesGet(policy, cwd);
   const files = Array.from(new Set(matches.flatMap(match => match.files)));
-  const treeViolationsResult = await policyViolationsGetFromDir(policy, cwd);
+  const treeViolationsResult = await policyViolationsGetFromDir(policy, cwd, {
+    configPath: resolvedConfigPath,
+  });
 
   if (isErr(treeViolationsResult)) {
     return treeViolationsResult;

@@ -38,7 +38,7 @@ import { esbuildPluginCreate } from '@codepol/plugin-esbuild';
 
 plugins: [
   esbuildPluginCreate({
-    configPath: './config/codepol.config.ts',
+    configPath: './config/codepol.toml',
     eslintConfigPath: './config/eslint.config.js',
     fix: false,
     cwd: process.cwd(),
@@ -96,7 +96,7 @@ type PolicyPluginOptions = {
 ## How It Works
 
 1. The plugin runs during esbuild's `onStart` phase
-2. It loads your `codepol.config.ts` configuration (auto-discovers or uses explicit path)
+2. It loads your `codepol.toml` configuration (auto-discovers or uses explicit path)
 3. Collects all files matching the policy rules
 4. Runs ESLint checks with the codepol ESLint rule
 5. Runs Tree-sitter structural analysis

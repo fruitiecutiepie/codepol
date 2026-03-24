@@ -1,0 +1,116 @@
+eslintConfigPath = "./eslint.config.mjs"
+exclude = ["dist/**", "node_modules/**"]
+
+targets.codepol-src.language = "typescript"
+targets.codepol-src.files = ["packages/*/src/**/*.ts"]
+
+targets.python-src.language = "python"
+targets.python-src.files = ["**/*.py"]
+targets.python-src.exclude = ["**/venv/**", "**/.venv/**", "**/dist/**", "**/node_modules/**"]
+
+[[plugins]]
+id = "@codepol/plugin"
+source = { kind = "builtin" }
+
+[[rules]]
+id = "no-unused-exports"
+ruleId = "@codepol/plugin/no-unused-exports"
+description = "Detect exported symbols not imported by any other file"
+targets = ["codepol-src"]
+args.ignorePackageEntryPoints = true
+
+[[rules]]
+ruleId = "@codepol/plugin/forbidden-words"
+severity = "error"
+targets = ["codepol-src", "python-src"]
+args.words = [
+  "handle",
+  "process",
+  "do",
+  "resolve",
+  "state",
+  "thing",
+  "util",
+  "helper",
+  "yield",
+  "generator",
+  "stepper",
+  "tmp",
+  "temp",
+]
+
+[[rules]]
+ruleId = "@codepol/plugin/forbidden-path-words"
+severity = "error"
+targets = ["codepol-src"]
+args.words = [
+  "handle",
+  "process",
+  "do",
+  "resolve",
+  "state",
+  "thing",
+  "util",
+  "helper",
+  "yield",
+  "generator",
+  "stepper",
+  "tmp",
+  "temp",
+]
+
+[[rules]]
+ruleId = "@codepol/plugin/no-verb-function-name"
+severity = "error"
+targets = ["codepol-src"]
+args.verbs = [
+  "get",
+  "set",
+  "create",
+  "add",
+  "update",
+  "delete",
+  "remove",
+  "fetch",
+  "load",
+  "save",
+  "send",
+  "receive",
+  "parse",
+  "format",
+  "convert",
+  "transform",
+  "init",
+  "initialize",
+  "start",
+  "stop",
+  "run",
+  "execute",
+  "extract",
+  "compute",
+  "calculate",
+  "build",
+  "make",
+  "check",
+  "validate",
+  "render",
+  "find",
+  "contains",
+]
+
+[[rules]]
+ruleId = "@codepol/plugin/no-duplicate-exports"
+severity = "error"
+targets = ["codepol-src"]
+args.identifierTypes = ["function", "variable", "type"]
+args.includeReexports = true
+
+[[rules]]
+ruleId = "@codepol/plugin/no-interface"
+targets = ["codepol-src"]
+
+[[rules]]
+ruleId = "@codepol/plugin/no-star-export-collisions"
+severity = "error"
+targets = ["codepol-src"]
+args.includeLocalExports = true

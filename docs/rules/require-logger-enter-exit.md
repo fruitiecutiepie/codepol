@@ -17,40 +17,28 @@ The rule checks for:
 
 ## Configuration
 
-This rule requires configuration in `codepol.config.ts` to specify the logger module and method names.
+This rule requires configuration in `codepol.toml` to specify the logger module and method names.
 
 ### Example
 
-```typescript
-// codepol.config.ts
-import { defineConfig } from '@codepol/core';
+```toml
+[[plugins]]
+id = "@codepol/plugin"
+source = { kind = "builtin" }
 
-export default defineConfig({
-  plugins: ['@codepol/plugin'],
-  targets: {
-    typescript: {
-      language: 'typescript',
-      files: ['src/**/*.ts'],
-    },
-  },
-  rules: [
-    {
-      ruleId: '@codepol/plugin/require-logger-enter-exit',
-      args: {
-        logger: {
-          identifier: 'logger',
-          enterMethod: 'enter',
-          exitMethod: 'exit',
-          import: {
-            module: '@your-org/logger',
-            named: 'logger',
-          },
-        },
-      },
-      targets: ['typescript'],
-    },
-  ],
-});
+[targets.typescript]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[[rules]]
+ruleId = "@codepol/plugin/require-logger-enter-exit"
+targets = ["typescript"]
+
+[rules.args.logger]
+identifier = "logger"
+enterMethod = "enter"
+exitMethod = "exit"
+import = { module = "@your-org/logger", named = "logger" }
 ```
 
 ## Valid Code
@@ -82,7 +70,4 @@ export function doSomething() {
 
 ## Auto-Fix
 
-This rule supports auto-fixing via ESLint (`--fix`). It will:
-1. Add the import statement for the logger if missing.
-2. Wrap the function body in a `try/finally` block.
-3. Insert the `enter` and `exit` calls.
+This rule is currently diagnostic-only. It can be adapted into ESLint for inline reporting, but it does not ship a built-in automatic fix.

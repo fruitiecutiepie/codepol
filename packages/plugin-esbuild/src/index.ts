@@ -15,7 +15,7 @@
  *   bundle: true,
  *   outfile: 'dist/bundle.js',
  *   plugins: [
- *     // Zero-config: auto-discovers codepol.config.ts
+ *     // Zero-config: auto-discovers codepol.toml
  *     esbuildPluginCreate(),
  *   ],
  * });
@@ -30,6 +30,7 @@ import {
   langAdd,
   parserInit,
   policyPluginsGet,
+  pluginModuleRegister,
   policyRuleTargetsResolve,
   ruleMatchesGet,
   policyViolationsGetFromDir,
@@ -46,6 +47,9 @@ import {
   type EslintProviderConfig,
 } from '@codepol/core';
 import { eslintPluginCreate } from '@codepol/plugin-eslint';
+import codepolPlugin from '@codepol/plugin';
+
+pluginModuleRegister('@codepol/plugin', { default: codepolPlugin });
 
 const ESLINT_CONFIG_EXTENSIONS = ['.js', '.mjs', '.cjs', '.ts', '.mts', '.cts'];
 
@@ -162,7 +166,7 @@ async function policyCheck(options: {
   const policy = config as PolicyFile;
 
   // Load plugins from policy config (dynamic, not hardcoded import)
-  const pluginRulesResult = await policyPluginsGet(policy, cwd);
+  const pluginRulesResult = await policyPluginsGet(policy, cwd, { configPath });
   if ('Err' in pluginRulesResult) {
     throw new Error(pluginRulesResult.Err);
   }
@@ -271,7 +275,7 @@ async function policyCheck(options: {
  * ```typescript
  * plugins: [
  *   esbuildPluginCreate({
- *     configPath: './config/codepol.config.ts',
+ *     configPath: './config/codepol.toml',
  *   })
  * ]
  * ```

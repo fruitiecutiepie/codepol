@@ -44,6 +44,7 @@ import {
   type PolicyRuleTargetContext,
   type CodepolConfig,
 } from '@codepol/core';
+import { eslintPluginCreate } from '@codepol/plugin-eslint';
 import { ruffCheck, ruffFix } from '@codepol/plugin-ruff';
 import codepolPlugin from '@codepol/plugin';
 
@@ -109,9 +110,8 @@ function policyRuleTargetsGet(policy: PolicyFile): PolicyRuleTargetContext[] {
 
 /**
  * Generates ESLint rule configurations from lint providers.
- * Note: Only returns rules, not plugins. The user's eslint config is expected
- * to have the codepol plugin already registered via eslintPluginCreate().
- * Adding plugins here would cause "Cannot redefine plugin" errors.
+ * The CLI injects the adapted codepol ESLint plugin directly at runtime, so
+ * this helper only needs to return the enabled rules and their options.
  */
 function eslintConfigGet(
   providers: LintProviderEntry[],
@@ -169,7 +169,7 @@ async function policyCheck(options: {
   // Use the config directly (CodepolConfig extends PolicyFile)
   const policy = config as PolicyFile;
   // Use core policyPluginsGet instead of local implementation
-  const pluginRulesResult = await policyPluginsGet(policy, cwd);
+  const pluginRulesResult = await policyPluginsGet(policy, cwd, { configPath });
   if ('Err' in pluginRulesResult) {
     throw new Error(pluginRulesResult.Err);
   }
@@ -241,6 +241,9 @@ async function policyCheck(options: {
     if (ESLint) {
       const eslint = new ESLint({
         overrideConfigFile: eslintConfigPath,
+        plugins: {
+          codepol: eslintPluginCreate(pluginRules.map((entry) => entry.pluginRule)) as unknown as import('eslint').ESLint.Plugin,
+        },
         overrideConfig: eslintConfigGet(eslintProviders, { policy, configPath, cwd, ruleTargets }),
         fix,
         cwd,
@@ -322,7 +325,7 @@ async function policyCheckAndPrintOutput(options: CliOptions): Promise<boolean> 
 async function policyPluginsValidateAndPrint(options: CliOptions): Promise<void> {
   const cwd = process.cwd();
   const policy = options.config as PolicyFile;
-  const policyPluginsResult = await policyPluginsGet(policy, cwd);
+  const policyPluginsResult = await policyPluginsGet(policy, cwd, { configPath: options.configPath });
   if ('Err' in policyPluginsResult) {
     throw new Error(policyPluginsResult.Err);
   }
@@ -411,7 +414,7 @@ async function main(): Promise<void> {
     .example('$0', 'Run policy checks once (auto-discovers config)')
     .example('$0 --fix', 'Run checks and apply fixes')
     .example('$0 --watch', 'Watch for changes and re-run checks')
-    .example('$0 --config ./config/codepol.config.ts', 'Use specific config file')
+    .example('$0 --config ./config/codepol.toml', 'Use specific config file')
     .example('$0 --check-plugins', 'Validate plugins for the config file')
     .help()
     .version()

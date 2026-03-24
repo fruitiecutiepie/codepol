@@ -10,7 +10,7 @@ pnpm add @codepol/core
 
 ## Features
 
-- Load and parse codepol config files (`codepol.config.ts`)
+- Load and parse codepol config files (`codepol.toml`)
 - Check TypeScript files using web-tree-sitter (WASM) for structural analysis
 - No native dependencies - works across all platforms
 - Detect missing logger instrumentation patterns
@@ -61,7 +61,7 @@ await parserInit();
 ```typescript
 import { configGet, ruleMatchesGet } from '@codepol/core';
 
-// Load the config file (auto-discovers codepol.config.ts)
+// Load the config file (auto-discovers codepol.toml)
 const { config } = await configGet();
 
 // Get files matching each rule
@@ -114,11 +114,11 @@ langAdd({ langId: 'typescript', fileExtensions: ['.ts'] });
 langAdd({ langId: 'tsx', fileExtensions: ['.tsx'] });
 await parserInit();
 
-// Auto-discovers codepol.config.ts
+// Auto-discovers codepol.toml
 const result = await policyCheck({});
 
 // Or with explicit config path
-// const result = await policyCheck({ configPath: './config/codepol.config.ts' });
+// const result = await policyCheck({ configPath: './config/codepol.toml' });
 
 if ('Err' in result) {
   console.error(result.Err);
@@ -206,7 +206,7 @@ type PolicyViolation = {
 | `langsGet()` | Get all registered languages |
 | `wasmPathGet(grammarName)` | Get path to bundled WASM file |
 | `parserInit()` | Initialize the WASM parser (must be called after registering languages) |
-| `configGet(cwd?)` | Auto-discover and load codepol.config.ts |
+| `configGet(cwd?)` | Auto-discover and load codepol.toml |
 | `configGetFromPath(path)` | Load config from explicit path |
 | `policyFileGet(path)` | (deprecated) Load JSON config file |
 | `policyFileGetChecked(policy, filePath, cwd)` | Check if a file is covered by the policy |

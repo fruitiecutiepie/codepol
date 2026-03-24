@@ -31,9 +31,9 @@ describe('configDiscover', () => {
   // ==========================================================================
 
   describe('configFileDiscover', () => {
-    it('should find codepol.config.ts in the starting directory', () => {
+    it('should find codepol.toml in the starting directory', () => {
       const dir = fs.mkdtempSync(path.join(testDir, 'discover-direct-'));
-      const configPath = path.join(dir, 'codepol.config.ts');
+      const configPath = path.join(dir, 'codepol.toml');
       fs.writeFileSync(configPath, '// config');
 
       const result = configFileDiscover(dir);
@@ -45,7 +45,7 @@ describe('configDiscover', () => {
       const parent = fs.mkdtempSync(path.join(testDir, 'discover-parent-'));
       const child = path.join(parent, 'src', 'nested');
       fs.mkdirSync(child, { recursive: true });
-      const configPath = path.join(parent, 'codepol.config.ts');
+      const configPath = path.join(parent, 'codepol.toml');
       fs.writeFileSync(configPath, '// config');
 
       const result = configFileDiscover(child);
@@ -68,16 +68,16 @@ describe('configDiscover', () => {
       ).toBe(true);
     });
 
-    it('should respect precedence order (codepol.config.ts over .js)', () => {
+    it('should ignore legacy JS/TS config files and only discover codepol.toml', () => {
       const dir = fs.mkdtempSync(path.join(testDir, 'discover-precedence-'));
-      const tsConfig = path.join(dir, 'codepol.config.ts');
-      const jsConfig = path.join(dir, 'codepol.config.js');
-      fs.writeFileSync(tsConfig, '// ts config');
-      fs.writeFileSync(jsConfig, '// js config');
+      const legacyTsConfig = path.join(dir, 'codepol.config.ts');
+      const tomlConfig = path.join(dir, 'codepol.toml');
+      fs.writeFileSync(legacyTsConfig, '// ts config');
+      fs.writeFileSync(tomlConfig, '# toml config');
 
       const result = configFileDiscover(dir);
 
-      expect(result).toBe(tsConfig);
+      expect(result).toBe(tomlConfig);
     });
   });
 
@@ -147,7 +147,7 @@ describe('configDiscover', () => {
 
   describe('configGetFromPath', () => {
     it('should throw when config file does not exist', async () => {
-      const nonExistent = path.join(testDir, 'does-not-exist.config.ts');
+      const nonExistent = path.join(testDir, 'does-not-exist.toml');
 
       await expect(configGetFromPath(nonExistent)).rejects.toThrow('Config file not found');
     });
@@ -159,27 +159,29 @@ describe('configDiscover', () => {
 
   describe('configGetFromPathSync', () => {
     it('should throw when config file does not exist', () => {
-      const nonExistent = path.join(testDir, 'does-not-exist-sync.config.ts');
+      const nonExistent = path.join(testDir, 'does-not-exist-sync.toml');
 
       expect(() => configGetFromPathSync(nonExistent)).toThrow('Config file not found');
     });
   });
 
   // ==========================================================================
-  // Integration: configGetFromPath / configGetFromPathSync with real JS config
+  // Integration: configGetFromPath / configGetFromPathSync with real TOML config
   // ==========================================================================
 
-  describe('config loading with JS config file', () => {
-    it('should load a JS config file via configGetFromPath', async () => {
-      const dir = fs.mkdtempSync(path.join(testDir, 'load-js-'));
-      const configPath = path.join(dir, 'codepol.config.js');
+  describe('config loading with TOML config file', () => {
+    it('should load a TOML config file via configGetFromPath', async () => {
+      const dir = fs.mkdtempSync(path.join(testDir, 'load-toml-'));
+      const configPath = path.join(dir, 'codepol.toml');
       fs.writeFileSync(configPath, `
-module.exports = {
-  targets: {
-    'ts-src': { language: 'typescript', files: ['src/**/*.ts'] },
-  },
-  rules: [{ id: 'r1', ruleId: 'test-rule', targets: ['ts-src'] }],
-};
+[targets.ts-src]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[[rules]]
+id = "r1"
+ruleId = "test-rule"
+targets = ["ts-src"]
 `);
 
       configCacheClear();
@@ -191,16 +193,18 @@ module.exports = {
       expect(config.targets['ts-src']).toBeDefined();
     });
 
-    it('should load a JS config file via configGetFromPathSync', () => {
-      const dir = fs.mkdtempSync(path.join(testDir, 'load-js-sync-'));
-      const configPath = path.join(dir, 'codepol.config.js');
+    it('should load a TOML config file via configGetFromPathSync', () => {
+      const dir = fs.mkdtempSync(path.join(testDir, 'load-toml-sync-'));
+      const configPath = path.join(dir, 'codepol.toml');
       fs.writeFileSync(configPath, `
-module.exports = {
-  targets: {
-    'ts-src': { language: 'typescript', files: ['src/**/*.ts'] },
-  },
-  rules: [{ id: 'r1', ruleId: 'test-rule', targets: ['ts-src'] }],
-};
+[targets.ts-src]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[[rules]]
+id = "r1"
+ruleId = "test-rule"
+targets = ["ts-src"]
 `);
 
       configCacheClear();
@@ -209,6 +213,22 @@ module.exports = {
       expect(resolvedPath).toBe(configPath);
       expect(config.rules).toHaveLength(1);
       expect(config.rules[0].ruleId).toBe('test-rule');
+    });
+
+    it('should reject invalid TOML config structure', async () => {
+      const dir = fs.mkdtempSync(path.join(testDir, 'load-toml-invalid-'));
+      const configPath = path.join(dir, 'codepol.toml');
+      fs.writeFileSync(configPath, `
+[targets.ts-src]
+language = 123
+files = ["src/**/*.ts"]
+
+[[rules]]
+ruleId = "test-rule"
+targets = ["ts-src"]
+`);
+
+      await expect(configGetFromPath(configPath)).rejects.toThrow('Invalid codepol config');
     });
   });
 });

@@ -1,0 +1,71 @@
+name: Release Binary
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (for example: v1.2.3)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release-binary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: oven-sh/setup-bun@v2
+
+      - run: pnpm install
+
+      - run: pnpm run build:binary-full
+
+      - name: Resolve release metadata
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          ARCHIVE="codepol-binary-${TAG}-linux-x64.tar.gz"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "archive=${ARCHIVE}" >> "$GITHUB_OUTPUT"
+
+      - name: Package standalone binary bundle
+        run: |
+          tar -C dist-binary -czf "${{ steps.meta.outputs.archive }}" \
+            codepol \
+            tree-sitter.wasm \
+            tree-sitter-typescript.wasm \
+            tree-sitter-tsx.wasm \
+            tree-sitter-python.wasm
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: codepol-binary-linux-x64-${{ steps.meta.outputs.tag }}
+          path: ${{ steps.meta.outputs.archive }}
+
+      - name: Publish GitHub Release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          generate_release_notes: true
+          overwrite_files: true
+          files: |
+            ${{ steps.meta.outputs.archive }}

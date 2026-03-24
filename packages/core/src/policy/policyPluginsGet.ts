@@ -1,29 +1,70 @@
-import { createRequire } from 'node:module';
-import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import type {
   PolicyFile,
-  PolicyPluginDeclaration,
   CodepolPluginRule,
   PluginRule,
+  FixProvider,
 } from './policyTypes';
-import { Result, Ok, Err } from '../result/result';
+import { Result, Ok, Err, isErr } from '../result/result';
 import { policyRuleTargetsResolve } from './policyGet';
+import {
+  processPluginDescribeGet,
+  processPluginRuleCheck,
+  processPluginRuleFix,
+  type ProcessPluginRuntimeContext,
+} from './policyPluginProcess';
+import { pluginRuleNew } from './policyTypes';
 
 export type PolicyPluginsMap = Map<string, PluginRule>;
+export type PolicyPluginsLoadOptions = {
+  configPath?: string;
+};
 
 /**
- * Pre-registered plugin modules keyed by module specifier.
- * Allows the CLI binary to bundle plugins statically and skip dynamic import().
+ * Built-in rule plugins keyed by stable plugin identifier.
  */
-const preRegisteredPlugins = new Map<string, unknown>();
+const builtinPlugins = new Map<string, CodepolPluginRule[]>();
 
 /**
- * Pre-registers a plugin module so policyPluginsGet skips dynamic import for it.
- * Used by the standalone binary to bundle built-in plugins.
+ * Normalize built-in rule plugin exports to a plain array of `CodepolPluginRule`.
+ */
+function pluginRulesNormalize(input: unknown): CodepolPluginRule[] {
+  if (Array.isArray(input)) {
+    return input as CodepolPluginRule[];
+  }
+  if (input && typeof input === 'object') {
+    const obj = input as Record<string, unknown>;
+    if (Array.isArray(obj.pluginRules)) {
+      return obj.pluginRules as CodepolPluginRule[];
+    }
+    if (Array.isArray(obj.default)) {
+      return obj.default as CodepolPluginRule[];
+    }
+    if (
+      obj.__esModule &&
+      obj.default &&
+      typeof obj.default === 'object' &&
+      Array.isArray((obj.default as Record<string, unknown>).default)
+    ) {
+      return (obj.default as { default: CodepolPluginRule[] }).default;
+    }
+  }
+  throw new Error(
+    'Expected built-in plugin rules as an array or as an object with a default/pluginRules export.'
+  );
+}
+
+/**
+ * Registers built-in rule plugins for transport-neutral resolution.
+ */
+export function pluginBuiltinRegister(pluginId: string, pluginRules: CodepolPluginRule[] | unknown): void {
+  builtinPlugins.set(pluginId, pluginRulesNormalize(pluginRules));
+}
+
+/**
+ * Backward-compatible alias for the older Node-module-oriented registry name.
  */
 export function pluginModuleRegister(moduleSpecifier: string, moduleExports: unknown): void {
-  preRegisteredPlugins.set(moduleSpecifier, moduleExports);
+  pluginBuiltinRegister(moduleSpecifier, moduleExports);
 }
 
 /**
@@ -70,102 +111,99 @@ export function pluginGetForRule(
   return undefined;
 }
 
+function processPluginRulesCreate(runtimeContext: ProcessPluginRuntimeContext): CodepolPluginRule[] {
+  const described = processPluginDescribeGet(runtimeContext);
+  return described.rules.map((descriptor) => {
+    const fixProvider: FixProvider | undefined = descriptor.hasFixProvider
+      ? {
+          apply: (context) => {
+            processPluginRuleFix(runtimeContext, descriptor.id, context);
+          },
+        }
+      : undefined;
+
+    return pluginRuleNew({
+      id: descriptor.id,
+      capabilities: {
+        treeCheckProvider: {
+          languages: descriptor.languages,
+          check: (rule, context) => {
+            try {
+              const violations = processPluginRuleCheck(runtimeContext, descriptor.id, rule, context);
+              return Ok(violations);
+            } catch (error) {
+              return Err(error instanceof Error ? error.message : String(error));
+            }
+          },
+        },
+        fixProvider,
+        requiresProjectIndex: descriptor.requiresProjectIndex,
+      },
+    });
+  });
+}
+
+function pluginRulesResolve(
+  runtimeContext: ProcessPluginRuntimeContext,
+): Result<CodepolPluginRule[], string> {
+  if (runtimeContext.declaration.source.kind === 'builtin') {
+    const builtin = builtinPlugins.get(runtimeContext.declaration.id);
+    if (!builtin) {
+      return Err(
+        `Builtin plugin ${runtimeContext.declaration.id} is not registered. ` +
+          'Register it with pluginBuiltinRegister() before loading the config.'
+      );
+    }
+    return Ok(builtin);
+  }
+
+  if (runtimeContext.declaration.source.kind === 'process') {
+    try {
+      return Ok(processPluginRulesCreate(runtimeContext));
+    } catch (error) {
+      return Err(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  return Err(`Unsupported plugin source for ${runtimeContext.declaration.id}.`);
+}
+
 /**
  * Loads plugins declared in the policy into a map keyed by plugin rule id.
  * @returns Result containing the plugins map or an error message
  */
 export async function policyPluginsGet(
   policy: PolicyFile,
-  cwd: string
+  cwd: string,
+  options: PolicyPluginsLoadOptions = {}
 ): Promise<Result<PolicyPluginsMap, string>> {
-  let declarations: PolicyPluginDeclaration[] = [];
-  if (policy.plugins !== undefined) {
-    declarations = policy.plugins;
-  }
+  const declarations = policy.plugins ?? [];
   const pluginsMapGet = new Map<string, PluginRule>();
 
-  // Create a require function that resolves from consumer's project context
-  const requireFromCwd = createRequire(path.join(cwd, 'package.json'));
-
   for (const declaration of declarations) {
-    const moduleSpecifier = typeof declaration === 'string' ? declaration : declaration.module;
-    
-    let moduleLoaded;
-    const preRegistered = preRegisteredPlugins.get(moduleSpecifier);
-    if (preRegistered !== undefined) {
-      moduleLoaded = preRegistered;
-    } else {
-      let moduleSource: string;
-      if (moduleSpecifier.startsWith('.') || moduleSpecifier.startsWith('/')) {
-        moduleSource = pathToFileURL(path.resolve(cwd, moduleSpecifier)).href;
-      } else {
-        try {
-          moduleSource = pathToFileURL(requireFromCwd.resolve(moduleSpecifier)).href;
-        } catch (e) {
-          return Err(`Failed to resolve plugin module ${moduleSpecifier}: ${e}`);
-        }
-      }
-      
-      try {
-        moduleLoaded = await import(moduleSource);
-      } catch (e) {
-        return Err(`Failed to load plugin module ${moduleSpecifier}: ${e}`);
-      }
+    const runtimeContext: ProcessPluginRuntimeContext = {
+      declaration,
+      cwd,
+      configPath: options.configPath,
+    };
+    const pluginRulesResult = pluginRulesResolve(runtimeContext);
+    if (isErr(pluginRulesResult)) {
+      return Err(pluginRulesResult.Err);
     }
-
-    // Handle CommonJS/ESM interop: when dynamically importing a CommonJS module
-    // that uses TypeScript's `export default`, Node.js wraps the entire `exports`
-    // object as the default. Check for nested `default` in __esModule modules.
-    //
-    // TODO: Remove this workaround by publishing @codepol/plugin as dual ESM+CJS package.
-    let pluginExported = moduleLoaded.default;
-    if (
-      pluginExported &&
-      typeof pluginExported === 'object' &&
-      pluginExported.__esModule &&
-      'default' in pluginExported
-    ) {
-      pluginExported = pluginExported.default;
-    }
-    if (!pluginExported) {
-      return Err(`Module ${moduleSpecifier} does not have a default export.`);
-    }
-
-    let pluginRules: CodepolPluginRule[];
-    try {
-      // pluginRulesNormalize
-      const exported = pluginExported;
-      if (!exported) {
-        throw new Error(`No rule plugins exported by ${moduleSpecifier}.`);
-      }
-      if (Array.isArray(exported)) {
-        pluginRules = exported as CodepolPluginRule[];
-      } else if (typeof exported === 'object' && exported !== undefined) {
-        const candidate = exported as { pluginRules?: unknown };
-        if (Array.isArray(candidate.pluginRules)) {
-          pluginRules = candidate.pluginRules as CodepolPluginRule[];
-        } else {
-          throw new Error(`Invalid rule plugin export from ${moduleSpecifier}. Expected an array of rule plugins.`);
-        }
-      } else {
-        throw new Error(`Invalid rule plugin export from ${moduleSpecifier}.`);
-      }
-    } catch (e: unknown) {
-      return Err(e instanceof Error ? e.message : String(e));
-    }
+    const pluginRules = pluginRulesResult.Ok;
 
     for (const pluginRule of pluginRules) {
       if (!pluginRule.id) {
-         return Err(`Rule plugin from ${moduleSpecifier} missing id.`);
+         return Err(`Rule plugin from ${declaration.id} missing id.`);
       }
       if (pluginRule.id.includes('/')) {
         return Err(
-          `Rule plugin id "${pluginRule.id}" from ${moduleSpecifier} must not contain '/'. ` +
+          `Rule plugin id "${pluginRule.id}" from ${declaration.id} must not contain '/'. ` +
           `The '/' character is reserved for namespacing (e.g., "@scope/plugin/rule-id").`
         );
       }
       
-      const resolvedId = ruleIDGetWithNamespace(pluginRule.id, moduleSpecifier);
+      const resolvedId = ruleIDGetWithNamespace(pluginRule.id, declaration.id);
 
       if (pluginsMapGet.has(resolvedId)) {
         return Err(`Duplicate plugin rule id detected: ${resolvedId}.`);

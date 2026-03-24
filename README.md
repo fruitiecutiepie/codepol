@@ -10,14 +10,14 @@ Codepol is a policy enforcement framework for TypeScript that combines ESLint ru
 ┌────────────────────────────────────────────┐
 │             Consumer Codebase              │
 │   ┌───────────────────┐  ┌─────────────┐   │
-│   │ codepol.config.ts │  │ src/**/*.ts │   │
+│   │  codepol.toml    │  │ src/**/*.ts │   │
 │   └─────────┬─────────┘  └─────────────┘   │
 └─────────────┼──────────────────────────────┘
               │
               ▼
 ┌────────────────────────────────────────────┐
 │               @codepol/core                │
-│   • Load and parse codepol.config.ts       │
+│   • Load and parse codepol.toml            │
 │   • Tree-sitter structural analysis        │
 │   • Violation detection and formatting     │
 └─────────────────────┬──────────────────────┘
@@ -59,8 +59,8 @@ pnpm add -D @codepol/core @codepol/plugin-eslint @codepol/plugin
 
 ### Use Codepol in 3 Steps
 
-1) Add a `codepol.config.ts` file in your project root.
-2) Register the `codepol` ESLint plugin in `eslint.config.*`.
+1) Add a `codepol.toml` file in your project root.
+2) If you run ESLint directly, assemble the `codepol` plugin from resolved rule plugins in `eslint.config.*`.
 3) Run checks with:
 
 ```bash
@@ -74,62 +74,61 @@ npx codepol --fix
 npx codepol --watch
 ```
 
-Codepol auto-discovers `codepol.config.ts` from the current directory upward. Use `--config` if your config is elsewhere.
+Codepol auto-discovers `codepol.toml` from the current directory upward. Use `--config` if your config is elsewhere.
 
 ### Create a Config File
 
-Create `codepol.config.ts` in your project root:
+Create `codepol.toml` in your project root:
 
-```typescript
-import { defineConfig } from '@codepol/core';
+```toml
+exclude = ["dist/**"]
 
-export default defineConfig({
-  plugins: ['@codepol/plugin'],
-  targets: {
-    'typescript-src': {
-      language: 'typescript',
-      files: ['src/**/*.ts', 'src/**/*.tsx'],
-      exclude: ['**/*.spec.ts', '**/*.test.ts'],
-    },
-  },
-  rules: [
-    {
-      id: 'function-logging',
-      ruleId: '@codepol/plugin/require-logger-enter-exit',
-      description: 'Ensure all functions have logger instrumentation',
-      args: {
-        logger: {
-          identifier: 'logger',
-          enterMethod: 'enter',
-          exitMethod: 'exit',
-          import: {
-            module: '@your-org/logger',
-            named: 'logger',
-          },
-        },
-      },
-      targets: ['typescript-src'],
-    },
-  ],
-  exclude: ['dist/**'],
-});
+[[plugins]]
+id = "@codepol/plugin"
+source = { kind = "builtin" }
+
+[targets.typescript-src]
+language = "typescript"
+files = ["src/**/*.ts", "src/**/*.tsx"]
+exclude = ["**/*.spec.ts", "**/*.test.ts"]
+
+[[rules]]
+id = "function-logging"
+ruleId = "@codepol/plugin/require-logger-enter-exit"
+description = "Ensure all functions have logger instrumentation"
+targets = ["typescript-src"]
+
+[rules.args.logger]
+identifier = "logger"
+enterMethod = "enter"
+exitMethod = "exit"
+import = { module = "@your-org/logger", named = "logger" }
 ```
 
 ### Configure ESLint
 
-Add to your `eslint.config.js`:
+Add to your `eslint.config.js` if you want direct ESLint integration:
 
 ```javascript
 import { eslintPluginCreate } from '@codepol/plugin-eslint';
-import pluginRules from '@codepol/plugin';
+import {
+  pluginBuiltinRegister,
+  policyPluginRulesGet,
+  providerRulesConfigGet,
+} from '@codepol/core';
+import codepolBuiltin from '@codepol/plugin';
+
+pluginBuiltinRegister('@codepol/plugin', codepolBuiltin);
+
+const codepol = eslintPluginCreate(await policyPluginRulesGet());
 
 export default [
   {
     plugins: {
-      codepol: eslintPluginCreate(pluginRules),
+      codepol,
     },
     rules: {
-      'codepol/require-logger-enter-exit': 'error',
+      ...await providerRulesConfigGet('eslint'),
     },
   },
 ];
@@ -137,9 +136,10 @@ export default [
 
 ### Plugin Loading
 
-Codepol loads rule-level plugin capabilities from `codepol.config.ts` declarations. The CLI uses the enabled rule plugins
-to decide which ESLint rules and fix providers to run, while Tree-sitter checking continues to use the policy rules
-and their associated tree check providers.
+Codepol loads rule-level plugin capabilities from `codepol.toml` declarations. Built-in plugins resolve from an
+in-process registry, while universal custom plugins can run through the subprocess protocol. The CLI uses the
+enabled rule plugins to decide which fixes and adapted ESLint rules to run, while Tree-sitter checking continues to
+use the policy rules and their associated tree check providers.
 
 The `@codepol/plugin-eslint` package is a thin adapter that aggregates rules from capability plugins such as
 `@codepol/plugin`. Use `eslintPluginCreate(pluginRules)` to assemble the ESLint adapter from any set of
@@ -171,8 +171,6 @@ Download and extract a release bundle, then keep these files in the same directo
 - `tree-sitter-typescript.wasm`
 - `tree-sitter-tsx.wasm`
 - `tree-sitter-python.wasm`
-- `codepol-core-stub.cjs`
-
 Example download flow:
 
 ```bash
@@ -195,31 +193,32 @@ Run from your project root:
 ```bash
 /path/to/codepol
 # or
-/path/to/codepol --config ./codepol.config.ts
+/path/to/codepol --config ./codepol.toml
 ```
 
 ## What It Enforces
 
 Codepol enforces custom policy rules defined by plugins. For example, a `no-duplicate-exports` rule that prevents naming collisions across your codebase:
 
-```typescript
-// codepol.config.ts
-export default defineConfig({
-  plugins: ['@your-org/plugin'],
-  targets: {
-    src: { language: 'typescript', files: ['src/**/*.ts'] },
-  },
-  rules: [
-    {
-      ruleId: '@your-org/plugin/no-duplicate-exports',
-      args: {
-        // Opt-in: which export kinds to check
-        include: ['function', 'class', 'type'],
-      },
-      targets: ['src'],
-    },
-  ],
-});
+```toml
+[[plugins]]
+id = "@your-org/plugin"
+
+[plugins.source]
+kind = "process"
+command = "python3"
+args = ["./tools/your_codepol_plugin.py"]
+
+[targets.src]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[[rules]]
+ruleId = "@your-org/plugin/no-duplicate-exports"
+targets = ["src"]
+
+[rules.args]
+include = ["function", "class", "type"]
 ```
 
 This rule uses Tree-sitter to scan all files for exported identifiers, then reports conflicts:

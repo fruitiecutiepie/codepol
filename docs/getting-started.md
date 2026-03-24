@@ -38,57 +38,44 @@ pnpm add -D @codepol/plugin-eslint @codepol/core @codepol/plugin
 
 ## Step 2: Create a Config File
 
-Create `codepol.config.ts` in your project root:
+Create `codepol.toml` in your project root:
 
-```typescript
-// codepol.config.ts
-import { defineConfig } from '@codepol/core';
+```toml
+# Optional: specify ESLint config path (auto-detected if not specified)
+eslintConfigPath = "./eslint.config.mjs"
+exclude = ["dist/**", "node_modules/**", "*.config.ts"]
 
-export default defineConfig({
-  // Optional: specify ESLint config path (auto-detected if not specified)
-  // eslintConfigPath: './eslint.config.ts',
+[[plugins]]
+id = "@codepol/plugin"
+source = { kind = "builtin" }
 
-  plugins: ['@codepol/plugin'],
-  targets: {
-    'typescript-src': {
-      language: 'typescript',
-      files: ['src/**/*.ts', 'src/**/*.tsx'],
-      exclude: [
-        '**/*.spec.ts',
-        '**/*.test.ts',
-        '**/__mocks__/**',
-        '**/__tests__/**',
-      ],
-    },
-  },
-  rules: [
-    {
-      id: 'function-logging',
-      ruleId: '@codepol/plugin/require-logger-enter-exit',
-      description: 'Ensure all functions have logger.enter/exit instrumentation',
-      args: {
-        logger: {
-          identifier: 'logger',
-          enterMethod: 'enter',
-          exitMethod: 'exit',
-          import: {
-            module: '@your-org/logger',
-            named: 'logger',
-          },
-        },
-      },
-      targets: ['typescript-src'],
-    },
-  ],
-  exclude: ['dist/**', 'node_modules/**', '*.config.ts'],
-});
+[targets.typescript-src]
+language = "typescript"
+files = ["src/**/*.ts", "src/**/*.tsx"]
+exclude = [
+  "**/*.spec.ts",
+  "**/*.test.ts",
+  "**/__mocks__/**",
+  "**/__tests__/**",
+]
+
+[[rules]]
+id = "function-logging"
+ruleId = "@codepol/plugin/require-logger-enter-exit"
+description = "Ensure all functions have logger.enter/exit instrumentation"
+targets = ["typescript-src"]
+
+[rules.args.logger]
+identifier = "logger"
+enterMethod = "enter"
+exitMethod = "exit"
+import = { module = "@your-org/logger", named = "logger" }
 ```
 
-The config file is auto-discovered from your project root. Supported formats:
-- `codepol.config.ts` (recommended)
-- `codepol.config.js`, `.mjs`, `.cjs`
+The config file is auto-discovered from your project root. Supported format:
+- `codepol.toml`
 
-> **Tip:** Using TypeScript config gives you autocomplete and type checking via `defineConfig()`.
+> **Tip:** Multiple rules can reference the same target. See [Policy Schema Reference](./policy-schema.md) for more details.
 
 > **Tip:** Multiple rules can reference the same target. See [Policy Schema Reference](./policy-schema.md) for more details.
 
@@ -98,8 +85,17 @@ The config file is auto-discovered from your project root. Supported formats:
 
 ```javascript
 import { eslintPluginCreate } from '@codepol/plugin-eslint';
-import codepolPlugin from '@codepol/plugin';
+import {
+  pluginBuiltinRegister,
+  policyPluginRulesGet,
+  providerRulesConfigGet,
+} from '@codepol/core';
+import codepolBuiltin from '@codepol/plugin';
 import tseslint from 'typescript-eslint';
+
+pluginBuiltinRegister('@codepol/plugin', codepolBuiltin);
+
+const codepol = eslintPluginCreate(await policyPluginRulesGet());
 
 export default [
   {
@@ -112,10 +108,10 @@ export default [
       },
     },
     plugins: {
-      codepol: eslintPluginCreate(codepolPlugin),
+      codepol,
     },
     rules: {
-      'codepol/require-logger-enter-exit': 'error',
+      ...await providerRulesConfigGet('eslint'),
       eqeqeq: 'error',
     },
   },
@@ -146,7 +142,7 @@ Rule keys use the ESLint plugin name `codepol` (for example, `codepol/require-lo
 ::: tip Severity Precedence
 When running ESLint directly (`eslint .`), your eslint.config.js rules apply.
 
-When running `codepol`, severity is read from `codepol.config.ts` and passed via ESLint's `overrideConfig`, which takes precedence over your eslint.config.js for codepol rules.
+When running `codepol`, severity is read from `codepol.toml` and passed via ESLint's `overrideConfig`, which takes precedence over your eslint.config.js for codepol rules.
 :::
 
 ## Step 4: Create Your Logger
@@ -165,34 +161,26 @@ export const logger = {
 };
 ```
 
-Update your `codepol.config.ts` to reference it:
+Update your `codepol.toml` to reference it:
 
-```typescript
-import { defineConfig } from '@codepol/core';
+```toml
+[[plugins]]
+id = "@codepol/plugin"
+source = { kind = "builtin" }
 
-export default defineConfig({
-  plugins: ['@codepol/plugin'],
-  targets: {
-    src: { language: 'typescript', files: ['src/**/*.ts'] },
-  },
-  rules: [
-    {
-      ruleId: '@codepol/plugin/require-logger-enter-exit',
-      args: {
-        logger: {
-          identifier: 'logger',
-          enterMethod: 'enter',
-          exitMethod: 'exit',
-          import: {
-            module: './logger',
-            named: 'logger',
-          },
-        },
-      },
-      targets: ['src'],
-    },
-  ],
-});
+[targets.src]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[[rules]]
+ruleId = "@codepol/plugin/require-logger-enter-exit"
+targets = ["src"]
+
+[rules.args.logger]
+identifier = "logger"
+enterMethod = "enter"
+exitMethod = "exit"
+import = { module = "./logger", named = "logger" }
 ```
 
 ## Step 5: Add NPM Scripts
@@ -226,7 +214,7 @@ src/utils.ts
 
 ## Step 7: Auto-Fix Violations
 
-Run with `--fix` to automatically add instrumentation:
+Run with `--fix` to apply any fixes provided by enabled rules:
 
 ```bash
 pnpm lint:policy:fix
@@ -235,26 +223,17 @@ pnpm lint:policy:fix
 Before:
 
 ```typescript
-export function processData(data: Data) {
-  validate(data);
-  return transform(data);
+export interface User {
+  name: string;
 }
 ```
 
 After:
 
 ```typescript
-import { logger } from './logger';
-
-export function processData(data: Data) {
-  logger.enter();
-  try {
-    validate(data);
-    return transform(data);
-  } finally {
-    logger.exit();
-  }
-}
+export type User = {
+  name: string;
+};
 ```
 
 ## Optional: esbuild Integration
@@ -271,7 +250,7 @@ await build({
   bundle: true,
   outdir: 'dist',
   plugins: [
-    // Zero-config: auto-discovers codepol.config.ts
+    // Zero-config: auto-discovers codepol.toml
     esbuildPluginCreate(),
   ],
 });
@@ -282,7 +261,7 @@ Or with explicit config path:
 ```typescript
 plugins: [
   esbuildPluginCreate({
-    configPath: './config/codepol.config.ts',
+    configPath: './config/codepol.toml',
   }),
 ]
 ```
@@ -332,8 +311,6 @@ After downloading and extracting a release asset, keep these files in the same d
 - `tree-sitter-typescript.wasm`
 - `tree-sitter-tsx.wasm`
 - `tree-sitter-python.wasm`
-- `codepol-core-stub.cjs`
-
 Example:
 
 ```bash
@@ -354,11 +331,11 @@ tar -xzf codepol-binary.tar.gz
 Then in the consumer project:
 
 ```bash
-# Run from project root (auto-discovers codepol.config.ts)
+# Run from project root (auto-discovers codepol.toml)
 /path/to/codepol
 
 # Or pass explicit paths
-/path/to/codepol --config ./codepol.config.ts --eslint-config ./eslint.config.js
+/path/to/codepol --config ./codepol.toml --eslint-config ./eslint.config.js
 ```
 
 > **Note:** Keep the WASM files next to the `codepol` executable at runtime.

@@ -47,19 +47,57 @@ export type LoggerConfig = {
 
 /**
  * Declaration for loading a policy plugin.
- * Accepts either a module string directly or an object with a module property.
- * Plugins must use a default export containing an array of CodepolPluginRule objects.
+ * Plugin resolution is transport-neutral: built-in plugins are registered
+ * in-process, while external plugins can be invoked as subprocesses.
  *
  * @example
  * ```json
- * // String shorthand
- * "plugins": ["@codepol/plugin"]
+ * {
+ *   "id": "@codepol/plugin",
+ *   "source": { "kind": "builtin" }
+ * }
  *
- * // Object format
- * "plugins": [{ "module": "@codepol/plugin" }]
+ * {
+ *   "id": "acme/process-plugin",
+ *   "source": {
+ *     "kind": "process",
+ *     "command": "python3",
+ *     "args": ["./tools/codepol_plugin.py"]
+ *   }
+ * }
  * ```
  */
-export type PolicyPluginDeclaration = string | { module: string };
+export type PolicyBuiltinPluginSource = {
+  /** Resolve the plugin from the in-process builtin registry */
+  kind: 'builtin';
+};
+
+export type PolicyProcessPluginSource = {
+  /** Invoke the plugin executable using the process protocol */
+  kind: 'process';
+  /** Executable or script to launch */
+  command: string;
+  /** Optional command arguments */
+  args?: string[];
+  /**
+   * Optional working directory for process execution.
+   * Relative paths resolve from the config file directory when available.
+   */
+  cwd?: string;
+  /** Optional extra environment variables for the plugin process */
+  env?: Record<string, string>;
+  /** Optional request timeout in milliseconds */
+  timeoutMs?: number;
+};
+
+export type PolicyPluginSource = PolicyBuiltinPluginSource | PolicyProcessPluginSource;
+
+export type PolicyPluginDeclaration = {
+  /** Stable plugin identifier used for rule namespacing */
+  id: string;
+  /** Transport-specific plugin source configuration */
+  source: PolicyPluginSource;
+};
 
 export type PolicyRuleTarget = {
   /** Target language adapter or parser identifier */
@@ -104,7 +142,7 @@ export type PolicyRule = {
 
 /**
  * The complete policy file structure.
- * This is the schema for codepol.config.ts files.
+ * This is the schema for `codepol.toml`.
  */
 export type PolicyFile = {
   /** Named target definitions that rules reference by name */
@@ -129,6 +167,8 @@ export type PolicyCheckContext = {
   policy: PolicyFile;
   /** Working directory used for resolution */
   dir: string;
+  /** Absolute path to the loaded config file, when available */
+  configPath?: string;
   /** Target definition used to resolve this check */
   target: PolicyRuleTarget;
   /** Resolved arguments for the rule */

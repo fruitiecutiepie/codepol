@@ -10,7 +10,7 @@
  */
 
 import { build } from 'esbuild';
-import { cpSync, mkdirSync, existsSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, existsSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
@@ -47,7 +47,6 @@ await build({
   format: 'cjs',
   outfile: bundlePath,
   // web-tree-sitter loads its own WASM via __dirname; must stay external.
-  // jiti does dynamic transpilation; must stay external.
   // eslint is optional and massive; stays external.
   external: [
     'web-tree-sitter',
@@ -89,23 +88,6 @@ for (const { src, name } of wasmFiles) {
     console.warn(`        Run "pnpm run build:wasm" first.`);
   }
 }
-
-// ---------------------------------------------------------------------------
-// Step 2b: Create @codepol/core stub for config file resolution
-// When using codepol.config.ts with `import { defineConfig } from '@codepol/core'`,
-// this stub provides the defineConfig function without needing the full package.
-// Place this node_modules directory next to your config file.
-// ---------------------------------------------------------------------------
-
-const stubContent = `'use strict';
-module.exports.defineConfig = function defineConfig(config) { return config; };
-`;
-
-const stubDir = join(outDir, 'node_modules', '@codepol', 'core');
-mkdirSync(stubDir, { recursive: true });
-writeFileSync(join(stubDir, 'index.js'), stubContent);
-writeFileSync(join(stubDir, 'package.json'), JSON.stringify({ name: '@codepol/core', version: '1.0.0', main: './index.js' }));
-console.log('  node_modules/@codepol/core/ (stub for .ts config files)');
 
 console.log('\nBundle complete: ' + bundlePath);
 

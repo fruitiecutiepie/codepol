@@ -106,14 +106,16 @@ Codepol uses a unified config file that is auto-discovered from your project roo
 
 ### defineConfig
 
-Type-safe helper for creating codepol configurations with autocomplete.
+Type-safe helper for building codepol config objects programmatically (e.g. in tests or advanced hosts). Runtime config is loaded from `codepol.toml`; this helper does **not** replace it.
 
 ```typescript
 import { defineConfig } from '@codepol/core';
 
-export default defineConfig({
+const config = defineConfig({
   eslintConfigPath: './eslint.config.ts',
-  plugins: ['@codepol/plugin'],
+  plugins: [
+    { id: '@codepol/plugin', source: { kind: 'builtin' } },
+  ],
   targets: { /* ... */ },
   rules: [ /* ... */ ],
 });
@@ -149,11 +151,7 @@ console.log(`Rules: ${config.rules.length}`);
 
 **Config file discovery order:**
 
-1. `codepol.config.ts`
-2. `codepol.config.mts`
-3. `codepol.config.js`
-4. `codepol.config.mjs`
-5. `codepol.config.cjs`
+1. `codepol.toml`
 
 ---
 
@@ -176,7 +174,7 @@ async function configGetFromPath(configPath: string): Promise<ConfigFileResult>
 ```typescript
 import { configGetFromPath } from '@codepol/core';
 
-const { config } = await configGetFromPath('./config/codepol.config.ts');
+const { config } = await configGetFromPath('./config/codepol.toml');
 ```
 
 ---
@@ -244,7 +242,7 @@ function configGetFromPathSync(configPath: string): ConfigFileResult
 ```typescript
 import { configGetFromPathSync } from '@codepol/core';
 
-const { config } = configGetFromPathSync('./config/codepol.config.ts');
+const { config } = configGetFromPathSync('./config/codepol.toml');
 ```
 
 ---
@@ -284,7 +282,7 @@ type CodepolConfigOptions = {
 
 ### policyFileGet (deprecated)
 
-Loads and parses a JSON config file. **Deprecated:** Use `configGet()` or `configGetFromPath()` instead, which support TypeScript config files (`codepol.config.ts`).
+Loads and parses a JSON config file. **Deprecated:** Use `configGet()` or `configGetFromPath()` instead, which support TOML config files (`codepol.toml`).
 
 ```typescript
 function policyFileGet(policyPath: string): PolicyFile
@@ -332,14 +330,22 @@ async function providerRulesConfigGet(
 
 ```javascript
 // eslint.config.js
-import { providerRulesConfigGet } from '@codepol/core';
-import codepol from '@codepol/plugin-eslint';
+import { eslintPluginCreate } from '@codepol/plugin-eslint';
+import {
+  pluginBuiltinRegister,
+  policyPluginRulesGet,
+  providerRulesConfigGet,
+} from '@codepol/core';
+import codepolBuiltin from '@codepol/plugin';
+
+pluginBuiltinRegister('@codepol/plugin', codepolBuiltin);
+
+const codepol = eslintPluginCreate(await policyPluginRulesGet());
 
 export default [{
   plugins: { codepol },
   rules: {
     ...await providerRulesConfigGet('eslint'),
-    // Your additional rules
     'no-console': 'warn',
   },
 }];
@@ -347,34 +353,22 @@ export default [{
 
 Severity is read from the config per rule (default: `'error'`):
 
-```typescript
-// codepol.config.ts
-export default defineConfig({
-  rules: [
-    {
-      ruleId: '@codepol/plugin/require-logger-enter-exit',
-      severity: 'warn',
-      targets: ['typescript'],
-    },
-  ],
-});
+```toml
+[[rules]]
+ruleId = "@codepol/plugin/require-logger-enter-exit"
+severity = "warn"
+targets = ["typescript"]
 ```
 
 #### Filtering by Provider
 
 Use `providers` to control which providers a rule applies to:
 
-```typescript
-// codepol.config.ts
-export default defineConfig({
-  rules: [
-    {
-      ruleId: '@codepol/plugin/require-logger-enter-exit',
-      providers: ['tree-sitter'],
-      targets: ['typescript'],
-    },
-  ],
-});
+```toml
+[[rules]]
+ruleId = "@codepol/plugin/require-logger-enter-exit"
+providers = ["tree-sitter"]
+targets = ["typescript"]
 ```
 
 If `providers` is omitted or empty, the rule applies to all providers. This is useful when you want a rule to only run during `codepol check` (tree-sitter) but not in ESLint, or vice versa.
@@ -399,7 +393,7 @@ export default [{
 This works when running **ESLint directly** (`eslint .`).
 
 ::: warning codepol check CLI Override
-When using `codepol check`, the CLI generates rules from your config and passes them via ESLint's `overrideConfig`, which has **highest precedence**. This means rules defined in `codepol.config.ts` will use severity from the config, overriding your eslint.config.js settings for those same rules.
+When using `codepol check`, the CLI generates rules from your config and passes them via ESLint's `overrideConfig`, which has **highest precedence**. This means rules defined in `codepol.toml` will use severity from the config, overriding your eslint.config.js settings for those same rules.
 
 If you want full control over ESLint configuration, run ESLint directly instead of using `codepol check`.
 :::
@@ -859,7 +853,7 @@ const result = await policyCheck({});
 
 // Or with explicit config path
 const result2 = await policyCheck({
-  configPath: './config/codepol.config.ts',
+  configPath: './config/codepol.toml',
 });
 
 if ('Ok' in result) {
@@ -923,12 +917,13 @@ type PolicyPluginsMap = Map<string, PluginRule>;
 
 ### policyPluginsGet
 
-Loads, validates, and namespaces all plugins declared in the policy. Each plugin module is dynamically imported, its rules are namespaced with the module specifier, and all policy rule references are validated against the loaded plugins.
+Loads, validates, and namespaces all plugins declared in the policy. Built-in plugins are resolved from the in-process registry; process plugins are invoked as subprocesses via the JSON protocol. All policy rule references are validated against the loaded plugins.
 
 ```typescript
 async function policyPluginsGet(
   policy: PolicyFile,
-  cwd: string
+  cwd: string,
+  options?: { configPath?: string }
 ): Promise<Result<PolicyPluginsMap, string>>
 ```
 
@@ -936,6 +931,7 @@ async function policyPluginsGet(
 
 - `policy`: The loaded policy definition
 - `cwd`: Working directory for resolving plugin module specifiers
+- `options.configPath`: Path to the config file. Process plugins resolve relative `command` paths from this location; omitting it falls back to `cwd`.
 
 **Returns:** `Ok(PolicyPluginsMap)` on success, `Err(string)` if a plugin fails to load, a rule references an unknown plugin, or language support validation fails
 
@@ -2419,7 +2415,7 @@ import pluginRules, { loggerEnterExitRule, loggerLintProvider } from '@codepol/p
 ```
 
 Use `(lintProvider.config as EslintProviderConfig).ruleOptions?.({ policy, configPath, cwd, ruleId, ruleArgs })`
-to get the ESLint rule options. Severity is defined in `codepol.config.ts` per rule.
+to get the ESLint rule options. Severity is defined in `codepol.toml` per rule.
 
 ### policyCacheClear
 
@@ -2433,36 +2429,24 @@ policyCacheClear();
 
 **Config file example:**
 
-```typescript
-// codepol.config.ts
-import { defineConfig } from '@codepol/core';
+```toml
+[[plugins]]
+id = "@codepol/plugin"
+source = { kind = "builtin" }
 
-export default defineConfig({
-  plugins: ['@codepol/plugin'],
-  targets: {
-    'typescript-src': {
-      language: 'typescript',
-      files: ['src/**/*.ts'],
-    },
-  },
-  rules: [
-    {
-      ruleId: '@codepol/plugin/require-logger-enter-exit',
-      args: {
-        logger: {
-          identifier: 'logger',
-          enterMethod: 'enter',
-          exitMethod: 'exit',
-          import: {
-            module: '@org/logger',
-            named: 'logger',
-          },
-        },
-      },
-      targets: ['typescript-src'],
-    },
-  ],
-});
+[targets.typescript-src]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[[rules]]
+ruleId = "@codepol/plugin/require-logger-enter-exit"
+targets = ["typescript-src"]
+
+[rules.args.logger]
+identifier = "logger"
+enterMethod = "enter"
+exitMethod = "exit"
+import = { module = "@org/logger", named = "logger" }
 ```
 
 ---
@@ -2501,7 +2485,7 @@ await build({
   bundle: true,
   outdir: 'dist',
   plugins: [
-    // Auto-discovers codepol.config.ts from project root
+    // Auto-discovers codepol.toml from project root
     esbuildPluginCreate(),
   ],
 });
@@ -2512,7 +2496,7 @@ await build({
 ```typescript
 plugins: [
   esbuildPluginCreate({
-    configPath: './config/codepol.config.ts',
+    configPath: './config/codepol.toml',
     fix: true,
   }),
 ]
@@ -2588,9 +2572,9 @@ main().catch(console.error);
 Run with:
 
 ```bash
-# Auto-discovers codepol.config.ts
+# Auto-discovers codepol.toml
 npx ts-node scripts/check-policy.ts
 
 # Or with explicit config path
-npx ts-node scripts/check-policy.ts ./config/codepol.config.ts
+npx ts-node scripts/check-policy.ts ./config/codepol.toml
 ```

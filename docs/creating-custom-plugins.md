@@ -1,6 +1,11 @@
 # Creating Custom Plugins
 
-This guide shows how to create a custom codepol plugin. You'll write one check function that works with both the CLI and ESLint.
+This guide shows how to create a custom codepol plugin. Codepol now supports two plugin transports:
+
+1. In-process JavaScript/TypeScript rule packages for advanced hosts and built-ins.
+2. Universal subprocess plugins for cross-language authoring.
+
+The examples below still use the in-process rule authoring API because it is the most concise way to explain rule structure. When you wire a plugin into `codepol.toml`, prefer the subprocess transport for maximum portability.
 
 ## Overview
 
@@ -20,7 +25,7 @@ flowchart TD
     D -->|No| F[Export Rule]
     E --> F
     F --> G[Add Default Export Array]
-    G --> H[Configure codepol.config.ts]
+    G --> H[Configure codepol.toml]
 ```
 
 ## Quick Start
@@ -93,7 +98,7 @@ export function noDuplicateExportsCheck(
   const lines = context.source.split('\n');
   const exportedNames = new Map<string, number>();
 
-  // Resolved args from codepol.config.ts are available in context.ruleArgs
+  // Resolved args from codepol.toml are available in context.ruleArgs
   // const args = context.ruleArgs;
 
   const exportRegex = /export\s+(?:const|let|var|function|class|type|interface)\s+(\w+)/;
@@ -222,7 +227,7 @@ const eslintConfig: EslintProviderConfig = {
 ```
 
 ::: tip Severity in config
-Severity is controlled by users in `codepol.config.ts`, not by plugins. This allows teams to customize enforcement per rule. See [Configuring Severity](#configuring-severity).
+Severity is controlled by users in `codepol.toml`, not by plugins. This allows teams to customize enforcement per rule. See [Configuring Severity](#configuring-severity).
 :::
 
 ### 5. Create the Entry Point
@@ -236,35 +241,32 @@ export { noDuplicateExportsRule } from './rules/noDuplicateExportsRule';
 export default [noDuplicateExportsRule];
 ```
 
-### 6. Configure codepol.config.ts
+### 6. Configure codepol.toml
 
-Create `codepol.config.ts` in your project root. This file declares which plugins to load and how rules apply to your codebase.
+Create `codepol.toml` in your project root. This file declares which plugins to load and how rules apply to your codebase.
 
 For the complete schema reference, see [Policy Schema Reference](./policy-schema.md).
 
 **Minimal example:**
 
-```typescript
-// codepol.config.ts
-import { defineConfig } from '@codepol/core';
+```toml
+[[plugins]]
+id = "@your-org/codepol-plugin-foo"
 
-export default defineConfig({
-  plugins: ['./path/to/your-plugin'],
-  targets: {
-    typescript: {
-      language: 'typescript',
-      files: ['src/**/*.ts'],
-    },
-  },
-  rules: [
-    {
-      ruleId: 'your-plugin/no-duplicate-exports',
-      description: 'Disallow duplicate exports',
-      severity: 'warn',
-      targets: ['typescript'],
-    },
-  ],
-});
+[plugins.source]
+kind = "process"
+command = "python3"
+args = ["./tools/codepol_plugin.py"]
+
+[targets.typescript]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[[rules]]
+ruleId = "@your-org/codepol-plugin-foo/no-duplicate-exports"
+description = "Disallow duplicate exports"
+severity = "warn"
+targets = ["typescript"]
 ```
 
 #### Configuring Severity
@@ -278,7 +280,7 @@ The `severity` field controls how violations are reported:
 | `'off'` | Rule is disabled |
 
 ::: tip Manual ESLint Configuration
-Users can also configure rules directly in their eslint.config.js instead of using codepol.config.ts:
+Users can also configure rules directly in their eslint.config.js instead of using codepol.toml:
 
 ```javascript
 rules: {
@@ -286,7 +288,7 @@ rules: {
 }
 ```
 
-This works when running ESLint directly. However, when using `codepol check`, severity from codepol.config.ts takes precedence via ESLint's `overrideConfig`.
+This works when running ESLint directly. However, when using `codepol check`, severity from `codepol.toml` takes precedence via ESLint's `overrideConfig`.
 :::
 
 #### Filtering Providers
@@ -332,10 +334,10 @@ bunx codepol
 
 :::
 
-The CLI auto-discovers `codepol.config.ts` from your project root. You can also specify a custom config path:
+The CLI auto-discovers `codepol.toml` from your project root. You can also specify a custom config path:
 
 ```bash
-npx codepol --config ./config/codepol.config.ts
+npx codepol --config ./config/codepol.toml
 ```
 
 ## Exporting Your Plugin
@@ -367,10 +369,17 @@ export default [myRule, anotherRule];
 Rule IDs must **not** contain `/`. The `/` character is reserved for namespacing—codepol automatically prefixes your ID with the module name (e.g., `my-rule` → `@your-org/plugin/my-rule`).
 :::
 
-Consumers reference your plugin by module path only:
+Consumers reference your plugin by transport-neutral plugin id and source declaration:
 
 ```json
-{ "module": "@your-org/codepol-plugin-foo" }
+{
+  "id": "@your-org/codepol-plugin-foo",
+  "source": {
+    "kind": "process",
+    "command": "python3",
+    "args": ["./tools/codepol_plugin.py"]
+  }
+}
 ```
 
 ### Multiple Plugin Collections
@@ -474,7 +483,7 @@ await build({
   bundle: true,
   outfile: 'dist/bundle.js',
   plugins: [
-    // Auto-discovers codepol.config.ts
+    // Auto-discovers codepol.toml
     esbuildPluginCreate({
       fix: false, // Set to true to auto-fix violations
     }),
@@ -498,7 +507,7 @@ To create an adapter for another platform, implement the `TreeCheckLintAdapter` 
 
 ### Accessing Rule Arguments
 
-Rule-specific arguments from `codepol.config.ts` are passed via `context.ruleArgs`:
+Rule-specific arguments from `codepol.toml` are passed via `context.ruleArgs`:
 
 ```typescript
 function myCheck(rule: PolicyRule, context: PolicyCheckContext): PolicyViolation[] {

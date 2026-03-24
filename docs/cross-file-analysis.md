@@ -11,7 +11,7 @@ Cross-file rules follow the same plugin structure as single-file rules, with two
 
 ```mermaid
 flowchart TD
-    Config["codepol.config.ts"] --> Core["@codepol/core"]
+    Config["codepol.toml"] --> Core["@codepol/core"]
     Core -->|"requiresProjectIndex: true"| Build["projectIndexBuild"]
     Build --> PI["ProjectIndex"]
     Core --> Check["check(rule, context)"]
@@ -131,28 +131,23 @@ export const unusedExportsRule = pluginRuleNew({
 
 ### Config Usage
 
-```typescript
-// codepol.config.ts
-import { defineConfig } from '@codepol/core';
+```toml
+[[plugins]]
+id = "@codepol/plugin"
+source = { kind = "builtin" }
 
-export default defineConfig({
-  plugins: ['@codepol/plugin'],
-  targets: {
-    src: {
-      language: 'typescript',
-      files: ['src/**/*.ts'],
-      exclude: ['**/*.spec.ts'],
-    },
-  },
-  rules: [
-    {
-      ruleId: '@codepol/plugin/no-unused-exports',
-      severity: 'warn',
-      targets: ['src'],
-      args: { ignoreEntryPoints: true },
-    },
-  ],
-});
+[targets.src]
+language = "typescript"
+files = ["src/**/*.ts"]
+exclude = ["**/*.spec.ts"]
+
+[[rules]]
+ruleId = "@codepol/plugin/no-unused-exports"
+severity = "warn"
+targets = ["src"]
+
+[rules.args]
+ignoreEntryPoints = true
 ```
 
 ## Example 2: Circular Dependency Detector

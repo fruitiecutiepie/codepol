@@ -3,7 +3,7 @@
  * @codepol/core - Core policy loading, checking, and enforcement for codepol.
  *
  * This package provides the foundation for policy-driven code enforcement:
- * - Load and parse codepol config files (codepol.config.ts)
+ * - Load and parse codepol config files (`codepol.toml`)
  * - Check TypeScript files using web-tree-sitter (WASM) for structural analysis
  * - Detect missing logger instrumentation
  * - Format and report violations
@@ -205,7 +205,9 @@ export async function providerRulesConfigGet(
     : await configGet(cwd);
   const policy = config;
   
-  const pluginsResult = await policyPluginsGet(policy, cwd);
+  const pluginsResult = await policyPluginsGet(policy, cwd, {
+    configPath: resolvedConfigPath,
+  });
   if (isErr(pluginsResult)) {
     throw new Error(pluginsResult.Err);
   }
@@ -296,6 +298,27 @@ export async function providerRulesConfigGet(
   return rules;
 }
 
+/**
+ * Loads and resolves all plugin rules referenced by the active config.
+ * This is useful for hosts such as ESLint that need concrete rule objects
+ * after built-in and process plugin resolution.
+ */
+export async function policyPluginRulesGet(configPath?: string): Promise<CodepolPluginRule[]> {
+  const cwd = process.cwd();
+  const { config, configPath: resolvedConfigPath } = configPath
+    ? await configGetFromPath(configPath)
+    : await configGet(cwd);
+
+  const pluginsResult = await policyPluginsGet(config, cwd, {
+    configPath: resolvedConfigPath,
+  });
+  if (isErr(pluginsResult)) {
+    throw new Error(pluginsResult.Err);
+  }
+
+  return Array.from(pluginsResult.Ok.values()).map((entry) => entry.pluginRule);
+}
+
 // Policy loading
 export {
   policyFileGet,
@@ -323,6 +346,7 @@ export type { PolicyPluginsMap } from './policy/policyPluginsGet';
 export {
   policyPluginsGet,
   pluginGetForRule,
+  pluginBuiltinRegister,
   pluginModuleRegister,
 } from './policy/policyPluginsGet';
 
@@ -403,6 +427,8 @@ export type {
 } from './index/indexTypes';
 
 export { SymbolFlags } from './index/indexTypes';
+export type { ProjectIndexSnapshot } from './index/indexSnapshot';
+export { projectIndexSnapshotCreate } from './index/indexSnapshot';
 
 // Module resolution
 export type { ModuleResolveOptions } from './index/moduleResolver';
@@ -440,3 +466,18 @@ export { IndexStore, indexStoreNew } from './index/indexStore';
 
 // Workspace package discovery
 export { workspacePackageMapDiscover } from './index/workspacePackages';
+
+// Process plugin protocol
+export type {
+  ProcessPluginRuntimeContext,
+  ProcessPluginRuleDescriptor,
+  ProcessPluginDescribeResult,
+  ProcessPluginCheckContext,
+  ProcessPluginFixContext,
+  ProcessPluginRequest,
+  ProcessPluginResponse,
+} from './policy/policyPluginProcess';
+export {
+  PROCESS_PLUGIN_PROTOCOL_VERSION,
+  processPluginCacheClear,
+} from './policy/policyPluginProcess';

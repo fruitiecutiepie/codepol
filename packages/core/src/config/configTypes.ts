@@ -15,29 +15,23 @@ export type CodepolConfigOptions = {
 
 /**
  * Full codepol configuration combining policy definition and runtime options.
- * This is the schema for codepol.config.ts files.
+ * This is the schema for `codepol.toml`.
  *
  * @example
- * ```typescript
- * // codepol.config.ts
- * import { defineConfig } from '@codepol/core';
+ * ```toml
+ * eslintConfigPath = "./eslint.config.mjs"
  *
- * export default defineConfig({
- *   eslintConfigPath: './eslint.config.ts',
- *   plugins: ['@codepol/plugin'],
- *   targets: {
- *     'typescript-src': {
- *       language: 'typescript',
- *       files: ['src/**\/*.ts'],
- *     },
- *   },
- *   rules: [
- *     {
- *       ruleId: 'require-logger-enter-exit',
- *       targets: ['typescript-src'],
- *     },
- *   ],
- * });
+ * [[plugins]]
+ * id = "@codepol/plugin"
+ * source = { kind = "builtin" }
+ *
+ * [targets.typescript-src]
+ * language = "typescript"
+ * files = ["src/**\/*.ts"]
+ *
+ * [[rules]]
+ * ruleId = "@codepol/plugin/require-logger-enter-exit"
+ * targets = ["typescript-src"]
  * ```
  */
 export type CodepolConfig = PolicyFile & CodepolConfigOptions;

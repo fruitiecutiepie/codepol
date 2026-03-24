@@ -18,6 +18,7 @@
   "dependencies": {
     "@codepol/core": "workspace:*",
     "@codepol/plugin": "workspace:*",
+    "@codepol/plugin-eslint": "workspace:^",
     "@codepol/plugin-ruff": "workspace:*",
     "chokidar": "^5.0.0",
     "yargs": "^18.0.0"

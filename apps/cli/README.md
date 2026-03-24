@@ -17,13 +17,13 @@ pnpm add -D @codepol/cli
 ### Quick Start
 
 ```bash
-# 1) Create codepol.config.ts in your project root
-# 2) Register codepol plugin in eslint.config.*
+# 1) Create codepol.toml in your project root
+# 2) Add your normal eslint.config.* (Codepol injects its plugin itself)
 # 3) Run:
 codepol
 ```
 
-Codepol auto-discovers `codepol.config.ts`. Use `--config` to point to a custom path.
+Codepol auto-discovers `codepol.toml`. Use `--config` to point to a custom path.
 
 ### Basic Check
 
@@ -39,7 +39,7 @@ Runs policy checks once and exits with code 1 if violations are found.
 codepol --fix
 ```
 
-Applies ESLint auto-fixes to add missing logger instrumentation.
+Applies any fixes provided by the enabled rules.
 
 ### Watch Mode
 
@@ -52,7 +52,7 @@ Watches for file changes and re-runs checks automatically.
 ### Custom Config Path
 
 ```bash
-codepol --config ./config/codepol.config.ts
+codepol --config ./config/codepol.toml
 ```
 
 ### Custom ESLint Config
@@ -70,8 +70,6 @@ If you are using a prebuilt standalone binary, download it from [GitHub Releases
 - `tree-sitter-typescript.wasm`
 - `tree-sitter-tsx.wasm`
 - `tree-sitter-python.wasm`
-- `codepol-core-stub.cjs`
-
 Example:
 
 ```bash
@@ -110,14 +108,14 @@ Then run:
 ## Examples
 
 ```bash
-# Run checks (auto-discovers codepol.config.ts)
+# Run checks (auto-discovers codepol.toml)
 codepol
 
 # Fix violations and watch for changes
 codepol --fix --watch
 
 # Use custom configuration
-codepol --config ./config/codepol.config.ts --eslint-config ./eslint.config.js
+codepol --config ./config/codepol.toml --eslint-config ./eslint.config.js
 
 # Validate plugins
 codepol --check-plugins

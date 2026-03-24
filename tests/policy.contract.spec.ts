@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import config from '../codepol.config';
-import { policyRuleTargetsResolve } from '@codepol/core';
+import path from 'node:path';
+import { configGetFromPathSync, policyRuleTargetsResolve } from '@codepol/core';
+
+const { config } = configGetFromPathSync(path.resolve(__dirname, '..', 'codepol.toml'));
 
 describe('policy contract', () => {
   it('rule identifiers are unique', () => {

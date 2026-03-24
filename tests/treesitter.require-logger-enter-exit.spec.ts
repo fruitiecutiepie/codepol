@@ -3,7 +3,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { PolicyFile } from '@codepol/core';
-import { isErr, langAdd, parserInit, policyViolationsGetFromDir } from '@codepol/core';
+import {
+  isErr,
+  langAdd,
+  parserInit,
+  policyViolationsGetFromDir,
+  pluginBuiltinRegister,
+} from '@codepol/core';
+import codepolBuiltin from '@codepol/plugin';
 
 // ============================================================================
 // Helpers
@@ -17,6 +24,11 @@ const loggerArgs = {
     exitMethod: 'exit',
     import: { module: './logger', named: 'logger' },
   },
+};
+
+const builtinPlugin = {
+  id: '@codepol/plugin',
+  source: { kind: 'builtin' as const },
 };
 
 /**
@@ -35,7 +47,7 @@ function tempProjectForLoggerCheck(
   }
 
   const policy: PolicyFile = {
-    plugins: [{ module: '@codepol/plugin' }],
+    plugins: [builtinPlugin],
     exclude: [],
     targets: {
       src: {
@@ -66,13 +78,12 @@ describe('tree-sitter policy check', () => {
     langAdd({ langId: 'typescript', fileExtensions: ['.ts'] });
     langAdd({ langId: 'tsx', fileExtensions: ['.tsx'] });
     await parserInit();
+    pluginBuiltinRegister('@codepol/plugin', codepolBuiltin);
   });
 
   it('finds missing logger instrumentation while ignoring already instrumented files', async () => {
     const policy: PolicyFile = {
-      plugins: [
-        { module: '@codepol/plugin' },
-      ],
+      plugins: [builtinPlugin],
       exclude: [],
       targets: {
         'test-fixtures': {
@@ -225,7 +236,7 @@ describe('tree-sitter policy check', () => {
       fs.writeFileSync(path.join(dir, 'generated.ts'), 'export function genFn() { return 2; }', 'utf8');
 
       const policy: PolicyFile = {
-        plugins: [{ module: '@codepol/plugin' }],
+        plugins: [builtinPlugin],
         exclude: [],
         targets: {
           src: {
@@ -262,7 +273,7 @@ describe('tree-sitter policy check', () => {
       fs.writeFileSync(path.join(dir, 'generated.ts'), 'export function genFn() { return 2; }', 'utf8');
 
       const policy: PolicyFile = {
-        plugins: [{ module: '@codepol/plugin' }],
+        plugins: [builtinPlugin],
         exclude: ['generated.ts'],
         targets: {
           src: {

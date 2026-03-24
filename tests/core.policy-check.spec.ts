@@ -9,7 +9,9 @@ import {
   isOk,
   isErr,
   configCacheClear,
+  pluginBuiltinRegister,
 } from '@codepol/core';
+import codepolBuiltin from '@codepol/plugin';
 
 describe('policyCheck full pipeline', () => {
   let testDir: string;
@@ -17,39 +19,33 @@ describe('policyCheck full pipeline', () => {
   beforeAll(async () => {
     langAdd({ langId: 'typescript', fileExtensions: ['.ts'] });
     await parserInit();
+    pluginBuiltinRegister('@codepol/plugin', codepolBuiltin);
 
     testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-policycheck-'));
 
-    // Create a JS config file that policyCheck can load via jiti.
-    // The config references @codepol/plugin as a plugin module.
-    const configContent = `module.exports = {
-  plugins: [{ module: '@codepol/plugin' }],
-  exclude: [],
-  targets: {
-    src: {
-      language: 'typescript',
-      files: ['src/**/*.ts'],
-    },
-  },
-  rules: [
-    {
-      id: 'function-logging',
-      ruleId: '@codepol/plugin/require-logger-enter-exit',
-      description: 'Ensure functions include logger enter/exit',
-      args: {
-        logger: {
-          identifier: 'logger',
-          enterMethod: 'enter',
-          exitMethod: 'exit',
-          import: { module: './logger', named: 'logger' },
-        },
-      },
-      targets: ['src'],
-    },
-  ],
-};
+    const configContent = `exclude = []
+
+[[plugins]]
+id = "@codepol/plugin"
+source = { kind = "builtin" }
+
+[targets.src]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[[rules]]
+id = "function-logging"
+ruleId = "@codepol/plugin/require-logger-enter-exit"
+description = "Ensure functions include logger enter/exit"
+targets = ["src"]
+
+[rules.args.logger]
+identifier = "logger"
+enterMethod = "enter"
+exitMethod = "exit"
+import = { module = "./logger", named = "logger" }
 `;
-    fs.writeFileSync(path.join(testDir, 'codepol.config.js'), configContent, 'utf8');
+    fs.writeFileSync(path.join(testDir, 'codepol.toml'), configContent, 'utf8');
 
     // Create a source file that violates the logger rule.
     fs.mkdirSync(path.join(testDir, 'src'), { recursive: true });
@@ -66,7 +62,7 @@ describe('policyCheck full pipeline', () => {
   });
 
   it('loads config, finds files, and returns violations', async () => {
-    const configPath = path.join(testDir, 'codepol.config.js');
+    const configPath = path.join(testDir, 'codepol.toml');
     const result = await policyCheck({ configPath, cwd: testDir });
 
     if (isErr(result)) {
@@ -93,7 +89,7 @@ describe('policyCheck full pipeline', () => {
 
   it('returns Err when config file does not exist', async () => {
     const result = await policyCheck({
-      configPath: path.join(testDir, 'nonexistent.config.js'),
+      configPath: path.join(testDir, 'nonexistent.toml'),
       cwd: testDir,
     });
 

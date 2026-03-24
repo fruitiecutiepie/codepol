@@ -1,0 +1,170 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import {
+  configCacheClear,
+  configGetFromPath,
+  isErr,
+  isOk,
+  langAdd,
+  parserInit,
+  pluginGetForRule,
+  policyCheck,
+  policyPluginsGet,
+  policyRuleTargetsResolve,
+  ruleMatchesGet,
+  type PolicyFile,
+  type PolicyRuleTargetContext,
+} from '@codepol/core';
+
+const processPluginPath = path.resolve(__dirname, 'fixtures', 'process-plugin.cjs');
+
+function processPluginConfigCreate(ruleBlocks: string): string {
+  return `[[plugins]]
+id = "fixture/process-plugin"
+
+[plugins.source]
+kind = "process"
+command = ${JSON.stringify(process.execPath)}
+args = [${JSON.stringify(processPluginPath)}]
+timeoutMs = 5000
+
+[targets.src]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+${ruleBlocks}
+`;
+}
+
+function ruleTargetsGet(policy: PolicyFile): PolicyRuleTargetContext[] {
+  const targets: PolicyRuleTargetContext[] = [];
+  for (const rule of policy.rules) {
+    const resolvedTargets = policyRuleTargetsResolve(rule, policy);
+    for (const target of resolvedTargets) {
+      targets.push({
+        ruleId: rule.ruleId,
+        description: rule.description,
+        args: rule.args,
+        target,
+      });
+    }
+  }
+  return targets;
+}
+
+describe('process plugins', () => {
+  let tempDirs: string[] = [];
+
+  beforeAll(async () => {
+    langAdd({ langId: 'typescript', fileExtensions: ['.ts'] });
+    await parserInit();
+  });
+
+  afterAll(() => {
+    configCacheClear();
+    for (const dir of tempDirs) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('loads subprocess plugin rules and reports violations', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-process-plugin-'));
+    tempDirs.push(dir);
+
+    fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'src', 'app.ts'), '// TODO fix\nexport const value = 1;\n', 'utf8');
+
+    const configPath = path.join(dir, 'codepol.toml');
+    fs.writeFileSync(
+      configPath,
+      processPluginConfigCreate(`[[rules]]
+id = "todo-comment"
+ruleId = "fixture/process-plugin/no-todo-comment"
+targets = ["src"]
+`),
+      'utf8',
+    );
+
+    const result = await policyCheck({ configPath, cwd: dir });
+    if (isErr(result)) {
+      throw new Error(result.Err);
+    }
+
+    expect(isOk(result)).toBe(true);
+    expect(result.Ok.treeViolations).toHaveLength(1);
+    expect(result.Ok.treeViolations[0].message).toContain('TODO comment');
+  });
+
+  it('passes a project index snapshot to subprocess rules that require it', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-process-index-'));
+    tempDirs.push(dir);
+
+    fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'src', 'app.ts'), 'export const value = 1;\n', 'utf8');
+
+    const configPath = path.join(dir, 'codepol.toml');
+    fs.writeFileSync(
+      configPath,
+      processPluginConfigCreate(`[[rules]]
+id = "index-check"
+ruleId = "fixture/process-plugin/requires-index"
+targets = ["src"]
+`),
+      'utf8',
+    );
+
+    const result = await policyCheck({ configPath, cwd: dir });
+    if (isErr(result)) {
+      throw new Error(result.Err);
+    }
+
+    expect(result.Ok.treeViolations).toHaveLength(0);
+  });
+
+  it('applies subprocess-provided fixes through wrapped fix providers', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-process-fix-'));
+    tempDirs.push(dir);
+
+    fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
+    const filePath = path.join(dir, 'src', 'app.ts');
+    fs.writeFileSync(filePath, '// TODO remove\nexport const value = 1;\n', 'utf8');
+
+    const configPath = path.join(dir, 'codepol.toml');
+    fs.writeFileSync(
+      configPath,
+      processPluginConfigCreate(`[[rules]]
+id = "todo-comment"
+ruleId = "fixture/process-plugin/no-todo-comment"
+targets = ["src"]
+`),
+      'utf8',
+    );
+
+    const { config } = await configGetFromPath(configPath);
+    const policy = config as PolicyFile;
+    const pluginsResult = await policyPluginsGet(policy, dir, { configPath });
+    if (isErr(pluginsResult)) {
+      throw new Error(pluginsResult.Err);
+    }
+
+    const lookup = pluginGetForRule(pluginsResult.Ok, 'fixture/process-plugin/no-todo-comment');
+    if (!lookup || !lookup.plugin.pluginRule.capabilities.fixProvider) {
+      throw new Error('Expected process plugin fix provider to be available');
+    }
+
+    const matches = await ruleMatchesGet(policy, dir);
+    const files = Array.from(new Set(matches.flatMap((match) => match.files)));
+    await lookup.plugin.pluginRule.capabilities.fixProvider.apply({
+      cwd: dir,
+      policy,
+      configPath,
+      files,
+      ruleTargets: ruleTargetsGet(policy),
+    });
+
+    const fixed = fs.readFileSync(filePath, 'utf8');
+    expect(fixed).not.toContain('TODO');
+  });
+});
