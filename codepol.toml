@@ -42,7 +42,7 @@ args.words = [
 [[rules]]
 ruleId = "@codepol/plugin/forbidden-path-words"
 severity = "error"
-targets = ["codepol-src"]
+targets = ["codepol-src", "python-src"]
 args.words = [
   "handle",
   "process",

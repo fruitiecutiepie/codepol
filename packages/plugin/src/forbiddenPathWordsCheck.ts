@@ -6,7 +6,7 @@ import type {
 } from '@codepol/core';
 import { identifierSplitByCasing } from './lib/identifierSplitByCasing';
 
-export type ForbiddenPathWordsArgs = {
+type ForbiddenPathWordsArgs = {
   words: string[];
   checkFiles?: boolean;       // default: true
   checkDirectories?: boolean; // default: true

@@ -12,6 +12,7 @@ import {
 } from '@codepol/core';
 import { Ok } from '@codepol/core';
 import { loggerEnterExitRule } from '@codepol/plugin';
+import { forbiddenPathWordsRule } from '../packages/plugin/src/forbiddenPathWordsRule';
 import { writeFileSync } from 'node:fs';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -124,6 +125,7 @@ describe('policyViolationsGetForFile with real plugin', () => {
   let testDir: string;
 
   beforeAll(async () => {
+    langAdd({ langId: 'python', fileExtensions: ['.py'] });
     langAdd({ langId: 'typescript', fileExtensions: ['.ts'] });
     await parserInit();
     testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-plugins-'));
@@ -184,5 +186,50 @@ describe('policyViolationsGetForFile with real plugin', () => {
     expect(violations[0].filePath).toBe(filePath);
     expect(violations[0].line).toBeGreaterThan(0);
     expect(violations[0].column).toBeGreaterThan(0);
+  });
+
+  it('returns Ok with violations for forbidden words in Python paths', () => {
+    const filePath = path.join(testDir, 'tmp', 'worker.py');
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    writeFileSync(filePath, 'def run():\n    return 1\n');
+
+    const target: PolicyRuleTarget = {
+      language: 'python',
+      files: ['**/*.py'],
+    };
+
+    const rule: PolicyRule = {
+      id: 'python-path-words',
+      ruleId: forbiddenPathWordsRule.id,
+      description: 'Disallow forbidden words in Python paths',
+      args: { words: ['tmp'] },
+      targets: ['src'],
+    };
+
+    const policy: PolicyFile = {
+      targets: { src: target },
+      rules: [rule],
+    };
+
+    const pluginsMap = new Map();
+    pluginsMap.set(forbiddenPathWordsRule.id, {
+      pluginRule: forbiddenPathWordsRule,
+    });
+
+    const result = policyViolationsGetForFile(
+      filePath,
+      rule,
+      target,
+      policy,
+      pluginsMap,
+      testDir
+    );
+
+    expect(isOk(result)).toBe(true);
+    const violations = result.Ok!;
+    expect(violations).toHaveLength(1);
+    expect(violations[0].ruleId).toBe('python-path-words');
+    expect(violations[0].message).toContain("Directory name 'tmp'");
+    expect(violations[0].filePath).toBe(filePath);
   });
 });
