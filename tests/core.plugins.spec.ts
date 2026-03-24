@@ -13,6 +13,7 @@ import {
 import { Ok } from '@codepol/core';
 import { loggerEnterExitRule } from '@codepol/plugin';
 import { forbiddenPathWordsRule } from '../packages/plugin/src/forbiddenPathWordsRule';
+import { noVerbFunctionNameRule } from '../packages/plugin/src/noVerbFunctionNameRule';
 import { writeFileSync } from 'node:fs';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -279,5 +280,73 @@ describe('policyViolationsGetForFile with real plugin', () => {
     expect(violations[0].ruleId).toBe('python-path-words');
     expect(violations[0].message).toContain("Directory name 'tmp'");
     expect(violations[0].filePath).toBe(filePath);
+  });
+
+  it('returns Ok with violations for verb-named functions in Python files', () => {
+    const filePath = path.join(testDir, 'service.py');
+    writeFileSync(filePath, [
+      'def get_data():',
+      '    return []',
+      '',
+      'def data_store():',
+      '    pass',
+      '',
+      'class Repo:',
+      '    def __init__(self):',
+      '        pass',
+      '    def fetch_items(self):',
+      '        return []',
+    ].join('\n'));
+
+    const target: PolicyRuleTarget = {
+      language: 'python',
+      files: ['**/*.py'],
+    };
+
+    const rule: PolicyRule = {
+      id: 'python-verb-names',
+      ruleId: noVerbFunctionNameRule.id,
+      description: 'Disallow verb-prefixed function names in Python',
+      args: { verbs: ['get', 'fetch', 'set', 'init'] },
+      targets: ['py-src'],
+    };
+
+    const policy: PolicyFile = {
+      targets: { 'py-src': target },
+      rules: [rule],
+    };
+
+    const pluginsMap = new Map();
+    pluginsMap.set(noVerbFunctionNameRule.id, {
+      pluginRule: noVerbFunctionNameRule,
+    });
+
+    const result = policyViolationsGetForFile(
+      filePath,
+      rule,
+      target,
+      policy,
+      pluginsMap,
+      testDir
+    );
+
+    expect(isOk(result)).toBe(true);
+    const violations = result.Ok!;
+    expect(violations).toHaveLength(2);
+    expect(violations.map(v => v.message)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('get_data'),
+        expect.stringContaining('fetch_items'),
+      ])
+    );
+    expect(violations[0].ruleId).toBe('python-verb-names');
+    expect(violations[0].filePath).toBe(filePath);
+    expect(violations[0].line).toBeGreaterThan(0);
+    expect(violations[0].column).toBeGreaterThan(0);
+  });
+
+  // TODO: remove .skip once Ruff adapter coverage is added for no-verb-function-name
+  it.skip('runs no-verb-function-name through Ruff adapter for Python', () => {
+    // Placeholder for Ruff adapter integration
   });
 });

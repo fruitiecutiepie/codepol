@@ -6,6 +6,7 @@ export const noVerbFunctionNameRule: CodepolPluginRule = pluginRuleNew({
   id: 'no-verb-function-name',
   capabilities: {
     treeCheckProvider: treeCheckProviderNew({
+      languages: ['typescript', 'tsx', 'python'],
       check: noVerbFunctionNameCheck,
     }),
   },

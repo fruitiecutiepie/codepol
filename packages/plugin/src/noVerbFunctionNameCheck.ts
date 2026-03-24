@@ -10,13 +10,13 @@ type NoVerbFunctionNameArgs = {
   verbs: string[];
 };
 
-type FunctionMatch = {
+export type FunctionMatch = {
   name: string;
   line: number;
   column: number;
 };
 
-export function extractFunctions(source: string): FunctionMatch[] {
+export function extractFunctionsTypeScript(source: string): FunctionMatch[] {
   const matches: FunctionMatch[] = [];
   const sourceFile = ts.createSourceFile(
     'temp.ts',
@@ -65,6 +65,54 @@ export function extractFunctions(source: string): FunctionMatch[] {
   return matches;
 }
 
+const PYTHON_DEF_PATTERN = /(?:async\s+)?def\s+([a-zA-Z_]\w*)\s*\(/gm;
+
+function isDunderName(name: string): boolean {
+  return name.startsWith('__') && name.endsWith('__');
+}
+
+function lineAndColumnFromOffset(source: string, offset: number): { line: number; column: number } {
+  let line = 1;
+  let lastNewline = -1;
+  for (let i = 0; i < offset; i++) {
+    if (source[i] === '\n') {
+      line++;
+      lastNewline = i;
+    }
+  }
+  return { line, column: offset - lastNewline };
+}
+
+/**
+ * Regex-based Python function name extractor.
+ * This is a compatibility step — the extraction function is isolated
+ * so it can be replaced with a tree-sitter-based extractor later.
+ */
+export function extractFunctionsPython(source: string): FunctionMatch[] {
+  const matches: FunctionMatch[] = [];
+  const pattern = new RegExp(PYTHON_DEF_PATTERN.source, 'gm');
+
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(source)) !== null) {
+    const name = match[1];
+    if (isDunderName(name)) continue;
+
+    const nameOffset = match.index + match[0].indexOf(name);
+    const { line, column } = lineAndColumnFromOffset(source, nameOffset);
+
+    matches.push({ name, line, column });
+  }
+
+  return matches;
+}
+
+export function extractFunctions(source: string, filePath: string = 'temp.ts'): FunctionMatch[] {
+  if (filePath.endsWith('.py')) {
+    return extractFunctionsPython(source);
+  }
+  return extractFunctionsTypeScript(source);
+}
+
 export function buildVerbSet(args: NoVerbFunctionNameArgs | undefined): Set<string> {
   if (!args?.verbs || args.verbs.length === 0) {
     return new Set();
@@ -91,7 +139,7 @@ export function noVerbFunctionNameCheck(
   const args = context.ruleArgs as NoVerbFunctionNameArgs | undefined;
   const verbs = buildVerbSet(args);
 
-  const functions = extractFunctions(context.source);
+  const functions = extractFunctions(context.source, context.filePath);
 
   for (const fn of functions) {
     const matchedVerb = startsWithVerb(fn.name, verbs);

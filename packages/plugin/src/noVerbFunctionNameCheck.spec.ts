@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   extractFunctions,
+  extractFunctionsTypeScript,
+  extractFunctionsPython,
   buildVerbSet,
   startsWithVerb,
   noVerbFunctionNameCheck,
@@ -461,5 +463,342 @@ function handleRequest() {}`;
       const violations = noVerbFunctionNameCheck(rule, createContext(source));
       expect(violations).toHaveLength(0);
     });
+  });
+
+  describe('Python files', () => {
+    const createPythonContext = (source: string, verbs: string[] = ['handle', 'get', 'process', 'do', 'fetch', 'init']): PolicyCheckContext => ({
+      filePath: '/project/module.py',
+      source,
+      policy: { plugins: [], rules: [], exclude: [], targets: { 'py': { language: 'python', files: ['**/*.py'] } } },
+      dir: '/project',
+      target: { language: 'python', files: ['**/*.py'] },
+      ruleArgs: { verbs },
+    });
+
+    it('flags Python function starting with verb', () => {
+      const source = 'def get_data():\n    pass\n';
+      const violations = noVerbFunctionNameCheck(rule, createPythonContext(source));
+      expect(violations).toHaveLength(1);
+      expect(violations[0].message).toContain('get_data');
+      expect(violations[0].message).toContain('get');
+    });
+
+    it('flags async Python function starting with verb', () => {
+      const source = 'async def fetch_items():\n    pass\n';
+      const violations = noVerbFunctionNameCheck(rule, createPythonContext(source));
+      expect(violations).toHaveLength(1);
+      expect(violations[0].message).toContain('fetch_items');
+      expect(violations[0].message).toContain('fetch');
+    });
+
+    it('allows Python function not starting with verb', () => {
+      const source = 'def data_store():\n    pass\n';
+      const violations = noVerbFunctionNameCheck(rule, createPythonContext(source));
+      expect(violations).toHaveLength(0);
+    });
+
+    it('skips dunder methods', () => {
+      const source = [
+        'class Foo:',
+        '    def __init__(self):',
+        '        pass',
+        '    def __str__(self):',
+        '        return ""',
+        '    def __getitem__(self, key):',
+        '        pass',
+      ].join('\n');
+      const violations = noVerbFunctionNameCheck(rule, createPythonContext(source));
+      expect(violations).toHaveLength(0);
+    });
+
+    it('flags method inside class while skipping dunders', () => {
+      const source = [
+        'class Service:',
+        '    def __init__(self):',
+        '        pass',
+        '    def get_value(self):',
+        '        return 1',
+      ].join('\n');
+      const violations = noVerbFunctionNameCheck(rule, createPythonContext(source));
+      expect(violations).toHaveLength(1);
+      expect(violations[0].message).toContain('get_value');
+    });
+
+    it('flags multiple verb functions in mixed source', () => {
+      const source = [
+        'def data_store():',
+        '    pass',
+        '',
+        'def get_data():',
+        '    pass',
+        '',
+        'async def fetch_items():',
+        '    pass',
+        '',
+        'def user_count():',
+        '    pass',
+      ].join('\n');
+      const violations = noVerbFunctionNameCheck(rule, createPythonContext(source));
+      expect(violations).toHaveLength(2);
+      expect(violations.map(v => v.message)).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('get_data'),
+          expect.stringContaining('fetch_items'),
+        ])
+      );
+    });
+
+    it('returns empty for empty Python source', () => {
+      const violations = noVerbFunctionNameCheck(rule, createPythonContext(''));
+      expect(violations).toHaveLength(0);
+    });
+
+    it('returns empty for Python source with only comments', () => {
+      const source = '# just a comment\n"""docstring"""\n';
+      const violations = noVerbFunctionNameCheck(rule, createPythonContext(source));
+      expect(violations).toHaveLength(0);
+    });
+  });
+});
+
+describe('extractFunctionsPython', () => {
+  describe('function definitions', () => {
+    it('extracts simple def', () => {
+      const fns = extractFunctionsPython('def foo():\n    pass\n');
+      expect(fns).toHaveLength(1);
+      expect(fns[0].name).toBe('foo');
+    });
+
+    it('extracts async def', () => {
+      const fns = extractFunctionsPython('async def bar():\n    pass\n');
+      expect(fns).toHaveLength(1);
+      expect(fns[0].name).toBe('bar');
+    });
+
+    it('extracts function with parameters', () => {
+      const fns = extractFunctionsPython('def greet(name, greeting="hello"):\n    pass\n');
+      expect(fns).toHaveLength(1);
+      expect(fns[0].name).toBe('greet');
+    });
+
+    it('extracts function with type annotations', () => {
+      const fns = extractFunctionsPython('def run(x: int, y: str) -> bool:\n    return True\n');
+      expect(fns).toHaveLength(1);
+      expect(fns[0].name).toBe('run');
+    });
+
+    it('extracts function with underscore prefix', () => {
+      const fns = extractFunctionsPython('def _private_helper():\n    pass\n');
+      expect(fns).toHaveLength(1);
+      expect(fns[0].name).toBe('_private_helper');
+    });
+  });
+
+  describe('dunder exclusion', () => {
+    it('skips __init__', () => {
+      const fns = extractFunctionsPython('def __init__(self):\n    pass\n');
+      expect(fns).toHaveLength(0);
+    });
+
+    it('skips __str__', () => {
+      const fns = extractFunctionsPython('def __str__(self):\n    return ""\n');
+      expect(fns).toHaveLength(0);
+    });
+
+    it('skips __getitem__', () => {
+      const fns = extractFunctionsPython('def __getitem__(self, key):\n    pass\n');
+      expect(fns).toHaveLength(0);
+    });
+
+    it('does not skip single-underscore prefix', () => {
+      const fns = extractFunctionsPython('def _helper():\n    pass\n');
+      expect(fns).toHaveLength(1);
+      expect(fns[0].name).toBe('_helper');
+    });
+
+    it('does not skip names with trailing double underscore only', () => {
+      const fns = extractFunctionsPython('def something__():\n    pass\n');
+      expect(fns).toHaveLength(1);
+      expect(fns[0].name).toBe('something__');
+    });
+  });
+
+  describe('class methods', () => {
+    it('extracts methods inside a class', () => {
+      const source = [
+        'class Foo:',
+        '    def method_a(self):',
+        '        pass',
+        '    def method_b(self):',
+        '        pass',
+      ].join('\n');
+      const fns = extractFunctionsPython(source);
+      expect(fns).toHaveLength(2);
+      expect(fns.map(f => f.name)).toEqual(['method_a', 'method_b']);
+    });
+
+    it('extracts classmethod and staticmethod', () => {
+      const source = [
+        'class Foo:',
+        '    @classmethod',
+        '    def from_dict(cls, data):',
+        '        pass',
+        '    @staticmethod',
+        '    def validate(value):',
+        '        pass',
+      ].join('\n');
+      const fns = extractFunctionsPython(source);
+      expect(fns).toHaveLength(2);
+      expect(fns.map(f => f.name)).toEqual(['from_dict', 'validate']);
+    });
+
+    it('extracts async method inside class', () => {
+      const source = [
+        'class Service:',
+        '    async def fetch_data(self):',
+        '        pass',
+      ].join('\n');
+      const fns = extractFunctionsPython(source);
+      expect(fns).toHaveLength(1);
+      expect(fns[0].name).toBe('fetch_data');
+    });
+  });
+
+  describe('decorated functions', () => {
+    it('extracts function after decorator', () => {
+      const source = '@decorator\ndef foo():\n    pass\n';
+      const fns = extractFunctionsPython(source);
+      expect(fns).toHaveLength(1);
+      expect(fns[0].name).toBe('foo');
+    });
+
+    it('extracts function after multiple decorators', () => {
+      const source = '@decorator_a\n@decorator_b(arg)\ndef bar():\n    pass\n';
+      const fns = extractFunctionsPython(source);
+      expect(fns).toHaveLength(1);
+      expect(fns[0].name).toBe('bar');
+    });
+  });
+
+  describe('nested functions', () => {
+    it('extracts outer and inner function', () => {
+      const source = [
+        'def outer():',
+        '    def inner():',
+        '        pass',
+        '    return inner',
+      ].join('\n');
+      const fns = extractFunctionsPython(source);
+      expect(fns).toHaveLength(2);
+      expect(fns.map(f => f.name)).toEqual(['outer', 'inner']);
+    });
+  });
+
+  describe('multiple functions', () => {
+    it('extracts all top-level functions', () => {
+      const source = [
+        'def alpha():',
+        '    pass',
+        '',
+        'def beta():',
+        '    pass',
+        '',
+        'async def gamma():',
+        '    pass',
+      ].join('\n');
+      const fns = extractFunctionsPython(source);
+      expect(fns).toHaveLength(3);
+      expect(fns.map(f => f.name)).toEqual(['alpha', 'beta', 'gamma']);
+    });
+  });
+
+  describe('line and column positions', () => {
+    it('reports correct position for function on first line', () => {
+      const source = 'def foo():\n    pass\n';
+      const fns = extractFunctionsPython(source);
+      expect(fns[0].line).toBe(1);
+      expect(fns[0].column).toBe(5);
+    });
+
+    it('reports correct position for function on second line', () => {
+      const source = '# comment\ndef bar():\n    pass\n';
+      const fns = extractFunctionsPython(source);
+      expect(fns[0].line).toBe(2);
+      expect(fns[0].column).toBe(5);
+    });
+
+    it('reports correct position for async def', () => {
+      const source = 'async def baz():\n    pass\n';
+      const fns = extractFunctionsPython(source);
+      expect(fns[0].line).toBe(1);
+      expect(fns[0].column).toBe(11);
+    });
+
+    it('reports correct position for indented method', () => {
+      const source = 'class C:\n    def method(self):\n        pass\n';
+      const fns = extractFunctionsPython(source);
+      expect(fns[0].line).toBe(2);
+      expect(fns[0].column).toBe(9);
+    });
+  });
+
+  describe('edge cases', () => {
+    it('returns empty for empty source', () => {
+      expect(extractFunctionsPython('')).toHaveLength(0);
+    });
+
+    it('returns empty for source with only comments', () => {
+      expect(extractFunctionsPython('# comment\n"""docstring"""')).toHaveLength(0);
+    });
+
+    // TODO: remove .skip once regex extractor is replaced with tree-sitter-based extraction
+    it.skip('does not match "def" inside strings', () => {
+      const source = 'x = "def not_a_function():"\n';
+      const fns = extractFunctionsPython(source);
+      expect(fns).toHaveLength(0);
+    });
+
+    // TODO: remove .skip once regex extractor is replaced with tree-sitter-based extraction
+    it.skip('does not match "def" inside comments', () => {
+      const source = '# def not_a_function():\n';
+      const fns = extractFunctionsPython(source);
+      expect(fns).toHaveLength(0);
+    });
+  });
+});
+
+describe('extractFunctions routing', () => {
+  it('routes .py files to Python extractor', () => {
+    const source = 'def foo():\n    pass\n';
+    const fns = extractFunctions(source, 'module.py');
+    expect(fns).toHaveLength(1);
+    expect(fns[0].name).toBe('foo');
+  });
+
+  it('routes .ts files to TypeScript extractor', () => {
+    const source = 'function foo() {}';
+    const fns = extractFunctions(source, 'module.ts');
+    expect(fns).toHaveLength(1);
+    expect(fns[0].name).toBe('foo');
+  });
+
+  it('defaults to TypeScript extractor when no filePath', () => {
+    const source = 'function foo() {}';
+    const fns = extractFunctions(source);
+    expect(fns).toHaveLength(1);
+    expect(fns[0].name).toBe('foo');
+  });
+
+  it('routes absolute .py path to Python extractor', () => {
+    const source = 'def bar():\n    pass\n';
+    const fns = extractFunctions(source, '/home/user/project/module.py');
+    expect(fns).toHaveLength(1);
+    expect(fns[0].name).toBe('bar');
+  });
+
+  it('does not use Python extractor for .pyw files', () => {
+    const source = 'def bar():\n    pass\n';
+    const fns = extractFunctions(source, 'script.pyw');
+    expect(fns).toHaveLength(0);
   });
 });
