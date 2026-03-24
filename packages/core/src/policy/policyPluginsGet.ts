@@ -233,16 +233,13 @@ export async function policyPluginsGet(
     }
     const { plugin, resolvedId } = lookup;
 
-    // For tree checks, we need the treeCheckProvider
     const treeCheckProvider = plugin.pluginRule.capabilities.treeCheckProvider;
-    if (!treeCheckProvider) {
-       return Err(`Plugin ${resolvedId} does not support tree checks (missing treeCheckProvider) for rule ${rule.id || ruleId}.`);
-    }
-
-    const targets = policyRuleTargetsResolve(rule, policy);
-    for (const target of targets) {
-      if (!treeCheckProvider.languages.includes(target.language)) {
-        return Err(`Plugin ${resolvedId} does not support language ${target.language} for rule ${rule.id || ruleId}.`);
+    if (treeCheckProvider) {
+      const targets = policyRuleTargetsResolve(rule, policy);
+      for (const target of targets) {
+        if (!treeCheckProvider.languages.includes(target.language)) {
+          return Err(`Plugin ${resolvedId} does not support language ${target.language} for rule ${rule.id || ruleId}.`);
+        }
       }
     }
   }
