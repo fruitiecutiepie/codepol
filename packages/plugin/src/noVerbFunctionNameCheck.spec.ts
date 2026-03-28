@@ -1,13 +1,19 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import {
-  extractFunctions,
-  extractFunctionsTypeScript,
-  extractFunctionsPython,
-  buildVerbSet,
+  functionMatchesGet,
+  functionMatchesTsGet,
+  functionMatchesPyGet,
+  verbSetGet,
   startsWithVerb,
   noVerbFunctionNameCheck,
 } from './noVerbFunctionNameCheck';
 import type { PolicyRule, PolicyCheckContext } from '@codepol/core';
+import { langAdd, parserInit } from '@codepol/core';
+
+beforeAll(async () => {
+  langAdd({ langId: 'python', fileExtensions: ['.py'] });
+  await parserInit();
+});
 
 describe('startsWithVerb', () => {
   describe('segment-based matching', () => {
@@ -126,16 +132,16 @@ describe('startsWithVerb', () => {
   });
 });
 
-describe('buildVerbSet', () => {
+describe('verbSetGet', () => {
   it('creates set from verbs array', () => {
-    const set = buildVerbSet({ verbs: ['get', 'set', 'handle'] });
+    const set = verbSetGet({ verbs: ['get', 'set', 'handle'] });
     expect(set.has('get')).toBe(true);
     expect(set.has('set')).toBe(true);
     expect(set.has('handle')).toBe(true);
   });
 
   it('lowercases all verbs', () => {
-    const set = buildVerbSet({ verbs: ['GET', 'Set', 'HANDLE'] });
+    const set = verbSetGet({ verbs: ['GET', 'Set', 'HANDLE'] });
     expect(set.has('get')).toBe(true);
     expect(set.has('set')).toBe(true);
     expect(set.has('handle')).toBe(true);
@@ -143,42 +149,42 @@ describe('buildVerbSet', () => {
   });
 
   it('returns empty set for undefined args', () => {
-    const set = buildVerbSet(undefined);
+    const set = verbSetGet(undefined);
     expect(set.size).toBe(0);
   });
 
   it('returns empty set for empty verbs array', () => {
-    const set = buildVerbSet({ verbs: [] });
+    const set = verbSetGet({ verbs: [] });
     expect(set.size).toBe(0);
   });
 });
 
-describe('extractFunctions', () => {
+describe('functionMatchesGet', () => {
   describe('function declarations', () => {
     it('extracts simple function declaration', () => {
       const source = 'function foo() {}';
-      const fns = extractFunctions(source);
+      const fns = functionMatchesGet(source);
       expect(fns).toHaveLength(1);
       expect(fns[0].name).toBe('foo');
     });
 
     it('extracts exported function declaration', () => {
       const source = 'export function bar() {}';
-      const fns = extractFunctions(source);
+      const fns = functionMatchesGet(source);
       expect(fns).toHaveLength(1);
       expect(fns[0].name).toBe('bar');
     });
 
     it('extracts async function declaration', () => {
       const source = 'async function baz() {}';
-      const fns = extractFunctions(source);
+      const fns = functionMatchesGet(source);
       expect(fns).toHaveLength(1);
       expect(fns[0].name).toBe('baz');
     });
 
     it('extracts generator function declaration', () => {
       const source = 'function* gen() {}';
-      const fns = extractFunctions(source);
+      const fns = functionMatchesGet(source);
       expect(fns).toHaveLength(1);
       expect(fns[0].name).toBe('gen');
     });
@@ -187,28 +193,28 @@ describe('extractFunctions', () => {
   describe('arrow functions', () => {
     it('extracts const arrow function', () => {
       const source = 'const fn = () => {}';
-      const fns = extractFunctions(source);
+      const fns = functionMatchesGet(source);
       expect(fns).toHaveLength(1);
       expect(fns[0].name).toBe('fn');
     });
 
     it('extracts async arrow function', () => {
       const source = 'const fn = async () => {}';
-      const fns = extractFunctions(source);
+      const fns = functionMatchesGet(source);
       expect(fns).toHaveLength(1);
       expect(fns[0].name).toBe('fn');
     });
 
     it('extracts let arrow function', () => {
       const source = 'let fn = () => {}';
-      const fns = extractFunctions(source);
+      const fns = functionMatchesGet(source);
       expect(fns).toHaveLength(1);
       expect(fns[0].name).toBe('fn');
     });
 
     it('extracts var arrow function', () => {
       const source = 'var fn = () => {}';
-      const fns = extractFunctions(source);
+      const fns = functionMatchesGet(source);
       expect(fns).toHaveLength(1);
       expect(fns[0].name).toBe('fn');
     });
@@ -217,14 +223,14 @@ describe('extractFunctions', () => {
   describe('function expressions', () => {
     it('extracts const function expression', () => {
       const source = 'const fn = function() {}';
-      const fns = extractFunctions(source);
+      const fns = functionMatchesGet(source);
       expect(fns).toHaveLength(1);
       expect(fns[0].name).toBe('fn');
     });
 
     it('extracts named function expression (uses variable name)', () => {
       const source = 'const fn = function namedFn() {}';
-      const fns = extractFunctions(source);
+      const fns = functionMatchesGet(source);
       expect(fns).toHaveLength(1);
       expect(fns[0].name).toBe('fn');
     });
@@ -233,7 +239,7 @@ describe('extractFunctions', () => {
   describe('method declarations', () => {
     it('extracts class method', () => {
       const source = 'class C { method() {} }';
-      const fns = extractFunctions(source);
+      const fns = functionMatchesGet(source);
       expect(fns).toHaveLength(1);
       expect(fns[0].name).toBe('method');
     });
@@ -243,7 +249,7 @@ describe('extractFunctions', () => {
         methodA() {}
         methodB() {}
       }`;
-      const fns = extractFunctions(source);
+      const fns = functionMatchesGet(source);
       expect(fns).toHaveLength(2);
       expect(fns.map(f => f.name)).toContain('methodA');
       expect(fns.map(f => f.name)).toContain('methodB');
@@ -251,14 +257,14 @@ describe('extractFunctions', () => {
 
     it('extracts object literal method', () => {
       const source = 'const obj = { method() {} }';
-      const fns = extractFunctions(source);
+      const fns = functionMatchesGet(source);
       expect(fns).toHaveLength(1);
       expect(fns[0].name).toBe('method');
     });
 
     it('extracts async method', () => {
       const source = 'class C { async fetchData() {} }';
-      const fns = extractFunctions(source);
+      const fns = functionMatchesGet(source);
       expect(fns).toHaveLength(1);
       expect(fns[0].name).toBe('fetchData');
     });
@@ -271,7 +277,7 @@ describe('extractFunctions', () => {
           function inner() {}
         }
       `;
-      const fns = extractFunctions(source);
+      const fns = functionMatchesGet(source);
       expect(fns).toHaveLength(2);
       expect(fns.map(f => f.name)).toContain('outer');
       expect(fns.map(f => f.name)).toContain('inner');
@@ -283,7 +289,7 @@ describe('extractFunctions', () => {
           const inner = () => {};
         }
       `;
-      const fns = extractFunctions(source);
+      const fns = functionMatchesGet(source);
       expect(fns).toHaveLength(2);
       expect(fns.map(f => f.name)).toContain('outer');
       expect(fns.map(f => f.name)).toContain('inner');
@@ -293,25 +299,25 @@ describe('extractFunctions', () => {
   describe('non-function declarations', () => {
     it('does not extract variable declaration', () => {
       const source = 'const x = 1';
-      const fns = extractFunctions(source);
+      const fns = functionMatchesGet(source);
       expect(fns).toHaveLength(0);
     });
 
     it('does not extract type alias', () => {
       const source = 'type Foo = () => void';
-      const fns = extractFunctions(source);
+      const fns = functionMatchesGet(source);
       expect(fns).toHaveLength(0);
     });
 
     it('does not extract interface', () => {
       const source = 'interface Foo { bar(): void }';
-      const fns = extractFunctions(source);
+      const fns = functionMatchesGet(source);
       expect(fns).toHaveLength(0);
     });
 
     it('does not extract class declaration (only methods)', () => {
       const source = 'class Foo {}';
-      const fns = extractFunctions(source);
+      const fns = functionMatchesGet(source);
       expect(fns).toHaveLength(0);
     });
   });
@@ -319,21 +325,21 @@ describe('extractFunctions', () => {
   describe('line and column positions', () => {
     it('reports correct position for function on first line', () => {
       const source = 'function foo() {}';
-      const fns = extractFunctions(source);
+      const fns = functionMatchesGet(source);
       expect(fns[0].line).toBe(1);
       expect(fns[0].column).toBe(10); // position of 'foo'
     });
 
     it('reports correct position for function on second line', () => {
       const source = '// comment\nfunction bar() {}';
-      const fns = extractFunctions(source);
+      const fns = functionMatchesGet(source);
       expect(fns[0].line).toBe(2);
       expect(fns[0].column).toBe(10); // position of 'bar'
     });
 
     it('reports correct position for arrow function', () => {
       const source = 'const fn = () => {}';
-      const fns = extractFunctions(source);
+      const fns = functionMatchesGet(source);
       expect(fns[0].line).toBe(1);
       expect(fns[0].column).toBe(7); // position of 'fn'
     });
@@ -561,34 +567,172 @@ function handleRequest() {}`;
   });
 });
 
-describe('extractFunctionsPython', () => {
+describe('functionMatchesTsGet', () => {
+  describe('function declarations', () => {
+    it('extracts simple function declaration', () => {
+      const fns = functionMatchesTsGet('function foo() {}');
+      expect(fns).toHaveLength(1);
+      expect(fns[0].name).toBe('foo');
+    });
+
+    it('extracts exported function declaration', () => {
+      const fns = functionMatchesTsGet('export function bar() {}');
+      expect(fns).toHaveLength(1);
+      expect(fns[0].name).toBe('bar');
+    });
+
+    it('extracts async function declaration', () => {
+      const fns = functionMatchesTsGet('async function baz() {}');
+      expect(fns).toHaveLength(1);
+      expect(fns[0].name).toBe('baz');
+    });
+
+    it('extracts generator function declaration', () => {
+      const fns = functionMatchesTsGet('function* gen() {}');
+      expect(fns).toHaveLength(1);
+      expect(fns[0].name).toBe('gen');
+    });
+  });
+
+  describe('arrow functions', () => {
+    it('extracts const arrow function', () => {
+      const fns = functionMatchesTsGet('const fn = () => {}');
+      expect(fns).toHaveLength(1);
+      expect(fns[0].name).toBe('fn');
+    });
+
+    it('extracts async arrow function', () => {
+      const fns = functionMatchesTsGet('const fn = async () => {}');
+      expect(fns).toHaveLength(1);
+      expect(fns[0].name).toBe('fn');
+    });
+  });
+
+  describe('function expressions', () => {
+    it('extracts const function expression', () => {
+      const fns = functionMatchesTsGet('const fn = function() {}');
+      expect(fns).toHaveLength(1);
+      expect(fns[0].name).toBe('fn');
+    });
+
+    it('extracts named function expression (uses variable name)', () => {
+      const fns = functionMatchesTsGet('const fn = function namedFn() {}');
+      expect(fns).toHaveLength(1);
+      expect(fns[0].name).toBe('fn');
+    });
+  });
+
+  describe('method declarations', () => {
+    it('extracts class method', () => {
+      const fns = functionMatchesTsGet('class C { method() {} }');
+      expect(fns).toHaveLength(1);
+      expect(fns[0].name).toBe('method');
+    });
+
+    it('extracts object literal method', () => {
+      const fns = functionMatchesTsGet('const obj = { method() {} }');
+      expect(fns).toHaveLength(1);
+      expect(fns[0].name).toBe('method');
+    });
+
+    it('extracts async method', () => {
+      const fns = functionMatchesTsGet('class C { async fetchData() {} }');
+      expect(fns).toHaveLength(1);
+      expect(fns[0].name).toBe('fetchData');
+    });
+  });
+
+  describe('nested functions', () => {
+    it('extracts outer and inner function', () => {
+      const source = `
+        function outer() {
+          function inner() {}
+        }
+      `;
+      const fns = functionMatchesTsGet(source);
+      expect(fns).toHaveLength(2);
+      expect(fns.map(f => f.name)).toContain('outer');
+      expect(fns.map(f => f.name)).toContain('inner');
+    });
+  });
+
+  describe('non-function declarations', () => {
+    it('does not extract variable declaration', () => {
+      expect(functionMatchesTsGet('const x = 1')).toHaveLength(0);
+    });
+
+    it('does not extract type alias', () => {
+      expect(functionMatchesTsGet('type Foo = () => void')).toHaveLength(0);
+    });
+
+    it('does not extract interface', () => {
+      expect(functionMatchesTsGet('interface Foo { bar(): void }')).toHaveLength(0);
+    });
+
+    it('does not extract class declaration (only methods)', () => {
+      expect(functionMatchesTsGet('class Foo {}')).toHaveLength(0);
+    });
+  });
+
+  describe('line and column positions', () => {
+    it('reports correct position for function on first line', () => {
+      const fns = functionMatchesTsGet('function foo() {}');
+      expect(fns[0].line).toBe(1);
+      expect(fns[0].column).toBe(10);
+    });
+
+    it('reports correct position for function on second line', () => {
+      const fns = functionMatchesTsGet('// comment\nfunction bar() {}');
+      expect(fns[0].line).toBe(2);
+      expect(fns[0].column).toBe(10);
+    });
+
+    it('reports correct position for arrow function', () => {
+      const fns = functionMatchesTsGet('const fn = () => {}');
+      expect(fns[0].line).toBe(1);
+      expect(fns[0].column).toBe(7);
+    });
+  });
+
+  describe('edge cases', () => {
+    it('returns empty for empty source', () => {
+      expect(functionMatchesTsGet('')).toHaveLength(0);
+    });
+
+    it('returns empty for source with only comments', () => {
+      expect(functionMatchesTsGet('// comment\n/* block */')).toHaveLength(0);
+    });
+  });
+});
+
+describe('functionMatchesPyGet', () => {
   describe('function definitions', () => {
     it('extracts simple def', () => {
-      const fns = extractFunctionsPython('def foo():\n    pass\n');
+      const fns = functionMatchesPyGet('def foo():\n    pass\n');
       expect(fns).toHaveLength(1);
       expect(fns[0].name).toBe('foo');
     });
 
     it('extracts async def', () => {
-      const fns = extractFunctionsPython('async def bar():\n    pass\n');
+      const fns = functionMatchesPyGet('async def bar():\n    pass\n');
       expect(fns).toHaveLength(1);
       expect(fns[0].name).toBe('bar');
     });
 
     it('extracts function with parameters', () => {
-      const fns = extractFunctionsPython('def greet(name, greeting="hello"):\n    pass\n');
+      const fns = functionMatchesPyGet('def greet(name, greeting="hello"):\n    pass\n');
       expect(fns).toHaveLength(1);
       expect(fns[0].name).toBe('greet');
     });
 
     it('extracts function with type annotations', () => {
-      const fns = extractFunctionsPython('def run(x: int, y: str) -> bool:\n    return True\n');
+      const fns = functionMatchesPyGet('def run(x: int, y: str) -> bool:\n    return True\n');
       expect(fns).toHaveLength(1);
       expect(fns[0].name).toBe('run');
     });
 
     it('extracts function with underscore prefix', () => {
-      const fns = extractFunctionsPython('def _private_helper():\n    pass\n');
+      const fns = functionMatchesPyGet('def _private_helper():\n    pass\n');
       expect(fns).toHaveLength(1);
       expect(fns[0].name).toBe('_private_helper');
     });
@@ -596,28 +740,28 @@ describe('extractFunctionsPython', () => {
 
   describe('dunder exclusion', () => {
     it('skips __init__', () => {
-      const fns = extractFunctionsPython('def __init__(self):\n    pass\n');
+      const fns = functionMatchesPyGet('def __init__(self):\n    pass\n');
       expect(fns).toHaveLength(0);
     });
 
     it('skips __str__', () => {
-      const fns = extractFunctionsPython('def __str__(self):\n    return ""\n');
+      const fns = functionMatchesPyGet('def __str__(self):\n    return ""\n');
       expect(fns).toHaveLength(0);
     });
 
     it('skips __getitem__', () => {
-      const fns = extractFunctionsPython('def __getitem__(self, key):\n    pass\n');
+      const fns = functionMatchesPyGet('def __getitem__(self, key):\n    pass\n');
       expect(fns).toHaveLength(0);
     });
 
     it('does not skip single-underscore prefix', () => {
-      const fns = extractFunctionsPython('def _helper():\n    pass\n');
+      const fns = functionMatchesPyGet('def _helper():\n    pass\n');
       expect(fns).toHaveLength(1);
       expect(fns[0].name).toBe('_helper');
     });
 
     it('does not skip names with trailing double underscore only', () => {
-      const fns = extractFunctionsPython('def something__():\n    pass\n');
+      const fns = functionMatchesPyGet('def something__():\n    pass\n');
       expect(fns).toHaveLength(1);
       expect(fns[0].name).toBe('something__');
     });
@@ -632,7 +776,7 @@ describe('extractFunctionsPython', () => {
         '    def method_b(self):',
         '        pass',
       ].join('\n');
-      const fns = extractFunctionsPython(source);
+      const fns = functionMatchesPyGet(source);
       expect(fns).toHaveLength(2);
       expect(fns.map(f => f.name)).toEqual(['method_a', 'method_b']);
     });
@@ -647,7 +791,7 @@ describe('extractFunctionsPython', () => {
         '    def validate(value):',
         '        pass',
       ].join('\n');
-      const fns = extractFunctionsPython(source);
+      const fns = functionMatchesPyGet(source);
       expect(fns).toHaveLength(2);
       expect(fns.map(f => f.name)).toEqual(['from_dict', 'validate']);
     });
@@ -658,7 +802,7 @@ describe('extractFunctionsPython', () => {
         '    async def fetch_data(self):',
         '        pass',
       ].join('\n');
-      const fns = extractFunctionsPython(source);
+      const fns = functionMatchesPyGet(source);
       expect(fns).toHaveLength(1);
       expect(fns[0].name).toBe('fetch_data');
     });
@@ -667,14 +811,14 @@ describe('extractFunctionsPython', () => {
   describe('decorated functions', () => {
     it('extracts function after decorator', () => {
       const source = '@decorator\ndef foo():\n    pass\n';
-      const fns = extractFunctionsPython(source);
+      const fns = functionMatchesPyGet(source);
       expect(fns).toHaveLength(1);
       expect(fns[0].name).toBe('foo');
     });
 
     it('extracts function after multiple decorators', () => {
       const source = '@decorator_a\n@decorator_b(arg)\ndef bar():\n    pass\n';
-      const fns = extractFunctionsPython(source);
+      const fns = functionMatchesPyGet(source);
       expect(fns).toHaveLength(1);
       expect(fns[0].name).toBe('bar');
     });
@@ -688,7 +832,7 @@ describe('extractFunctionsPython', () => {
         '        pass',
         '    return inner',
       ].join('\n');
-      const fns = extractFunctionsPython(source);
+      const fns = functionMatchesPyGet(source);
       expect(fns).toHaveLength(2);
       expect(fns.map(f => f.name)).toEqual(['outer', 'inner']);
     });
@@ -706,7 +850,7 @@ describe('extractFunctionsPython', () => {
         'async def gamma():',
         '    pass',
       ].join('\n');
-      const fns = extractFunctionsPython(source);
+      const fns = functionMatchesPyGet(source);
       expect(fns).toHaveLength(3);
       expect(fns.map(f => f.name)).toEqual(['alpha', 'beta', 'gamma']);
     });
@@ -715,28 +859,28 @@ describe('extractFunctionsPython', () => {
   describe('line and column positions', () => {
     it('reports correct position for function on first line', () => {
       const source = 'def foo():\n    pass\n';
-      const fns = extractFunctionsPython(source);
+      const fns = functionMatchesPyGet(source);
       expect(fns[0].line).toBe(1);
       expect(fns[0].column).toBe(5);
     });
 
     it('reports correct position for function on second line', () => {
       const source = '# comment\ndef bar():\n    pass\n';
-      const fns = extractFunctionsPython(source);
+      const fns = functionMatchesPyGet(source);
       expect(fns[0].line).toBe(2);
       expect(fns[0].column).toBe(5);
     });
 
     it('reports correct position for async def', () => {
       const source = 'async def baz():\n    pass\n';
-      const fns = extractFunctionsPython(source);
+      const fns = functionMatchesPyGet(source);
       expect(fns[0].line).toBe(1);
       expect(fns[0].column).toBe(11);
     });
 
     it('reports correct position for indented method', () => {
       const source = 'class C:\n    def method(self):\n        pass\n';
-      const fns = extractFunctionsPython(source);
+      const fns = functionMatchesPyGet(source);
       expect(fns[0].line).toBe(2);
       expect(fns[0].column).toBe(9);
     });
@@ -744,61 +888,76 @@ describe('extractFunctionsPython', () => {
 
   describe('edge cases', () => {
     it('returns empty for empty source', () => {
-      expect(extractFunctionsPython('')).toHaveLength(0);
+      expect(functionMatchesPyGet('')).toHaveLength(0);
     });
 
     it('returns empty for source with only comments', () => {
-      expect(extractFunctionsPython('# comment\n"""docstring"""')).toHaveLength(0);
+      expect(functionMatchesPyGet('# comment\n"""docstring"""')).toHaveLength(0);
     });
 
-    // TODO: remove .skip once regex extractor is replaced with tree-sitter-based extraction
-    it.skip('does not match "def" inside strings', () => {
+    it('does not match "def" inside strings', () => {
       const source = 'x = "def not_a_function():"\n';
-      const fns = extractFunctionsPython(source);
+      const fns = functionMatchesPyGet(source);
       expect(fns).toHaveLength(0);
     });
 
-    // TODO: remove .skip once regex extractor is replaced with tree-sitter-based extraction
-    it.skip('does not match "def" inside comments', () => {
+    it('does not match "def" inside comments', () => {
       const source = '# def not_a_function():\n';
-      const fns = extractFunctionsPython(source);
+      const fns = functionMatchesPyGet(source);
+      expect(fns).toHaveLength(0);
+    });
+
+    it('does not match "def" inside multiline strings', () => {
+      const source = [
+        'docstring = """',
+        'def not_a_function():',
+        '    pass',
+        '"""',
+      ].join('\n');
+      const fns = functionMatchesPyGet(source);
+      expect(fns).toHaveLength(0);
+    });
+
+    it('does not match "def" inside f-strings', () => {
+      const source = 'msg = f"result: {def_count}"\n';
+      const fns = functionMatchesPyGet(source);
       expect(fns).toHaveLength(0);
     });
   });
 });
 
-describe('extractFunctions routing', () => {
+describe('functionMatchesGet routing', () => {
   it('routes .py files to Python extractor', () => {
     const source = 'def foo():\n    pass\n';
-    const fns = extractFunctions(source, 'module.py');
+    const fns = functionMatchesGet(source, 'module.py');
     expect(fns).toHaveLength(1);
     expect(fns[0].name).toBe('foo');
   });
 
   it('routes .ts files to TypeScript extractor', () => {
     const source = 'function foo() {}';
-    const fns = extractFunctions(source, 'module.ts');
+    const fns = functionMatchesGet(source, 'module.ts');
     expect(fns).toHaveLength(1);
     expect(fns[0].name).toBe('foo');
   });
 
   it('defaults to TypeScript extractor when no filePath', () => {
     const source = 'function foo() {}';
-    const fns = extractFunctions(source);
+    const fns = functionMatchesGet(source);
     expect(fns).toHaveLength(1);
     expect(fns[0].name).toBe('foo');
   });
 
   it('routes absolute .py path to Python extractor', () => {
     const source = 'def bar():\n    pass\n';
-    const fns = extractFunctions(source, '/home/user/project/module.py');
+    const fns = functionMatchesGet(source, '/home/user/project/module.py');
     expect(fns).toHaveLength(1);
     expect(fns[0].name).toBe('bar');
   });
 
   it('does not use Python extractor for .pyw files', () => {
     const source = 'def bar():\n    pass\n';
-    const fns = extractFunctions(source, 'script.pyw');
+    const fns = functionMatchesGet(source, 'script.pyw');
     expect(fns).toHaveLength(0);
   });
 });

@@ -3,6 +3,8 @@ import type {
   PolicyCheckContext,
   PolicyViolation,
 } from '@codepol/core';
+import { parserGetForFile, isErr } from '@codepol/core';
+import type { SyntaxNode } from 'web-tree-sitter';
 import ts from 'typescript';
 import { identifierSplitByCasing } from './lib/identifierSplitByCasing';
 
@@ -10,13 +12,13 @@ type NoVerbFunctionNameArgs = {
   verbs: string[];
 };
 
-export type FunctionMatch = {
+type FunctionMatch = {
   name: string;
   line: number;
   column: number;
 };
 
-export function extractFunctionsTypeScript(source: string): FunctionMatch[] {
+export function functionMatchesTsGet(source: string): FunctionMatch[] {
   const matches: FunctionMatch[] = [];
   const sourceFile = ts.createSourceFile(
     'temp.ts',
@@ -65,55 +67,54 @@ export function extractFunctionsTypeScript(source: string): FunctionMatch[] {
   return matches;
 }
 
-const PYTHON_DEF_PATTERN = /(?:async\s+)?def\s+([a-zA-Z_]\w*)\s*\(/gm;
-
 function isDunderName(name: string): boolean {
   return name.startsWith('__') && name.endsWith('__');
 }
 
-function lineAndColumnFromOffset(source: string, offset: number): { line: number; column: number } {
-  let line = 1;
-  let lastNewline = -1;
-  for (let i = 0; i < offset; i++) {
-    if (source[i] === '\n') {
-      line++;
-      lastNewline = i;
-    }
+function functionDefinitionsVisit(
+  node: SyntaxNode,
+  visitor: (fnNode: SyntaxNode) => void
+): void {
+  if (node.type === 'function_definition') {
+    visitor(node);
   }
-  return { line, column: offset - lastNewline };
+  for (const child of node.namedChildren) {
+    functionDefinitionsVisit(child, visitor);
+  }
 }
 
-/**
- * Regex-based Python function name extractor.
- * This is a compatibility step — the extraction function is isolated
- * so it can be replaced with a tree-sitter-based extractor later.
- */
-export function extractFunctionsPython(source: string): FunctionMatch[] {
-  const matches: FunctionMatch[] = [];
-  const pattern = new RegExp(PYTHON_DEF_PATTERN.source, 'gm');
-
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(source)) !== null) {
-    const name = match[1];
-    if (isDunderName(name)) continue;
-
-    const nameOffset = match.index + match[0].indexOf(name);
-    const { line, column } = lineAndColumnFromOffset(source, nameOffset);
-
-    matches.push({ name, line, column });
+export function functionMatchesPyGet(source: string): FunctionMatch[] {
+  const parserResult = parserGetForFile('temp.py');
+  if (isErr(parserResult)) {
+    throw new Error(`Python parser not available: ${parserResult.Err}`);
   }
+
+  const parser = parserResult.Ok;
+  const tree = parser.parse(source);
+  const matches: FunctionMatch[] = [];
+
+  functionDefinitionsVisit(tree.rootNode, (fnNode) => {
+    const nameNode = fnNode.childForFieldName('name');
+    if (nameNode && !isDunderName(nameNode.text)) {
+      matches.push({
+        name: nameNode.text,
+        line: nameNode.startPosition.row + 1,
+        column: nameNode.startPosition.column + 1,
+      });
+    }
+  });
 
   return matches;
 }
 
-export function extractFunctions(source: string, filePath: string = 'temp.ts'): FunctionMatch[] {
+export function functionMatchesGet(source: string, filePath: string = 'temp.ts'): FunctionMatch[] {
   if (filePath.endsWith('.py')) {
-    return extractFunctionsPython(source);
+    return functionMatchesPyGet(source);
   }
-  return extractFunctionsTypeScript(source);
+  return functionMatchesTsGet(source);
 }
 
-export function buildVerbSet(args: NoVerbFunctionNameArgs | undefined): Set<string> {
+export function verbSetGet(args: NoVerbFunctionNameArgs | undefined): Set<string> {
   if (!args?.verbs || args.verbs.length === 0) {
     return new Set();
   }
@@ -137,9 +138,9 @@ export function noVerbFunctionNameCheck(
 ): PolicyViolation[] {
   const violations: PolicyViolation[] = [];
   const args = context.ruleArgs as NoVerbFunctionNameArgs | undefined;
-  const verbs = buildVerbSet(args);
+  const verbs = verbSetGet(args);
 
-  const functions = extractFunctions(context.source, context.filePath);
+  const functions = functionMatchesGet(context.source, context.filePath);
 
   for (const fn of functions) {
     const matchedVerb = startsWithVerb(fn.name, verbs);

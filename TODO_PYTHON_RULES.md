@@ -8,7 +8,7 @@ This document tracks the next steps for Python rule support after making tree-ch
 - `no-star-export-collisions` stays explicitly restricted to `typescript` / `tsx`.
 - `require-logger-enter-exit` should also stay explicitly restricted to `typescript` / `tsx` for now.
 - `forbidden-path-words` is language-agnostic and can rely on default-all behavior.
-- `no-verb-function-name` now supports Python (regex-based extraction, see Section 2).
+- `no-verb-function-name` now supports Python (tree-sitter-based extraction, see Section 2).
 - `no-unused-exports` should not be stretched directly into Python without a separate design for Python dead-code detection.
 
 ## 1. Python Dead Code
@@ -86,16 +86,17 @@ Python support for `no-verb-function-name` has been implemented via a language-a
 ### What was done
 
 - Renamed `extractFunctions` to `extractFunctionsTypeScript` (no logic changes).
-- Added `extractFunctionsPython` using regex (`/(?:async\s+)?def\s+([a-zA-Z_]\w*)\s*\(/gm`).
+- Added `extractFunctionsPython` — initially regex-based, now tree-sitter-based (see below).
 - Added `extractFunctions(source, filePath)` as a router dispatching by `.py` extension.
 - Updated `noVerbFunctionNameCheck` to pass `context.filePath` to the router.
 - Set explicit `languages: ['typescript', 'tsx', 'python']` on the rule provider.
 - Added `"python-src"` to the `no-verb-function-name` rule targets in `codepol.toml`.
+- Replaced regex extractor with tree-sitter AST walk for correctness.
 
 ### Design decisions
 
 - **Dunder exclusion:** `__init__`, `__str__`, `__getitem__`, etc. are skipped by the Python extractor since they are language-mandated names and would false-positive on verbs like `init`, `get`, `set`.
-- **Regex-based extraction:** This is an explicit compatibility step. The `extractFunctionsPython` function is isolated so it can be replaced with a tree-sitter-based extractor later. Known limitation: regex cannot distinguish `def` inside string literals or comments from real definitions (tests for these cases are skipped with TODO markers).
+- **Tree-sitter extraction:** `extractFunctionsPython` uses `parserGetForFile` from `@codepol/core` to parse Python source via tree-sitter, then walks `function_definition` nodes. This correctly ignores `def` inside string literals, comments, and multiline strings. Requires `langAdd` + `parserInit()` to have been called before use (same requirement as `policyPluginLogger.ts`).
 
 ### Completed tasks
 
@@ -104,11 +105,11 @@ Python support for `no-verb-function-name` has been implemented via a language-a
 - [x] Add Python extraction and route by file extension.
 - [x] Set explicit rule languages to `['typescript', 'tsx', 'python']`.
 - [x] Add integration test in `tests/core.plugins.spec.ts` for Python verb-name violations.
+- [x] Replace regex extractor with tree-sitter-based extraction for correctness (handles `def` inside strings/comments).
 
 ### Remaining
 
 - [ ] Add Ruff adapter coverage for Python rule execution if we want the rule to run through Ruff workflows.
-- [ ] Replace regex extractor with tree-sitter-based extraction for correctness (handles `def` inside strings/comments).
 
 ## 3. Suggested Order
 
