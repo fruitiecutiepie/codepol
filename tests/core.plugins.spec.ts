@@ -345,8 +345,38 @@ describe('policyViolationsGetForFile with real plugin', () => {
     expect(violations[0].column).toBeGreaterThan(0);
   });
 
-  // TODO: remove .skip once Ruff adapter coverage is added for no-verb-function-name
-  it.skip('runs no-verb-function-name through Ruff adapter for Python', () => {
-    // Placeholder for Ruff adapter integration
+  it('runs no-verb-function-name through Ruff adapter for Python', () => {
+    const { ruffAdapter } = require('@codepol/plugin-ruff');
+    const adapted = ruffAdapter.adapt(noVerbFunctionNameRule);
+
+    const pythonSource = [
+      'def get_data():',
+      '    return []',
+      '',
+      'def data_store():',
+      '    pass',
+      '',
+      'class Repo:',
+      '    def __init__(self):',
+      '        pass',
+      '    def fetch_items(self):',
+      '        return []',
+    ].join('\n');
+
+    const diagnostics = adapted.check(
+      '/src/service.py',
+      pythonSource,
+      { verbs: ['get', 'fetch', 'set', 'init'] }
+    );
+
+    expect(diagnostics).toHaveLength(2);
+    expect(diagnostics.map((d: any) => d.message)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('get_data'),
+        expect.stringContaining('fetch_items'),
+      ])
+    );
+    expect(diagnostics[0].ruleId).toBe('no-verb-function-name');
+    expect(diagnostics[0].severity).toBe('error');
   });
 });

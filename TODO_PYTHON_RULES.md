@@ -58,26 +58,24 @@ Open question:
 
 ### Proposed Tasks
 
-- [ ] Define the public interface first: a `vultureCheck(files, config)` style wrapper returning `Result<PolicyViolation[], string>`.
-- [ ] Decide package boundary: dedicated `plugin-vulture` package vs generic subprocess helper.
-- [ ] Model config options:
+- [x] 2026-03-28 Define the public interface first: a `vultureCheck(files, config)` style wrapper returning `Result<PolicyViolation[], string>`.
+- [x] 2026-03-28 Decide package boundary: dedicated `plugin-vulture` package vs generic subprocess helper. Decision: dedicated `packages/plugin-vulture/` package, mirroring `@codepol/plugin-ruff`.
+- [x] 2026-03-28 Model config options:
   - `vultureBin`
   - `configPath`
   - `minConfidence`
   - `exclude`
   - `ignoreNames`
   - whitelist file support
-- [ ] Normalize Vulture findings into codepol diagnostics with stable `ruleId`, `filePath`, `message`, `line`, and `column`.
-- [ ] Add tests for:
+- [x] 2026-03-28 Normalize Vulture findings into codepol diagnostics with stable `ruleId`, `filePath`, `message`, `line`, and `column`. Vulture has no JSON output; a text-output parser (`vultureOutputParse`) parses the `filename:line: unused type 'name' (confidence% confidence)` format. Column defaults to `1`.
+- [x] 2026-03-28 Add tests for:
   - dead function
   - dead class
   - unused import
   - whitelist suppression
   - confidence filtering
   - subprocess failure / missing binary handling
-- [ ] Decide how Python dead-code rules should be exposed in policy:
-  - a new rule id, or
-  - a Python-specific sibling to `no-unused-exports`
+- [x] 2026-03-28 Decide how Python dead-code rules should be exposed in policy: new rule ID `python-dead-code`, separate from `no-unused-exports` (which is JS/TS-specific). Invoked directly by CLI via `vultureCheck`, not through the ESLint adapter.
 
 ## 2. Python `no-verb-function-name` (done)
 
@@ -109,7 +107,7 @@ Python support for `no-verb-function-name` has been implemented via a language-a
 
 ### Remaining
 
-- [ ] Add Ruff adapter coverage for Python rule execution if we want the rule to run through Ruff workflows.
+- [x] 2026-03-28 Add Ruff adapter coverage for Python rule execution if we want the rule to run through Ruff workflows. Added 7 tests in `tests/ruff.tree-check-adapter.spec.ts` and unskipped the placeholder in `tests/core.plugins.spec.ts`.
 
 ## 3. Suggested Order
 

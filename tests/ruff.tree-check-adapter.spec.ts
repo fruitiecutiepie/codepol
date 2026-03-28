@@ -3,6 +3,7 @@ import { ruffAdapter, ruffDiagnosticToViolation } from '@codepol/plugin-ruff';
 import type { RuffDiagnostic } from '@codepol/plugin-ruff';
 import { langAdd, parserInit, pluginRuleNew, treeCheckProviderNew } from '@codepol/core';
 import { forbiddenWordsCheck } from '../packages/plugin/src/forbiddenWordsCheck';
+import { noVerbFunctionNameRule } from '../packages/plugin/src/noVerbFunctionNameRule';
 
 const forbiddenWordsRule = pluginRuleNew({
   id: 'forbidden-words',
@@ -298,5 +299,153 @@ describe('ruff adapter with custom TreeCheckProvider', () => {
     );
 
     expect(diagnostics).toHaveLength(0);
+  });
+});
+
+describe('ruff adapter with no-verb-function-name rule', () => {
+  it('detects verb-prefixed function names in Python', () => {
+    const adapted = ruffAdapter.adapt(noVerbFunctionNameRule);
+
+    const pythonSource = [
+      'def get_data():',
+      '    return []',
+      '',
+      'def data_store():',
+      '    pass',
+    ].join('\n');
+
+    const diagnostics = adapted.check(
+      '/src/service.py',
+      pythonSource,
+      { verbs: ['get', 'set'] }
+    );
+
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0].message).toContain('get_data');
+    expect(diagnostics[0].ruleId).toBe('no-verb-function-name');
+    expect(diagnostics[0].severity).toBe('error');
+  });
+
+  it('detects verb-prefixed methods inside classes', () => {
+    const adapted = ruffAdapter.adapt(noVerbFunctionNameRule);
+
+    const pythonSource = [
+      'class UserService:',
+      '    def fetch_users(self):',
+      '        return []',
+      '',
+      '    def users_list(self):',
+      '        return []',
+    ].join('\n');
+
+    const diagnostics = adapted.check(
+      '/src/users.py',
+      pythonSource,
+      { verbs: ['fetch'] }
+    );
+
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0].message).toContain('fetch_users');
+  });
+
+  it('skips dunder methods', () => {
+    const adapted = ruffAdapter.adapt(noVerbFunctionNameRule);
+
+    const pythonSource = [
+      'class Model:',
+      '    def __init__(self):',
+      '        pass',
+      '    def __getitem__(self, key):',
+      '        return None',
+      '    def __setattr__(self, name, value):',
+      '        pass',
+    ].join('\n');
+
+    const diagnostics = adapted.check(
+      '/src/model.py',
+      pythonSource,
+      { verbs: ['init', 'get', 'set'] }
+    );
+
+    expect(diagnostics).toHaveLength(0);
+  });
+
+  it('returns no diagnostics for non-Python files', () => {
+    const adapted = ruffAdapter.adapt(noVerbFunctionNameRule);
+
+    const diagnostics = adapted.check(
+      '/src/service.ts',
+      'function getData() { return []; }',
+      { verbs: ['get'] }
+    );
+
+    expect(diagnostics).toHaveLength(0);
+  });
+
+  it('returns no diagnostics when no verbs match', () => {
+    const adapted = ruffAdapter.adapt(noVerbFunctionNameRule);
+
+    const pythonSource = [
+      'def data_handler():',
+      '    pass',
+      '',
+      'def item_processor():',
+      '    pass',
+    ].join('\n');
+
+    const diagnostics = adapted.check(
+      '/src/handlers.py',
+      pythonSource,
+      { verbs: ['get', 'set', 'fetch'] }
+    );
+
+    expect(diagnostics).toHaveLength(0);
+  });
+
+  it('detects multiple violations across functions and methods', () => {
+    const adapted = ruffAdapter.adapt(noVerbFunctionNameRule);
+
+    const pythonSource = [
+      'def get_data():',
+      '    return []',
+      '',
+      'def fetch_items():',
+      '    return []',
+      '',
+      'class Repo:',
+      '    def set_value(self, v):',
+      '        self.v = v',
+    ].join('\n');
+
+    const diagnostics = adapted.check(
+      '/src/repo.py',
+      pythonSource,
+      { verbs: ['get', 'fetch', 'set'] }
+    );
+
+    expect(diagnostics).toHaveLength(3);
+    const messages = diagnostics.map((d: any) => d.message);
+    expect(messages).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('get_data'),
+        expect.stringContaining('fetch_items'),
+        expect.stringContaining('set_value'),
+      ])
+    );
+  });
+
+  it('uses warning severity when configured', () => {
+    const adapted = ruffAdapter.adapt(noVerbFunctionNameRule, {
+      severity: 'warning',
+    });
+
+    const diagnostics = adapted.check(
+      '/src/app.py',
+      'def get_value():\n    return 1\n',
+      { verbs: ['get'] }
+    );
+
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0].severity).toBe('warning');
   });
 });
