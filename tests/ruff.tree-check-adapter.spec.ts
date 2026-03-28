@@ -4,6 +4,10 @@ import type { RuffDiagnostic } from '@codepol/plugin-ruff';
 import { langAdd, parserInit, pluginRuleNew, treeCheckProviderNew } from '@codepol/core';
 import { forbiddenWordsCheck } from '../packages/plugin/src/forbiddenWordsCheck';
 import { noVerbFunctionNameRule } from '../packages/plugin/src/noVerbFunctionNameRule';
+import fs from 'node:fs';
+import path from 'node:path';
+
+const FIXTURE_DIR = path.resolve(__dirname, 'fixtures', 'py');
 
 const forbiddenWordsRule = pluginRuleNew({
   id: 'forbidden-words',
@@ -447,5 +451,106 @@ describe('ruff adapter with no-verb-function-name rule', () => {
 
     expect(diagnostics).toHaveLength(1);
     expect(diagnostics[0].severity).toBe('warning');
+  });
+});
+
+function fixtureRead(relativePath: string): { filePath: string; source: string } {
+  const filePath = path.join(FIXTURE_DIR, relativePath);
+  return { filePath, source: fs.readFileSync(filePath, 'utf8') };
+}
+
+describe('ruff adapter with fixture files', () => {
+  describe('forbidden-words on fixtures', () => {
+    it('detects forbidden words in helpers.py', () => {
+      const adapted = ruffAdapter.adapt(forbiddenWordsRule);
+      const { filePath, source } = fixtureRead('myapp/services/helpers.py');
+
+      const diagnostics = adapted.check(filePath, source, { words: ['batch'] });
+
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].message).toContain("'process_batch'");
+      expect(diagnostics[0].message).toContain("'batch'");
+    });
+
+    it('detects forbidden words in commands.py', () => {
+      const adapted = ruffAdapter.adapt(forbiddenWordsRule);
+      const { filePath, source } = fixtureRead('myapp/cli/commands.py');
+
+      const diagnostics = adapted.check(filePath, source, { words: ['command'] });
+
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].message).toContain("'run_command'");
+    });
+
+    it('returns no diagnostics for clean fixture file', () => {
+      const adapted = ruffAdapter.adapt(forbiddenWordsRule);
+      const { filePath, source } = fixtureRead('myapp/__init__.py');
+
+      const diagnostics = adapted.check(filePath, source, { words: ['forbidden'] });
+
+      expect(diagnostics).toHaveLength(0);
+    });
+  });
+
+  describe('no-verb-function-name on fixtures', () => {
+    it('detects verb-prefixed functions in commands.py', () => {
+      const adapted = ruffAdapter.adapt(noVerbFunctionNameRule);
+      const { filePath, source } = fixtureRead('myapp/cli/commands.py');
+
+      const diagnostics = adapted.check(filePath, source, { verbs: ['run', 'list'] });
+
+      expect(diagnostics).toHaveLength(2);
+      const messages = diagnostics.map((d: any) => d.message);
+      expect(messages).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('run_command'),
+          expect.stringContaining('list_users'),
+        ])
+      );
+    });
+
+    it('detects verb-prefixed functions in auth.py', () => {
+      const adapted = ruffAdapter.adapt(noVerbFunctionNameRule);
+      const { filePath, source } = fixtureRead('myapp/services/auth.py');
+
+      const diagnostics = adapted.check(filePath, source, { verbs: ['refresh', 'verify'] });
+
+      expect(diagnostics).toHaveLength(2);
+      const messages = diagnostics.map((d: any) => d.message);
+      expect(messages).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('refresh_token'),
+          expect.stringContaining('verify_model'),
+        ])
+      );
+    });
+
+    it('detects verb-prefixed functions in helpers.py', () => {
+      const adapted = ruffAdapter.adapt(noVerbFunctionNameRule);
+      const { filePath, source } = fixtureRead('myapp/services/helpers.py');
+
+      const diagnostics = adapted.check(filePath, source, { verbs: ['process'] });
+
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].message).toContain('process_batch');
+    });
+
+    it('skips dunder methods in user.py', () => {
+      const adapted = ruffAdapter.adapt(noVerbFunctionNameRule);
+      const { filePath, source } = fixtureRead('myapp/models/user.py');
+
+      const diagnostics = adapted.check(filePath, source, { verbs: ['init', 'get'] });
+
+      expect(diagnostics).toHaveLength(0);
+    });
+
+    it('detects nothing in standalone.py with non-matching verbs', () => {
+      const adapted = ruffAdapter.adapt(noVerbFunctionNameRule);
+      const { filePath, source } = fixtureRead('standalone.py');
+
+      const diagnostics = adapted.check(filePath, source, { verbs: ['fetch', 'set'] });
+
+      expect(diagnostics).toHaveLength(0);
+    });
   });
 });

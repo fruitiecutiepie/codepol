@@ -97,9 +97,14 @@ export function vultureFindingToViolation(finding: VultureFinding): PolicyViolat
 /**
  * Runs `vulture` on the given files and returns the findings as PolicyViolation[].
  *
- * Vulture exits with code 1 when dead code is found (not an error) and
- * code 0 when no dead code is found. Exit code 2+ indicates a real error.
- * A missing vulture binary or invalid usage is reported via Result.Err.
+ * Vulture exit codes:
+ *   0 – no dead code found
+ *   1 – dead code found
+ *   2 – invalid CLI usage / config error
+ *   3 – dead code found AND syntax errors in some files
+ *
+ * Codes 1 and 3 are treated as success (findings in stdout).
+ * A missing vulture binary or invalid config is reported via Result.Err.
  */
 export function vultureCheck(
   files: string[],
@@ -121,7 +126,7 @@ export function vultureCheck(
     });
   } catch (err: unknown) {
     const execErr = err as { status?: number; stdout?: string; stderr?: string; message?: string };
-    if (execErr.status === 1 && execErr.stdout) {
+    if ((execErr.status === 1 || execErr.status === 3) && execErr.stdout) {
       stdout = execErr.stdout;
     } else if (execErr.status === 2) {
       return Err(`vulture configuration or usage error: ${execErr.stderr ?? execErr.message}`);

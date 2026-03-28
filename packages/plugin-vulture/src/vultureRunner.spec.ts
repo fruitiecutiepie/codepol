@@ -447,4 +447,24 @@ describe('vultureCheck', () => {
     expect(isErr(result)).toBe(true);
     expect(result.Err).toContain('usage error');
   });
+
+  it('treats exit code 3 as findings (dead code + syntax errors)', () => {
+    const vultureOutput =
+      "app.py:1: unused import 'os' (90% confidence)\n" +
+      "app.py:4: unused function 'greet' (60% confidence)";
+
+    mockExecFileSync.mockImplementation(() => {
+      const err = new Error('vulture exited with code 3') as any;
+      err.status = 3;
+      err.stdout = vultureOutput;
+      throw err;
+    });
+
+    const result = vultureCheck(['app.py']);
+
+    expect(isOk(result)).toBe(true);
+    expect(result.Ok).toHaveLength(2);
+    expect(result.Ok![0].message).toBe("unused import 'os' (90% confidence)");
+    expect(result.Ok![1].message).toBe("unused function 'greet' (60% confidence)");
+  });
 });
