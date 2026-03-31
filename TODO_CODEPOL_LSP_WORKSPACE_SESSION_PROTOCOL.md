@@ -768,4 +768,4 @@ The key decisions are:
 
 That gives Codepol deterministic reconnect behavior and prevents the exact problems this section called out: stale answers, dropped diagnostics, duplicate warm-up work, and inconsistent request behavior during warm-up.
 
-The next section that usually needs pinning down after this is request ordering, cancellation, and snapshot consistency, because once replay exists you need a precise rule for what state each query observes.
+That next boundary is now covered by `TODO_CODEPOL_LSP_SNAPSHOT_EXECUTION_CONTRACT.md`. After that, the next natural section is write and mutation semantics, because once replay and reads have pinned snapshot rules, commands need matching precondition and commit rules.

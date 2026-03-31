@@ -626,7 +626,61 @@ Detailed note:
 
 - [TODO_CODEPOL_LSP_WORKSPACE_SESSION_PROTOCOL.md](TODO_CODEPOL_LSP_WORKSPACE_SESSION_PROTOCOL.md)
 
-### 5. Config reload and invalidation rules
+### 5. Request ordering, cancellation, and snapshot consistency
+
+Decision:
+
+- define this boundary as the snapshot and execution contract for daemon requests and side effects
+- every request binds to an explicit state vector capturing at least:
+  - `daemon_session_id`
+  - `workspace_instance_id`
+  - `replay_epoch`
+  - `client_session_id` when client-local overlays matter
+  - document overlay version or versions when relevant
+  - `file_system_revision` when relevant
+  - one published `analysis_generation` when relevant
+- make pinned snapshots the default read model:
+  - reads run against a coherent published snapshot chosen at dispatch time, not a moving target
+  - consistency levels are explicit: pinned latest safe, pinned exact, and labeled best-effort only for explicitly degraded features
+- treat replay and invalidation as ordered writes with barriers:
+  - replay messages form a per-session ordered stream ending in a replay barrier
+  - foreground reads must not observe half-applied replay or half-published analysis state
+- publish new semantic state by committed generations:
+  - background indexing and file-watch invalidation build future generations
+  - reads see generation `G` or committed `G+1`, never a mix
+- split cancellation semantics:
+  - compute cancellation is best-effort
+  - publication cancellation is hard, so canceled or superseded work must not publish current replies or side effects
+- require metadata on all responses and push events:
+  - clients discard stale outputs by daemon session, workspace instance, replay epoch, document version, request id, and analysis generation as applicable
+
+Why it matters:
+
+- without a pinned snapshot contract, technically successful requests can still be operationally wrong because they mix old overlays, new index state, and stale replay visibility
+- editor interactions constantly race with edits, reconnect, replay, invalidation, and background indexing, so stale-response handling must be deterministic
+- diagnostics, progress, and other push side effects need the same freshness rules as direct request responses
+
+Key invariants:
+
+- every request and publish event is attributable to one daemon session, one workspace instance, and one replay epoch
+- document-sensitive reads must not claim success against an older overlay version than requested
+- cross-file and project-wide reads execute against one pinned published analysis generation
+- no request may observe half-applied replay or half-committed analysis state
+- canceled or superseded work may continue internally, but it must not publish user-visible results as current
+- correctness-sensitive commands must validate exact snapshot preconditions or fail and require revalidation
+
+Read the detailed note when:
+
+- defining request binding metadata, consistency levels, or snapshot-resolution rules
+- implementing replay barriers, generation commit, stale-response discard, or supersession logic
+- deciding cancellation and side-effect suppression behavior for diagnostics, progress, or other push channels
+- validating rename, refactor, or apply operations against exact snapshot preconditions
+
+Detailed note:
+
+- [TODO_CODEPOL_LSP_SNAPSHOT_EXECUTION_CONTRACT.md](TODO_CODEPOL_LSP_SNAPSHOT_EXECUTION_CONTRACT.md)
+
+### 6. Config reload and invalidation rules
 
 Current gap:
 
@@ -644,7 +698,7 @@ Decision needed:
   - index rebuild
   - daemon workspace restart
 
-### 6. Trust and sandboxing model
+### 7. Trust and sandboxing model
 
 Current gap:
 
@@ -664,7 +718,7 @@ Decision needed:
   - timeout and memory ceilings
   - user-visible failure and trust prompts if needed
 
-### 7. Multi-root and remote execution scope
+### 8. Multi-root and remote execution scope
 
 Current gap:
 
@@ -685,7 +739,7 @@ Decision needed:
   - local multi-root
   - remote-aware from day one
 
-### 8. Persistence contract and cache versioning
+### 9. Persistence contract and cache versioning
 
 Current gap:
 
@@ -704,7 +758,7 @@ Decision needed:
   - crash-safe write behavior
   - cleanup and TTL policy
 
-### 9. Process-plugin capability roadmap
+### 10. Process-plugin capability roadmap
 
 Current gap:
 
