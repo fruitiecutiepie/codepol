@@ -493,29 +493,39 @@ Detailed note:
 
 ### 2. Capability ownership matrix by language
 
-Current gap:
+Decision:
 
-- the plan says not to replace `tsserver`, `Pylance`, or `Pyright` in phase 1, but it also includes LSP features such as definition, references, hover, and rename
+- for TypeScript/JavaScript and Python, Codepol does not replace `tsserver`, `Pylance`, or `Pyright` in phase 1
+- existing language servers remain the source of truth for core language intelligence and standard language-semantic features
+- Codepol may only act as a supplemental provider for Codepol-owned semantic classes:
+  - project or domain entities
+  - architecture or policy objects
+  - generated artifacts
+  - config-derived navigation and symbols
+- define ownership by semantic class, not only by feature name
+- when coexistence is ambiguous, prefer explicit Codepol commands, views, or clearly labeled alternate results over competing default handlers
 
 Why it matters:
 
-- without an explicit matrix, implementation may drift into duplicate or conflicting results
+- without an explicit matrix, implementation will drift into duplicate UI entries, inconsistent jump targets, conflicting rename scopes, and user confusion about which result is authoritative
+- an underspecified phase-1 boundary creates pressure to "just implement the missing 20%" until Codepol accidentally becomes a second language server
 
-Decision needed:
+Key invariants:
 
-- define, per language and per feature, whether Codepol is:
-  - source of truth
-  - supplemental provider
-  - not implemented yet
+- phase-1 Codepol capabilities must not compete with standard language intelligence on normal code symbols
+- any shared editor surface must label Codepol results clearly and carry provenance plus semantic-class metadata
+- when coexistence is ambiguous, prefer explicit Codepol commands over competing default handlers
 
-At minimum, decide this for:
+Read the detailed note when:
 
-- diagnostics
-- definition
-- references
-- hover
-- rename
-- workspace symbols
+- deciding whether a new LSP capability belongs in phase 1
+- implementing `definition`, `references`, `hover`, `rename`, or `workspace/symbol`
+- deciding whether results should appear in the default flow or behind explicit Codepol commands
+- defining provenance or semantic-class labels for adapter output
+
+Detailed note:
+
+- [TODO_CODEPOL_LSP_CAPABILITY_MATRIX.md](TODO_CODEPOL_LSP_CAPABILITY_MATRIX.md)
 
 ### 3. Daemon discovery, launch, and version handshake
 
