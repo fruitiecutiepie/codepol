@@ -436,6 +436,174 @@ Examples:
 - a failed dependency graph query does not block diagnostics
 - external linter timeouts do not poison native semantic features
 
+## Open Design Decisions
+
+The sections above define the recommended architecture, but the following contracts still need explicit decisions before implementation starts in earnest.
+
+### 1. Fix and code-action model
+
+Current gap:
+
+- the document explains diagnostics and service boundaries, but it does not yet define how fixes are exposed and applied consistently across:
+  - plugin `FixProvider`
+  - tree-check fixes carried on violations
+  - ESLint autofix
+  - Ruff `--fix`
+
+Why it matters:
+
+- editor UX needs a clear model for:
+  - single quick fix
+  - fix all for a rule
+  - fix all in file
+  - safe ordering when multiple fix engines touch the same file
+  - conflict detection when byte ranges overlap
+
+Decision needed:
+
+- define a first-class service-level fix/code-action contract and decide whether all fix sources are normalized into one `WorkspaceEdit` model before adapters see them
+
+### 2. Capability ownership matrix by language
+
+Current gap:
+
+- the plan says not to replace `tsserver`, `Pylance`, or `Pyright` in phase 1, but it also includes LSP features such as definition, references, hover, and rename
+
+Why it matters:
+
+- without an explicit matrix, implementation may drift into duplicate or conflicting results
+
+Decision needed:
+
+- define, per language and per feature, whether Codepol is:
+  - source of truth
+  - supplemental provider
+  - not implemented yet
+
+At minimum, decide this for:
+
+- diagnostics
+- definition
+- references
+- hover
+- rename
+- workspace symbols
+
+### 3. Daemon discovery, launch, and version handshake
+
+Current gap:
+
+- the plan recommends a daemon over socket or named pipe, but it does not define how clients discover, launch, reconnect to, or version-check that daemon
+
+Why it matters:
+
+- this affects packaging, stale socket cleanup, extension upgrades, CLI interoperability, and fallback behavior when the daemon is unavailable or out of date
+
+Decision needed:
+
+- define:
+  - daemon discovery path
+  - launch authority
+  - startup handshake
+  - version compatibility rules
+  - stale process and stale socket recovery
+  - fallback mode when the daemon cannot be used
+
+### 4. Config reload and invalidation rules
+
+Current gap:
+
+- the plan talks about workspace identity and caches, but it does not define how config changes invalidate state
+
+Why it matters:
+
+- `codepol.toml`, ESLint config, Ruff config, plugin declarations, and environment changes can all alter diagnostics, indexing scope, or transport behavior
+
+Decision needed:
+
+- define which changes trigger:
+  - partial rule re-evaluation
+  - target/file-match recomputation
+  - index rebuild
+  - daemon workspace restart
+
+### 5. Trust and sandboxing model
+
+Current gap:
+
+- the repo already supports process plugins and external tool execution, but the plan does not define the trust model for running those inside a long-lived editor daemon
+
+Why it matters:
+
+- a persistent daemon makes command execution and environment handling more security-sensitive than one-shot CLI execution
+
+Decision needed:
+
+- define:
+  - workspace trust requirements
+  - when process plugins and external linters may run
+  - environment variable passthrough rules
+  - cwd restrictions
+  - timeout and memory ceilings
+  - user-visible failure and trust prompts if needed
+
+### 6. Multi-root and remote execution scope
+
+Current gap:
+
+- the current document assumes a local workspace-centric daemon, but it does not say whether the first implementation supports:
+  - multiple workspace folders
+  - remote containers
+  - SSH/remote hosts
+  - non-file URI schemes
+
+Why it matters:
+
+- these choices affect URI normalization, transport assumptions, daemon placement, and workspace identity
+
+Decision needed:
+
+- explicitly decide whether MVP scope is:
+  - local single-root only
+  - local multi-root
+  - remote-aware from day one
+
+### 7. Persistence contract and cache versioning
+
+Current gap:
+
+- the plan calls for warm-start behavior and persistent caches, but it does not define what is persisted or how persisted state is invalidated
+
+Why it matters:
+
+- incorrect cache reuse can silently corrupt semantic answers
+
+Decision needed:
+
+- define:
+  - what artifacts are persisted
+  - cache key inputs
+  - schema/version invalidation rules
+  - crash-safe write behavior
+  - cleanup and TTL policy
+
+### 8. Process-plugin capability roadmap
+
+Current gap:
+
+- the document notes that process plugins are less expressive than built-in lint providers, but it does not decide whether that asymmetry is temporary or intentional
+
+Why it matters:
+
+- this affects whether long-term analyzer replacement happens through:
+  - richer process-plugin contracts
+  - host-owned runners only
+  - a mix of both
+
+Decision needed:
+
+- define whether process plugins should eventually support richer lint-provider-style capabilities, or whether external lint orchestration remains exclusively a daemon-host concern
+
 ## Non-Goals For The First Implementation
 
 - replacing `tsserver`, `Pylance`, or `Pyright`
