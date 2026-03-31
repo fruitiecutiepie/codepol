@@ -1,0 +1,771 @@
+# Codepol LSP Workspace Session Protocol
+
+This companion note expands the `Workspace attachment and session replay` section in `TODO_CODEPOL_LSP.md`.
+
+Keep the main TODO focused on architecture, rollout, and decision summaries. Use this file for the concrete session protocol layered on top of the daemon control plane: client registration, workspace attachment, replay, readiness phases, and restart behavior.
+
+## When To Read This
+
+Read this note when you are:
+
+- defining `register_client_session`, `attach_workspace`, or replay RPCs
+- implementing reconnect and replay after daemon restart
+- deciding how overlays, subscriptions, and diagnostics recover after reconnect
+- designing readiness status APIs for workspace-wide and per-feature warm-up
+- deciding how in-flight and background work behaves across daemon session changes
+
+## Decision
+
+Define this as a workspace session protocol layered on top of the daemon control plane.
+
+Use four separate concepts:
+
+- daemon session: lifetime of one daemon process incarnation
+- workspace instance: one opened project, config, and environment inside the daemon
+- client session: one attached editor or CLI consumer
+- client replica state: the replayable state that must be restored after reconnect
+
+That separation is what keeps reconnect deterministic.
+
+## Recommendation
+
+Make the following identities explicit.
+
+### Daemon Session
+
+Changes whenever the daemon restarts.
+
+```text
+daemon_session_id
+```
+
+Purpose:
+
+- lets clients detect that all prior attachments are invalid
+- forces replay instead of assuming continuity
+
+### Workspace Instance
+
+Represents one opened project and environment inside the daemon.
+
+```text
+workspace_id = stable logical identity
+workspace_instance_id = concrete live instance inside current daemon session
+```
+
+Example logical identity inputs:
+
+- `root_uri`
+- language family
+- toolchain or config identity
+- environment identity
+
+The live instance id is opaque and generated on open or attach.
+
+A daemon restart invalidates the instance id, not necessarily the logical workspace identity.
+
+### Client Session
+
+Represents one consumer attachment.
+
+```text
+client_session_id
+```
+
+This is stable across reconnect from the client's perspective, but must be re-registered into the new daemon session.
+
+### Document Replica And Overlay Identity
+
+Per open document, per client session.
+
+```text
+(document_id, client_session_id)
+```
+
+This keeps unsaved overlays client-local.
+
+## Phases
+
+Make attachment explicitly phased.
+
+### Phase A: Daemon Ready
+
+Handled by the daemon control-plane handshake.
+
+### Phase B: Client Registered
+
+The daemon knows:
+
+- who the client is
+- client kind and version
+- client session id
+- client capability profile
+
+### Phase C: Workspace Attached
+
+The daemon has:
+
+- mapped client session to workspace instance
+- validated workspace identity and config
+- begun or restored project state
+
+### Phase D: Workspace Ready
+
+Core workspace services can answer baseline workspace-scoped queries safely.
+
+### Phase E: Feature Ready
+
+Individual features are warmed enough to answer without degraded semantics.
+
+Do not collapse `workspace ready` and `feature ready`.
+
+## Required Attachment Protocol
+
+After daemon `hello`, require this sequence.
+
+### Step 1: Register Client Session
+
+Client sends:
+
+```json
+{
+  "type": "register_client_session",
+  "client_session_id": "client-123",
+  "client": {
+    "kind": "vscode-extension",
+    "client_version": "0.9.0",
+    "instance_id": "window-7"
+  },
+  "reconnect": {
+    "previous_daemon_session_id": "daemon-old-1",
+    "resume_intent": true
+  }
+}
+```
+
+Daemon replies:
+
+```json
+{
+  "type": "register_client_session_ack",
+  "daemon_session_id": "daemon-new-2",
+  "client_registration_id": "reg-456"
+}
+```
+
+This establishes:
+
+- the client is known
+- replay may now begin
+- the daemon can track this client separately from the transport connection
+
+### Step 2: Attach Workspace
+
+Client sends logical workspace identity, not only a raw path:
+
+```json
+{
+  "type": "attach_workspace",
+  "client_registration_id": "reg-456",
+  "workspace": {
+    "root_uri": "file:///repo",
+    "language_family": "typescript",
+    "config_identity": "tsconfig.app.json:hash",
+    "environment_identity": "node20+pnpm-lock-hash"
+  },
+  "attach_mode": "create_or_join"
+}
+```
+
+Daemon replies with both logical and live identities plus current phase:
+
+```json
+{
+  "type": "attach_workspace_ack",
+  "workspace_id": "ws-logical-22",
+  "workspace_instance_id": "ws-inst-88",
+  "phase": "warming",
+  "workspace_ready": false,
+  "feature_readiness": {
+    "diagnostics": "warming",
+    "definition": "warming",
+    "completion": "warming",
+    "semantic_search": "cold"
+  }
+}
+```
+
+Only after this should the client replay workspace-scoped state.
+
+## Session Identity Rules
+
+These rules need to stay crisp.
+
+### Client Session Id
+
+Generated by the client host and stable for the lifetime of that editor window or CLI consumer.
+
+Use it to:
+
+- scope overlays
+- scope subscriptions
+- dedupe replay attempts
+- identify the reconnecting session
+
+If the window or consumer fully closes, the client session ends.
+
+### Transport Connection Id
+
+Ephemeral, per socket or pipe connection. Never use this as durable session identity.
+
+### Workspace Membership
+
+A client session may attach to:
+
+- one workspace
+- or multiple workspaces if the product needs multi-root support
+
+If multi-root exists, each attachment gets a separate attachment record.
+
+### Reconnect Rule
+
+After daemon restart, the client must assume:
+
+- client registration is gone
+- workspace attachment is gone
+- overlays are gone
+- subscriptions are gone
+- in-flight work is gone unless the protocol explicitly supports resumability
+
+So reconnect always means re-register plus re-attach plus replay.
+
+## Replayable Client-State Inventory
+
+Define a replayable inventory.
+
+### A. Open Document Set
+
+For each open document:
+
+- document id or URI
+- version
+- language mode if needed
+- whether it should currently be considered open by the daemon
+
+### B. Full Current Overlay Contents
+
+Do not rely on re-sending incremental edit history after reconnect.
+
+Replay:
+
+- current text content snapshot
+- or base version plus authoritative full overlay snapshot
+
+Best default: send the full current text snapshot for each open overlaid document.
+
+### C. Active Subscriptions
+
+Examples:
+
+- diagnostics subscription
+- index progress subscription
+- file watch abstraction
+- custom graph or status streams
+- semantic token push subscription
+- workspace notifications
+
+### D. Client Preferences That Affect Responses
+
+Only replay preferences that materially affect semantics or output shape.
+
+Examples:
+
+- preferred diagnostic profile
+- enabled feature flags
+- index scope filters
+- custom command registration options
+
+### E. Pending Long-Lived Tasks The Client Wants Resumed Or Reissued
+
+Examples:
+
+- background search
+- graph build
+- impact analysis job
+- custom refactor preview job
+
+Only replay these if the protocol supports resumption semantics. Otherwise mark them lost.
+
+## State That Must Not Be Replayed As Daemon-Owned Truth
+
+Do not treat these as daemon-owned truth:
+
+- cursor position
+- selection
+- UI tree expansion state
+- panel visibility
+- temporary local-only debounce state
+- transient completion popup context
+
+Those are client-only UI state. They may influence later requests, but they are not part of attachment replay.
+
+## Overlay Replay Model
+
+This is one of the most important choices.
+
+Rule:
+
+- overlays are authoritative per client session
+- overlays must be replayed as snapshots, not deltas
+
+Why:
+
+- daemon restart invalidates daemon-side version history
+- re-sending incremental edits assumes shared prior state
+- snapshot replay is simpler and correct
+
+### Open Document Metadata
+
+```json
+{
+  "type": "open_document",
+  "workspace_instance_id": "ws-inst-88",
+  "client_session_id": "client-123",
+  "document": {
+    "document_id": "file:///repo/src/a.ts",
+    "language_id": "typescript"
+  }
+}
+```
+
+### Apply Authoritative Overlay Snapshot
+
+```json
+{
+  "type": "set_document_overlay",
+  "workspace_instance_id": "ws-inst-88",
+  "client_session_id": "client-123",
+  "document_id": "file:///repo/src/a.ts",
+  "overlay": {
+    "kind": "full_text_snapshot",
+    "content": "current full text here",
+    "client_document_version": 173
+  }
+}
+```
+
+### Close Document
+
+```json
+{
+  "type": "close_document",
+  "workspace_instance_id": "ws-inst-88",
+  "client_session_id": "client-123",
+  "document_id": "file:///repo/src/a.ts"
+}
+```
+
+The daemon should never require the full edit event history to recover correctness.
+
+## Replay Order
+
+Define a strict replay order.
+
+Best default:
+
+1. daemon `hello`
+2. `register_client_session`
+3. `attach_workspace`
+4. replay client-scoped workspace preferences or config flags
+5. re-establish subscriptions
+6. replay open document set
+7. replay authoritative overlay snapshots
+8. request or trigger needed recomputation
+9. resume normal request flow
+
+Why subscriptions before overlays:
+
+- push events generated by replayed overlays already have a destination
+- diagnostics and index progress can begin flowing immediately
+
+Why opens before overlays:
+
+- the daemon needs document session records first
+
+Why full snapshots before normal requests:
+
+- otherwise requests may run against stale disk state
+
+## Subscription Rehydration Rules
+
+Subscriptions should be explicit records, not implicit side effects of random requests.
+
+Examples:
+
+- `subscribe_diagnostics(workspace_instance_id, client_session_id, scope)`
+- `subscribe_index_progress(...)`
+- `subscribe_workspace_events(...)`
+- `subscribe_feature_status(...)`
+
+Reconnect rule:
+
+- all subscriptions are presumed lost across daemon restart and must be replayed
+
+Deduplication rule:
+
+- within one live daemon session, repeating the same subscription from the same client session should be idempotent
+
+That avoids duplicate streams during racey reconnects.
+
+## Behavior During Warm-Up
+
+Define request behavior per request class.
+
+### A. Requests Allowed Before Workspace Ready
+
+Only requests that do not require workspace semantics, such as:
+
+- daemon and session status
+- workspace status polling
+- attach and replay messages
+- maybe syntax-local operations on a single fully replayed overlaid document, if implemented safely
+
+### B. Requests Blocked Before Workspace Ready
+
+Usually:
+
+- workspace symbol search
+- cross-file references
+- rename
+- dependency graph
+- impact analysis
+- project-wide diagnostics
+
+These should return a structured not-ready result, not bogus partial answers that masquerade as complete.
+
+### C. Requests Allowed In Degraded Mode Before Feature Ready
+
+Some features can respond with explicit quality markers:
+
+- definition: maybe partial if local file index is ready but full project graph is not
+- completion: maybe syntax-only or basic semantic
+- diagnostics: local parse diagnostics available while project diagnostics are warming
+
+If this exists, the response must say it is degraded:
+
+```json
+{
+  "status": "degraded",
+  "reason": "workspace_warming",
+  "completeness": "local_only",
+  "results": []
+}
+```
+
+Do not silently mix degraded and full-quality results.
+
+### D. Requests That Should Wait
+
+For latency-sensitive operations, the client may choose:
+
+- fail fast with structured not-ready
+- or wait on a readiness barrier up to a timeout
+
+Good default:
+
+- interactive requests: short wait, then degraded or not-ready
+- background requests: may queue until feature ready
+
+## Request Readiness Contract
+
+Each feature should declare readiness dependencies.
+
+Example:
+
+```text
+definition:
+  requires workspace_ready
+  prefers feature graph_ready
+
+completion:
+  requires document_open
+  prefers file_semantics_ready
+
+rename:
+  requires workspace_ready
+  requires cross_ref_index_ready
+
+diagnostics:
+  local parse diagnostics require document_open + overlay_applied
+  project diagnostics require workspace_ready + analysis_ready
+```
+
+This should be encoded in daemon capability and status APIs, not buried in implementation.
+
+Then the client can reason correctly about:
+
+- whether to ask now
+- whether to wait
+- whether to present a warming-up state
+
+## In-Flight Work Across Daemon Restart
+
+Assume all in-flight work is lost unless a task protocol explicitly makes it resumable.
+
+That is the safest default.
+
+### Interactive Requests
+
+Examples:
+
+- completion
+- hover
+- definition
+
+If transport drops:
+
+- fail them with `daemon_session_ended`
+- caller may retry after reconnect if still relevant
+
+Do not auto-replay stale interactive requests. Cursor state may already have changed.
+
+### Background Requests
+
+Examples:
+
+- workspace index
+- semantic search
+- dependency graph build
+- impact analysis
+
+Use three categories.
+
+#### Category 1: Daemon-Owned Intrinsic Work
+
+Example:
+
+- workspace indexing
+
+After restart:
+
+- the daemon restarts, rebuilds, or restores this as part of workspace attach
+- the client does not manually replay it
+
+#### Category 2: Client-Requested Idempotent Background Jobs
+
+Example:
+
+- compute graph for current workspace
+
+After restart:
+
+- the job is lost
+- the client may reissue it if still desired
+
+#### Category 3: Resumable Tasks With Explicit Resume Tokens
+
+Only if built on purpose.
+
+Then:
+
+- daemon returns `task_id` and maybe a persisted `resume_token`
+- client may ask after reconnect whether it can resume or must restart
+
+Do not imply resumability unless you implement durable task semantics.
+
+## Background Work Deduplication
+
+To avoid duplicate indexing work after reconnect:
+
+Rule:
+
+- workspace intrinsic work is keyed by `workspace_instance_id` internally
+- scheduling should still be driven by stable workspace identity
+
+Meaning:
+
+- multiple attached clients should not each trigger separate full indexing
+- attach replay should join the same workspace warm-up pipeline when possible
+
+Good daemon behavior:
+
+- first attach starts warm-up or restoration
+- later attaches join the existing workspace instance
+- restart creates a new instance, but still only one warm-up per logical workspace
+
+## Diagnostics Behavior Across Restart
+
+This is a common source of inconsistency.
+
+On reconnect, the client should treat all previous diagnostics from the old daemon session as stale.
+
+Recommended behavior:
+
+- clear or mark stale diagnostics originating from the old daemon session
+- after replay, the daemon republishes current diagnostics
+- until then, the client may show `recomputing diagnostics`
+
+If you want smoother UX:
+
+- keep old diagnostics visually marked as stale
+- replace them as new ones arrive
+
+The protocol should still treat those old diagnostics as invalid after daemon session change.
+
+## Deterministic Replay Barrier
+
+Add an explicit barrier message so the client knows when replay has been fully ingested.
+
+After sending:
+
+- subscriptions
+- open documents
+- overlay snapshots
+
+The client sends:
+
+```json
+{
+  "type": "complete_replay",
+  "workspace_instance_id": "ws-inst-88",
+  "client_session_id": "client-123"
+}
+```
+
+Daemon replies:
+
+```json
+{
+  "type": "complete_replay_ack",
+  "workspace_instance_id": "ws-inst-88",
+  "client_session_id": "client-123",
+  "replay_state": "applied",
+  "workspace_ready": false,
+  "feature_readiness": {
+    "diagnostics": "warming",
+    "definition": "warming"
+  }
+}
+```
+
+This separates:
+
+- client has sent replay
+- daemon has applied replay and future requests will see it
+
+Without this barrier, request ordering gets fuzzy.
+
+## Recommended End-To-End Reconnect Flow
+
+```text
+transport reconnect
+-> hello
+-> register_client_session
+-> attach_workspace
+-> subscribe to push channels
+-> replay open documents
+-> replay full overlay snapshots
+-> complete_replay barrier
+-> daemon acks replay applied
+-> interactive requests resume
+-> feature readiness updates stream as workspace warms
+```
+
+## Warm-Up Status Model
+
+Expose status as structured state, not ad hoc strings in logs.
+
+Example:
+
+```json
+{
+  "workspace_instance_id": "ws-inst-88",
+  "workspace_phase": "warming",
+  "workspace_ready": false,
+  "feature_status": {
+    "overlay_state": "ready",
+    "parse_state": "ready",
+    "local_diagnostics": "ready",
+    "project_graph": "warming",
+    "cross_refs": "warming",
+    "rename": "blocked",
+    "semantic_search": "cold"
+  }
+}
+```
+
+Then clients can show:
+
+- basic features ready
+- project-wide features warming
+- rename unavailable until indexing completes
+
+This reduces confusion and avoids wrong retries.
+
+## Recommended Concrete Policy
+
+Lock in this policy.
+
+### Workspace Attach And Open Handshake
+
+- after control-plane `hello`, client must `register_client_session`
+- then `attach_workspace` with logical workspace identity
+- daemon returns `workspace_id`, `workspace_instance_id`, and readiness state
+
+### Per-Client Session Identity
+
+- client-generated `client_session_id`, stable for the lifetime of that editor window or consumer
+- transport connection id is ephemeral and never authoritative
+
+### Replayable Client State
+
+Must replay:
+
+- open document set
+- authoritative full overlay snapshots for each open overlaid document
+- subscriptions
+- workspace-scoped client options that affect outputs
+- optionally resumable task intents if the protocol supports them
+
+Must not replay as daemon-owned truth:
+
+- cursor position
+- selection
+- UI-only local state
+
+### Overlay And Subscription Order
+
+- attach workspace
+- restore subscriptions
+- open documents
+- apply full overlay snapshots
+- send `complete_replay`
+- only then treat daemon answers as overlay-correct
+
+### Request Behavior Before Readiness
+
+- before `workspace_ready`: only attachment, status, and local-safe operations
+- before per-feature readiness: either explicit degraded responses or structured not-ready
+- no silent partials pretending to be full results
+
+### In-Flight And Background Work Across Restart
+
+- interactive in-flight requests fail and may be retried by the client if still relevant
+- workspace intrinsic work restarts or restores automatically inside the daemon
+- client-requested background jobs are lost unless an explicit resumable-task protocol exists
+
+## Bottom Line
+
+The key decisions are:
+
+- daemon restart invalidates all prior registrations, attachments, overlays, and subscriptions
+- client reconnect is always re-register plus re-attach plus replay
+- overlay replay uses authoritative snapshots, not edit deltas
+- subscriptions are explicit and idempotent
+- replay completion uses a barrier plus ack
+- requests before readiness return structured degraded or not-ready states
+- all old diagnostics and results from the old daemon session are stale by definition
+
+That gives Codepol deterministic reconnect behavior and prevents the exact problems this section called out: stale answers, dropped diagnostics, duplicate warm-up work, and inconsistent request behavior during warm-up.
+
+The next section that usually needs pinning down after this is request ordering, cancellation, and snapshot consistency, because once replay exists you need a precise rule for what state each query observes.

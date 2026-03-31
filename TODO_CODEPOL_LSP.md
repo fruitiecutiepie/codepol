@@ -575,24 +575,56 @@ Detailed note:
 
 ### 4. Workspace attachment and session replay
 
-Current gap:
+Decision:
 
-- the daemon control-plane contract now separates daemon readiness from workspace readiness, but the plan still does not define how clients attach workspaces, register sessions, replay client state after reconnect, or behave while a workspace is still warming
+- define this boundary as a workspace session protocol layered on top of the daemon control plane
+- separate four identities explicitly:
+  - `daemon_session_id` for one daemon process incarnation
+  - `workspace_id` for stable logical workspace identity
+  - `workspace_instance_id` for one live workspace instance inside the current daemon session
+  - `client_session_id` for one attached editor or CLI consumer, with client-local document overlays scoped per session
+- require a phased attach and replay flow after daemon `hello`:
+  - `register_client_session`
+  - `attach_workspace`
+  - replay subscriptions, open documents, and authoritative overlay snapshots
+  - `complete_replay` barrier before normal request flow resumes
+- treat reconnect as full re-registration and replay, not continuation:
+  - daemon restart invalidates prior registrations, workspace attachments, overlays, subscriptions, and non-resumable in-flight work
+- make readiness explicit and separate:
+  - daemon ready
+  - client registered
+  - workspace attached
+  - workspace ready
+  - feature ready
+- define request behavior during warm-up:
+  - requests must return structured `not_ready` or explicit degraded results when dependencies are not ready
+  - clients must not treat partial or stale answers as full-quality results
 
 Why it matters:
 
-- reconnect correctness depends on deterministic replay of open documents, overlays, subscriptions, and workspace-scoped state
-- without an explicit attachment contract, daemon restarts can produce stale answers, dropped diagnostics, duplicate indexing work, or inconsistent request behavior during warm-up
+- deterministic reconnect depends on replayable client state, authoritative overlay restore, and explicit readiness barriers
+- without a workspace session protocol, daemon restarts can produce stale diagnostics, dropped subscriptions, duplicate warm-up work, and requests that race against half-restored state
+- separating daemon session, workspace instance, and client session identities keeps reconnect and multi-client attach behavior correct
 
-Decision needed:
+Key invariants:
 
-- define:
-  - workspace attach/open handshake
-  - per-client session identity and registration rules
-  - which client state must be replayed after reconnect
-  - overlay and subscription rehydration order
-  - request behavior before workspace-ready and feature-ready phases complete
-  - how in-flight and background work behaves across daemon restart
+- reconnect is always `register_client_session` plus `attach_workspace` plus replay
+- overlay restore uses authoritative snapshots, not edit deltas
+- subscriptions are explicit, replayable, and idempotent within one daemon session
+- old diagnostics and results from a prior `daemon_session_id` are stale by definition
+- transport connection identity is ephemeral and never used as durable client or workspace identity
+- workspace-ready and feature-ready are separate phases with separate status signals
+
+Read the detailed note when:
+
+- defining `register_client_session`, `attach_workspace`, replay, or readiness RPCs
+- implementing overlay replay, subscription rehydration, or replay barriers after reconnect
+- deciding request gating, degraded responses, or timeout behavior during workspace warm-up
+- handling diagnostics invalidation, background work restart, or resumable task semantics across daemon restart
+
+Detailed note:
+
+- [TODO_CODEPOL_LSP_WORKSPACE_SESSION_PROTOCOL.md](TODO_CODEPOL_LSP_WORKSPACE_SESSION_PROTOCOL.md)
 
 ### 5. Config reload and invalidation rules
 
