@@ -529,25 +529,72 @@ Detailed note:
 
 ### 3. Daemon discovery, launch, and version handshake
 
-Current gap:
+Decision:
 
-- the plan recommends a daemon over socket or named pipe, but it does not define how clients discover, launch, reconnect to, or version-check that daemon
+- define this boundary explicitly as the daemon control plane, not incidental boot code
+- use a per-user runtime descriptor for discovery:
+  - clients resolve `daemon.info.json` first, then connect to the advertised transport
+- make a shared launcher library the sole launch authority:
+  - it acquires exclusive `daemon.lock`
+  - it is the only component allowed to spawn the shared daemon or clean stale runtime artifacts
+- require a mandatory startup `hello` handshake before any normal work:
+  - discovery proves where to connect
+  - handshake proves protocol compatibility, daemon identity, liveness, and negotiated capabilities
+- separate compatibility concerns:
+  - control-plane protocol compatibility is strict
+  - engine capability compatibility is negotiated and may degrade features
+  - cache and index schema versioning is handled separately
+- define deterministic stale recovery and fallback:
+  - failed connect or handshake enters a lock-guarded recovery path
+  - shared daemon mode falls back to private per-client backend mode, then reduced feature mode, then hard fail only if no safe degraded path exists
 
 Why it matters:
 
-- this affects packaging, stale socket cleanup, extension upgrades, CLI interoperability, and fallback behavior when the daemon is unavailable or out of date
+- packaging, extension upgrades, CLI sharing, reconnect behavior, and stale socket cleanup all depend on a stable control-plane contract
+- without single-launch authority and mandatory handshake, clients will race to spawn daemons, talk to stale endpoints, or silently attach to incompatible builds
+- explicit fallback modes let the product degrade predictably instead of treating daemon failures as undefined behavior
+
+Key invariants:
+
+- clients discover a descriptor, not a raw socket or pipe guess
+- only the launch-lock holder may spawn, replace, or clean shared runtime artifacts
+- socket existence or PID presence alone never proves health; successful handshake does
+- reconnect is full rediscovery plus full handshake plus session replay
+- daemon readiness, workspace attachment, and feature readiness are separate phases
+
+Read the detailed note when:
+
+- defining runtime and state directory layout, descriptor schema, or launcher ownership rules
+- designing handshake RPCs, version negotiation, or capability gating
+- implementing stale socket cleanup, reconnect logic, or controlled daemon replacement on upgrade
+- making the CLI and editor extension share the same daemon lifecycle contract
+
+Detailed note:
+
+- [TODO_CODEPOL_LSP_DAEMON_CONTROL_PLANE.md](TODO_CODEPOL_LSP_DAEMON_CONTROL_PLANE.md)
+
+### 4. Workspace attachment and session replay
+
+Current gap:
+
+- the daemon control-plane contract now separates daemon readiness from workspace readiness, but the plan still does not define how clients attach workspaces, register sessions, replay client state after reconnect, or behave while a workspace is still warming
+
+Why it matters:
+
+- reconnect correctness depends on deterministic replay of open documents, overlays, subscriptions, and workspace-scoped state
+- without an explicit attachment contract, daemon restarts can produce stale answers, dropped diagnostics, duplicate indexing work, or inconsistent request behavior during warm-up
 
 Decision needed:
 
 - define:
-  - daemon discovery path
-  - launch authority
-  - startup handshake
-  - version compatibility rules
-  - stale process and stale socket recovery
-  - fallback mode when the daemon cannot be used
+  - workspace attach/open handshake
+  - per-client session identity and registration rules
+  - which client state must be replayed after reconnect
+  - overlay and subscription rehydration order
+  - request behavior before workspace-ready and feature-ready phases complete
+  - how in-flight and background work behaves across daemon restart
 
-### 4. Config reload and invalidation rules
+### 5. Config reload and invalidation rules
 
 Current gap:
 
@@ -565,7 +612,7 @@ Decision needed:
   - index rebuild
   - daemon workspace restart
 
-### 5. Trust and sandboxing model
+### 6. Trust and sandboxing model
 
 Current gap:
 
@@ -585,7 +632,7 @@ Decision needed:
   - timeout and memory ceilings
   - user-visible failure and trust prompts if needed
 
-### 6. Multi-root and remote execution scope
+### 7. Multi-root and remote execution scope
 
 Current gap:
 
@@ -606,7 +653,7 @@ Decision needed:
   - local multi-root
   - remote-aware from day one
 
-### 7. Persistence contract and cache versioning
+### 8. Persistence contract and cache versioning
 
 Current gap:
 
@@ -625,7 +672,7 @@ Decision needed:
   - crash-safe write behavior
   - cleanup and TTL policy
 
-### 8. Process-plugin capability roadmap
+### 9. Process-plugin capability roadmap
 
 Current gap:
 
