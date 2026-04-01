@@ -838,22 +838,81 @@ Key invariants:
 
 ### 9. Persistence contract and cache versioning
 
-Current gap:
+Decision:
 
-- the plan calls for warm-start behavior and persistent caches, but it does not define what is persisted or how persisted state is invalidated
+- treat persistence as an explicit semantic contract owned by the workspace service rather than an internal cache optimization
+- separate persisted state into four artifact classes with explicit trust levels:
+  - Tier A `authoritative_metadata`: workspace manifest, discovered project roots, config-resolution results, dependency graph structure derived from declared config, file fingerprints, toolchain or environment fingerprints, and shard inventory; safe to trust if structurally valid
+  - Tier B `derived_semantic_shards`: AST or CST blobs, symbol tables, import or export summaries, diagnostics snapshots, reference-index shards, workspace symbol shards, search indexes, and similar intermediate semantic assets; reusable only when the full reuse key matches exactly
+  - Tier C `ephemeral_runtime_state`: overlays, unsaved buffers, in-flight jobs, session bindings, debounce state, and cancellation state; do not persist as correctness-bearing state
+  - Tier D `telemetry_and_history`: last successful index time, cache hit rates, crash markers, and clean-shutdown markers; persist separately and never let them affect semantic correctness
+- persist a minimum durable set per workspace:
+  - a workspace manifest with `workspace_id`, storage format version, semantic schema version, producer version, capability or plugin-set hash, environment fingerprint, toolchain fingerprint, relevant config fingerprints, shard inventory, timestamps, and clean or dirty shutdown marker
+  - a file fingerprint table with canonical file identity, content hash, size, mtime as a hint only, language or parse mode, dependency-edge summary, and shard membership
+  - granular per-file or per-module shards for parse blobs, symbol summaries, import or export summaries, diagnostics snapshots, local reference summaries, and similar reusable intermediate state
+  - workspace-level index shards for workspace symbols, cross-file reference indexes, dependency graph snapshots, and search indexes
+- do not persist user-facing semantic answers as trusted truth:
+  - rename plans, hover or completion payloads, code actions, full cross-workspace reference results, and cursor- or overlay-sensitive answers are recomputed from persisted inputs rather than reused directly
+- require every persisted artifact to carry an explicit reuse key over:
+  - semantic schema version
+  - storage format version
+  - workspace identity
+  - toolchain and environment fingerprint
+  - relevant config fingerprints
+  - source and dependency fingerprints
+  - feature options and capability or plugin-set fingerprint when applicable
+- use separate version axes rather than one app version:
+  - `storage_format_version` for on-disk encoding compatibility
+  - `semantic_schema_version` for meaning and correctness compatibility
+  - `producer_version` for diagnostics and cautious rollback handling
+  - `capability_set_version` or hash when plugins contribute semantic data
+
+Reuse contract:
+
+- an artifact is reusable for correctness-sensitive queries only if:
+  - its checksum validates
+  - its storage format is supported
+  - its semantic schema version exactly matches
+  - its producer capability or plugin set is compatible
+  - its workspace identity matches
+  - its required toolchain or environment fingerprint matches
+  - its required config, source, and dependency fingerprints match
+  - it has a committed manifest or journal entry and is not superseded or orphaned
+- if any required condition fails:
+  - ignore the artifact for correctness-sensitive queries
+  - optionally use it only as a rebuild hint when that artifact class is explicitly advisory
+
+Invalidation and retention:
+
+- hard-invalidate an artifact on storage or schema mismatch, incompatible toolchain or capability fingerprint, config mismatch, required content or dependency hash mismatch, missing dependency shard, or missing committed manifest entry
+- allow soft-invalidated artifacts to accelerate rebuild only when explicitly marked advisory, such as stale search segments or artifacts waiting for hash recomputation
+- use TTL only for cleanup and eviction, never for semantic correctness
+- separate reuse eligibility from retention:
+  - reuse is governed strictly by validation and reuse-key matching
+  - retention is governed by disk budget, per-workspace budget, LRU or recency, last access time, validation age, crash leftovers, and eager removal of obsolete schema versions
+
+Crash-safe write behavior:
+
+- never overwrite committed artifacts in place
+- write new shards to temp paths, checksum and fsync them, atomically rename them into place, then publish the manifest or journal entry and fsync that metadata
+- treat a shard as reusable only after its manifest or journal entry is durably committed
+- on startup after unclean shutdown, remove temp files, ignore orphan or uncommitted shards, replay the journal if needed, and validate workspace-level indexes before trusting them
+- prefer small independently validatable shards over one workspace-wide cache blob so partial reuse and crash recovery stay cheap and predictable
 
 Why it matters:
 
-- incorrect cache reuse can silently corrupt semantic answers
+- warm-start behavior is only safe if the daemon can explain exactly what persisted state means and what proof is required before reuse
+- semantic answers depend on toolchain, config, dependency, and overlay context, so weak invalidation risks silent corruption rather than obvious crashes
+- granular committed shards improve recovery, partial reuse, and cleanup without forcing a full workspace rebuild after every change
 
-Decision needed:
+Key invariants:
 
-- define:
-  - what artifacts are persisted
-  - cache key inputs
-  - schema/version invalidation rules
-  - crash-safe write behavior
-  - cleanup and TTL policy
+- persisted state stores intermediate semantic assets and coordination metadata, not fragile context-specific user-facing answers
+- content hashes are the source of truth for correctness; mtimes are optimization hints only
+- correctness-sensitive reuse requires exact match of every declared reuse-key dimension
+- artifacts without committed manifest or journal publication are never reusable
+- TTL and age affect retention only, not trust
+- telemetry and crash history never change semantic results; they only influence operations and recovery
 
 ### 10. Process-plugin capability roadmap
 
