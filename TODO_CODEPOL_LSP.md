@@ -804,24 +804,37 @@ Detailed note:
 
 ### 8. Multi-root and remote execution scope
 
-Current gap:
+Decision:
 
-- the current document assumes a local workspace-centric daemon, but it does not say whether the first implementation supports:
+- MVP supports local single-root execution only:
+  - one local workspace root
+  - standard `file:` URIs only
+  - daemon runs on the same machine as the editor extension and accesses the local filesystem directly
+- explicitly defer:
   - multiple workspace folders
-  - remote containers
   - SSH/remote hosts
-  - non-file URI schemes
+  - remote containers
+  - non-`file:` or virtual document schemes
+- treat this as an intentional product boundary, not an accidental omission
+- keep the architecture future-ready even though MVP scope is narrow:
+  - use URI-based workspace and document identifiers rather than raw path-only types
+  - separate document identity from content access and file watching so providers can evolve later
+  - keep transport and daemon-placement concerns out of the semantic core
+  - model workspace instances explicitly rather than assuming one global root forever
 
 Why it matters:
 
-- these choices affect URI normalization, transport assumptions, daemon placement, and workspace identity
+- multi-root changes workspace identity, config precedence, dependency partitioning, and cross-root query semantics; it is not just a transport detail
+- remote support changes daemon placement, transport, file watching, cache locality, auth, and latency or cancellation behavior
+- non-`file:` schemes change assumptions about document identity, canonicalization, persistence, and whether a stable on-disk backing file even exists
+- constraining MVP to local single-root keeps lifecycle, cache ownership, URI normalization, and transport assumptions simple while preserving headroom for later expansion
 
-Decision needed:
+Key invariants:
 
-- explicitly decide whether MVP scope is:
-  - local single-root only
-  - local multi-root
-  - remote-aware from day one
+- v1 adapters accept only `file:` workspace and document URIs and reject other schemes explicitly
+- each workspace instance currently has exactly one canonical local root URI
+- local IPC and direct local filesystem access are valid v1 host assumptions, but they must not leak into semantic-core types
+- adding multi-root, remote execution, or non-`file:` support later should not require redesigning the semantic core
 
 ### 9. Persistence contract and cache versioning
 
