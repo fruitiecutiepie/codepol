@@ -750,23 +750,57 @@ Reload pipeline:
 
 ### 7. Trust and sandboxing model
 
-Current gap:
+Decision:
 
-- the repo already supports process plugins and external tool execution, but the plan does not define the trust model for running those inside a long-lived editor daemon
+- treat external execution as a first-class trust and execution-policy subsystem owned by the daemon host rather than scattered checks in adapters or plugins
+- separate trust into three layers:
+  - daemon trust: the daemon runs as the user but defaults to a reduced execution posture and does not implicitly execute workspace-defined commands, workspace binaries, or process plugins
+  - workspace trust: each workspace is explicitly `untrusted` or `trusted`, and opening a folder never grants execution rights by itself
+  - tool trust: tools and plugins are classified and approved separately by origin such as `builtin`, `user_global`, `workspace_configured_global`, `workspace_local`, `downloaded_runtime`, and `plugin_process`
+- gate execution by capability and origin rather than one broad allow flag:
+  - classify requests by capability such as `static_analysis`, `linting`, `formatting`, `build_metadata_probe`, `test_discovery`, `code_generation`, `arbitrary_command`, and `process_plugin`
+  - evaluate policy over at least `workspace_trust`, `tool_origin`, `capability_class`, `resource_profile`, `env_profile`, requested cwd, and whether the action is explicit user invocation
+- make `untrusted` workspaces read-only by default:
+  - allow parsing, indexing, config parsing as data, and bundled in-process analyzers
+  - block process plugins, repo-configured external tools, workspace-local executables, arbitrary commands, secret env passthrough, and other execution that requires separate approval
+- make `trusted` workspaces eligible, but not automatically entitled, to bounded external execution:
+  - built-in tools and user-configured global linters or formatters may auto-run under sanitized env and cwd restrictions
+  - repo-selected global commands, process plugins, workspace-local executables, downloaded helper runtimes, and extra env or network access require additional approval
+  - arbitrary commands and write- or network-affecting build, test, or codegen flows require explicit user invocation
+- sanitize and constrain every child-process launch centrally:
+  - build child env from allowlisted profiles and named env classes rather than daemon-env passthrough
+  - restrict cwd to workspace root, subdirectories, or daemon-managed temp dirs after canonicalization
+  - enforce timeouts, memory ceilings, process-tree cancellation, concurrency caps, and structured audit metadata on every execution
+- make prompts and failures specific and auditable:
+  - trust prompts identify the exact executable or plugin, origin, feature, cwd, and requested env classes
+  - blocked, denied, timed-out, and missing-tool failures surface as structured status, not repeated generic prompts
 
 Why it matters:
 
-- a persistent daemon makes command execution and environment handling more security-sensitive than one-shot CLI execution
+- a long-lived daemon turns "open repo" into a potential execution surface, so trust for the daemon, the workspace, and the tool origin must stay separate
+- editor-driven auto-runs happen frequently and implicitly, so capability-specific policy is safer than feature-local allow checks
+- centralized policy prevents privilege creep, inconsistent prompts, and accidental secret exposure across tool adapters
 
-Decision needed:
+Key invariants:
 
-- define:
-  - workspace trust requirements
-  - when process plugins and external linters may run
-  - environment variable passthrough rules
-  - cwd restrictions
-  - timeout and memory ceilings
-  - user-visible failure and trust prompts if needed
+- opening a workspace does not imply permission to execute repo-defined code
+- workspace trust is explicit, persisted per workspace identity, and revocable
+- process plugins require both workspace trust and separate plugin approval
+- workspace-local executables never auto-run solely because repo config referenced them
+- child processes receive sanitized env, bounded cwd, and resource ceilings by default
+- arbitrary commands are explicit user actions, not background daemon behavior
+- the daemon host owns policy enforcement, while adapters only declare requested capabilities
+
+Read the detailed note when:
+
+- defining trust persistence, execution requests, policy-engine inputs, or approval records
+- integrating process plugins, external linters, or repo-local helper executables
+- deciding env profiles, cwd canonicalization rules, resource ceilings, or process-tree supervision
+- designing trust prompts, blocked-execution UX, audit logs, or network and filesystem policy classes
+
+Detailed note:
+
+- [TODO_CODEPOL_LSP_TRUST_EXECUTION_POLICY.md](TODO_CODEPOL_LSP_TRUST_EXECUTION_POLICY.md)
 
 ### 8. Multi-root and remote execution scope
 
