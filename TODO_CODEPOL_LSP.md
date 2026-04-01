@@ -682,21 +682,71 @@ Detailed note:
 
 ### 6. Config reload and invalidation rules
 
-Current gap:
+Decision:
 
-- the plan talks about workspace identity and caches, but it does not define how config changes invalidate state
+- make config reload a first-class subsystem with field-classified invalidation rather than one generic "config changed" path
+- split config into explicit reload domains because different changes have different safe actions:
+  - rule config for rule enablement, severity, and rule options
+  - targeting config for include/exclude globs, ignore files, and target membership
+  - semantic environment config for parser, resolver, interpreter, language-version, and source-root behavior
+  - plugin and capability config for plugin topology, runtime wiring, capability registration, and sandbox-affecting settings
+  - execution environment config for toolchain, executable lookup, and env vars consumed by analyzers
+- classify each normalized config field into one reload class:
+  - `none`
+  - `rules`
+  - `targeting`
+  - `semantic`
+  - `workspace_restart`
+- detect config changes by semantic diff, not raw file bytes:
+  - parse watched config into normalized form
+  - ignore formatting-only and irrelevant changes
+  - compute field-level diffs and aggregate the strongest required reload class in the batch
+- apply the smallest safe action for the affected partition:
+  - `rules` preserves parse, type, and index caches and reruns affected diagnostics only
+  - `targeting` recomputes file-to-target membership and adds or prunes affected files
+  - `semantic` rebuilds parse, type, and semantic-index state for affected partitions
+  - `workspace_restart` restarts the workspace instance and replays overlays and subscriptions
+- make invalidation partition-aware rather than workspace-wide when possible:
+  - partition by target, config root, language, environment identity, and analyzer pipeline identity
+  - one partition changing must not force unrelated language or target rebuilds
+- version published workspace state so stale results cannot leak:
+  - track at least `config_version`, `target_graph_version`, `semantic_graph_version`, and `plugin_graph_version`
+  - require diagnostics, cached results, and push events to carry the versions they were derived from
+- be conservative about plugin and runtime topology changes:
+  - rule-only plugin option changes may use `rules` or `targeting`
+  - plugin add/remove, ABI or version changes, capability-graph changes, and sandbox or runtime mode changes default to `workspace_restart`
 
 Why it matters:
 
-- `codepol.toml`, ESLint config, Ruff config, plugin declarations, and environment changes can all alter diagnostics, indexing scope, or transport behavior
+- `codepol.toml`, ESLint config, Ruff config, plugin declarations, and environment changes can affect rules, file targeting, semantic meaning, or runtime capabilities, and those do not share one safe invalidation path
+- a field-classified model avoids unnecessary rebuilds while still preventing stale diagnostics, stale index entries, and unsafe hot reload behavior
+- partitioned invalidation is a major scalability boundary for mixed-language and multi-target workspaces
 
-Decision needed:
+Key invariants:
 
-- define which changes trigger:
-  - partial rule re-evaluation
-  - target/file-match recomputation
-  - index rebuild
-  - daemon workspace restart
+- config reload is field-classified, not file-classified
+- formatting-only config edits must not trigger semantic invalidation
+- rule-only changes preserve parse, type, and semantic-index caches
+- targeting changes recompute membership and prune or add affected files without forcing unrelated semantic rebuilds
+- parser, resolver, interpreter, toolchain, and language-version changes invalidate semantic state for affected partitions
+- plugin topology, runtime wiring, capability registration, and sandbox changes restart the workspace instance unless hot-reload safety is explicitly proven
+- old results are stale by definition once their version vector no longer matches current workspace state
+
+Default mapping:
+
+- rule severity, enablement, or rule option changes trigger partial rule re-evaluation
+- include/exclude, ignore, override, or target declaration changes trigger target or file-match recomputation
+- parser, module-resolution, source-root, interpreter, or language-version changes trigger index rebuild
+- plugin topology, plugin runtime compatibility, transport capability, or sandbox and security changes trigger daemon workspace restart
+
+Reload pipeline:
+
+- watch `codepol.toml`, ESLint config, Ruff config, plugin manifests, and relevant environment or toolchain fingerprints
+- parse each source into normalized semantic form and compute a field-level diff
+- map changed fields and plugin manifest changes to reload classes
+- aggregate the strongest required action per batch and per affected partition
+- increment the relevant workspace-state versions before publishing new results
+- emit explicit lifecycle events such as `config_reload_started`, `index_rebuild_started`, `workspace_restarting`, and `config_reload_completed`
 
 ### 7. Trust and sandboxing model
 
