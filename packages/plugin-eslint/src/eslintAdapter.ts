@@ -17,6 +17,7 @@ import type {
   PolicyCheckContext,
   PolicyRuleTargetContext,
   LintDiagnostic,
+  PolicyDiagnosticLocation,
   CodepolPluginRule,
   ProjectIndex,
   IndexCapabilities,
@@ -137,6 +138,24 @@ function diagnosticToEslintLoc(diagnostic: LintDiagnostic): TSESLint.ReportDescr
     end: {
       line: diagnostic.endLine ?? diagnostic.line,
       column: (diagnostic.endColumn ?? diagnostic.column) - 1,
+    },
+  };
+}
+
+/**
+ * Converts a related diagnostic span to ESLint `loc`.
+ */
+function policyDiagnosticLocationToEslintLoc(
+  loc: PolicyDiagnosticLocation,
+): TSESLint.ReportDescriptor<MessageIds>['loc'] {
+  return {
+    start: {
+      line: loc.line,
+      column: loc.column - 1,
+    },
+    end: {
+      line: loc.endLine ?? loc.line,
+      column: (loc.endColumn ?? loc.column) - 1,
     },
   };
 }
@@ -460,10 +479,8 @@ function createAdaptedRule(
             return;
           }
 
-          const violations = checkResult.Ok;
-
-          // Report each violation
-          for (const violation of violations) {
+          // Report each violation (primary loc + optional related locations as extra reports)
+          for (const violation of checkResult.Ok) {
             const diagnostic = violationToLintDiagnostic(violation, defaultSeverity);
             context.report({
               node,
@@ -479,6 +496,24 @@ function createAdaptedRule(
                   )
                 : undefined,
             });
+            if (diagnostic.relatedLocations?.length) {
+              const currentFile = path.resolve(filename);
+              for (const rel of diagnostic.relatedLocations) {
+                if (path.resolve(rel.filePath) !== currentFile) {
+                  continue;
+                }
+                context.report({
+                  node,
+                  loc: policyDiagnosticLocationToEslintLoc(rel),
+                  messageId: 'treeCheckViolation',
+                  data: {
+                    message:
+                      rel.message ??
+                      `${diagnostic.message} (related location)`,
+                  },
+                });
+              }
+            }
           }
         },
       };
@@ -495,4 +530,3 @@ export const eslintAdapter: TreeCheckLintAdapter<TSESLint.RuleModule<string, unk
   platform: 'eslint',
   adapt: (plugin, options) => createAdaptedRule(plugin, options) as TSESLint.RuleModule<string, unknown[]>,
 };
-

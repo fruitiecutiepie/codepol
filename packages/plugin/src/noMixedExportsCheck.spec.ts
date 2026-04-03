@@ -134,15 +134,31 @@ describe('noMixedExportsCheck', () => {
     expect(noMixedExportsCheck(rule, context)).toHaveLength(0);
   });
 
-  it('returns one violation when mixed', () => {
+  it('returns one violation when mixed, primary on first statement that completes the mix', () => {
     const { rule, context } = contextNew(
       '/x.ts',
       'export default 1;\nexport const x = 2;\n',
     );
     const v = noMixedExportsCheck(rule, context);
     expect(v).toHaveLength(1);
-    expect(v[0].line).toBe(1);
+    expect(v[0].line).toBe(2);
     expect(v[0].column).toBe(1);
+    expect(v[0].endLine).toBe(2);
+    expect(v[0].endColumn).toBeGreaterThan(1);
     expect(v[0].message).toContain('Do not mix');
+    expect(v[0].relatedLocations).toBeUndefined();
+  });
+
+  it('includes relatedLocations for later export statements after primary', () => {
+    const { rule, context } = contextNew(
+      '/x.ts',
+      'export default 1;\nexport const x = 2;\nexport const y = 3;\n',
+    );
+    const v = noMixedExportsCheck(rule, context);
+    expect(v).toHaveLength(1);
+    expect(v[0].line).toBe(2);
+    expect(v[0].relatedLocations).toHaveLength(1);
+    expect(v[0].relatedLocations![0].line).toBe(3);
+    expect(v[0].relatedLocations![0].message).toBe('Additional export in mixed module');
   });
 });

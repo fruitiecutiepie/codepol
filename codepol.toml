@@ -116,6 +116,36 @@ targets = ["codepol-src"]
 args.includeLocalExports = true
 
 [[rules]]
+ruleId = "@codepol/plugin/no-mixed-exports"
+severity = "error"
+targets = ["codepol-src"]
+
+[[rules]]
+id = "enforce-casing"
+ruleId = "@codepol/plugin/enforce-casing"
+description = "Enforce naming conventions for symbols and file/directory paths"
+severity = "warn"
+targets = ["codepol-src", "python-src"]
+
+[rules.args.symbols]
+function = ["snake_case"]
+method = ["camelCase", "snake_case"]
+class = ["PascalCase"]
+interface = ["PascalCase"]
+type = ["PascalCase"]
+variable = ["snake_case"]
+const = ["camelCase", "SCREAMING_SNAKE_CASE", "snake_case"]
+field = ["camelCase", "snake_case"]
+parameter = ["camelCase", "snake_case"]
+enum = ["PascalCase"]
+enumMember = ["PascalCase", "SCREAMING_SNAKE_CASE"]
+
+[rules.args.paths]
+file = ["kebab-case", "snake_case"]
+directory = ["kebab-case", "snake_case"]
+ignoreExtensions = true
+
+[[rules]]
 ruleId = "@codepol/plugin/python-dead-code"
 description = "Detect unused Python code via Vulture"
 targets = ["python-src"]

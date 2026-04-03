@@ -65,5 +65,32 @@ describe('policyCheck', () => {
       // Second file
       expect(lines[2]).toContain('beta.ts:20:7: error [require-logger]');
     });
+
+    it('should append related location lines when present', () => {
+      const violations: PolicyViolation[] = [
+        {
+          ruleId: 'no-mixed-exports',
+          filePath: path.join(cwd, 'src', 'mod.ts'),
+          message: 'Do not mix default and named exports',
+          line: 2,
+          column: 1,
+          relatedLocations: [
+            {
+              filePath: path.join(cwd, 'src', 'mod.ts'),
+              line: 3,
+              column: 1,
+              message: 'Additional export',
+            },
+          ],
+        },
+      ];
+
+      const result = policyViolationsGetOutputPretty(violations, cwd);
+      const lines = result.split('\n');
+      expect(lines[0]).toContain('mod.ts:2:1: error [no-mixed-exports]');
+      expect(lines[1]).toContain('related');
+      expect(lines[1]).toContain('mod.ts:3:1');
+      expect(lines[1]).toContain('Additional export');
+    });
   });
 });

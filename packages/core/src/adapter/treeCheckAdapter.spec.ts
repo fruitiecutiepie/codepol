@@ -46,6 +46,32 @@ describe('treeCheckAdapter', () => {
         { byteRange: { start: 100, end: 110 }, text: 'logger.enter();' }
       );
     });
+
+    it('should pass through end range and relatedLocations', () => {
+      const violation: PolicyViolation = {
+        ruleId: 'no-mixed-exports',
+        filePath: '/src/a.ts',
+        message: 'mixed',
+        line: 2,
+        column: 1,
+        endLine: 2,
+        endColumn: 20,
+        relatedLocations: [
+          {
+            filePath: '/src/a.ts',
+            line: 3,
+            column: 1,
+            endLine: 3,
+            endColumn: 22,
+            message: 'related',
+          },
+        ],
+      };
+      const diagnostic = violationToLintDiagnostic(violation);
+      expect(diagnostic.endLine).toBe(2);
+      expect(diagnostic.endColumn).toBe(20);
+      expect(diagnostic.relatedLocations).toEqual(violation.relatedLocations);
+    });
   });
 
   describe('violationsToLintDiagnostics', () => {

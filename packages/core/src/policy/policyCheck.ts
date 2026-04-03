@@ -87,8 +87,17 @@ export function policyViolationsGetOutputPretty(violations: PolicyViolation[], c
   for (const [file, fileViolations] of grouped.entries()) {
     for (const violation of fileViolations) {
       lines.push(
-        `${file}:${violation.line}:${violation.column}: error [${violation.ruleId}] ${violation.message}`
+        `${file}:${violation.line}:${violation.column}: error [${violation.ruleId}] ${violation.message}`,
       );
+      if (violation.relatedLocations?.length) {
+        for (const rel of violation.relatedLocations) {
+          const relFile = path.relative(cwd, rel.filePath);
+          const msg = rel.message ? ` ${rel.message}` : '';
+          lines.push(
+            `  related ${relFile}:${rel.line}:${rel.column}:${msg}`,
+          );
+        }
+      }
     }
   }
   return lines.join('\n');

@@ -38,7 +38,7 @@ targets = ["app"]
 
 ## Reporting
 
-Violations are reported at line 1, column 1 (file-level).
+The primary violation is anchored on the **first top-level statement** that makes the module mixed (the statement that introduces the second export style). Any **further export statements** after that line are listed as related locations (and in ESLint appear as additional diagnostics for the same rule).
 
 ## See also
 

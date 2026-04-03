@@ -11,6 +11,7 @@ import type {
   PolicyRuleTargetContext,
   PolicyViolation,
   PolicyViolationFix,
+  PolicyDiagnosticLocation,
 } from './policyTypes';
 
 export const PROCESS_PLUGIN_PROTOCOL_VERSION = 1 as const;
@@ -179,14 +180,58 @@ function fixParse(value: unknown, pathLabel: string): PolicyViolationFix | undef
   };
 }
 
+function policyDiagnosticLocationParse(
+  value: unknown,
+  pathLabel: string,
+): PolicyDiagnosticLocation {
+  const record = recordExpect(value, pathLabel);
+  return {
+    filePath: stringExpect(record.filePath, `${pathLabel}.filePath`),
+    line: numberExpect(record.line, `${pathLabel}.line`),
+    column: numberExpect(record.column, `${pathLabel}.column`),
+    endLine:
+      record.endLine === undefined
+        ? undefined
+        : numberExpect(record.endLine, `${pathLabel}.endLine`),
+    endColumn:
+      record.endColumn === undefined
+        ? undefined
+        : numberExpect(record.endColumn, `${pathLabel}.endColumn`),
+    message:
+      record.message === undefined
+        ? undefined
+        : stringExpect(record.message, `${pathLabel}.message`),
+  };
+}
+
 function violationParse(value: unknown, pathLabel: string): PolicyViolation {
   const record = recordExpect(value, pathLabel);
+  let relatedLocations: PolicyDiagnosticLocation[] | undefined;
+  if (record.relatedLocations !== undefined) {
+    if (!Array.isArray(record.relatedLocations)) {
+      throw new Error(
+        `Invalid process plugin response at ${pathLabel}.relatedLocations: expected array`,
+      );
+    }
+    relatedLocations = record.relatedLocations.map((loc, index) =>
+      policyDiagnosticLocationParse(loc, `${pathLabel}.relatedLocations[${index}]`),
+    );
+  }
   return {
     ruleId: stringExpect(record.ruleId, `${pathLabel}.ruleId`),
     filePath: stringExpect(record.filePath, `${pathLabel}.filePath`),
     message: stringExpect(record.message, `${pathLabel}.message`),
     line: numberExpect(record.line, `${pathLabel}.line`),
     column: numberExpect(record.column, `${pathLabel}.column`),
+    endLine:
+      record.endLine === undefined
+        ? undefined
+        : numberExpect(record.endLine, `${pathLabel}.endLine`),
+    endColumn:
+      record.endColumn === undefined
+        ? undefined
+        : numberExpect(record.endColumn, `${pathLabel}.endColumn`),
+    relatedLocations,
     fix: fixParse(record.fix, `${pathLabel}.fix`),
   };
 }

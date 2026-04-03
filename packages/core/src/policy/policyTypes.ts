@@ -383,6 +383,24 @@ export type PolicyViolationFix = {
 };
 
 /**
+ * A file span for diagnostics. Used for optional end range and related locations.
+ */
+export type PolicyDiagnosticLocation = {
+  /** Absolute path to the file */
+  filePath: string;
+  /** 1-based start line */
+  line: number;
+  /** 1-based start column */
+  column: number;
+  /** Optional 1-based end line (inclusive span semantics match primary violation) */
+  endLine?: number;
+  /** Optional 1-based end column */
+  endColumn?: number;
+  /** Optional short note for related locations */
+  message?: string;
+};
+
+/**
  * Represents a single policy violation found during checking.
  */
 export type PolicyViolation = {
@@ -396,6 +414,12 @@ export type PolicyViolation = {
   line: number;
   /** 1-based column number where the violation occurs */
   column: number;
+  /** Optional 1-based end line for the primary diagnostic range */
+  endLine?: number;
+  /** Optional 1-based end column for the primary diagnostic range */
+  endColumn?: number;
+  /** Additional spans (e.g. other export sites); consumers may degrade to extra reports */
+  relatedLocations?: PolicyDiagnosticLocation[];
   /** Optional fix data for auto-fixable violations (inline ESLint/IDE fixes) */
   fix?: PolicyViolationFix;
 };
@@ -449,6 +473,8 @@ export type LintDiagnostic = {
   ruleId: string;
   /** Severity level of the diagnostic */
   severity: 'error' | 'warning' | 'info';
+  /** Additional spans (same semantics as PolicyViolation.relatedLocations) */
+  relatedLocations?: PolicyDiagnosticLocation[];
   /** Optional fix data for auto-fixable diagnostics */
   fix?: PolicyViolationFix;
 };

@@ -49,13 +49,18 @@ function ruffArgsGet(
  * Maps a single Ruff diagnostic to a codepol PolicyViolation.
  */
 function ruffDiagnosticToViolation(diag: RuffDiagnostic): PolicyViolation {
-  return {
+  const violation: PolicyViolation = {
     ruleId: diag.code ?? 'ruff',
     filePath: diag.filename,
     message: diag.message,
     line: diag.location.row,
     column: diag.location.column,
   };
+  if (diag.end_location) {
+    violation.endLine = diag.end_location.row;
+    violation.endColumn = diag.end_location.column;
+  }
+  return violation;
 }
 
 /**

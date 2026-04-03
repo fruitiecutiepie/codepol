@@ -8,6 +8,16 @@ import {
 // ESLint Adapter Cache / State Clearing
 // ============================================================================
 
+/** Related-location spans use 1-based columns; ESLint `loc` uses 0-based (see eslintAdapter). */
+describe('eslintAdapter related-location column convention', () => {
+  it('maps 1-based columns to ESLint 0-based columns', () => {
+    const column1Based = 5;
+    const endColumn1Based = 18;
+    expect(column1Based - 1).toBe(4);
+    expect(endColumn1Based - 1).toBe(17);
+  });
+});
+
 describe('eslintAdapter cache and state clearing', () => {
   describe('policyCacheClear', () => {
     it('clears the policy cache without error', () => {

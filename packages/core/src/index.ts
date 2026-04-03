@@ -55,6 +55,7 @@ export type {
   PolicyCheckContext,
   PolicyViolation,
   PolicyViolationFix,
+  PolicyDiagnosticLocation,
   RuleMatch,
   // Adapter types
   LintDiagnostic,

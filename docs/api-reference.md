@@ -997,6 +997,15 @@ possible in the future.
 Platform-agnostic lint diagnostic that any lint provider can consume.
 
 ```typescript
+type PolicyDiagnosticLocation = {
+  filePath: string;
+  line: number;
+  column: number;
+  endLine?: number;
+  endColumn?: number;
+  message?: string;
+};
+
 type LintDiagnostic = {
   message: string;       // Human-readable message
   line: number;          // 1-based line number
@@ -1005,6 +1014,7 @@ type LintDiagnostic = {
   endColumn?: number;    // Optional end column
   ruleId: string;        // Rule ID that produced this diagnostic
   severity: 'error' | 'warning' | 'info';
+  relatedLocations?: PolicyDiagnosticLocation[]; // Optional extra spans
 };
 ```
 
@@ -1152,6 +1162,24 @@ type PluginRuleConfig = {
 ```
 
 ---
+
+### PolicyViolation
+
+A single policy finding. Primary position uses `line` / `column`; optional `endLine` / `endColumn` close the range; `relatedLocations` lists additional spans (see `PolicyDiagnosticLocation` under Tree-Check Adapter Types).
+
+```typescript
+type PolicyViolation = {
+  ruleId: string;
+  filePath: string;
+  message: string;
+  line: number;
+  column: number;
+  endLine?: number;
+  endColumn?: number;
+  relatedLocations?: PolicyDiagnosticLocation[];
+  fix?: PolicyViolationFix;
+};
+```
 
 ### PolicyViolationFix
 

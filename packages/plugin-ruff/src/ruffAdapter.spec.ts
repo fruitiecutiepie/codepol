@@ -216,6 +216,8 @@ describe('ruffDiagnosticToViolation', () => {
     expect(violation.message).toBe('`os` imported but unused');
     expect(violation.line).toBe(1);
     expect(violation.column).toBe(1);
+    expect(violation.endLine).toBe(1);
+    expect(violation.endColumn).toBe(10);
   });
 
   it('uses "ruff" as ruleId when code is null', () => {
