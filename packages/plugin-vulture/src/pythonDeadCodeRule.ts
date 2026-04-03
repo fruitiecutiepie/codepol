@@ -34,7 +34,7 @@ const pythonDeadCodeFixProvider: FixProvider = {
   },
 };
 
-const pythonDeadCodeRule: CodepolPluginRule = pluginRuleNew({
+export const pythonDeadCodeRule: CodepolPluginRule = pluginRuleNew({
   id: 'python-dead-code',
   capabilities: {
     treeCheckProvider: treeCheckProviderNew({
@@ -44,5 +44,3 @@ const pythonDeadCodeRule: CodepolPluginRule = pluginRuleNew({
     fixProvider: pythonDeadCodeFixProvider,
   },
 });
-
-export default [pythonDeadCodeRule];
