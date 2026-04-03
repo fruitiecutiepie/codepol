@@ -197,6 +197,38 @@ describe('enforceCasingCheck', () => {
       expect(enforceCasingCheck(rule, context)).toHaveLength(0);
     });
 
+    it('flags parameter not matching camelCase or snake_case', () => {
+      const filePath = path.join(testDir, 'sym-param-bad.ts');
+      const source =
+        'export function f(BAD_NAME: string): void {\n  void BAD_NAME;\n}\n';
+      fs.writeFileSync(filePath, source);
+      const { index } = projectIndexBuildSync({
+        files: [filePath],
+        dir: testDir,
+      });
+      const { rule, context } = contextNew(filePath, source, index, {
+        symbols: { parameter: ['camelCase', 'snake_case'] },
+      });
+      const v = enforceCasingCheck(rule, context);
+      expect(v.some((x) => x.message.includes('BAD_NAME'))).toBe(true);
+      expect(v.some((x) => x.message.includes('parameter'))).toBe(true);
+    });
+
+    it('allows snake_case parameter when configured', () => {
+      const filePath = path.join(testDir, 'sym-param-ok.ts');
+      const source =
+        'export function g(good_name: string): void {\n  void good_name;\n}\n';
+      fs.writeFileSync(filePath, source);
+      const { index } = projectIndexBuildSync({
+        files: [filePath],
+        dir: testDir,
+      });
+      const { rule, context } = contextNew(filePath, source, index, {
+        symbols: { parameter: ['camelCase', 'snake_case'] },
+      });
+      expect(enforceCasingCheck(rule, context)).toHaveLength(0);
+    });
+
     it('import type bindings use symbols.type, not symbols.variable', () => {
       const filePath = path.join(testDir, 'import-type-casing.ts');
       const source =

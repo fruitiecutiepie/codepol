@@ -35,6 +35,31 @@ export const SYMBOLS_QUERY = `
   name: (property_identifier) @name) @decl.method
 
 ; =========================
+;  Parameters
+; =========================
+
+(formal_parameters
+  (required_parameter
+    name: (identifier) @name)) @decl.parameter
+
+(formal_parameters
+  (required_parameter
+    pattern: (identifier) @name)) @decl.parameter
+
+(formal_parameters
+  (required_parameter
+    name: (rest_pattern
+      (identifier) @name))) @decl.parameter
+
+(formal_parameters
+  (optional_parameter
+    name: (identifier) @name)) @decl.parameter
+
+(formal_parameters
+  (optional_parameter
+    pattern: (identifier) @name)) @decl.parameter
+
+; =========================
 ;  Variables (var/let/const)
 ; =========================
 
