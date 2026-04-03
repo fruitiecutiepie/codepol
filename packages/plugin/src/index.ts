@@ -1,5 +1,6 @@
 import type { CodepolPluginRule } from '@codepol/core';
 import { pluginRuleNew } from '@codepol/core';
+import { pythonDeadCodeRule } from '@codepol/plugin-vulture';
 import { loggerTreeCheckProvider } from './policyPluginLogger';
 import { unusedExportsRule } from './unusedExportsRule';
 import { unusedExportsCheck } from './unusedExportsCheck';
@@ -12,6 +13,7 @@ import { noStarExportCollisionsRule } from './noStarExportCollisionsRule';
 
 export { unusedExportsRule };
 export { unusedExportsCheck };
+export { pythonDeadCodeRule } from '@codepol/plugin-vulture';
 
 export const loggerEnterExitRule: CodepolPluginRule = pluginRuleNew({
   id: 'require-logger-enter-exit',
@@ -23,6 +25,7 @@ export const loggerEnterExitRule: CodepolPluginRule = pluginRuleNew({
 export default [
   loggerEnterExitRule,
   unusedExportsRule,
+  pythonDeadCodeRule,
   forbiddenWordsRule,
   forbiddenPathWordsRule,
   noVerbFunctionNameRule,

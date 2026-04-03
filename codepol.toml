@@ -12,10 +12,6 @@ targets.python-src.exclude = ["**/venv/**", "**/.venv/**", "**/dist/**", "**/nod
 id = "@codepol/plugin"
 source = { kind = "builtin" }
 
-[[plugins]]
-id = "@codepol/plugin-vulture"
-source = { kind = "builtin" }
-
 [[rules]]
 id = "no-unused-exports"
 ruleId = "@codepol/plugin/no-unused-exports"
@@ -120,7 +116,7 @@ targets = ["codepol-src"]
 args.includeLocalExports = true
 
 [[rules]]
-ruleId = "@codepol/plugin-vulture/python-dead-code"
+ruleId = "@codepol/plugin/python-dead-code"
 description = "Detect unused Python code via Vulture"
 targets = ["python-src"]
 providers = ["tree-sitter"]

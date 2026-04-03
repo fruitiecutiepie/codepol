@@ -157,6 +157,9 @@ importers:
 
   packages/plugin:
     dependencies:
+      '@codepol/plugin-vulture':
+        specifier: workspace:^
+        version: link:../plugin-vulture
       minimatch:
         specifier: ^10.1.1
         version: 10.1.1
