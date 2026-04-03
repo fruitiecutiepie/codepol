@@ -8,6 +8,7 @@
 
 export {
   vultureCheck,
+  vultureFindingsGet,
   vultureOutputParse,
   vultureLineParse,
   vultureFindingToViolation,
@@ -17,3 +18,12 @@ export type {
   VultureFinding,
   VultureProviderConfig,
 } from './vultureTypes';
+
+export { pythonDeadCodeCheck } from './pythonDeadCodeCheck';
+export { pythonDeadCodeFixApply } from './pythonDeadCodeFix';
+export { pythonDeadCodeRule } from './pythonDeadCodeRule';
+export { vultureFindingMatchesFile } from './vulturePathMatch';
+
+import { pythonDeadCodeRule } from './pythonDeadCodeRule';
+
+export default [pythonDeadCodeRule];

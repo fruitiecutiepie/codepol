@@ -110,6 +110,9 @@ importers:
       '@codepol/plugin-ruff':
         specifier: workspace:*
         version: link:../../packages/plugin-ruff
+      '@codepol/plugin-vulture':
+        specifier: workspace:*
+        version: link:../../packages/plugin-vulture
       chokidar:
         specifier: ^5.0.0
         version: 5.0.0
@@ -179,6 +182,9 @@ importers:
       '@codepol/plugin-eslint':
         specifier: workspace:*
         version: link:../plugin-eslint
+      '@codepol/plugin-vulture':
+        specifier: workspace:*
+        version: link:../plugin-vulture
       '@types/node':
         specifier: ^25.0.3
         version: 25.0.3
@@ -233,6 +239,9 @@ importers:
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
+      web-tree-sitter:
+        specifier: ^0.24.7
+        version: 0.24.7
 
 packages:
 

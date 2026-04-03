@@ -116,7 +116,7 @@ import { pluginRuleNew, treeCheckProviderNew } from '@codepol/core';
 import { unusedExportsCheck } from './unusedExportsCheck';
 
 const unusedExportsTreeCheck = treeCheckProviderNew({
-  languages: ['typescript', 'tsx'],
+  languages: ['typescript', 'tsx', 'javascript', 'jsx'],
   check: unusedExportsCheck,
 });
 

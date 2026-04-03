@@ -47,8 +47,10 @@ import {
 import { eslintPluginCreate } from '@codepol/plugin-eslint';
 import { ruffCheck, ruffFix } from '@codepol/plugin-ruff';
 import codepolPlugin from '@codepol/plugin';
+import vulturePlugin from '@codepol/plugin-vulture';
 
 pluginModuleRegister('@codepol/plugin', { default: codepolPlugin });
+pluginModuleRegister('@codepol/plugin-vulture', { default: vulturePlugin });
 
 type CliOptions = {
   fix: boolean;

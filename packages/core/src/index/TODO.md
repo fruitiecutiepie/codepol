@@ -131,6 +131,38 @@ See [TODO_ADAPTER_PY.md](TODO_ADAPTER_PY.md) for Python-specific remaining work 
 
 ---
 
+### Native `no-unused-vars` parity
+
+**Priority**: Medium
+**Status**: Partial primitives only
+**Effort**: Medium-Large
+
+The semantic index is sufficient for a baseline "declared binding has no resolved references" rule, but not yet for ESLint- or typescript-eslint-style `no-unused-vars` parity.
+
+`ruleArgs` already supports rich rule options, so config plumbing is not the main blocker. The missing work is semantic fidelity in the TypeScript adapter and reference model.
+
+Missing pieces:
+
+- [ ] Parameter declarations in the TS/TSX adapter. `SymbolKind` includes `parameter`, but `packages/core/src/adapters/treeSitter/languages/typescript/queries/symbols.ts` does not currently capture `@decl.parameter`. Need support for simple, default, rest, and destructured parameters.
+- [ ] Catch bindings and catch-local scopes. `packages/core/src/adapters/treeSitter/languages/typescript/queries/scopes.ts` currently captures only class/function/block scopes. Need `catch_clause` coverage plus symbol extraction for catch identifiers.
+- [ ] Rich reference usage kinds. `ReferencesRelation` in `indexTypes.ts` only stores `scopeId`, `name`, `byteRange`, and optional `resolvedSymbolId`. High-parity unused-vars needs at least read/write classification and enough metadata to distinguish assignment-only refs, self-updates, and type-only refs from real value reads.
+- [ ] Better TS ref extraction. `packages/core/src/adapters/treeSitter/languages/typescript/queries/refs.ts` is intentionally simplified and captures broad `identifier` / `type_identifier` nodes. A native unused-vars rule needs more precise filtering for declaration-vs-use, value-vs-type positions, and destructuring/default-value cases.
+- [ ] More accurate local resolution. `resolveLocal()` in `packages/core/src/adapters/treeSitter/adapterCore.ts` is a practical scope-chain heuristic and can fall back to the first candidate. Unused-vars parity needs tighter handling for shadowing edge cases, named function expressions, loop-head bindings, and nested destructuring scopes.
+- [ ] Destructuring metadata. Need to know whether a binding came from object vs array destructuring, whether it has rest siblings, whether a name is a property key or bound identifier, and whether default initializers introduce reads.
+- [ ] Parameter ordering metadata for `args: "after-used"`. The rule needs either indexed parameter order or a reliable AST-side reconstruction of "last used parameter" semantics.
+- [ ] Rule-level parity behavior after index support exists. Implement ESLint-style handling for `varsIgnorePattern`, `argsIgnorePattern`, `caughtErrorsIgnorePattern`, `destructuredArrayIgnorePattern`, `ignoreRestSiblings`, `reportUsedIgnorePattern`, and write-only/self-update edge cases such as `a = 1`, `a++`, and `a = a + 1`.
+
+Test matrix once implemented:
+
+- [ ] Unused locals, params, and catch bindings
+- [ ] Destructuring with defaults and rest siblings
+- [ ] `args: "after-used"` behavior
+- [ ] Write-only refs vs true reads
+- [ ] Type-only references in TS
+- [ ] Ignore-pattern and report-used-ignore-pattern behavior
+
+---
+
 ### 1. `TypeOf` relation
 
 **Priority**: Low (deferred)

@@ -239,6 +239,18 @@ describe('vultureFindingToViolation', () => {
 
     expect(vultureFindingToViolation(finding).column).toBe(1);
   });
+
+  it('uses custom ruleId when provided', () => {
+    const finding: VultureFinding = {
+      filePath: 'app.py',
+      line: 1,
+      type: 'function',
+      name: 'f',
+      confidence: 60,
+    };
+    const v = vultureFindingToViolation(finding, '@codepol/plugin-vulture/python-dead-code');
+    expect(v.ruleId).toBe('@codepol/plugin-vulture/python-dead-code');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -265,6 +277,16 @@ describe('vultureCheck', () => {
 
     expect(isOk(result)).toBe(true);
     expect(result.Ok).toEqual([]);
+  });
+
+  it('passes --config when configPath is set', () => {
+    mockExecFileSync.mockReturnValue('' as any);
+    vultureCheck(['app.py'], { configPath: '/path/pyproject.toml' });
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'vulture',
+      expect.arrayContaining(['app.py', '--config=/path/pyproject.toml']),
+      expect.anything(),
+    );
   });
 
   it('parses violations from exit-1 stdout (dead code found)', () => {

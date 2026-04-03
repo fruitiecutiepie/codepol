@@ -21,6 +21,7 @@ export const unusedExportsRule: CodepolPluginRule = pluginRuleNew({
   id: 'no-unused-exports',
   capabilities: {
     treeCheckProvider: treeCheckProviderNew({
+      languages: ['typescript', 'tsx', 'javascript', 'jsx'],
       check: unusedExportsCheck,
     }),
     fixProvider: unusedExportsFixProvider,

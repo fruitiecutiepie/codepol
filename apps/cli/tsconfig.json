@@ -9,6 +9,7 @@
   "references": [
     { "path": "../../packages/core" },
     { "path": "../../packages/plugin" },
-    { "path": "../../packages/plugin-ruff" }
+    { "path": "../../packages/plugin-ruff" },
+    { "path": "../../packages/plugin-vulture" }
   ]
 }

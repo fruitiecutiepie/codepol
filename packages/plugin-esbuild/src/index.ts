@@ -48,8 +48,10 @@ import {
 } from '@codepol/core';
 import { eslintPluginCreate } from '@codepol/plugin-eslint';
 import codepolPlugin from '@codepol/plugin';
+import vulturePlugin from '@codepol/plugin-vulture';
 
 pluginModuleRegister('@codepol/plugin', { default: codepolPlugin });
+pluginModuleRegister('@codepol/plugin-vulture', { default: vulturePlugin });
 
 const ESLINT_CONFIG_EXTENSIONS = ['.js', '.mjs', '.cjs', '.ts', '.mts', '.cts'];
 
@@ -161,6 +163,7 @@ async function policyCheck(options: {
   // Register languages and initialize web-tree-sitter WASM parser
   langAdd({ langId: 'typescript', fileExtensions: ['.ts'] });
   langAdd({ langId: 'tsx', fileExtensions: ['.tsx'] });
+  langAdd({ langId: 'python', fileExtensions: ['.py', '.pyw'] });
   await parserInit();
 
   const policy = config as PolicyFile;

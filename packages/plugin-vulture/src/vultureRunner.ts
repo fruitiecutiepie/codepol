@@ -8,7 +8,7 @@
 
 import { execFileSync } from 'node:child_process';
 import type { PolicyViolation } from '@codepol/core';
-import { Ok, Err, type Result } from '@codepol/core';
+import { Ok, Err, isErr, type Result } from '@codepol/core';
 import type { VultureFinding, VultureProviderConfig } from './vultureTypes';
 
 const VULTURE_RULE_ID = 'python-dead-code';
@@ -47,6 +47,9 @@ function vultureArgsGet(
   if (config?.ignoreNames?.length) {
     args.push(`--ignore-names=${config.ignoreNames.join(',')}`);
   }
+  if (config?.configPath) {
+    args.push(`--config=${config.configPath}`);
+  }
 
   return args;
 }
@@ -84,9 +87,12 @@ export function vultureOutputParse(stdout: string): VultureFinding[] {
 /**
  * Maps a VultureFinding to a codepol PolicyViolation.
  */
-export function vultureFindingToViolation(finding: VultureFinding): PolicyViolation {
+export function vultureFindingToViolation(
+  finding: VultureFinding,
+  ruleId: string = VULTURE_RULE_ID,
+): PolicyViolation {
   return {
-    ruleId: VULTURE_RULE_ID,
+    ruleId,
     filePath: finding.filePath,
     message: `unused ${finding.type} '${finding.name}' (${finding.confidence}% confidence)`,
     line: finding.line,
@@ -95,7 +101,7 @@ export function vultureFindingToViolation(finding: VultureFinding): PolicyViolat
 }
 
 /**
- * Runs `vulture` on the given files and returns the findings as PolicyViolation[].
+ * Runs `vulture` and returns structured findings (for fixers and policy checks).
  *
  * Vulture exit codes:
  *   0 – no dead code found
@@ -106,10 +112,10 @@ export function vultureFindingToViolation(finding: VultureFinding): PolicyViolat
  * Codes 1 and 3 are treated as success (findings in stdout).
  * A missing vulture binary or invalid config is reported via Result.Err.
  */
-export function vultureCheck(
+export function vultureFindingsGet(
   files: string[],
   config?: VultureProviderConfig
-): Result<PolicyViolation[], string> {
+): Result<VultureFinding[], string> {
   if (files.length === 0) {
     return Ok([]);
   }
@@ -140,6 +146,19 @@ export function vultureCheck(
     return Ok([]);
   }
 
-  const findings = vultureOutputParse(trimmed);
-  return Ok(findings.map(vultureFindingToViolation));
+  return Ok(vultureOutputParse(trimmed));
+}
+
+/**
+ * Runs `vulture` on the given files and returns the findings as PolicyViolation[].
+ */
+export function vultureCheck(
+  files: string[],
+  config?: VultureProviderConfig
+): Result<PolicyViolation[], string> {
+  const findings = vultureFindingsGet(files, config);
+  if (isErr(findings)) {
+    return findings;
+  }
+  return Ok(findings.Ok.map(f => vultureFindingToViolation(f)));
 }

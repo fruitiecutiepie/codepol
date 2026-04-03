@@ -59,6 +59,10 @@ export function policyViolationsGetForFile(
   configPath?: string,
   projectIndex?: ProjectIndex
 ): Result<PolicyViolation[], string> {
+  if (rule.providers && rule.providers.length > 0 && !rule.providers.includes('tree-sitter')) {
+    return Ok([]);
+  }
+
   const pluginResult = policyPluginGet(pluginsMap, rule, target);
   if (isErr(pluginResult)) {
     return pluginResult;

@@ -9,6 +9,7 @@
   "references": [
     { "path": "../core" },
     { "path": "../plugin-eslint" },
-    { "path": "../plugin" }
+    { "path": "../plugin" },
+    { "path": "../plugin-vulture" }
   ]
 }
