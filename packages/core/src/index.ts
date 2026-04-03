@@ -366,6 +366,7 @@ export {
 export {
   violationToLintDiagnostic,
   violationsToLintDiagnostics,
+  treeSitterViolationPositionPreferred,
 } from './adapter/treeCheckAdapter';
 
 // Result

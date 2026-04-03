@@ -175,6 +175,55 @@ describe('enforceCasingCheck', () => {
       expect(enforceCasingCheck(rule, context)).toHaveLength(0);
     });
 
+    it('import type bindings use symbols.type, not symbols.variable', () => {
+      const filePath = path.join(testDir, 'import-type-casing.ts');
+      const source =
+        "import type {\n  TreeCheckLintAdapter,\n} from '@codepol/core';\n";
+      fs.writeFileSync(filePath, source);
+      const { index } = projectIndexBuildSync({
+        files: [filePath],
+        dir: testDir,
+      });
+      const { rule, context } = contextNew(filePath, source, index, {
+        symbols: {
+          variable: ['snake_case'],
+          type: ['PascalCase'],
+        },
+      });
+      expect(enforceCasingCheck(rule, context)).toHaveLength(0);
+    });
+
+    it('value imports use resolved export kind (e.g. function), not variable', () => {
+      const depPath = path.join(testDir, 'casing-dep.ts');
+      fs.writeFileSync(
+        depPath,
+        'export function bad_import_name() { return 1; }\n',
+      );
+      const consumerPath = path.join(testDir, 'casing-consumer.ts');
+      const consumerSource =
+        "import { bad_import_name } from './casing-dep';\n";
+      fs.writeFileSync(consumerPath, consumerSource);
+      const { index } = projectIndexBuildSync({
+        files: [depPath, consumerPath],
+        dir: testDir,
+      });
+      const { rule, context } = contextNew(
+        consumerPath,
+        consumerSource,
+        index,
+        {
+          symbols: {
+            function: ['camelCase'],
+            variable: ['snake_case'],
+          },
+        },
+      );
+      const v = enforceCasingCheck(rule, context);
+      expect(v).toHaveLength(1);
+      expect(v[0].message).toContain('bad_import_name');
+      expect(v[0].message).toContain('function');
+    });
+
     it('Python: function snake_case', () => {
       const pyDir = path.join(testDir, 'py-fn');
       fs.mkdirSync(pyDir, { recursive: true });

@@ -3,6 +3,7 @@ import type {
   PolicyRule,
   PolicyCheckContext,
   PolicyViolation,
+  ProjectIndex,
   SymbolKind,
   SymbolRecord,
 } from '@codepol/core';
@@ -11,6 +12,7 @@ import {
   nameMatchesAnyCasingStyle,
   type CasingStyleName,
 } from './lib/casingConvention';
+import { importBindingIsTypeOnly } from './lib/importBindingTypeOnly';
 
 /**
  * Per-symbol-kind allowed casing styles. Omitted kinds are not checked.
@@ -112,8 +114,54 @@ function pathSegmentsExtract(filePath: string, cwd: string): PathSegment[] {
 function symbolViolationMessage(
   sym: SymbolRecord,
   allowed: CasingStyleName[],
+  kindLabel?: string,
 ): string {
-  return `Symbol '${sym.name}' (${sym.kind}) must match one of: ${casingStylesDescribe(allowed)}`;
+  const label = kindLabel ?? sym.kind;
+  return `Symbol '${sym.name}' (${label}) must match one of: ${casingStylesDescribe(allowed)}`;
+}
+
+/**
+ * Import bindings are indexed as `variable`. Adjust casing policy:
+ * - `import type { X }` → use `[rules.args.symbols].type`
+ * - Resolved value imports → use the **exported** symbol kind (function, const,
+ *   etc.), not `variable`, when `resolvedExportId` is available
+ */
+function symbolAllowedStylesGet(
+  sym: SymbolRecord,
+  projectIndex: ProjectIndex,
+  source: string,
+  symbolsConfig: EnforceCasingSymbolsArgs,
+): { allowed: CasingStyleName[]; kindLabel: string } | undefined {
+  if (sym.kind === 'variable') {
+    const binding = projectIndex.importBindingGetForSymbol(sym.id);
+    if (binding && importBindingIsTypeOnly(source, sym.byteRange.start)) {
+      const forTypeImport = symbolsConfig.type;
+      if (forTypeImport && forTypeImport.length > 0) {
+        return { allowed: forTypeImport, kindLabel: 'type import' };
+      }
+      return undefined;
+    }
+
+    if (binding?.resolvedExportId) {
+      const remote = projectIndex.symbolGet(binding.resolvedExportId);
+      if (remote && isEnforceableSymbolKind(remote.kind)) {
+        const forRemoteKind = symbolsConfig[remote.kind];
+        if (forRemoteKind && forRemoteKind.length > 0) {
+          return { allowed: forRemoteKind, kindLabel: remote.kind };
+        }
+        return undefined;
+      }
+    }
+  }
+
+  if (!isEnforceableSymbolKind(sym.kind)) {
+    return undefined;
+  }
+  const allowed = symbolsConfig[sym.kind];
+  if (!allowed || allowed.length === 0) {
+    return undefined;
+  }
+  return { allowed, kindLabel: sym.kind };
 }
 
 function pathViolationMessage(
@@ -167,13 +215,16 @@ export function enforceCasingCheck(
   if (symbolsConfig && projectIndex) {
     const symbols = projectIndex.symbolsInFileGet(filePath);
     for (const sym of symbols) {
-      if (!isEnforceableSymbolKind(sym.kind)) {
+      const resolved = symbolAllowedStylesGet(
+        sym,
+        projectIndex,
+        source,
+        symbolsConfig,
+      );
+      if (!resolved) {
         continue;
       }
-      const allowed = symbolsConfig[sym.kind];
-      if (!allowed || allowed.length === 0) {
-        continue;
-      }
+      const { allowed, kindLabel } = resolved;
       if (nameMatchesAnyCasingStyle(sym.name, allowed)) {
         continue;
       }
@@ -184,7 +235,7 @@ export function enforceCasingCheck(
       violations.push({
         ruleId: rule.id || rule.ruleId,
         filePath,
-        message: symbolViolationMessage(sym, allowed),
+        message: symbolViolationMessage(sym, allowed, kindLabel),
         line,
         column,
       });
