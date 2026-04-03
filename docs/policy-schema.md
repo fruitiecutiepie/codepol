@@ -212,10 +212,13 @@ targets = ["typescript-src"]
 Common provider values:
 
 - `eslint`
+- `biome`
 - `tree-sitter`
 - `ruff`
 
 If omitted, the rule applies everywhere the host can adapt it.
+
+`biome` providers are executed by the CLI via `biome lint` on JS/TS files that match **this rule’s** targets (and only when the rule selects the `biome` provider, if `providers` is set). Biome’s own config discovery still applies unless the provider supplies an explicit `configPath`. Multiple distinct Biome provider configurations result in multiple `biome lint` subprocess runs (one per normalized config group). Policy `severity` and `args` do not currently alter Biome diagnostics; configure rules in Biome’s config instead.
 
 ## Notes
 

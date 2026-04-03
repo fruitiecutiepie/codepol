@@ -24,8 +24,10 @@
     "docs:preview": "vitepress preview docs"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.4.10",
     "@codepol/core": "workspace:*",
     "@codepol/plugin": "workspace:*",
+    "@codepol/plugin-biome": "workspace:*",
     "@codepol/plugin-esbuild": "workspace:*",
     "@codepol/plugin-eslint": "workspace:*",
     "@codepol/plugin-ruff": "workspace:*",

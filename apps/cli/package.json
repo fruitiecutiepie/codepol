@@ -13,11 +13,12 @@
   ],
   "scripts": {
     "build": "tsc --project tsconfig.json",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --build --pretty false"
   },
   "dependencies": {
     "@codepol/core": "workspace:*",
     "@codepol/plugin": "workspace:*",
+    "@codepol/plugin-biome": "workspace:*",
     "@codepol/plugin-eslint": "workspace:^",
     "@codepol/plugin-ruff": "workspace:*",
     "@codepol/plugin-vulture": "workspace:*",

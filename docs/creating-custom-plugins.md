@@ -181,6 +181,32 @@ export const noDuplicateExportsRule: CodepolPluginRule = pluginRuleNew({
 });
 ```
 
+#### Biome provider example
+
+Use a Biome provider when your rule should **delegate** JS/TS enforcement to the Biome CLI instead of ESLint. This is a host hook: `codepol` shells out to `biome lint` and merges RDJSON diagnostics. It does **not** embed Codepol logic as native Biome rules (no custom Biome plugin API).
+
+```typescript
+const biomeProvider: LintProvider = {
+  platform: 'biome',
+  languages: ['typescript', 'tsx', 'javascript', 'jsx'],
+  config: {
+    biomeBin: 'biome',
+    configPath: './biome.json',
+  },
+};
+
+export const biomeBackedRule = pluginRuleNew({
+  id: 'biome-backed-rule',
+  capabilities: {
+    lintProviders: [biomeProvider],
+  },
+});
+```
+
+When users run `codepol`, the CLI runs `biome lint` only for files matched by this rule’s policy targets that enable the Biome provider. When they run `codepol --fix`, the CLI runs `biome lint --write` for those files. If two policy rules need different Biome invocations (different `configPath` / `extraArgs` / binary), use different provider configs; each distinct config is executed once per run. Do not attach two different Biome provider configs to the **same** rule plugin — that is rejected as a conflict.
+
+Policy `severity` and `ruleArgs` are not forwarded into Biome the way `EslintProviderConfig.ruleOptions` forwards into ESLint; configure Biome via `biome.json` and the provider `config` instead.
+
 #### Understanding ruleOptions
 
 `ruleOptions` is an **optional** field on `EslintProviderConfig`.

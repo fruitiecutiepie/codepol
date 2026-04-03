@@ -29,6 +29,7 @@ import {
   policyViolationsGetFromDir,
   policyViolationsGetOutputPretty,
   policyPluginsGet,
+  pluginGetForRule,
   pluginModuleRegister,
   ESLINT_PLUGIN_NAME_DEFAULT,
   configGet,
@@ -44,7 +45,9 @@ import {
   type PolicyWorkspaceEdit,
   type PolicyRuleTargetContext,
   type CodepolConfig,
+  type RuleMatch,
 } from '@codepol/core';
+import { biomeCheck, biomeFix, type BiomeProviderConfig } from '@codepol/plugin-biome';
 import { eslintPluginCreate } from '@codepol/plugin-eslint';
 import { ruffCheck, ruffFix } from '@codepol/plugin-ruff';
 import codepolPlugin from '@codepol/plugin';
@@ -79,6 +82,91 @@ type LintProviderEntry = {
 };
 
 const ESLINT_CONFIG_EXTENSIONS = ['.js', '.mjs', '.cjs', '.ts', '.mts', '.cts'];
+const BIOME_FILE_EXTENSIONS = ['.js', '.mjs', '.cjs', '.jsx', '.ts', '.mts', '.cts', '.tsx'];
+const PYTHON_FILE_EXTENSIONS = ['.py', '.pyw'];
+
+function fileHasExtension(filePath: string, extensions: string[]): boolean {
+  return extensions.some((extension) => filePath.endsWith(extension));
+}
+
+/**
+ * Stable key for grouping Biome subprocess runs. Equivalent configs must produce the same key.
+ */
+function biomeProviderConfigKey(config: BiomeProviderConfig | undefined): string {
+  const c = config ?? {};
+  return JSON.stringify({
+    biomeBin: c.biomeBin ?? 'biome',
+    configPath: c.configPath ?? null,
+    extraArgs: c.extraArgs ?? [],
+  });
+}
+
+function biomeProviderConfigFromKey(key: string): BiomeProviderConfig {
+  const parsed = JSON.parse(key) as {
+    biomeBin: string;
+    configPath: string | null;
+    extraArgs: string[];
+  };
+  const out: BiomeProviderConfig = { biomeBin: parsed.biomeBin };
+  if (parsed.configPath != null) {
+    out.configPath = parsed.configPath;
+  }
+  if (parsed.extraArgs.length > 0) {
+    out.extraArgs = parsed.extraArgs;
+  }
+  return out;
+}
+
+/**
+ * One resolved Biome config per policy rule. Conflicting configs for the same rule throw.
+ */
+function biomeRuleIdToConfigMapBuild(entries: LintProviderEntry[]): Map<string, BiomeProviderConfig> {
+  const map = new Map<string, BiomeProviderConfig>();
+  for (const entry of entries) {
+    if (entry.provider.platform !== 'biome') {
+      continue;
+    }
+    const cfg = entry.provider.config as BiomeProviderConfig;
+    const prev = map.get(entry.ruleId);
+    if (prev !== undefined && biomeProviderConfigKey(prev) !== biomeProviderConfigKey(cfg)) {
+      throw new Error(
+        `Conflicting Biome lint provider configs for rule "${entry.ruleId}". ` +
+        'Use a single Biome provider configuration per rule, or split into separate policy rules.'
+      );
+    }
+    map.set(entry.ruleId, cfg);
+  }
+  return map;
+}
+
+/**
+ * Files to pass to Biome: only targets of policy rules that enabled a Biome provider,
+ * grouped by normalized Biome CLI config.
+ */
+function biomeFilesByConfigKeyCollect(
+  matches: RuleMatch[],
+  ruleIdToBiomeConfig: Map<string, BiomeProviderConfig>,
+): Map<string, Set<string>> {
+  const byKey = new Map<string, Set<string>>();
+  for (const match of matches) {
+    const cfg = ruleIdToBiomeConfig.get(match.rule.ruleId);
+    if (!cfg) {
+      continue;
+    }
+    const key = biomeProviderConfigKey(cfg);
+    let set = byKey.get(key);
+    if (!set) {
+      set = new Set<string>();
+      byKey.set(key, set);
+    }
+    for (const filePath of match.files) {
+      if (fileHasExtension(filePath, BIOME_FILE_EXTENSIONS)) {
+        set.add(filePath);
+      }
+    }
+  }
+  return byKey;
+}
 
 function policyViolationWorkspaceEditsGet(
   violation: PolicyViolation,
@@ -265,7 +353,7 @@ async function fixProvidersApply(
   }
 }
 
-async function policyCheck(options: {
+export async function policyCheck(options: {
   config: CodepolConfig;
   configPath: string;
   eslintConfigPath: string;
@@ -288,30 +376,23 @@ async function policyCheck(options: {
   // Collect lint providers from all rule plugins
   // Args and severity come from policy rules
   const lintProviderEntries: LintProviderEntry[] = [];
-  for (const entry of pluginRules) {
-    const lintProviders = entry.pluginRule.capabilities.lintProviders ?? [];
-    for (const provider of lintProviders) {
-      // Find the policy rule that uses this plugin to get its args, severity, and providers filter
-      const matchingRule = policy.rules.find(r => 
-        r.ruleId === entry.pluginRule.id || 
-        entry.pluginRule.id.endsWith(`/${r.ruleId}`)
-      );
+  for (const rule of policy.rules) {
+    const lookup = pluginGetForRule(pluginRulesMap, rule.ruleId);
+    if (!lookup) {
+      continue;
+    }
 
-      // Skip providers for plugin rules that have no matching policy rule
-      if (!matchingRule) continue;
-      
-      // Skip if rule specifies providers and this provider's platform is not included
-      if (matchingRule.providers && matchingRule.providers.length > 0) {
-        if (!matchingRule.providers.includes(provider.platform)) {
-          continue;
-        }
+    const lintProviders = lookup.plugin.pluginRule.capabilities.lintProviders ?? [];
+    for (const provider of lintProviders) {
+      if (rule.providers && rule.providers.length > 0 && !rule.providers.includes(provider.platform)) {
+        continue;
       }
-      
+
       lintProviderEntries.push({
         provider,
-        ruleId: entry.pluginRule.id,
-        ruleArgs: matchingRule.args,
-        severity: matchingRule.severity,
+        ruleId: lookup.resolvedId,
+        ruleArgs: rule.args,
+        severity: rule.severity,
       });
     }
   }
@@ -385,18 +466,52 @@ async function policyCheck(options: {
     }
   }
 
+  const biomeViolations: PolicyViolation[] = [];
+  const biomeLintEntries = lintProviderEntries.filter(
+    entry => entry.provider.platform === 'biome'
+  );
+  if (biomeLintEntries.length > 0) {
+    const ruleIdToBiomeConfig = biomeRuleIdToConfigMapBuild(lintProviderEntries);
+    const biomeFilesByConfigKey = biomeFilesByConfigKeyCollect(matches, ruleIdToBiomeConfig);
+
+    for (const [configKey, fileSet] of biomeFilesByConfigKey) {
+      const biomeFiles = [...fileSet];
+      if (biomeFiles.length === 0) {
+        continue;
+      }
+      const biomeConfig = biomeProviderConfigFromKey(configKey);
+
+      if (fix) {
+        const biomeFixResult = biomeFix(biomeFiles, biomeConfig);
+        if (isErr(biomeFixResult)) {
+          console.warn(`biome fix failed: ${biomeFixResult.Err}`);
+        }
+      }
+
+      const biomeResult = biomeCheck(biomeFiles, biomeConfig);
+      if (isErr(biomeResult)) {
+        console.warn(`biome lint failed: ${biomeResult.Err}`);
+      } else {
+        biomeViolations.push(...biomeResult.Ok);
+      }
+    }
+  }
+
   // Run ruff on Python files
   const ruffProviders = lintProviderEntries.filter(
     entry => entry.provider.platform === 'ruff'
   );
 
   const ruffViolations: PolicyViolation[] = [];
-  const pythonFiles = files.filter(f => f.endsWith('.py') || f.endsWith('.pyw'));
+  const pythonFiles = files.filter(filePath => fileHasExtension(filePath, PYTHON_FILE_EXTENSIONS));
   if (pythonFiles.length > 0 && ruffProviders.length > 0) {
     const ruffConfig = ruffProviders[0]?.provider.config as RuffProviderConfig | undefined;
 
     if (fix) {
-      ruffFix(pythonFiles, ruffConfig);
+      const ruffFixResult = ruffFix(pythonFiles, ruffConfig);
+      if (isErr(ruffFixResult)) {
+        console.warn(`ruff fix failed: ${ruffFixResult.Err}`);
+      }
     }
 
     const ruffResult = ruffCheck(pythonFiles, ruffConfig);
@@ -407,7 +522,9 @@ async function policyCheck(options: {
     }
   }
 
-  const violationsResult = await policyViolationsGetFromDir(policy, cwd);
+  const violationsResult = await policyViolationsGetFromDir(policy, cwd, {
+    configPath,
+  });
 
   if ('Err' in violationsResult) {
     throw new Error(violationsResult.Err);
@@ -416,7 +533,12 @@ async function policyCheck(options: {
   return {
     policy,
     files,
-    violations: [...eslintViolations, ...ruffViolations, ...violationsResult.Ok],
+    violations: [
+      ...eslintViolations,
+      ...biomeViolations,
+      ...ruffViolations,
+      ...violationsResult.Ok,
+    ],
   };
 }
 
@@ -496,8 +618,8 @@ function fsSubNew(options: CliOptions, files: string[], patterns: string[]): voi
 }
 
 async function main(): Promise<void> {
-  langAdd({ langId: 'typescript', fileExtensions: ['.ts'] });
-  langAdd({ langId: 'tsx', fileExtensions: ['.tsx'] });
+  langAdd({ langId: 'typescript', fileExtensions: ['.ts', '.mts', '.cts', '.js', '.mjs', '.cjs'] });
+  langAdd({ langId: 'tsx', fileExtensions: ['.tsx', '.jsx'] });
   langAdd({ langId: 'python', fileExtensions: ['.py', '.pyw'] });
   await parserInit();
 
@@ -600,7 +722,9 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch(error => {
-  console.error(error);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  void main().catch(error => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}

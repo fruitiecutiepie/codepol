@@ -26,6 +26,9 @@ pnpm add -D @codepol/cli
 # For ESLint integration
 pnpm add -D @codepol/plugin-eslint @codepol/plugin @typescript-eslint/utils
 
+# For Biome-backed policy providers
+pnpm add -D @codepol/plugin-biome
+
 # For esbuild integration
 pnpm add -D @codepol/plugin-esbuild esbuild
 ```
@@ -144,6 +147,16 @@ When running ESLint directly (`eslint .`), your eslint.config.js rules apply.
 
 When running `codepol`, severity is read from `codepol.toml` and passed via ESLint's `overrideConfig`, which takes precedence over your eslint.config.js for codepol rules.
 :::
+
+### Optional: Biome-backed providers
+
+If a loaded rule exposes a `platform = "biome"` lint provider, `codepol` **delegates** to the Biome CLI: it runs `biome lint` on the JS/TS files matched by **that policy rule’s targets** (not every JS/TS file in the repo) and merges Biome’s diagnostics into the normal CLI output. `codepol --fix` runs `biome lint --write` for those same scoped files.
+
+Rules:
+
+- The provider selects how to invoke Biome (`biomeBin`, optional `configPath`, optional `extraArgs`). It does **not** register custom rules inside Biome; enforcement comes from Biome’s own configuration.
+- Distinct provider configs are run as **separate** `biome lint` invocations (grouped by normalized config). The same rule must not declare two conflicting Biome provider configs.
+- Policy `severity` and `args` do **not** currently change Biome’s behavior (unlike ESLint, where severity is passed through `overrideConfig`). Configure severity in `biome.json` / Biome CLI options instead.
 
 ## Step 4: Create Your Logger
 

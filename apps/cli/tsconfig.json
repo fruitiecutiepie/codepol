@@ -2,12 +2,17 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "./dist",
-    "rootDir": "./src"
+    "rootDir": "./src",
+    "baseUrl": "../..",
+    "paths": {
+      "@codepol/plugin-biome": ["./packages/plugin-biome/src/index.ts"]
+    }
   },
   "include": ["src/**/*.ts"],
   "exclude": ["dist", "node_modules"],
   "references": [
     { "path": "../../packages/core" },
+    { "path": "../../packages/plugin-biome" },
     { "path": "../../packages/plugin" },
     { "path": "../../packages/plugin-ruff" },
     { "path": "../../packages/plugin-vulture" }

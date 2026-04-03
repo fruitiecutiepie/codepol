@@ -44,6 +44,7 @@ export type {
   LintProviderContext,
   LintProvider,
   EslintProviderConfig,
+  BiomeProviderConfig,
   RuffProviderConfig,
   FixProviderContext,
   FixProvider,
@@ -197,8 +198,8 @@ export async function providerRulesConfigGet(
   configPath?: string
 ): Promise<Record<string, unknown>> {
   // Register languages and initialize tree-sitter parser for rules that need cross-file analysis
-  langAdd({ langId: 'typescript', fileExtensions: ['.ts'] });
-  langAdd({ langId: 'tsx', fileExtensions: ['.tsx'] });
+  langAdd({ langId: 'typescript', fileExtensions: ['.ts', '.mts', '.cts', '.js', '.mjs', '.cjs'] });
+  langAdd({ langId: 'tsx', fileExtensions: ['.tsx', '.jsx'] });
   await parserInit();
   
   const cwd = process.cwd();

@@ -244,6 +244,18 @@ export type EslintProviderConfig = {
 };
 
 /**
+ * Biome-specific provider configuration.
+ */
+export type BiomeProviderConfig = {
+  /** Path to the biome binary (default: 'biome') */
+  biomeBin?: string;
+  /** Path to biome.json or biome.jsonc */
+  configPath?: string;
+  /** Extra CLI arguments */
+  extraArgs?: string[];
+};
+
+/**
  * Ruff-specific provider configuration.
  */
 export type RuffProviderConfig = {
