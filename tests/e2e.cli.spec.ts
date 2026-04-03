@@ -104,6 +104,25 @@ targets = ["src"]
 `;
 }
 
+function enforceCasingConfigContentCreate(): string {
+  return `[[plugins]]
+id = "@codepol/plugin"
+source = { kind = "builtin" }
+
+[targets.src]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[[rules]]
+id = "enforce-casing"
+ruleId = "@codepol/plugin/enforce-casing"
+targets = ["src"]
+
+[rules.args.symbols]
+function = ["camelCase"]
+`;
+}
+
 const SOURCE_VALID = `\
 import { logger } from './logger';
 
@@ -126,6 +145,20 @@ export function run() {
 const SOURCE_INTERFACE = `\
 export interface User {
   name: string;
+}
+`;
+
+const SOURCE_BAD_EXPORT = `\
+export function BAD_NAME() {
+  return 1;
+}
+`;
+
+const SOURCE_BAD_IMPORT_ALIAS = `\
+import { BAD_NAME as goodAlias } from './dep';
+
+export function runTask() {
+  return goodAlias();
 }
 `;
 
@@ -260,6 +293,30 @@ describe('CLI E2E', () => {
       expect(fixedContent).toContain('type User =');
       expect(fixedContent).not.toContain('interface User');
       expect(result.exitCode).toBe(0);
+    });
+
+    it('applies cross-file casing renames while preserving aliased local references', async () => {
+      fs.writeFileSync(
+        path.join(fixDir, 'codepol.toml'),
+        enforceCasingConfigContentCreate(),
+        'utf8',
+      );
+
+      const depPath = path.join(fixDir, 'src', 'dep.ts');
+      const appPath = path.join(fixDir, 'src', 'app.ts');
+      fs.writeFileSync(depPath, SOURCE_BAD_EXPORT, 'utf8');
+      fs.writeFileSync(appPath, SOURCE_BAD_IMPORT_ALIAS, 'utf8');
+
+      const result = await runCli(['--fix'], fixDir);
+
+      const fixedDep = fs.readFileSync(depPath, 'utf8');
+      const fixedApp = fs.readFileSync(appPath, 'utf8');
+
+      expect(fixedDep).toContain('export function badName()');
+      expect(fixedApp).toContain("import { badName as goodAlias } from './dep';");
+      expect(fixedApp).toContain('return goodAlias();');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Policy checks passed');
     });
   });
 

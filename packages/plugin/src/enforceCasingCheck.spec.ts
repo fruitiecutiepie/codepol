@@ -7,7 +7,10 @@ import {
   type PolicyCheckContext,
   type ProjectIndex,
 } from '@codepol/core';
-import { enforceCasingCheck } from './enforceCasingCheck';
+import {
+  enforceCasingCheck,
+  type EnforceCasingSymbolsArgs,
+} from './enforceCasingCheck';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -50,6 +53,23 @@ describe('enforceCasingCheck', () => {
         ruleArgs,
       },
     };
+  }
+
+  function symbolViolations(
+    fileName: string,
+    source: string,
+    symbols: EnforceCasingSymbolsArgs,
+  ) {
+    const filePath = path.join(testDir, fileName);
+    fs.writeFileSync(filePath, source);
+    const { index } = projectIndexBuildSync({
+      files: [filePath],
+      dir: testDir,
+    });
+    const { rule, context } = contextNew(filePath, source, index, {
+      symbols,
+    });
+    return enforceCasingCheck(rule, context);
   }
 
   beforeAll(async () => {
@@ -130,6 +150,178 @@ describe('enforceCasingCheck', () => {
   });
 
   describe('symbols with index', () => {
+    const badSymbolKindCases: Array<{
+      label: string;
+      fileName: string;
+      source: string;
+      symbols: EnforceCasingSymbolsArgs;
+      expectedName: string;
+      expectedKind: keyof EnforceCasingSymbolsArgs;
+    }> = [
+      {
+        label: 'class',
+        fileName: 'sym-kind-class-bad.ts',
+        source: 'export class bad_class {}\n',
+        symbols: { class: ['PascalCase'] },
+        expectedName: 'bad_class',
+        expectedKind: 'class',
+      },
+      {
+        label: 'interface',
+        fileName: 'sym-kind-interface-bad.ts',
+        source: 'export interface bad_interface {}\n',
+        symbols: { interface: ['PascalCase'] },
+        expectedName: 'bad_interface',
+        expectedKind: 'interface',
+      },
+      {
+        label: 'type',
+        fileName: 'sym-kind-type-bad.ts',
+        source: 'export type bad_type = string;\n',
+        symbols: { type: ['PascalCase'] },
+        expectedName: 'bad_type',
+        expectedKind: 'type',
+      },
+      {
+        label: 'function',
+        fileName: 'sym-kind-function-bad.ts',
+        source: 'export function BadFunction() { return 1; }\n',
+        symbols: { function: ['camelCase'] },
+        expectedName: 'BadFunction',
+        expectedKind: 'function',
+      },
+      {
+        label: 'method',
+        fileName: 'sym-kind-method-bad.ts',
+        source: 'export class MethodHost { BadMethod() { return 1; } }\n',
+        symbols: { method: ['camelCase'] },
+        expectedName: 'BadMethod',
+        expectedKind: 'method',
+      },
+      {
+        label: 'variable',
+        fileName: 'sym-kind-variable-bad.ts',
+        source: 'let BadVariable = 1;\n',
+        symbols: { variable: ['camelCase'] },
+        expectedName: 'BadVariable',
+        expectedKind: 'variable',
+      },
+      {
+        label: 'const',
+        fileName: 'sym-kind-const-bad.ts',
+        source: 'const badConst = 1;\n',
+        symbols: { const: ['SCREAMING_SNAKE_CASE'] },
+        expectedName: 'badConst',
+        expectedKind: 'const',
+      },
+      {
+        label: 'field',
+        fileName: 'sym-kind-field-bad.ts',
+        source: "export class FieldHost { BadField: string = 'x'; }\n",
+        symbols: { field: ['camelCase'] },
+        expectedName: 'BadField',
+        expectedKind: 'field',
+      },
+      {
+        label: 'parameter',
+        fileName: 'sym-kind-parameter-bad.ts',
+        source: 'export function parameterHost(BadParam: string) { return BadParam; }\n',
+        symbols: { parameter: ['camelCase'] },
+        expectedName: 'BadParam',
+        expectedKind: 'parameter',
+      },
+      {
+        label: 'enum',
+        fileName: 'sym-kind-enum-bad.ts',
+        source: "export enum bad_enum { GoodMember = 'x' }\n",
+        symbols: { enum: ['PascalCase'] },
+        expectedName: 'bad_enum',
+        expectedKind: 'enum',
+      },
+      {
+        label: 'enumMember',
+        fileName: 'sym-kind-enum-member-bad.ts',
+        source: "export enum GoodEnum { bad_member = 'x' }\n",
+        symbols: { enumMember: ['PascalCase'] },
+        expectedName: 'bad_member',
+        expectedKind: 'enumMember',
+      },
+    ];
+
+    const goodSymbolKindCases: Array<{
+      label: string;
+      fileName: string;
+      source: string;
+      symbols: EnforceCasingSymbolsArgs;
+    }> = [
+      {
+        label: 'class',
+        fileName: 'sym-kind-class-ok.ts',
+        source: 'export class GoodClass {}\n',
+        symbols: { class: ['PascalCase'] },
+      },
+      {
+        label: 'interface',
+        fileName: 'sym-kind-interface-ok.ts',
+        source: 'export interface GoodInterface {}\n',
+        symbols: { interface: ['PascalCase'] },
+      },
+      {
+        label: 'type',
+        fileName: 'sym-kind-type-ok.ts',
+        source: 'export type GoodType = string;\n',
+        symbols: { type: ['PascalCase'] },
+      },
+      {
+        label: 'function',
+        fileName: 'sym-kind-function-ok.ts',
+        source: 'export function goodFunction() { return 1; }\n',
+        symbols: { function: ['camelCase'] },
+      },
+      {
+        label: 'method',
+        fileName: 'sym-kind-method-ok.ts',
+        source: 'export class MethodHost { goodMethod() { return 1; } }\n',
+        symbols: { method: ['camelCase'] },
+      },
+      {
+        label: 'variable',
+        fileName: 'sym-kind-variable-ok.ts',
+        source: 'let goodVariable = 1;\n',
+        symbols: { variable: ['camelCase'] },
+      },
+      {
+        label: 'const',
+        fileName: 'sym-kind-const-ok.ts',
+        source: 'const GOOD_CONST = 1;\n',
+        symbols: { const: ['SCREAMING_SNAKE_CASE'] },
+      },
+      {
+        label: 'field',
+        fileName: 'sym-kind-field-ok.ts',
+        source: "export class FieldHost { goodField: string = 'x'; }\n",
+        symbols: { field: ['camelCase'] },
+      },
+      {
+        label: 'parameter',
+        fileName: 'sym-kind-parameter-ok.ts',
+        source: 'export function parameterHost(goodParam: string) { return goodParam; }\n',
+        symbols: { parameter: ['camelCase'] },
+      },
+      {
+        label: 'enum',
+        fileName: 'sym-kind-enum-ok.ts',
+        source: "export enum GoodEnum { GoodMember = 'x' }\n",
+        symbols: { enum: ['PascalCase'] },
+      },
+      {
+        label: 'enumMember',
+        fileName: 'sym-kind-enum-member-ok.ts',
+        source: "export enum GoodEnumMemberHost { GoodMember = 'x' }\n",
+        symbols: { enumMember: ['PascalCase'] },
+      },
+    ];
+
     it('flags class not PascalCase', () => {
       const filePath = path.join(testDir, 'sym-class.ts');
       const source = 'export class bad_class {}\n';
@@ -229,6 +421,23 @@ describe('enforceCasingCheck', () => {
       expect(enforceCasingCheck(rule, context)).toHaveLength(0);
     });
 
+    it.each(badSymbolKindCases)(
+      'flags non-compliant $label names for enforce-casing',
+      ({ fileName, source, symbols, expectedName, expectedKind }) => {
+        const violations = symbolViolations(fileName, source, symbols);
+
+        expect(violations).toHaveLength(1);
+        expect(violations[0].message).toContain(expectedName);
+        expect(violations[0].message).toContain(expectedKind);
+      },
+    );
+
+    it.each(goodSymbolKindCases)('accepts compliant $label names for enforce-casing', ({ fileName, source, symbols }) => {
+      const violations = symbolViolations(fileName, source, symbols);
+
+      expect(violations).toHaveLength(0);
+    });
+
     it('import type bindings use symbols.type, not symbols.variable', () => {
       const filePath = path.join(testDir, 'import-type-casing.ts');
       const source =
@@ -276,6 +485,74 @@ describe('enforceCasingCheck', () => {
       expect(v).toHaveLength(1);
       expect(v[0].message).toContain('bad_import_name');
       expect(v[0].message).toContain('function');
+    });
+
+    it('emits cross-file workspace edits for matching import names and references', () => {
+      const depPath = path.join(testDir, 'rename-dep.ts');
+      fs.writeFileSync(
+        depPath,
+        'export function BAD_NAME() { return 1; }\n',
+      );
+      const consumerPath = path.join(testDir, 'rename-consumer.ts');
+      const consumerSource = [
+        "import { BAD_NAME } from './rename-dep';",
+        'const value = BAD_NAME();',
+        '',
+      ].join('\n');
+      fs.writeFileSync(consumerPath, consumerSource);
+
+      const { index } = projectIndexBuildSync({
+        files: [depPath, consumerPath],
+        dir: testDir,
+      });
+      const { rule, context } = contextNew(depPath, fs.readFileSync(depPath, 'utf8'), index, {
+        symbols: { function: ['camelCase'] },
+      });
+
+      const v = enforceCasingCheck(rule, context);
+      expect(v).toHaveLength(1);
+      expect(v[0].fix?.text).toBe('badName');
+      expect(v[0].fix?.edits).toBeDefined();
+
+      const edits = v[0].fix!.edits!;
+      const depEdits = edits.filter((edit) => edit.filePath === depPath);
+      const consumerEdits = edits.filter((edit) => edit.filePath === consumerPath);
+
+      expect(depEdits).toHaveLength(1);
+      expect(consumerEdits).toHaveLength(2);
+      expect(consumerEdits.every((edit) => edit.text === 'badName')).toBe(true);
+    });
+
+    it('renames aliased import specifiers without renaming alias references', () => {
+      const depPath = path.join(testDir, 'rename-alias-dep.ts');
+      fs.writeFileSync(
+        depPath,
+        'export function BAD_NAME() { return 1; }\n',
+      );
+      const consumerPath = path.join(testDir, 'rename-alias-consumer.ts');
+      const consumerSource = [
+        "import { BAD_NAME as goodAlias } from './rename-alias-dep';",
+        'const value = goodAlias();',
+        '',
+      ].join('\n');
+      fs.writeFileSync(consumerPath, consumerSource);
+
+      const { index } = projectIndexBuildSync({
+        files: [depPath, consumerPath],
+        dir: testDir,
+      });
+      const { rule, context } = contextNew(depPath, fs.readFileSync(depPath, 'utf8'), index, {
+        symbols: { function: ['camelCase'] },
+      });
+
+      const v = enforceCasingCheck(rule, context);
+      expect(v).toHaveLength(1);
+      const consumerEdits = v[0].fix!.edits!.filter(
+        (edit) => edit.filePath === consumerPath,
+      );
+
+      expect(consumerEdits).toHaveLength(1);
+      expect(consumerEdits[0]?.text).toBe('badName');
     });
 
     it('Python: function snake_case', () => {

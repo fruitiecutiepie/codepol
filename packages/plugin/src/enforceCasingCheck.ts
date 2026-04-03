@@ -4,6 +4,7 @@ import type {
   PolicyCheckContext,
   PolicyViolation,
   PolicyFixSuggestion,
+  PolicyWorkspaceEdit,
   ProjectIndex,
   SymbolKind,
   SymbolRecord,
@@ -202,6 +203,111 @@ function argsHasWork(args: EnforceCasingArgs | undefined): boolean {
   return false;
 }
 
+function workspaceEditKey(edit: PolicyWorkspaceEdit): string {
+  return `${edit.filePath}:${edit.byteRange.start}:${edit.byteRange.end}:${edit.text}`;
+}
+
+function referenceNameMatchesRenameTarget(
+  referenceName: string,
+  symbolName: string,
+): boolean {
+  return (
+    referenceName === symbolName ||
+    referenceName.endsWith(`.${symbolName}`)
+  );
+}
+
+function importBindingRenameEditGet(
+  projectIndex: ProjectIndex,
+  bindingSymbolId: string,
+  importedNameByteRange:
+    | { start: number; end: number }
+    | undefined,
+  importedName: string,
+  nextName: string,
+): PolicyWorkspaceEdit | undefined {
+  const localSymbol = projectIndex.symbolGet(bindingSymbolId);
+  if (!localSymbol) {
+    return undefined;
+  }
+
+  const byteRange =
+    importedNameByteRange ??
+    (localSymbol.name === importedName ? localSymbol.byteRange : undefined);
+  if (!byteRange) {
+    return undefined;
+  }
+
+  return {
+    filePath: localSymbol.file,
+    byteRange,
+    text: nextName,
+  };
+}
+
+function symbolWorkspaceEditsCreate(
+  sym: SymbolRecord,
+  nextName: string,
+  declarationByteRange: { start: number; end: number },
+  projectIndex: ProjectIndex,
+): PolicyWorkspaceEdit[] {
+  const edits: PolicyWorkspaceEdit[] = [
+    {
+      filePath: sym.file,
+      byteRange: declarationByteRange,
+      text: nextName,
+    },
+  ];
+
+  for (const ref of projectIndex.referencesGet(sym.id)) {
+    if (!referenceNameMatchesRenameTarget(ref.name, sym.name)) {
+      continue;
+    }
+    const scope = projectIndex.scopeGet(ref.scopeId);
+    if (!scope) {
+      continue;
+    }
+    edits.push({
+      filePath: scope.file,
+      byteRange: ref.byteRange,
+      text: nextName,
+    });
+  }
+
+  for (const indexedFile of projectIndex.filesGet()) {
+    for (const binding of projectIndex.importBindingsGet(indexedFile)) {
+      if (
+        binding.resolvedExportId !== sym.id ||
+        binding.isDefault ||
+        binding.isNamespace ||
+        binding.importedName !== sym.name
+      ) {
+        continue;
+      }
+      const edit = importBindingRenameEditGet(
+        projectIndex,
+        binding.localSymbolId,
+        binding.importedNameByteRange,
+        binding.importedName,
+        nextName,
+      );
+      if (edit) {
+        edits.push(edit);
+      }
+    }
+  }
+
+  const seen = new Set<string>();
+  return edits.filter((edit) => {
+    const key = workspaceEditKey(edit);
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
 export function enforceCasingCheck(
   rule: PolicyRule,
   context: PolicyCheckContext,
@@ -263,9 +369,16 @@ export function enforceCasingCheck(
       if (replacements.length > 0) {
         if (allowed.length === 1 || replacements.length === 1) {
           const r = replacements[0]!;
+          const primaryByteRange = { start: offset, end: byteEnd };
           fix = {
-            byteRange: { start: offset, end: byteEnd },
+            byteRange: primaryByteRange,
             text: r.text,
+            edits: symbolWorkspaceEditsCreate(
+              sym,
+              r.text,
+              primaryByteRange,
+              projectIndex,
+            ),
           };
         } else {
           suggestions = replacements.map((r) => ({
@@ -273,6 +386,12 @@ export function enforceCasingCheck(
             fix: {
               byteRange: { start: offset, end: byteEnd },
               text: r.text,
+              edits: symbolWorkspaceEditsCreate(
+                sym,
+                r.text,
+                { start: offset, end: byteEnd },
+                projectIndex,
+              ),
             },
           }));
         }

@@ -36,6 +36,91 @@ describe('index builder', () => {
   // ==========================================================================
 
   describe('symbol extraction', () => {
+    function symbolsFromSource(fileName: string, source: string) {
+      const file = path.join(testDir, fileName);
+      fs.writeFileSync(file, source);
+
+      const { index } = projectIndexBuildSync({ files: [file], dir: testDir });
+
+      return index.symbolsInFileGet(file);
+    }
+
+    it.each([
+      {
+        label: 'class declarations',
+        fileName: 'sym_matrix_class.ts',
+        source: 'export class GoodClass {}\n',
+        expected: { name: 'GoodClass', kind: 'class' },
+      },
+      {
+        label: 'interface declarations',
+        fileName: 'sym_matrix_interface.ts',
+        source: 'export interface GoodInterface {}\n',
+        expected: { name: 'GoodInterface', kind: 'interface' },
+      },
+      {
+        label: 'type aliases',
+        fileName: 'sym_matrix_type.ts',
+        source: 'export type GoodType = string;\n',
+        expected: { name: 'GoodType', kind: 'type' },
+      },
+      {
+        label: 'function declarations',
+        fileName: 'sym_matrix_function.ts',
+        source: 'export function goodFunction() { return 1; }\n',
+        expected: { name: 'goodFunction', kind: 'function' },
+      },
+      {
+        label: 'class methods',
+        fileName: 'sym_matrix_method.ts',
+        source: 'export class MethodHost { goodMethod() { return 1; } }\n',
+        expected: { name: 'goodMethod', kind: 'method' },
+      },
+      {
+        label: 'variables',
+        fileName: 'sym_matrix_variable.ts',
+        source: 'let goodVariable = 1;\n',
+        expected: { name: 'goodVariable', kind: 'variable' },
+      },
+      {
+        label: 'const declarations',
+        fileName: 'sym_matrix_const.ts',
+        source: 'const GOOD_CONST = 1;\n',
+        expected: { name: 'GOOD_CONST', kind: 'const' },
+      },
+      {
+        label: 'class fields',
+        fileName: 'sym_matrix_field.ts',
+        source: "export class FieldHost { goodField: string = 'x'; }\n",
+        expected: { name: 'goodField', kind: 'field' },
+      },
+      {
+        label: 'parameters',
+        fileName: 'sym_matrix_parameter.ts',
+        source: 'export function parameterHost(goodParam: string) { return goodParam; }\n',
+        expected: { name: 'goodParam', kind: 'parameter' },
+      },
+      {
+        label: 'enums',
+        fileName: 'sym_matrix_enum.ts',
+        source: "export enum GoodEnum { FirstMember = 'first' }\n",
+        expected: { name: 'GoodEnum', kind: 'enum' },
+      },
+      {
+        label: 'enum members',
+        fileName: 'sym_matrix_enum_member.ts',
+        source: "export enum GoodEnumMembers { FirstMember = 'first' }\n",
+        expected: { name: 'FirstMember', kind: 'enumMember' },
+      },
+    ])('should extract $label with the expected symbol kind', ({ fileName, source, expected }) => {
+      const symbols = symbolsFromSource(fileName, source);
+      const symbol = symbols.find((candidate) =>
+        candidate.name === expected.name && candidate.kind === expected.kind
+      );
+
+      expect(symbol).toBeDefined();
+    });
+
     it('should extract function declarations with correct kind and flags', () => {
       const file = path.join(testDir, 'sym_functions.ts');
       fs.writeFileSync(file, `

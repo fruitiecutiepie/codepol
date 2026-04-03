@@ -11,6 +11,7 @@ import type {
   PolicyRuleTargetContext,
   PolicyViolation,
   PolicyViolationFix,
+  PolicyWorkspaceEdit,
   PolicyFixSuggestion,
   PolicyDiagnosticLocation,
 } from './policyTypes';
@@ -172,12 +173,40 @@ function fixParse(value: unknown, pathLabel: string): PolicyViolationFix | undef
   }
   const record = recordExpect(value, pathLabel);
   const byteRange = recordExpect(record.byteRange, `${pathLabel}.byteRange`);
+  let edits: PolicyWorkspaceEdit[] | undefined;
+  if (record.edits !== undefined) {
+    if (!Array.isArray(record.edits)) {
+      throw new Error(`Invalid process plugin response at ${pathLabel}.edits: expected array`);
+    }
+    edits = record.edits.map((edit, index) => {
+      const editRecord = recordExpect(edit, `${pathLabel}.edits[${index}]`);
+      const editByteRange = recordExpect(
+        editRecord.byteRange,
+        `${pathLabel}.edits[${index}].byteRange`,
+      );
+      return {
+        filePath: stringExpect(editRecord.filePath, `${pathLabel}.edits[${index}].filePath`),
+        byteRange: {
+          start: numberExpect(
+            editByteRange.start,
+            `${pathLabel}.edits[${index}].byteRange.start`,
+          ),
+          end: numberExpect(
+            editByteRange.end,
+            `${pathLabel}.edits[${index}].byteRange.end`,
+          ),
+        },
+        text: stringExpect(editRecord.text, `${pathLabel}.edits[${index}].text`),
+      };
+    });
+  }
   return {
     byteRange: {
       start: numberExpect(byteRange.start, `${pathLabel}.byteRange.start`),
       end: numberExpect(byteRange.end, `${pathLabel}.byteRange.end`),
     },
     text: stringExpect(record.text, `${pathLabel}.text`),
+    edits,
   };
 }
 

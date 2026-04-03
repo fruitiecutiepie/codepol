@@ -7,7 +7,7 @@
  *   codepol [options]
  *
  * Options:
- *   --fix          Apply ESLint fixes where possible
+ *   --fix          Apply available fixes where possible
  *   --watch        Run policy checks in watch mode
  *   --config       Path to config file (auto-discovered if not specified)
  *   --eslint-config Path to the ESLint config file (uses config file value or auto-detects)
@@ -41,6 +41,7 @@ import {
   type FixProvider,
   type PolicyFile,
   type PolicyViolation,
+  type PolicyWorkspaceEdit,
   type PolicyRuleTargetContext,
   type CodepolConfig,
 } from '@codepol/core';
@@ -78,6 +79,111 @@ type LintProviderEntry = {
 };
 
 const ESLINT_CONFIG_EXTENSIONS = ['.js', '.mjs', '.cjs', '.ts', '.mts', '.cts'];
+
+function policyViolationWorkspaceEditsGet(
+  violation: PolicyViolation,
+): PolicyWorkspaceEdit[] {
+  const fix = violation.fix;
+  if (!fix) {
+    return [];
+  }
+  if (fix.edits && fix.edits.length > 0) {
+    return fix.edits;
+  }
+  return [
+    {
+      filePath: violation.filePath,
+      byteRange: fix.byteRange,
+      text: fix.text,
+    },
+  ];
+}
+
+function fileWorkspaceEditsNormalize(
+  edits: PolicyWorkspaceEdit[],
+): PolicyWorkspaceEdit[] {
+  const sorted = [...edits].sort((a, b) => {
+    if (a.byteRange.start !== b.byteRange.start) {
+      return a.byteRange.start - b.byteRange.start;
+    }
+    if (a.byteRange.end !== b.byteRange.end) {
+      return a.byteRange.end - b.byteRange.end;
+    }
+    return a.text.localeCompare(b.text);
+  });
+
+  const normalized: PolicyWorkspaceEdit[] = [];
+  for (const edit of sorted) {
+    const prev = normalized[normalized.length - 1];
+    if (
+      prev &&
+      prev.byteRange.start === edit.byteRange.start &&
+      prev.byteRange.end === edit.byteRange.end &&
+      prev.text === edit.text
+    ) {
+      continue;
+    }
+    if (prev && edit.byteRange.start < prev.byteRange.end) {
+      continue;
+    }
+    normalized.push(edit);
+  }
+
+  return normalized;
+}
+
+function fileWorkspaceEditsApply(
+  source: string,
+  edits: PolicyWorkspaceEdit[],
+): string {
+  if (edits.length === 0) {
+    return source;
+  }
+
+  const input = Buffer.from(source, 'utf8');
+  const chunks: Buffer[] = [];
+  let cursor = 0;
+
+  for (const edit of edits) {
+    chunks.push(input.subarray(cursor, edit.byteRange.start));
+    chunks.push(Buffer.from(edit.text, 'utf8'));
+    cursor = edit.byteRange.end;
+  }
+
+  chunks.push(input.subarray(cursor));
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+function treeCheckFixesApply(violations: PolicyViolation[]): boolean {
+  const editsByFile = new Map<string, PolicyWorkspaceEdit[]>();
+
+  for (const violation of violations) {
+    for (const edit of policyViolationWorkspaceEditsGet(violation)) {
+      const list = editsByFile.get(edit.filePath) ?? [];
+      list.push(edit);
+      editsByFile.set(edit.filePath, list);
+    }
+  }
+
+  let changed = false;
+  for (const [filePath, fileEdits] of editsByFile) {
+    const normalized = fileWorkspaceEditsNormalize(fileEdits);
+    if (normalized.length === 0) {
+      continue;
+    }
+
+    const source = fs.readFileSync(filePath, 'utf8');
+    const next = fileWorkspaceEditsApply(source, normalized);
+    if (next === source) {
+      continue;
+    }
+
+    fs.writeFileSync(filePath, next, 'utf8');
+    changed = true;
+  }
+
+  return changed;
+}
 
 /**
  * Detects the ESLint config file by checking for common file names.
@@ -224,6 +330,16 @@ async function policyCheck(options: {
 
   if (fix && fixProviders.length > 0) {
     await fixProvidersApply(fixProviders, { policy, configPath, cwd, files, ruleTargets });
+  }
+
+  if (fix) {
+    const treeFixViolationsResult = await policyViolationsGetFromDir(policy, cwd, {
+      configPath,
+    });
+    if ('Err' in treeFixViolationsResult) {
+      throw new Error(treeFixViolationsResult.Err);
+    }
+    treeCheckFixesApply(treeFixViolationsResult.Ok);
   }
 
   const eslintViolations: PolicyViolation[] = [];
@@ -393,7 +509,7 @@ async function main(): Promise<void> {
     .option('fix', {
       type: 'boolean',
       default: false,
-      describe: 'Apply ESLint fixes where possible',
+      describe: 'Apply available fixes where possible',
     })
     .option('watch', {
       type: 'boolean',

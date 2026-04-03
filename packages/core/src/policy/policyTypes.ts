@@ -380,6 +380,25 @@ export type PolicyViolationFix = {
   byteRange: ByteRange;
   /** Replacement text (can be empty to delete the range) */
   text: string;
+  /**
+   * Optional workspace edits for multi-file fixes.
+   * The primary `byteRange`/`text` pair remains the single-file edit used by
+   * inline consumers such as ESLint; CLI-style consumers may apply `edits`
+   * instead when present.
+   */
+  edits?: PolicyWorkspaceEdit[];
+};
+
+/**
+ * A text edit against a specific file in the workspace.
+ */
+export type PolicyWorkspaceEdit = {
+  /** Absolute path to the file containing the edit */
+  filePath: string;
+  /** Byte offset range [start, end) in that file */
+  byteRange: ByteRange;
+  /** Replacement text (can be empty to delete the range) */
+  text: string;
 };
 
 /**
