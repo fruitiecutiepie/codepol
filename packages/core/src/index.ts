@@ -55,6 +55,7 @@ export type {
   PolicyCheckContext,
   PolicyViolation,
   PolicyViolationFix,
+  PolicyWorkspaceEdit,
   PolicyFixSuggestion,
   PolicyDiagnosticLocation,
   RuleMatch,
@@ -407,6 +408,9 @@ export type {
   SymbolId,
   ScopeId,
   SymbolKind,
+  SymbolBindingInfo,
+  SymbolBindingKind,
+  SymbolPatternKind,
   ScopeKind,
   ByteRange,
   SymbolRecord,
@@ -415,6 +419,7 @@ export type {
   DefinesRelation,
   ContainsRelation,
   ReferencesRelation,
+  ReferenceUsageType,
   ImportsRelation,
   CallsRelation,
   ImportBindingRelation,
@@ -429,7 +434,7 @@ export type {
   FlowNodeKind,
 } from './index/indexTypes';
 
-export { SymbolFlags } from './index/indexTypes';
+export { ReferenceUsage, SymbolFlags } from './index/indexTypes';
 export type { ProjectIndexSnapshot } from './index/indexSnapshot';
 export { projectIndexSnapshotCreate } from './index/indexSnapshot';
 

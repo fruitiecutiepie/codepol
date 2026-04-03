@@ -1,8 +1,7 @@
 /**
  * Tree-sitter symbol declaration query for TypeScript/TSX.
- * Captures nodes that represent declarations (symbols).
- * 
- * Note: Simplified to use only widely-supported node types.
+ * Captures declaration nodes and lets adapterCore extract binding identifiers
+ * from nested patterns where needed.
  */
 export const SYMBOLS_QUERY = `
 ; =========================
@@ -27,6 +26,10 @@ export const SYMBOLS_QUERY = `
 (generator_function_declaration
   name: (identifier) @name) @decl.generator
 
+; Named function expressions: const x = function y() {}
+(function_expression
+  name: (identifier) @name) @decl.function_expression_name
+
 ; =========================
 ;  Methods
 ; =========================
@@ -35,53 +38,29 @@ export const SYMBOLS_QUERY = `
   name: (property_identifier) @name) @decl.method
 
 ; =========================
-;  Parameters
+;  Fields
 ; =========================
 
-(formal_parameters
-  (required_parameter
-    name: (identifier) @name)) @decl.parameter
-
-(formal_parameters
-  (required_parameter
-    pattern: (identifier) @name)) @decl.parameter
-
-(formal_parameters
-  (required_parameter
-    name: (rest_pattern
-      (identifier) @name))) @decl.parameter
-
-(formal_parameters
-  (optional_parameter
-    name: (identifier) @name)) @decl.parameter
-
-(formal_parameters
-  (optional_parameter
-    pattern: (identifier) @name)) @decl.parameter
+(public_field_definition
+  name: (property_identifier) @name) @decl.field
 
 ; =========================
 ;  Variables (var/let/const)
 ; =========================
 
 (lexical_declaration
-  (variable_declarator
-    name: (identifier) @name)) @decl.variable
+  (variable_declarator) @decl.variable)
 
 (variable_declaration
-  (variable_declarator
-    name: (identifier) @name)) @decl.variable
+  (variable_declarator) @decl.variable)
 
-; Destructuring - object pattern: const { a, b } = obj
-(lexical_declaration
-  (variable_declarator
-    name: (object_pattern
-      (shorthand_property_identifier_pattern) @name))) @decl.variable
+; =========================
+;  Parameters / Catch bindings
+; =========================
 
-; Destructuring - array pattern: const [x, y] = arr
-(lexical_declaration
-  (variable_declarator
-    name: (array_pattern
-      (identifier) @name))) @decl.variable
+(required_parameter) @decl.parameter
+(optional_parameter) @decl.parameter
+(catch_clause) @decl.catch_binding
 
 ; =========================
 ;  Type Aliases

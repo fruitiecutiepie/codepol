@@ -8,11 +8,17 @@
 export const SCOPES_QUERY = `
 ; --- Type / class scopes ---
 (class_declaration) @scope
+(abstract_class_declaration) @scope
 
 ; --- Function scopes ---
 (function_declaration) @scope
+(generator_function_declaration) @scope
+(function_expression) @scope
 (arrow_function) @scope
 (method_definition) @scope
+
+; --- Catch scopes ---
+(catch_clause) @scope
 
 ; --- Block scopes ---
 (statement_block) @scope

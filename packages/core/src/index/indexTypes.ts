@@ -82,6 +82,59 @@ export const SymbolFlags = {
 
 type SymbolFlagsType = (typeof SymbolFlags)[keyof typeof SymbolFlags];
 
+/**
+ * Binding-kind metadata for local declarations.
+ * Used by higher-level rules such as native `no-unused-vars`.
+ */
+export type SymbolBindingKind =
+  | 'catch'
+  | 'function-expression-name'
+  | 'import'
+  | 'parameter';
+
+/**
+ * Binding-pattern metadata for destructuring-aware rules.
+ */
+export type SymbolPatternKind =
+  | 'array'
+  | 'identifier'
+  | 'object';
+
+/**
+ * Optional metadata for local bindings.
+ */
+export type SymbolBindingInfo = {
+  /** Special binding category (catch, parameter, import, etc.) */
+  bindingKind?: SymbolBindingKind;
+  /** Pattern shape that introduced the binding */
+  pattern?: SymbolPatternKind;
+  /** Whether the binding is a rest element */
+  isRest?: boolean;
+  /** Whether the binding has a sibling object rest element */
+  hasRestSibling?: boolean;
+  /** Whether the binding receives an initial value from its declaration/default */
+  initialized?: boolean;
+  /** Whether the binding is visible throughout its containing scope */
+  hoisted?: boolean;
+  /** Parameter position for `args: "after-used"` semantics */
+  parameterIndex?: number;
+};
+
+/**
+ * Reference usage flags.
+ * Multiple flags may be combined with bitwise OR.
+ */
+export const ReferenceUsage = {
+  None: 0,
+  Read: 1 << 0,
+  Write: 1 << 1,
+  Type: 1 << 2,
+  SelfUpdate: 1 << 3,
+} as const;
+
+export type ReferenceUsageType =
+  (typeof ReferenceUsage)[keyof typeof ReferenceUsage];
+
 // ============================================================================
 // Core Records
 // ============================================================================
@@ -118,6 +171,8 @@ export type SymbolRecord = {
   qualName: string;
   /** Attribute flags (exported, async, etc.) */
   flags: number;
+  /** Optional binding metadata for local-variable style rules */
+  binding?: SymbolBindingInfo;
 };
 
 /**
@@ -170,6 +225,14 @@ export type ReferencesRelation = {
   byteRange: ByteRange;
   /** Resolved symbol ID (file-local resolution only) */
   resolvedSymbolId?: SymbolId;
+  /**
+   * Original file-local resolved symbol ID before any cross-file rewrite.
+   * Preserved so rules can still reason about local import bindings after
+   * `resolvedSymbolId` is rewritten to the exported target symbol.
+   */
+  localSymbolId?: SymbolId;
+  /** Usage facts for the reference (read/write/type/self-update) */
+  usage?: ReferenceUsageType;
 };
 
 /**
@@ -209,6 +272,8 @@ export type ImportBindingRelation = {
   localSymbolId: SymbolId;
   /** Original exported name (may differ from local if aliased) */
   importedName: string;
+  /** Source range of the imported name token when present (e.g. `foo` in `import { foo as bar }`) */
+  importedNameByteRange?: ByteRange;
   /** Module specifier (e.g., './utils', 'lodash') */
   moduleSpec: string;
   /** Absolute file path of the source module (populated in resolution pass) */

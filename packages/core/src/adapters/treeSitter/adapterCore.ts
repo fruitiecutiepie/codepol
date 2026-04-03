@@ -13,6 +13,7 @@ import type {
   SymbolId,
   ScopeId,
   SymbolKind,
+  SymbolBindingInfo,
   ScopeKind,
   ByteRange,
   SymbolRecord,
@@ -27,7 +28,7 @@ import type {
   ExportsRelation,
   TypeRelation,
 } from '../../index/indexTypes';
-import { SymbolFlags } from '../../index/indexTypes';
+import { ReferenceUsage, SymbolFlags } from '../../index/indexTypes';
 import type {
   LangConfig,
   FileIndexDelta,
@@ -193,6 +194,311 @@ function findInnermostScope(scopes: ScopeRecord[], byteRange: ByteRange): ScopeI
 // Symbol Extraction
 // ============================================================================
 
+type SymbolBindingEntry = {
+  nameNode: Parser.SyntaxNode;
+  binding?: SymbolBindingInfo;
+};
+
+function namedChildrenGet(node: Parser.SyntaxNode): Parser.SyntaxNode[] {
+  const children: Parser.SyntaxNode[] = [];
+  for (let i = 0; i < node.namedChildCount; i++) {
+    const child = node.namedChild(i);
+    if (child) {
+      children.push(child);
+    }
+  }
+  return children;
+}
+
+function nodeRangeGet(node: Parser.SyntaxNode): ByteRange {
+  return { start: node.startIndex, end: node.endIndex };
+}
+
+function objectPatternHasRest(node: Parser.SyntaxNode): boolean {
+  return namedChildrenGet(node).some((child) => child.type === 'rest_pattern');
+}
+
+function parameterBindingNodeGet(node: Parser.SyntaxNode): Parser.SyntaxNode | undefined {
+  return namedChildrenGet(node).find((child) =>
+    child.type === 'identifier' ||
+    child.type === 'object_pattern' ||
+    child.type === 'array_pattern' ||
+    child.type === 'rest_pattern' ||
+    child.type === 'shorthand_property_identifier_pattern'
+  );
+}
+
+function parameterHasInitializer(node: Parser.SyntaxNode): boolean {
+  const bindingNode = parameterBindingNodeGet(node);
+  if (!bindingNode) return false;
+
+  return namedChildrenGet(node).some((child) =>
+    child.id !== bindingNode.id && child.type !== 'type_annotation'
+  );
+}
+
+function parameterIndexGet(node: Parser.SyntaxNode): number | undefined {
+  const parent = node.parent;
+  if (!parent || parent.type !== 'formal_parameters') return undefined;
+
+  let index = 0;
+  for (const child of namedChildrenGet(parent)) {
+    if (child.id === node.id) {
+      return index;
+    }
+    index++;
+  }
+
+  return undefined;
+}
+
+function catchBindingNodeGet(node: Parser.SyntaxNode): Parser.SyntaxNode | undefined {
+  return namedChildrenGet(node).find((child) => child.type !== 'statement_block');
+}
+
+function bindingEntriesExtract(
+  node: Parser.SyntaxNode | undefined,
+  inherited: SymbolBindingInfo = {}
+): SymbolBindingEntry[] {
+  if (!node) return [];
+
+  switch (node.type) {
+    case 'identifier':
+    case 'shorthand_property_identifier_pattern':
+      return [{
+        nameNode: node,
+        binding: {
+          ...inherited,
+          pattern: inherited.pattern ?? 'identifier',
+        },
+      }];
+
+    case 'rest_pattern': {
+      const child = namedChildrenGet(node)[0];
+      return bindingEntriesExtract(child, {
+        ...inherited,
+        isRest: true,
+      });
+    }
+
+    case 'assignment_pattern':
+    case 'object_assignment_pattern': {
+      const left =
+        node.childForFieldName('left') ??
+        namedChildrenGet(node)[0];
+      return bindingEntriesExtract(left, {
+        ...inherited,
+        initialized: true,
+      });
+    }
+
+    case 'pair_pattern': {
+      const children = namedChildrenGet(node);
+      const value =
+        node.childForFieldName('value') ??
+        children[children.length - 1];
+      return bindingEntriesExtract(value, {
+        ...inherited,
+        pattern: 'object',
+      });
+    }
+
+    case 'object_pattern': {
+      const hasRestSibling = objectPatternHasRest(node);
+      return namedChildrenGet(node).flatMap((child) =>
+        bindingEntriesExtract(child, {
+          ...inherited,
+          pattern: 'object',
+          hasRestSibling: child.type === 'rest_pattern' ? false : hasRestSibling,
+        })
+      );
+    }
+
+    case 'array_pattern':
+      return namedChildrenGet(node).flatMap((child) =>
+        bindingEntriesExtract(child, {
+          ...inherited,
+          pattern: 'array',
+        })
+      );
+
+    case 'required_parameter':
+    case 'optional_parameter':
+      return bindingEntriesExtract(parameterBindingNodeGet(node), {
+        ...inherited,
+        bindingKind: 'parameter',
+        hoisted: true,
+        initialized: inherited.initialized ?? parameterHasInitializer(node),
+        parameterIndex: parameterIndexGet(node),
+      });
+
+    case 'catch_clause':
+      return bindingEntriesExtract(catchBindingNodeGet(node), {
+        ...inherited,
+        bindingKind: 'catch',
+        hoisted: true,
+      });
+
+    default:
+      return [];
+  }
+}
+
+function variableScopeIdGet(
+  scopes: ScopeRecord[],
+  nameRange: ByteRange,
+  declNode: Parser.SyntaxNode
+): ScopeId {
+  let scopeId = findInnermostScope(scopes, nameRange);
+
+  if (declNode.parent?.type === 'variable_declaration') {
+    const scopeById = new Map(scopes.map((scope) => [scope.id, scope]));
+    let current = scopeById.get(scopeId);
+    while (current && current.kind === 'block' && current.parent) {
+      current = scopeById.get(current.parent);
+      if (current) {
+        scopeId = current.id;
+      }
+    }
+  }
+
+  return scopeId;
+}
+
+function declarationScopeIdGet(
+  scopes: ScopeRecord[],
+  nameRange: ByteRange,
+  declNode: Parser.SyntaxNode
+): ScopeId {
+  const innermost = findInnermostScope(scopes, nameRange);
+  const scopeById = new Map(scopes.map((scope) => [scope.id, scope]));
+
+  switch (declNode.type) {
+    case 'function_declaration':
+    case 'generator_function_declaration':
+    case 'class_declaration':
+    case 'abstract_class_declaration':
+    case 'interface_declaration':
+    case 'type_alias_declaration':
+    case 'enum_declaration':
+    case 'internal_module':
+    case 'method_definition':
+      return scopeById.get(innermost)?.parent ?? scopes[0]!.id;
+
+    case 'function_expression':
+      return innermost;
+
+    case 'import_specifier':
+    case 'namespace_import':
+    case 'import_clause':
+      return scopes[0]!.id;
+
+    case 'variable_declarator':
+      return variableScopeIdGet(scopes, nameRange, declNode);
+
+    case 'required_parameter':
+    case 'optional_parameter':
+    case 'catch_clause':
+      return innermost;
+
+    default:
+      return innermost;
+  }
+}
+
+function symbolFlagsGet(
+  nameNode: Parser.SyntaxNode,
+  declNode?: Parser.SyntaxNode
+): number {
+  let flags = SymbolFlags.None;
+
+  let current: Parser.SyntaxNode | null = nameNode.parent;
+  while (current) {
+    if (current.type.includes('export')) {
+      flags |= SymbolFlags.Exported;
+      break;
+    }
+    current = current.parent;
+  }
+
+  if (declNode) {
+    for (let i = 0; i < declNode.childCount; i++) {
+      const child = declNode.child(i);
+      if (child && child.type === 'async') {
+        flags |= SymbolFlags.Async;
+        break;
+      }
+    }
+
+    if (declNode.type.includes('generator')) {
+      flags |= SymbolFlags.Generator;
+    }
+  }
+
+  return flags;
+}
+
+function symbolBindingBaseGet(
+  declNode: Parser.SyntaxNode,
+  suffix: string
+): SymbolBindingInfo | undefined {
+  if (declNode.type === 'import_specifier' ||
+      declNode.type === 'namespace_import' ||
+      declNode.type === 'import_clause') {
+    return {
+      bindingKind: 'import',
+      hoisted: true,
+      pattern: 'identifier',
+    };
+  }
+
+  if (suffix === 'function_expression_name') {
+    return {
+      bindingKind: 'function-expression-name',
+      hoisted: true,
+      pattern: 'identifier',
+    };
+  }
+
+  if (declNode.type === 'function_declaration' ||
+      declNode.type === 'generator_function_declaration' ||
+      declNode.type === 'type_alias_declaration' ||
+      declNode.type === 'interface_declaration') {
+    return {
+      hoisted: true,
+      pattern: 'identifier',
+    };
+  }
+
+  if (declNode.type === 'class_declaration' ||
+      declNode.type === 'abstract_class_declaration' ||
+      declNode.type === 'enum_declaration' ||
+      declNode.type === 'internal_module' ||
+      declNode.type === 'method_definition') {
+    return {
+      pattern: 'identifier',
+    };
+  }
+
+  return undefined;
+}
+
+function symbolKindAdjust(
+  kind: SymbolKind,
+  declNode: Parser.SyntaxNode | undefined
+): SymbolKind {
+  if (!declNode) return kind;
+
+  if (declNode.type === 'variable_declarator' && declNode.parent?.type === 'lexical_declaration') {
+    const keyword = declNode.parent.child(0)?.type;
+    if (keyword === 'const') {
+      return 'const';
+    }
+  }
+
+  return kind;
+}
+
 /**
  * Extract symbol declarations from Tree-sitter query captures.
  */
@@ -211,90 +517,75 @@ function symbolsExtract(
 
   for (const match of matches) {
     const capturesByName = new Map<string, Parser.SyntaxNode>();
+    let declNode: Parser.SyntaxNode | undefined;
+    let suffix: string | undefined;
     for (const capture of match.captures) {
       capturesByName.set(capture.name, capture.node);
-    }
-
-    // Find name capture
-    const nameNode = capturesByName.get(cfg.captures.symbolName);
-    if (!nameNode) continue;
-
-    // Find kind and declaration node from capture with decl prefix
-    let kind: SymbolKind = cfg.symbolKinds.default;
-    let declNode: Parser.SyntaxNode | undefined;
-    for (const capture of match.captures) {
       if (capture.name.startsWith(cfg.captures.symbolKindPrefix + '.')) {
         declNode = capture.node;
-        const suffix = capture.name.slice(cfg.captures.symbolKindPrefix.length + 1);
-        const mappedKind = cfg.symbolKinds.byCaptureSuffix[suffix];
-        if (mappedKind) {
-          kind = mappedKind;
-          break;
-        }
+        suffix = capture.name.slice(cfg.captures.symbolKindPrefix.length + 1);
       }
     }
 
-    let name = sliceText(source, nameNode.startIndex, nameNode.endIndex);
+    if (!declNode || !suffix) continue;
 
-    // For import bindings with alias (import { foo as bar }), use the alias as local name.
-    // The tree-sitter import_specifier node has name: "foo" and alias: "bar".
-    // The local binding is "bar", so symbol name must be "bar".
-    if (declNode?.type === 'import_specifier') {
+    let kind: SymbolKind = cfg.symbolKinds.default;
+    const mappedKind = cfg.symbolKinds.byCaptureSuffix[suffix];
+    if (mappedKind) {
+      kind = mappedKind;
+    }
+    kind = symbolKindAdjust(kind, declNode);
+
+    let bindingEntries: SymbolBindingEntry[] = [];
+
+    if (declNode.type === 'variable_declarator') {
+      const bindingRoot =
+        declNode.childForFieldName('name') ??
+        declNode.namedChild(0) ??
+        undefined;
+      const initialized = declNode.childForFieldName('value') != null;
+      bindingEntries = bindingEntriesExtract(bindingRoot, { initialized });
+    } else if (declNode.type === 'required_parameter' ||
+               declNode.type === 'optional_parameter' ||
+               declNode.type === 'catch_clause') {
+      bindingEntries = bindingEntriesExtract(declNode);
+    } else {
+      let nameNode = capturesByName.get(cfg.captures.symbolName);
+      if (!nameNode) continue;
+
       const aliasNode = declNode.childForFieldName('alias');
       if (aliasNode) {
-        name = sliceText(source, aliasNode.startIndex, aliasNode.endIndex);
+        nameNode = aliasNode;
       }
+
+      bindingEntries = [{
+        nameNode,
+        binding: symbolBindingBaseGet(declNode, suffix),
+      }];
     }
 
-    // Name range: used for dedup and scope lookup (the identifier position)
-    const nameRange: ByteRange = { start: nameNode.startIndex, end: nameNode.endIndex };
-    declRanges.add(`${nameRange.start}:${nameRange.end}`);
+    for (const entry of bindingEntries) {
+      const name = sliceText(source, entry.nameNode.startIndex, entry.nameNode.endIndex);
+      const nameRange = nodeRangeGet(entry.nameNode);
+      declRanges.add(`${nameRange.start}:${nameRange.end}`);
 
-    const scopeId = findInnermostScope(scopes, nameRange);
-    const qualName = buildQualifiedName(scopes, scopeId, name);
-    const id = symbolIdCreate(cfg.languageId, file, kind, qualName, nameNode.startIndex);
+      const scopeId = declarationScopeIdGet(scopes, nameRange, declNode);
+      const qualName = buildQualifiedName(scopes, scopeId, name);
+      const id = symbolIdCreate(cfg.languageId, file, kind, qualName, entry.nameNode.startIndex);
+      const symbolRange = nodeRangeGet(declNode);
 
-    // Detect flags (basic heuristics)
-    let flags = SymbolFlags.None;
-    // Check for export in ancestors
-    let current: Parser.SyntaxNode | null = nameNode.parent;
-    while (current) {
-      if (current.type.includes('export')) {
-        flags |= SymbolFlags.Exported;
-        break;
-      }
-      current = current.parent;
+      symbols.push({
+        id,
+        kind,
+        name,
+        file,
+        byteRange: symbolRange,
+        scopeId,
+        qualName,
+        flags: symbolFlagsGet(entry.nameNode, declNode),
+        binding: entry.binding,
+      });
     }
-    // Check for async keyword on declaration node
-    if (declNode) {
-      for (let i = 0; i < declNode.childCount; i++) {
-        const child = declNode.child(i);
-        if (child && child.type === 'async') {
-          flags |= SymbolFlags.Async;
-          break;
-        }
-      }
-      // Check for generator declaration
-      if (declNode.type.includes('generator')) {
-        flags |= SymbolFlags.Generator;
-      }
-    }
-
-    // Full declaration span for byteRange (enables caller/callee containment checks)
-    const symbolRange: ByteRange = declNode
-      ? { start: declNode.startIndex, end: declNode.endIndex }
-      : nameRange;
-
-    symbols.push({
-      id,
-      kind,
-      name,
-      file,
-      byteRange: symbolRange,
-      scopeId,
-      qualName,
-      flags,
-    });
   }
 
   return { symbols, declRanges };
@@ -321,6 +612,114 @@ function sliceText(source: string, start: number, end: number): string {
   return source.slice(start, end);
 }
 
+function symbolsByNameBuild(symbols: SymbolRecord[]): Map<string, SymbolRecord[]> {
+  const symbolsByName = new Map<string, SymbolRecord[]>();
+  for (const sym of symbols) {
+    const existing = symbolsByName.get(sym.name) ?? [];
+    existing.push(sym);
+    symbolsByName.set(sym.name, existing);
+  }
+  return symbolsByName;
+}
+
+function bindingTargetContains(targetNode: Parser.SyntaxNode | undefined, node: Parser.SyntaxNode): boolean {
+  if (!targetNode) return false;
+
+  switch (targetNode.type) {
+    case 'identifier':
+    case 'shorthand_property_identifier_pattern':
+      return targetNode.id === node.id;
+
+    case 'rest_pattern':
+      return bindingTargetContains(namedChildrenGet(targetNode)[0], node);
+
+    case 'assignment_pattern':
+    case 'object_assignment_pattern': {
+      const left =
+        targetNode.childForFieldName('left') ??
+        namedChildrenGet(targetNode)[0];
+      return bindingTargetContains(left, node);
+    }
+
+    case 'pair_pattern': {
+      const children = namedChildrenGet(targetNode);
+      const value =
+        targetNode.childForFieldName('value') ??
+        children[children.length - 1];
+      return bindingTargetContains(value, node);
+    }
+
+    case 'object_pattern':
+    case 'array_pattern':
+      return namedChildrenGet(targetNode).some((child) => bindingTargetContains(child, node));
+
+    default:
+      return false;
+  }
+}
+
+function referenceUsageGet(
+  node: Parser.SyntaxNode,
+  captureName: string
+): number {
+  let usage = ReferenceUsage.None;
+
+  if (captureName.endsWith('.type') || node.type === 'type_identifier') {
+    usage |= ReferenceUsage.Type;
+  }
+
+  let current: Parser.SyntaxNode | null = node.parent;
+  while (current) {
+    if (current.type === 'type_query') {
+      usage |= ReferenceUsage.Type;
+      break;
+    }
+    current = current.parent;
+  }
+
+  const updateExpr = node.parent?.type === 'update_expression' ? node.parent : undefined;
+  if (updateExpr && bindingTargetContains(namedChildrenGet(updateExpr)[0], node)) {
+    return usage | ReferenceUsage.Read | ReferenceUsage.Write | ReferenceUsage.SelfUpdate;
+  }
+
+  let ancestor: Parser.SyntaxNode | null = node.parent;
+  while (ancestor) {
+    if (ancestor.type === 'augmented_assignment_expression') {
+      const left = namedChildrenGet(ancestor)[0];
+      if (bindingTargetContains(left, node)) {
+        return usage | ReferenceUsage.Read | ReferenceUsage.Write | ReferenceUsage.SelfUpdate;
+      }
+
+      const targetName = left ? left.text : undefined;
+      if (targetName && targetName === node.text) {
+        return usage | ReferenceUsage.Read | ReferenceUsage.SelfUpdate;
+      }
+      break;
+    }
+
+    if (ancestor.type === 'assignment_expression') {
+      const left = namedChildrenGet(ancestor)[0];
+      if (bindingTargetContains(left, node)) {
+        return usage | ReferenceUsage.Write;
+      }
+
+      const targetName = left?.type === 'identifier' ? left.text : undefined;
+      if (targetName && targetName === node.text && !bindingTargetContains(left, node)) {
+        return usage | ReferenceUsage.Read | ReferenceUsage.SelfUpdate;
+      }
+      break;
+    }
+
+    ancestor = ancestor.parent;
+  }
+
+  if (node.type !== 'type_identifier') {
+    usage |= ReferenceUsage.Read;
+  }
+
+  return usage;
+}
+
 // ============================================================================
 // Reference Extraction
 // ============================================================================
@@ -344,12 +743,7 @@ function refsExtract(
   const captures = query.captures(tree.rootNode);
 
   // Build name -> symbol map for file-local resolution
-  const symbolsByName = new Map<string, SymbolRecord[]>();
-  for (const sym of symbols) {
-    const existing = symbolsByName.get(sym.name) ?? [];
-    existing.push(sym);
-    symbolsByName.set(sym.name, existing);
-  }
+  const symbolsByName = symbolsByNameBuild(symbols);
 
   for (const capture of captures) {
     // Check for ref prefix
@@ -379,7 +773,8 @@ function refsExtract(
     const scopeId = findInnermostScope(scopes, byteRange);
 
     // Try to resolve locally
-    const resolved = resolveLocal(symbolsByName, name, scopeId, scopes);
+    const resolved = resolveLocal(symbolsByName, name, node, scopes);
+    const usage = referenceUsageGet(node, capture.name);
 
     refs.push({
       kind: 'References',
@@ -387,6 +782,8 @@ function refsExtract(
       name,
       byteRange,
       resolvedSymbolId: resolved?.id,
+      localSymbolId: resolved?.id,
+      usage,
     });
   }
 
@@ -437,12 +834,7 @@ function memberRefsExtract(
   if (matches.length === 0) return refs;
 
   // Build name -> symbol map for local resolution of the object part
-  const symbolsByName = new Map<string, SymbolRecord[]>();
-  for (const sym of symbols) {
-    const existing = symbolsByName.get(sym.name) ?? [];
-    existing.push(sym);
-    symbolsByName.set(sym.name, existing);
-  }
+  const symbolsByName = symbolsByNameBuild(symbols);
 
   for (const match of matches) {
     const capturesByName = new Map<string, Parser.SyntaxNode>();
@@ -467,7 +859,7 @@ function memberRefsExtract(
     const scopeId = findInnermostScope(scopes, byteRange);
 
     // Resolve the object to a local symbol (may be a namespace import)
-    const objResolved = resolveLocal(symbolsByName, objName, scopeId, scopes);
+    const objResolved = resolveLocal(symbolsByName, objName, objNode, scopes);
 
     refs.push({
       kind: 'References',
@@ -475,6 +867,8 @@ function memberRefsExtract(
       name: `${objName}.${propName}`,
       byteRange,
       resolvedSymbolId: objResolved?.id,
+      localSymbolId: objResolved?.id,
+      usage: ReferenceUsage.Read,
     });
   }
 
@@ -488,32 +882,32 @@ function memberRefsExtract(
 function resolveLocal(
   symbolsByName: Map<string, SymbolRecord[]>,
   name: string,
-  scopeId: ScopeId,
+  refNode: Parser.SyntaxNode,
   scopes: ScopeRecord[]
 ): SymbolRecord | undefined {
   const candidates = symbolsByName.get(name);
   if (!candidates || candidates.length === 0) return undefined;
 
-  // Prefer symbol in same scope
-  const inSameScope = candidates.find(s => s.scopeId === scopeId);
-  if (inSameScope) return inSameScope;
-
-  // Walk up scope chain
+  const refScopeId = findInnermostScope(scopes, nodeRangeGet(refNode));
   const scopeById = new Map(scopes.map(s => [s.id, s]));
-  let currentScopeId: ScopeId | undefined = scopeId;
+  let currentScopeId: ScopeId | undefined = refScopeId;
 
   while (currentScopeId) {
-    const scope = scopeById.get(currentScopeId);
-    if (!scope) break;
+    const visible = candidates
+      .filter((candidate) => candidate.scopeId === currentScopeId)
+      .filter((candidate) =>
+        candidate.binding?.hoisted === true || candidate.byteRange.start <= refNode.startIndex
+      )
+      .sort((a, b) => b.byteRange.start - a.byteRange.start);
 
-    const inScope = candidates.find(s => s.scopeId === currentScopeId);
-    if (inScope) return inScope;
+    if (visible.length > 0) {
+      return visible[0];
+    }
 
-    currentScopeId = scope.parent;
+    currentScopeId = scopeById.get(currentScopeId)?.parent;
   }
 
-  // Fall back to first candidate (file-level)
-  return candidates[0];
+  return undefined;
 }
 
 // ============================================================================
@@ -754,6 +1148,10 @@ function importBindingsExtract(
           kind: 'ImportBinding',
           localSymbolId: localSymbol.id,
           importedName,
+          importedNameByteRange: {
+            start: bindingNameNode.startIndex,
+            end: bindingNameNode.endIndex,
+          },
           moduleSpec,
           isDefault: false,
           isNamespace: false,
@@ -863,6 +1261,10 @@ function importBindingsExtract(
           kind: 'ImportBinding',
           localSymbolId: localSymbol.id,
           importedName: localName,
+          importedNameByteRange: {
+            start: dynamicBindingNode.startIndex,
+            end: dynamicBindingNode.endIndex,
+          },
           moduleSpec,
           isDefault: false,
           isNamespace: false,
