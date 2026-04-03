@@ -10,9 +10,11 @@ import { noInterfaceRule } from './noInterfaceRule';
 import { noVerbFunctionNameRule } from './noVerbFunctionNameRule';
 import { noDuplicateExportsRule } from './noDuplicateExportsRule';
 import { noStarExportCollisionsRule } from './noStarExportCollisionsRule';
+import { enforceCasingRule } from './enforceCasingRule';
 
 export { unusedExportsRule };
 export { unusedExportsCheck };
+export { enforceCasingRule } from './enforceCasingRule';
 export { pythonDeadCodeRule } from '@codepol/plugin-vulture';
 
 export const loggerEnterExitRule: CodepolPluginRule = pluginRuleNew({
@@ -32,4 +34,5 @@ export default [
   noInterfaceRule,
   noDuplicateExportsRule,
   noStarExportCollisionsRule,
+  enforceCasingRule,
 ];

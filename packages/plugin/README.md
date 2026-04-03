@@ -2,9 +2,10 @@
 
 ## Purpose
 
-`@codepol/plugin` provides the logger enforcement rule plugin for Codepol. It supplies both
-Tree-sitter checking and ESLint rule integration to ensure functions are instrumented with logger
-enter/exit calls.
+`@codepol/plugin` is the default Codepol plugin package. It ships multiple built-in rules (logger
+instrumentation, unused exports, naming conventions, duplicate exports, Python dead code via
+vulture, and more). Many rules support both Tree-sitter checks and ESLint adapters where
+applicable.
 
 ## Installation
 
@@ -14,8 +15,14 @@ pnpm add -D @codepol/plugin
 
 ## Exports
 
-- **Default export**: an array of rule plugins (currently `[loggerEnterExitRule]`).
-- `loggerEnterExitRule`: the rule plugin definition for `require-logger-enter-exit`.
+- **Default export**: an array of all built-in rule plugins (see `src/index.ts`).
+- Named exports include individual rules, for example `loggerEnterExitRule`, `enforceCasingRule`,
+  `unusedExportsRule`, etc.
+
+### enforce-casing
+
+Rule id: `@codepol/plugin/enforce-casing`. Enforces allowed casing styles for indexed symbols
+and/or file and directory path segments. See [docs/rules/enforce-casing.md](../../docs/rules/enforce-casing.md).
 
 ## Basic Configuration
 

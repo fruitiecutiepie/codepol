@@ -129,6 +129,27 @@ exitMethod = "exit"
 import = { module = "@your-org/logger", named = "logger" }
 ```
 
+For the built-in `enforce-casing` rule, configure symbol kinds and/or path segments. Supported styles per name: `camelCase`, `snake_case`, `PascalCase`, `SCREAMING_SNAKE_CASE`, `kebab-case`. Omitted symbol kinds are not checked. Path checks apply to each directory segment and the file basename (see [enforce-casing](/rules/enforce-casing) for details).
+
+```toml
+[[rules]]
+ruleId = "@codepol/plugin/enforce-casing"
+targets = ["typescript-src"]
+
+[rules.args.symbols]
+function = ["camelCase"]
+class = ["PascalCase"]
+interface = ["PascalCase"]
+type = ["PascalCase"]
+variable = ["camelCase"]
+const = ["camelCase", "SCREAMING_SNAKE_CASE"]
+
+[rules.args.paths]
+file = ["kebab-case"]
+directory = ["kebab-case"]
+ignoreExtensions = true
+```
+
 ## Plugin Declarations
 
 Codepol no longer resolves plugins as Node module imports from the config file. Policies declare a stable plugin `id` plus a transport-specific `source`.
@@ -191,5 +212,5 @@ If omitted, the rule applies everywhere the host can adapt it.
 ## Notes
 
 - `codepol.toml` is the only discovered config format.
-- Built-in rule IDs keep their namespaced form, for example `@codepol/plugin/no-interface`.
+- Built-in rule IDs keep their namespaced form, for example `@codepol/plugin/no-interface` or `@codepol/plugin/enforce-casing`.
 - Direct ESLint usage should combine `policyPluginRulesGet()` with `providerRulesConfigGet('eslint')`.
