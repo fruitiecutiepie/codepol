@@ -1,6 +1,13 @@
 import type { SyntaxNode } from 'web-tree-sitter';
 import type { LoggerConfig, PolicyCheckContext, PolicyRule, PolicyViolation, TreeCheckProvider } from '@codepol/core';
-import { parserGetForFile, Result, Ok, Err, isErr } from '@codepol/core';
+import {
+  parserGetForFile,
+  Result,
+  Ok,
+  Err,
+  isErr,
+  treeSitterViolationPositionPreferred,
+} from '@codepol/core';
 
 const blockNodeTypes = new Set(['statement_block', 'block', 'function_body']);
 
@@ -191,13 +198,13 @@ function loggerRuleCheck(
         missing.push(`${logger.identifier}.${logger.exitMethod}`);
       }
       const firstMissing = missing.join(' & ');
-      const { row: row, column: column } = fnNode.startPosition;
+      const { line, column } = treeSitterViolationPositionPreferred(fnNode);
       violations.push({
         ruleId: rule.id || rule.ruleId,
         filePath: context.filePath,
         message: `Function ${name} is missing ${firstMissing}`,
-        line: row + 1,
-        column: column + 1,
+        line,
+        column,
       });
     }
   });

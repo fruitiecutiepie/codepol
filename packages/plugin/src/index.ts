@@ -11,10 +11,12 @@ import { noVerbFunctionNameRule } from './noVerbFunctionNameRule';
 import { noDuplicateExportsRule } from './noDuplicateExportsRule';
 import { noStarExportCollisionsRule } from './noStarExportCollisionsRule';
 import { enforceCasingRule } from './enforceCasingRule';
+import { noMixedExportsRule } from './noMixedExportsRule';
 
 export { unusedExportsRule };
 export { unusedExportsCheck };
 export { enforceCasingRule } from './enforceCasingRule';
+export { noMixedExportsRule } from './noMixedExportsRule';
 export { pythonDeadCodeRule } from '@codepol/plugin-vulture';
 
 export const loggerEnterExitRule: CodepolPluginRule = pluginRuleNew({
@@ -35,4 +37,5 @@ export default [
   noDuplicateExportsRule,
   noStarExportCollisionsRule,
   enforceCasingRule,
+  noMixedExportsRule,
 ];

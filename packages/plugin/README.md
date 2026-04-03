@@ -3,8 +3,8 @@
 ## Purpose
 
 `@codepol/plugin` is the default Codepol plugin package. It ships multiple built-in rules (logger
-instrumentation, unused exports, naming conventions, duplicate exports, Python dead code via
-vulture, and more). Many rules support both Tree-sitter checks and ESLint adapters where
+instrumentation, unused exports, naming conventions, duplicate exports, mixed default/named export
+style, Python dead code via vulture, and more). Many rules support both Tree-sitter checks and ESLint adapters where
 applicable.
 
 ## Installation
@@ -23,6 +23,11 @@ pnpm add -D @codepol/plugin
 
 Rule id: `@codepol/plugin/enforce-casing`. Enforces allowed casing styles for indexed symbols
 and/or file and directory path segments. See [docs/rules/enforce-casing.md](../../docs/rules/enforce-casing.md).
+
+### no-mixed-exports
+
+Rule id: `@codepol/plugin/no-mixed-exports`. Flags files that combine `export default` with named
+or re-export statements. See [docs/rules/no-mixed-exports.md](../../docs/rules/no-mixed-exports.md).
 
 ## Basic Configuration
 

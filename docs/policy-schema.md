@@ -150,6 +150,14 @@ directory = ["kebab-case"]
 ignoreExtensions = true
 ```
 
+For the built-in `no-mixed-exports` rule, no `args` are required. It applies to JavaScript and TypeScript targets matched by the rule (see [no-mixed-exports](/rules/no-mixed-exports)).
+
+```toml
+[[rules]]
+ruleId = "@codepol/plugin/no-mixed-exports"
+targets = ["typescript-src"]
+```
+
 ## Plugin Declarations
 
 Codepol no longer resolves plugins as Node module imports from the config file. Policies declare a stable plugin `id` plus a transport-specific `source`.

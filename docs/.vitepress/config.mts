@@ -33,7 +33,8 @@ export default withMermaid({
         text: 'Rules',
         items: [
           { text: 'require-logger-enter-exit', link: '/rules/require-logger-enter-exit' },
-          { text: 'enforce-casing', link: '/rules/enforce-casing' }
+          { text: 'enforce-casing', link: '/rules/enforce-casing' },
+          { text: 'no-mixed-exports', link: '/rules/no-mixed-exports' }
         ]
       }
     ],
