@@ -3,6 +3,7 @@ import type {
   PolicyRule,
   PolicyCheckContext,
   PolicyViolation,
+  PolicyFixSuggestion,
   ProjectIndex,
   SymbolKind,
   SymbolRecord,
@@ -13,6 +14,10 @@ import {
   type CasingStyleName,
 } from './lib/casingConvention';
 import { importBindingIsTypeOnly } from './lib/importBindingTypeOnly';
+import { enforceCasingReplacements } from './enforceCasingFix';
+
+const utf8ByteLength = (s: string): number =>
+  new TextEncoder().encode(s).length;
 
 /**
  * Per-symbol-kind allowed casing styles. Omitted kinds are not checked.
@@ -230,15 +235,18 @@ export function enforceCasingCheck(
       }
 
       let offset = sym.byteRange.start;
+      let idText = sym.name;
       const searchSpace = source.slice(offset, sym.byteRange.end);
       const escapedName = sym.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const match = new RegExp(`\\b${escapedName}\\b`).exec(searchSpace);
       if (match) {
         offset += match.index;
+        idText = match[0];
       } else {
         const fallbackIndex = source.indexOf(sym.name, offset);
         if (fallbackIndex !== -1 && fallbackIndex <= sym.byteRange.end) {
           offset = fallbackIndex;
+          idText = sym.name;
         }
       }
 
@@ -246,12 +254,38 @@ export function enforceCasingCheck(
         source,
         offset,
       );
+
+      const replacements = enforceCasingReplacements(sym.name, allowed);
+      const byteEnd = offset + utf8ByteLength(idText);
+
+      let fix = undefined;
+      let suggestions: PolicyFixSuggestion[] | undefined = undefined;
+      if (replacements.length > 0) {
+        if (allowed.length === 1 || replacements.length === 1) {
+          const r = replacements[0]!;
+          fix = {
+            byteRange: { start: offset, end: byteEnd },
+            text: r.text,
+          };
+        } else {
+          suggestions = replacements.map((r) => ({
+            message: `Rename to ${r.style}: ${r.text}`,
+            fix: {
+              byteRange: { start: offset, end: byteEnd },
+              text: r.text,
+            },
+          }));
+        }
+      }
+
       violations.push({
         ruleId: rule.id || rule.ruleId,
         filePath,
         message: symbolViolationMessage(sym, allowed, kindLabel),
         line,
         column,
+        ...(fix ? { fix } : {}),
+        ...(suggestions ? { suggestions } : {}),
       });
     }
   }

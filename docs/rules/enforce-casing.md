@@ -29,6 +29,15 @@ Supported styles: `camelCase`, `snake_case`, `PascalCase`, `SCREAMING_SNAKE_CASE
 
 Leading underscores are stripped before checking (e.g. `_foo` is validated as `foo`).
 
+### Fixes and suggestions (symbols only)
+
+For **symbol** violations, Codepol can suggest renames that match your allowed styles:
+
+- If **only one** allowed style applies to a given symbol kind, a single **auto-fix** is produced (replace the identifier span in source).
+- If **multiple** allowed styles are listed (e.g. `const = ["camelCase", "SCREAMING_SNAKE_CASE"]`), **suggestions** are produced (one per distinct valid rename). In ESLint, these appear as quick-fix suggestions; use the one that matches your intent.
+
+**Path** rules (`[rules.args.paths]`) are report-only: they do not rename files or directories on disk.
+
 ### Paths
 
 - `file` — allowed styles for the **basename without extension** when `ignoreExtensions` is true (default), or the full last path segment when `ignoreExtensions` is false.

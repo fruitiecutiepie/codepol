@@ -61,7 +61,7 @@ type AdaptedRuleOptions = [
   }?
 ];
 
-type MessageIds = 'treeCheckViolation';
+type MessageIds = 'treeCheckViolation' | 'treeCheckSuggestion';
 
 function policyRuleTargetsGet(policy: PolicyFile): PolicyRuleTargetContext[] {
   const targets: PolicyRuleTargetContext[] = [];
@@ -338,11 +338,13 @@ function createAdaptedRule(
     meta: {
       type: 'problem',
       fixable: 'code',
+      hasSuggestions: true,
       docs: {
         description: `Tree-check rule adapted from ${plugin.id}`,
       },
       messages: {
         treeCheckViolation: '{{message}}',
+        treeCheckSuggestion: '{{message}}',
       },
       schema: [
         {
@@ -495,6 +497,16 @@ function createAdaptedRule(
                     diagnostic.fix!.text,
                   )
                 : undefined,
+              suggest:
+                diagnostic.suggestions?.map((s) => ({
+                  messageId: 'treeCheckSuggestion' as const,
+                  data: { message: s.message },
+                  fix: (fixer) =>
+                    fixer.replaceTextRange(
+                      [s.fix.byteRange.start, s.fix.byteRange.end],
+                      s.fix.text,
+                    ),
+                })) ?? undefined,
             });
             if (diagnostic.relatedLocations?.length) {
               const currentFile = path.resolve(filename);

@@ -145,6 +145,28 @@ describe('enforceCasingCheck', () => {
       expect(v.length).toBeGreaterThanOrEqual(1);
       expect(v[0].message).toContain('bad_class');
       expect(v[0].message).toContain('class');
+      expect(v[0].fix).toBeDefined();
+      expect(v[0].fix!.text).toBe('BadClass');
+      expect(v[0].suggestions).toBeUndefined();
+    });
+
+    it('emits suggestions when multiple allowed styles and multiple renames', () => {
+      const filePath = path.join(testDir, 'sym-fn-suggest.ts');
+      const source = 'export function bad_NAME() { return 1; }\n';
+      fs.writeFileSync(filePath, source);
+      const { index } = projectIndexBuildSync({
+        files: [filePath],
+        dir: testDir,
+      });
+      const { rule, context } = contextNew(filePath, source, index, {
+        symbols: { function: ['camelCase', 'SCREAMING_SNAKE_CASE'] },
+      });
+      const v = enforceCasingCheck(rule, context);
+      expect(v).toHaveLength(1);
+      expect(v[0].fix).toBeUndefined();
+      expect(v[0].suggestions?.length).toBe(2);
+      const texts = v[0].suggestions!.map((s) => s.fix.text).sort();
+      expect(texts).toEqual(['BAD_NAME', 'badName']);
     });
 
     it('allows PascalCase class', () => {

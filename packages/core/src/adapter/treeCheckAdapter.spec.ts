@@ -47,6 +47,20 @@ describe('treeCheckAdapter', () => {
       );
     });
 
+    it('should pass through suggestions when present', () => {
+      const violationWithSuggestions: PolicyViolation = {
+        ...baseViolation,
+        suggestions: [
+          {
+            message: 'Rename to camelCase: fooBar',
+            fix: { byteRange: { start: 1, end: 5 }, text: 'fooBar' },
+          },
+        ],
+      };
+      const diagnostic = violationToLintDiagnostic(violationWithSuggestions);
+      expect(diagnostic.suggestions).toEqual(violationWithSuggestions.suggestions);
+    });
+
     it('should pass through end range and relatedLocations', () => {
       const violation: PolicyViolation = {
         ruleId: 'no-mixed-exports',

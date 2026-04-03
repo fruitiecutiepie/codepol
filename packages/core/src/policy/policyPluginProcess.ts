@@ -11,6 +11,7 @@ import type {
   PolicyRuleTargetContext,
   PolicyViolation,
   PolicyViolationFix,
+  PolicyFixSuggestion,
   PolicyDiagnosticLocation,
 } from './policyTypes';
 
@@ -180,6 +181,18 @@ function fixParse(value: unknown, pathLabel: string): PolicyViolationFix | undef
   };
 }
 
+function fixSuggestionParse(value: unknown, pathLabel: string): PolicyFixSuggestion {
+  const record = recordExpect(value, pathLabel);
+  const fix = fixParse(record.fix, `${pathLabel}.fix`);
+  if (!fix) {
+    throw new Error(`Invalid process plugin response at ${pathLabel}.fix: expected fix object`);
+  }
+  return {
+    message: stringExpect(record.message, `${pathLabel}.message`),
+    fix,
+  };
+}
+
 function policyDiagnosticLocationParse(
   value: unknown,
   pathLabel: string,
@@ -233,6 +246,18 @@ function violationParse(value: unknown, pathLabel: string): PolicyViolation {
         : numberExpect(record.endColumn, `${pathLabel}.endColumn`),
     relatedLocations,
     fix: fixParse(record.fix, `${pathLabel}.fix`),
+    suggestions:
+      record.suggestions === undefined
+        ? undefined
+        : Array.isArray(record.suggestions)
+          ? record.suggestions.map((s, index) =>
+              fixSuggestionParse(s, `${pathLabel}.suggestions[${index}]`),
+            )
+          : (() => {
+              throw new Error(
+                `Invalid process plugin response at ${pathLabel}.suggestions: expected array`,
+              );
+            })(),
   };
 }
 
@@ -473,3 +498,8 @@ export function processPluginRuleFix(
 
 /** Parse a `describe` response body (the `result` object). Exported for tests and tooling. */
 export { describeResultParse as processPluginDescribeResultParse };
+
+/** Parse a single violation object (process plugin JSON). Exported for tests. */
+export function processPluginViolationParse(value: unknown): PolicyViolation {
+  return violationParse(value, 'violation');
+}

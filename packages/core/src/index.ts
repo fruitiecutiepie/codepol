@@ -55,6 +55,7 @@ export type {
   PolicyCheckContext,
   PolicyViolation,
   PolicyViolationFix,
+  PolicyFixSuggestion,
   PolicyDiagnosticLocation,
   RuleMatch,
   // Adapter types

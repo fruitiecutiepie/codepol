@@ -60,6 +60,7 @@ export function violationToLintDiagnostic(
     ruleId: violation.ruleId,
     severity,
     fix: violation.fix,
+    suggestions: violation.suggestions,
   };
 }
 

@@ -383,6 +383,15 @@ export type PolicyViolationFix = {
 };
 
 /**
+ * A single alternative fix (e.g. ESLint "suggest") when multiple valid replacements exist.
+ */
+export type PolicyFixSuggestion = {
+  /** Short label shown in the IDE (e.g. "Rename to camelCase: fooBar") */
+  message: string;
+  fix: PolicyViolationFix;
+};
+
+/**
  * A file span for diagnostics. Used for optional end range and related locations.
  */
 export type PolicyDiagnosticLocation = {
@@ -422,6 +431,8 @@ export type PolicyViolation = {
   relatedLocations?: PolicyDiagnosticLocation[];
   /** Optional fix data for auto-fixable violations (inline ESLint/IDE fixes) */
   fix?: PolicyViolationFix;
+  /** Optional alternative fixes when more than one valid replacement exists */
+  suggestions?: PolicyFixSuggestion[];
 };
 
 /**
@@ -477,6 +488,8 @@ export type LintDiagnostic = {
   relatedLocations?: PolicyDiagnosticLocation[];
   /** Optional fix data for auto-fixable diagnostics */
   fix?: PolicyViolationFix;
+  /** Optional alternative fixes (e.g. ESLint suggestions) */
+  suggestions?: PolicyFixSuggestion[];
 };
 
 /**
