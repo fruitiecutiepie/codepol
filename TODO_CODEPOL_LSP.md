@@ -927,9 +927,28 @@ Why it matters:
   - host-owned runners only
   - a mix of both
 
-Decision needed:
+Decision:
 
-- define whether process plugins should eventually support richer lint-provider-style capabilities, or whether external lint orchestration remains exclusively a daemon-host concern
+- make the asymmetry intentional at the adapter boundary:
+  - process plugins may grow richer editor-neutral semantic capabilities, but they do not become transport-native `lintProvider`, LSP, or extension-UI implementations
+- keep external execution and orchestration host-owned:
+  - the daemon/service host owns process lifecycle, trust policy, scheduling, caching, overlay/session plumbing, cancellation, and multiplexing
+  - adapters only translate normalized service operations to LSP, CLI, or extension RPC surfaces
+- converge built-in analyzers and process plugins at the shared workspace-service contract rather than at transport-specific plugin shapes:
+  - if a built-in or external analyzer can produce normalized diagnostics, fixes, symbols, graph data, or other semantic results, adapters should consume those results uniformly
+- allow the process-plugin protocol to grow only in editor-agnostic directions when needed:
+  - richer metadata
+  - index-aware queries
+  - structured semantic results
+  - explicit commands over stable versioned contracts
+- if a feature exists only to satisfy a particular editor transport or UX, implement it in the daemon host or adapter layer rather than extending the process-plugin protocol
+
+Key invariants:
+
+- the semantic/workspace core owns correctness and durable semantic types
+- the daemon host owns execution, lifecycle, caching, and policy
+- LSP and custom extension RPC are thin adapters, not the place where analyzer semantics live
+- process plugins return normalized semantic data or invoke normalized capabilities; they do not serialize native ESLint rules or editor-specific objects
 
 ## Non-Goals For The First Implementation
 
