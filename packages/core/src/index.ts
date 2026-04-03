@@ -366,7 +366,6 @@ export {
 export {
   violationToLintDiagnostic,
   violationsToLintDiagnostics,
-  treeSitterViolationPositionPreferred,
 } from './adapter/treeCheckAdapter';
 
 // Result
@@ -482,4 +481,5 @@ export type {
 export {
   PROCESS_PLUGIN_PROTOCOL_VERSION,
   processPluginCacheClear,
+  processPluginDescribeResultParse,
 } from './policy/policyPluginProcess';

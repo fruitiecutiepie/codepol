@@ -1,69 +1,9 @@
-import type { SyntaxNode } from 'web-tree-sitter';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
   violationToLintDiagnostic,
   violationsToLintDiagnostics,
-  treeSitterViolationPositionPreferred,
 } from './treeCheckAdapter';
 import type { PolicyViolation } from '../policy/policyTypes';
-import { langAdd } from '../parser/parserLangs';
-import { parserGetForFile, parserInit } from '../parser/parserInit';
-
-function syntaxNodeFindFirst(
-  node: SyntaxNode,
-  type: string,
-): SyntaxNode | undefined {
-  if (node.type === type) {
-    return node;
-  }
-  for (const child of node.namedChildren) {
-    const found = syntaxNodeFindFirst(child, type);
-    if (found) {
-      return found;
-    }
-  }
-  return undefined;
-}
-
-describe('treeSitterViolationPositionPreferred', () => {
-  beforeAll(async () => {
-    langAdd({ langId: 'typescript', fileExtensions: ['.ts'] });
-    await parserInit();
-  });
-
-  it('points at function name, not the function keyword', () => {
-    const source = 'export function myFunc() {\n  return 1;\n}\n';
-    const parser = parserGetForFile('x.ts');
-    if ('Err' in parser) {
-      throw new Error(String(parser.Err));
-    }
-    const tree = parser.Ok.parse(source);
-    const fn = syntaxNodeFindFirst(tree.rootNode, 'function_declaration');
-    expect(fn).toBeDefined();
-    const pos = treeSitterViolationPositionPreferred(fn!);
-    const nameLine = source.slice(0, source.indexOf('myFunc')).split('\n').length;
-    const nameCol =
-      source.split('\n')[nameLine - 1]!.indexOf('myFunc') + 1;
-    expect(pos.line).toBe(nameLine);
-    expect(pos.column).toBe(nameCol);
-  });
-
-  it('points at const binding for arrow function without name', () => {
-    const source = 'const arrowFn = () => 1;\n';
-    const parser = parserGetForFile('x.ts');
-    if ('Err' in parser) {
-      throw new Error(String(parser.Err));
-    }
-    const tree = parser.Ok.parse(source);
-    const decl = syntaxNodeFindFirst(tree.rootNode, 'variable_declarator');
-    expect(decl?.type).toBe('variable_declarator');
-    const arrowFn = decl?.namedChildren.find((n) => n.type === 'arrow_function');
-    expect(arrowFn).toBeDefined();
-    const pos = treeSitterViolationPositionPreferred(arrowFn!);
-    expect(pos.line).toBe(1);
-    expect(pos.column).toBe(source.indexOf('arrowFn') + 1);
-  });
-});
 
 describe('treeCheckAdapter', () => {
   const baseViolation: PolicyViolation = {

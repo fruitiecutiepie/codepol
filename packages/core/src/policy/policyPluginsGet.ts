@@ -126,9 +126,9 @@ function processPluginRulesCreate(runtimeContext: ProcessPluginRuntimeContext): 
     return pluginRuleNew({
       id: descriptor.id,
       capabilities: {
-        treeCheckProvider: {
-          languages: descriptor.languages,
-          check: (rule, context) => {
+      treeCheckProvider: {
+        languages: descriptor.languages,
+        check: (rule, context) => {
             try {
               const violations = processPluginRuleCheck(runtimeContext, descriptor.id, rule, context);
               return Ok(violations);

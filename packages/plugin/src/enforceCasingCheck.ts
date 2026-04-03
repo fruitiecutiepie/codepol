@@ -228,9 +228,23 @@ export function enforceCasingCheck(
       if (nameMatchesAnyCasingStyle(sym.name, allowed)) {
         continue;
       }
+
+      let offset = sym.byteRange.start;
+      const searchSpace = source.slice(offset, sym.byteRange.end);
+      const escapedName = sym.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const match = new RegExp(`\\b${escapedName}\\b`).exec(searchSpace);
+      if (match) {
+        offset += match.index;
+      } else {
+        const fallbackIndex = source.indexOf(sym.name, offset);
+        if (fallbackIndex !== -1 && fallbackIndex <= sym.byteRange.end) {
+          offset = fallbackIndex;
+        }
+      }
+
       const { line, column } = byteOffsetToLineColumn(
         source,
-        sym.byteRange.start,
+        offset,
       );
       violations.push({
         ruleId: rule.id || rule.ruleId,

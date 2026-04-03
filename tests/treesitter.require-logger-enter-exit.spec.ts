@@ -217,6 +217,26 @@ describe('tree-sitter policy check', () => {
       expect(violations[0].message).toContain('logger.enter');
       expect(violations[0].message).toContain('logger.exit');
     });
+
+    it('anchors diagnostics at the function identifier', async () => {
+      const { dir, policy } = tempProjectForLoggerCheck({
+        'ident.ts': `export function myFunc() {
+  return 1;
+}
+`,
+      });
+      tempDirs.push(dir);
+
+      const result = await policyViolationsGetFromDir(policy, dir);
+      expect(isErr(result)).toBe(false);
+
+      const violations = result.Ok!.filter(v => v.filePath.endsWith('ident.ts'));
+      expect(violations).toHaveLength(1);
+      const content = fs.readFileSync(path.join(dir, 'ident.ts'), 'utf8');
+      const line1 = content.split('\n')[0]!;
+      expect(violations[0].line).toBe(1);
+      expect(violations[0].column).toBe(line1.indexOf('myFunc') + 1);
+    });
   });
 
   describe('exclude patterns', () => {

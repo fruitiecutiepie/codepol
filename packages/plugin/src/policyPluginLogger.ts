@@ -6,25 +6,32 @@ import {
   Ok,
   Err,
   isErr,
-  treeSitterViolationPositionPreferred,
 } from '@codepol/core';
 
 const blockNodeTypes = new Set(['statement_block', 'block', 'function_body']);
 
-/**
- * Extracts the function name from a syntax node.
- */
-function functionNameGet(node: SyntaxNode): string {
+function functionNameNodeGet(node: SyntaxNode): SyntaxNode | undefined {
   const nameNode = node.childForFieldName('name');
   if (nameNode) {
-    return nameNode.text;
+    return nameNode;
   }
   const parent = node.parent;
   if (parent && parent.type === 'method_definition') {
     const methodName = parent.childForFieldName('name');
     if (methodName) {
-      return methodName.text;
+      return methodName;
     }
+  }
+  return undefined;
+}
+
+/**
+ * Extracts the function name from a syntax node.
+ */
+function functionNameGet(node: SyntaxNode): string {
+  const nameNode = functionNameNodeGet(node);
+  if (nameNode) {
+    return nameNode.text;
   }
   return '<anonymous>';
 }
@@ -198,13 +205,15 @@ function loggerRuleCheck(
         missing.push(`${logger.identifier}.${logger.exitMethod}`);
       }
       const firstMissing = missing.join(' & ');
-      const { line, column } = treeSitterViolationPositionPreferred(fnNode);
+      const nameNode = functionNameNodeGet(fnNode);
+      const posNode = nameNode || fnNode;
+      const { row, column: col0 } = posNode.startPosition;
       violations.push({
         ruleId: rule.id || rule.ruleId,
         filePath: context.filePath,
         message: `Function ${name} is missing ${firstMissing}`,
-        line,
-        column,
+        line: row + 1,
+        column: col0 + 1,
       });
     }
   });

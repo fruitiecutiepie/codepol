@@ -425,3 +425,6 @@ export function processPluginRuleFix(
     () => undefined,
   );
 }
+
+/** Parse a `describe` response body (the `result` object). Exported for tests and tooling. */
+export { describeResultParse as processPluginDescribeResultParse };
