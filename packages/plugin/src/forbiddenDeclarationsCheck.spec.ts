@@ -289,7 +289,101 @@ export default function() {}
     ).toEqual([]);
   });
 
-  it('reports the caller rule id and anchors syntax violations at the keyword', () => {
+  describe('diagnostic spans', () => {
+    it('highlights the class keyword for class symbol bans', () => {
+      const v = forbiddenDeclarationsCheck(
+        rule,
+        createContext('class Foo {}', { symbols: ['class'] }),
+      )[0]!;
+      expect(v).toMatchObject({
+        line: 1,
+        column: 1,
+        endLine: 1,
+        endColumn: 6,
+      });
+    });
+
+    it('highlights the interface keyword only, not the body block', () => {
+      const source = `interface Foo {
+  x: number;
+}`;
+      const v = forbiddenDeclarationsCheck(
+        rule,
+        createContext(source, { symbols: ['interface'] }),
+      )[0]!;
+      expect(v).toMatchObject({
+        line: 1,
+        column: 1,
+        endLine: 1,
+        endColumn: 10,
+      });
+    });
+
+    it('highlights the import keyword for import bindings', () => {
+      const v = forbiddenDeclarationsCheck(
+        rule,
+        createContext('import foo from "./dep";', { bindings: ['import'] }),
+      )[0]!;
+      expect(v).toMatchObject({
+        line: 1,
+        column: 1,
+        endLine: 1,
+        endColumn: 7,
+      });
+    });
+
+    it('highlights the binding identifier for destructured parameters', () => {
+      const v = forbiddenDeclarationsCheck(
+        rule,
+        createContext('function run({ value }: { value: string }) {}', {
+          symbols: ['parameter'],
+        }),
+      )[0]!;
+      expect(v).toMatchObject({
+        line: 1,
+        column: 16,
+        endLine: 1,
+        endColumn: 21,
+      });
+    });
+
+    it('highlights the catch keyword for catch bindings', () => {
+      const v = forbiddenDeclarationsCheck(
+        rule,
+        createContext('try {} catch ({ message }) {}', { bindings: ['catch'] }),
+      )[0]!;
+      expect(v).toMatchObject({
+        line: 1,
+        column: 8,
+        endLine: 1,
+        endColumn: 13,
+      });
+    });
+
+    it('highlights the var keyword for each variable binding in a list', () => {
+      const violations = forbiddenDeclarationsCheck(
+        rule,
+        createContext('var a = 1, b = 2;', { symbols: ['variable'] }),
+      );
+      expect(violations).toHaveLength(2);
+      expect(violations[0]).toMatchObject({
+        message: `Forbidden declaration 'a' (variable).`,
+        line: 1,
+        column: 1,
+        endLine: 1,
+        endColumn: 4,
+      });
+      expect(violations[1]).toMatchObject({
+        message: `Forbidden declaration 'b' (variable).`,
+        line: 1,
+        column: 1,
+        endLine: 1,
+        endColumn: 4,
+      });
+    });
+  });
+
+  it('reports the caller rule id and highlights the var keyword for syntax bans', () => {
     const customRule: PolicyRule = {
       id: 'custom-forbidden-declarations',
       ruleId: 'fallback-id',
@@ -305,7 +399,11 @@ var legacyValue = 1;`;
 
     expect(violations).toHaveLength(1);
     expect(violations[0]?.ruleId).toBe('custom-forbidden-declarations');
-    expect(violations[0]?.line).toBe(2);
-    expect(violations[0]?.column).toBe(1);
+    expect(violations[0]).toMatchObject({
+      line: 2,
+      column: 1,
+      endLine: 2,
+      endColumn: 4,
+    });
   });
 });

@@ -75,8 +75,11 @@ args.syntax = ["var"]
 
 Diagnostics use the format `Forbidden declaration '<name>' (<label>).`
 
-- Symbol and binding checks anchor at the declaration name when available.
-- Syntax checks anchor at the relevant keyword or token where practical, for example the `var` or `let` keyword.
+- Primary diagnostics highlight the **banned keyword** when the grammar has one (for example `interface`, `class`, `type`, `function`, `enum`, `namespace`, `import`, `catch`, `const`, `let`, `var`). That keeps squiggles on the keyword (for example only `interface` on an `interface` declaration), not across the whole body block.
+- Forms without a dedicated keyword use the **name** span only: method and field names, parameter and enum-member identifiers, and inner names on function expressions.
+- `abstract class` syntax bans highlight the `abstract` keyword; `function*` generator syntax bans highlight `function` through `*`.
+- Import bindings in the same statement share the single `import` keyword span. Multiple `var`/`let` bindings in one list each report with the same `var`/`let` keyword span.
+- When both a broad symbol category and a narrower syntax category match, the narrower syntax label is used and the span follows that syntax rule (for example `abstract` for `abstract-class`).
 - Anonymous default `class` and `function` exports are reported as `default`.
 
 ## Current coverage
