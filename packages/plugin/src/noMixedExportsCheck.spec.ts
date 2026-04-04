@@ -3,6 +3,10 @@ import type { PolicyRule, PolicyCheckContext } from '@codepol/core';
 import ts from 'typescript';
 import { mixedExportsAnalyze, noMixedExportsCheck } from './noMixedExportsCheck';
 
+type NoMixedExportsArgs = {
+  preferredStyle?: 'default' | 'named';
+};
+
 function sourceFileFrom(source: string, filePath = 'test.ts'): ts.SourceFile {
   return ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true);
 }
@@ -93,6 +97,7 @@ describe('noMixedExportsCheck', () => {
   function contextNew(
     filePath: string,
     source: string,
+    ruleArgs: NoMixedExportsArgs = {},
   ): { rule: PolicyRule; context: PolicyCheckContext } {
     const rule: PolicyRule = {
       id: 'no-mixed-test',
@@ -119,7 +124,7 @@ describe('noMixedExportsCheck', () => {
         dir: '/',
         target,
         projectIndex: undefined,
-        ruleArgs: {},
+        ruleArgs,
       },
     };
   }
@@ -160,5 +165,34 @@ describe('noMixedExportsCheck', () => {
     expect(v[0].relatedLocations).toHaveLength(1);
     expect(v[0].relatedLocations![0].line).toBe(3);
     expect(v[0].relatedLocations![0].message).toBe('Additional export in mixed module');
+  });
+
+  it('anchors the violation on the non-preferred default export when preferredStyle is named', () => {
+    const { rule, context } = contextNew(
+      '/x.ts',
+      'export default 1;\nexport const x = 2;\n',
+      { preferredStyle: 'named' },
+    );
+    const v = noMixedExportsCheck(rule, context);
+    expect(v).toHaveLength(1);
+    expect(v[0].line).toBe(1);
+    expect(v[0].message).toContain('prefer named exports');
+    expect(v[0].relatedLocations).toHaveLength(1);
+    expect(v[0].relatedLocations![0].line).toBe(2);
+  });
+
+  it('anchors the violation on the first non-preferred named export when preferredStyle is default', () => {
+    const { rule, context } = contextNew(
+      '/x.ts',
+      'export const x = 1;\nexport const y = 2;\nexport default 3;\n',
+      { preferredStyle: 'default' },
+    );
+    const v = noMixedExportsCheck(rule, context);
+    expect(v).toHaveLength(1);
+    expect(v[0].line).toBe(1);
+    expect(v[0].message).toContain('prefer default exports');
+    expect(v[0].relatedLocations).toHaveLength(2);
+    expect(v[0].relatedLocations![0].line).toBe(2);
+    expect(v[0].relatedLocations![1].line).toBe(3);
   });
 });

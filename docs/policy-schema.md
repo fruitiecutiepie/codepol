@@ -150,12 +150,13 @@ directory = ["kebab-case"]
 ignoreExtensions = true
 ```
 
-For the built-in `no-mixed-exports` rule, no `args` are required. It applies to JavaScript and TypeScript targets matched by the rule (see [no-mixed-exports](/rules/no-mixed-exports)).
+The built-in `no-mixed-exports` rule applies to JavaScript and TypeScript targets matched by the rule (see [no-mixed-exports](/rules/no-mixed-exports)). It accepts an optional `args.preferredStyle = "named" | "default"` to control which side of a mixed module is treated as the preferred export style in diagnostics.
 
 ```toml
 [[rules]]
 ruleId = "@codepol/plugin/no-mixed-exports"
 targets = ["typescript-src"]
+args.preferredStyle = "named"
 ```
 
 ## Plugin Declarations

@@ -119,6 +119,7 @@ args.includeLocalExports = true
 ruleId = "@codepol/plugin/no-mixed-exports"
 severity = "error"
 targets = ["codepol-src"]
+args.preferredStyle = "named"
 
 [[rules]]
 id = "enforce-casing"

@@ -10,6 +10,20 @@ import type {
 } from '@codepol/core';
 import ts from 'typescript';
 
+type NoMixedExportsPreferredStyle = 'default' | 'named';
+
+type NoMixedExportsArgs = {
+  preferredStyle?: NoMixedExportsPreferredStyle;
+};
+
+type ExportStyle = NoMixedExportsPreferredStyle;
+
+type ExportStatement = {
+  index: number;
+  stmt: ts.Statement;
+  style: ExportStyle;
+};
+
 function hasExportModifier(node: ts.Node): boolean {
   if (!ts.canHaveModifiers(node)) return false;
   const modifiers = ts.getModifiers(node);
@@ -22,6 +36,46 @@ function hasDefaultModifier(node: ts.Node): boolean {
   return modifiers?.some((m) => m.kind === ts.SyntaxKind.DefaultKeyword) ?? false;
 }
 
+function statement_export_style_get(stmt: ts.Statement): ExportStyle | undefined {
+  if (ts.isExportAssignment(stmt)) {
+    if (!stmt.isExportEquals) {
+      return 'default';
+    }
+    return undefined;
+  }
+
+  if (ts.isExportDeclaration(stmt)) {
+    if (stmt.moduleSpecifier) {
+      if (stmt.exportClause === undefined) {
+        return 'named';
+      } else if (ts.isNamespaceExport(stmt.exportClause)) {
+        return 'named';
+      } else if (ts.isNamedExports(stmt.exportClause)) {
+        if (stmt.exportClause.elements.length > 0) {
+          return 'named';
+        }
+      }
+    } else if (stmt.exportClause !== undefined) {
+      if (ts.isNamedExports(stmt.exportClause)) {
+        if (stmt.exportClause.elements.length > 0) {
+          return 'named';
+        }
+      }
+    }
+    return undefined;
+  }
+
+  if (hasExportModifier(stmt) && hasDefaultModifier(stmt)) {
+    return 'default';
+  }
+
+  if (hasExportModifier(stmt) && !hasDefaultModifier(stmt)) {
+    return 'named';
+  }
+
+  return undefined;
+}
+
 /**
  * Updates export flags from a single top-level statement (same semantics as the
  * original `mixedExportsAnalyze` walk).
@@ -30,49 +84,14 @@ function applyStatementToExportFlags(
   stmt: ts.Statement,
   flags: { hasDefaultExport: boolean; hasNamedExport: boolean },
 ): void {
-  if (ts.isExportAssignment(stmt)) {
-    if (!stmt.isExportEquals) {
-      flags.hasDefaultExport = true;
-    }
-    return;
-  }
-
-  if (ts.isExportDeclaration(stmt)) {
-    if (stmt.moduleSpecifier) {
-      if (stmt.exportClause === undefined) {
-        flags.hasNamedExport = true;
-      } else if (ts.isNamespaceExport(stmt.exportClause)) {
-        flags.hasNamedExport = true;
-      } else if (ts.isNamedExports(stmt.exportClause)) {
-        if (stmt.exportClause.elements.length > 0) {
-          flags.hasNamedExport = true;
-        }
-      }
-    } else if (stmt.exportClause !== undefined) {
-      if (ts.isNamedExports(stmt.exportClause)) {
-        if (stmt.exportClause.elements.length > 0) {
-          flags.hasNamedExport = true;
-        }
-      }
-    }
-    return;
-  }
-
-  if (hasExportModifier(stmt) && hasDefaultModifier(stmt)) {
+  const style = statement_export_style_get(stmt);
+  if (style === 'default') {
     flags.hasDefaultExport = true;
     return;
   }
-
-  if (hasExportModifier(stmt) && !hasDefaultModifier(stmt)) {
+  if (style === 'named') {
     flags.hasNamedExport = true;
   }
-}
-
-function isExportingStatement(stmt: ts.Statement): boolean {
-  if (ts.isExportAssignment(stmt)) return true;
-  if (ts.isExportDeclaration(stmt)) return true;
-  if (hasExportModifier(stmt)) return true;
-  return false;
 }
 
 function spanFromStatement(
@@ -108,6 +127,66 @@ export function mixedExportsAnalyze(sourceFile: ts.SourceFile): {
 const MIXED_MESSAGE =
   'Do not mix default exports with named exports in the same module; use one style per file.';
 
+function preferred_style_get(ruleArgs: unknown): ExportStyle | undefined {
+  const preferredStyle = (ruleArgs as NoMixedExportsArgs | undefined)?.preferredStyle;
+  if (preferredStyle === 'default' || preferredStyle === 'named') {
+    return preferredStyle;
+  }
+  return undefined;
+}
+
+function mixed_exports_message_get(preferredStyle: ExportStyle | undefined): string {
+  if (preferredStyle === 'default') {
+    return 'Do not mix default exports with named exports in the same module; prefer default exports for mixed modules.';
+  }
+  if (preferredStyle === 'named') {
+    return 'Do not mix default exports with named exports in the same module; prefer named exports for mixed modules.';
+  }
+  return MIXED_MESSAGE;
+}
+
+function export_statements_collect(sourceFile: ts.SourceFile): ExportStatement[] {
+  const statements: ExportStatement[] = [];
+  for (let i = 0; i < sourceFile.statements.length; i++) {
+    const stmt = sourceFile.statements[i]!;
+    const style = statement_export_style_get(stmt);
+    if (!style) continue;
+    statements.push({ index: i, stmt, style });
+  }
+  return statements;
+}
+
+function primary_export_statement_get(
+  exportStatements: ExportStatement[],
+  preferredStyle: ExportStyle | undefined,
+): ExportStatement | undefined {
+  const hasDefaultExport = exportStatements.some((stmt) => stmt.style === 'default');
+  const hasNamedExport = exportStatements.some((stmt) => stmt.style === 'named');
+  if (!hasDefaultExport || !hasNamedExport) {
+    return undefined;
+  }
+
+  if (preferredStyle) {
+    return exportStatements.find((stmt) => stmt.style !== preferredStyle);
+  }
+
+  const flags = { hasDefaultExport: false, hasNamedExport: false };
+  for (const exportStmt of exportStatements) {
+    const wasMixed = flags.hasDefaultExport && flags.hasNamedExport;
+    if (exportStmt.style === 'default') {
+      flags.hasDefaultExport = true;
+    } else {
+      flags.hasNamedExport = true;
+    }
+    const isMixed = flags.hasDefaultExport && flags.hasNamedExport;
+    if (isMixed && !wasMixed) {
+      return exportStmt;
+    }
+  }
+
+  return undefined;
+}
+
 export function noMixedExportsCheck(
   rule: PolicyRule,
   context: PolicyCheckContext,
@@ -119,33 +198,26 @@ export function noMixedExportsCheck(
     true,
   );
 
-  const flags = { hasDefaultExport: false, hasNamedExport: false };
-  let primaryIndex = -1;
+  const preferredStyle = preferred_style_get(context.ruleArgs);
+  const exportStatements = export_statements_collect(sourceFile);
+  const primaryExportStatement = primary_export_statement_get(
+    exportStatements,
+    preferredStyle,
+  );
 
-  const statements = sourceFile.statements;
-  for (let i = 0; i < statements.length; i++) {
-    const stmt = statements[i]!;
-    const wasMixed = flags.hasDefaultExport && flags.hasNamedExport;
-    applyStatementToExportFlags(stmt, flags);
-    const isMixed = flags.hasDefaultExport && flags.hasNamedExport;
-    if (isMixed && !wasMixed) {
-      primaryIndex = i;
-      break;
-    }
-  }
-
-  if (primaryIndex < 0) {
+  if (!primaryExportStatement) {
     return [];
   }
 
-  const primaryStmt = statements[primaryIndex]!;
+  const primaryStmt = primaryExportStatement.stmt;
   const primarySpan = spanFromStatement(sourceFile, primaryStmt);
 
   const relatedLocations: PolicyDiagnosticLocation[] = [];
-  for (let j = primaryIndex + 1; j < statements.length; j++) {
-    const stmt = statements[j]!;
-    if (!isExportingStatement(stmt)) continue;
-    const span = spanFromStatement(sourceFile, stmt);
+  const relatedStatements = preferredStyle
+    ? exportStatements.filter((stmt) => stmt.index !== primaryExportStatement.index)
+    : exportStatements.filter((stmt) => stmt.index > primaryExportStatement.index);
+  for (const relatedStatement of relatedStatements) {
+    const span = spanFromStatement(sourceFile, relatedStatement.stmt);
     relatedLocations.push({
       filePath: context.filePath,
       line: span.line,
@@ -160,7 +232,7 @@ export function noMixedExportsCheck(
     {
       ruleId: rule.id || rule.ruleId,
       filePath: context.filePath,
-      message: MIXED_MESSAGE,
+      message: mixed_exports_message_get(preferredStyle),
       line: primarySpan.line,
       column: primarySpan.column,
       endLine: primarySpan.endLine,

@@ -39,6 +39,7 @@ files = ["src/**/*.ts"]
 id = "no-mixed-exports"
 ruleId = "@codepol/plugin/no-mixed-exports"
 targets = ["src"]
+args.preferredStyle = "named"
 `;
 
     fs.writeFileSync(path.join(testDir, 'codepol.toml'), configContent, 'utf8');
@@ -68,9 +69,10 @@ targets = ["src"]
     const mixed = treeViolations.filter(
       (v) =>
         v.ruleId === 'no-mixed-exports' &&
-        v.message.includes('Do not mix'),
+        v.message.includes('prefer named exports'),
     );
     expect(mixed.length).toBeGreaterThanOrEqual(1);
     expect(mixed[0].filePath).toContain('mixed.ts');
+    expect(mixed[0].line).toBe(1);
   });
 });

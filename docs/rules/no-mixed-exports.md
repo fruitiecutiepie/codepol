@@ -18,7 +18,12 @@ Files that use only named exports or only a default export are allowed.
 
 ## Configuration
 
-No rule-specific arguments. Add a `[[rules]]` entry with `ruleId = "@codepol/plugin/no-mixed-exports"` and matching `targets`.
+This rule accepts an optional `args.preferredStyle` setting:
+
+- `"named"`: when a file mixes styles, anchor the primary violation on the default export.
+- `"default"`: when a file mixes styles, anchor the primary violation on the first named export.
+
+If omitted, the rule keeps its default behavior and anchors the violation on the statement that first makes the module mixed.
 
 ### Example
 
@@ -34,11 +39,14 @@ files = ["src/**/*.ts", "src/**/*.tsx"]
 [[rules]]
 ruleId = "@codepol/plugin/no-mixed-exports"
 targets = ["app"]
+args.preferredStyle = "named"
 ```
 
 ## Reporting
 
-The primary violation is anchored on the **first top-level statement** that makes the module mixed (the statement that introduces the second export style). Any **further export statements** after that line are listed as related locations (and in ESLint appear as additional diagnostics for the same rule).
+Without `args.preferredStyle`, the primary violation is anchored on the **first top-level statement** that makes the module mixed (the statement that introduces the second export style). Any **further export statements** after that line are listed as related locations.
+
+With `args.preferredStyle`, the primary violation is anchored on the **first export statement that uses the non-preferred style**, and the other export statements in the file are listed as related locations. In ESLint, related locations appear as additional diagnostics for the same rule.
 
 ## See also
 

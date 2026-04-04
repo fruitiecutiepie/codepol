@@ -52,9 +52,9 @@ import {
   treeCheckFixesApply,
   workspaceEditPlanCreateFromFix,
 } from './edits';
-import { ensureWorkspaceRuntimeReady } from './runtime';
+import { builtinPluginsRefresh, ensureWorkspaceRuntimeReady } from './runtime';
 
-export { ensureWorkspaceRuntimeReady } from './runtime';
+export { builtinPluginsRefresh, ensureWorkspaceRuntimeReady } from './runtime';
 
 const ESLINT_CONFIG_EXTENSIONS = ['.js', '.mjs', '.cjs', '.ts', '.mts', '.cts'];
 const BIOME_FILE_EXTENSIONS = ['.js', '.mjs', '.cjs', '.jsx', '.ts', '.mts', '.cts', '.tsx'];
@@ -766,6 +766,7 @@ async function workspaceAnalysisRun(
 ): Promise<WorkspaceAnalysis> {
   await ensureWorkspaceRuntimeReady();
   workspaceStateAnalysisInvalidate(state);
+  builtinPluginsRefresh();
 
   const policy = state.config as PolicyFile;
   const pluginRulesResult = await policyPluginsGet(policy, state.rootPath, {
