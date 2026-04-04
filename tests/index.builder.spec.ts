@@ -83,6 +83,12 @@ describe('index builder', () => {
         expected: { name: 'goodMethod', kind: 'method' },
       },
       {
+        label: 'interface method signatures',
+        fileName: 'sym_matrix_interface_method.ts',
+        source: 'export interface MethodHost { goodMethod(): void; }\n',
+        expected: { name: 'goodMethod', kind: 'method' },
+      },
+      {
         label: 'variables',
         fileName: 'sym_matrix_variable.ts',
         source: 'let goodVariable = 1;\n',
@@ -98,6 +104,12 @@ describe('index builder', () => {
         label: 'class fields',
         fileName: 'sym_matrix_field.ts',
         source: "export class FieldHost { goodField: string = 'x'; }\n",
+        expected: { name: 'goodField', kind: 'field' },
+      },
+      {
+        label: 'type literal fields',
+        fileName: 'sym_matrix_type_literal_field.ts',
+        source: 'export type FieldHost = { goodField: string };\n',
         expected: { name: 'goodField', kind: 'field' },
       },
       {
@@ -117,6 +129,12 @@ describe('index builder', () => {
         fileName: 'sym_matrix_enum_member.ts',
         source: "export enum GoodEnumMembers { FirstMember = 'first' }\n",
         expected: { name: 'FirstMember', kind: 'enumMember' },
+      },
+      {
+        label: 'abstract method signatures',
+        fileName: 'sym_matrix_abstract_method.ts',
+        source: 'export abstract class AbstractHost { abstract goodMethod(): void; }\n',
+        expected: { name: 'goodMethod', kind: 'method' },
       },
       {
         label: 'module declarations',
@@ -478,6 +496,32 @@ class MyClass {
       // Class scopes should exist
       const classScopes = scopes.filter(s => s.kind === 'class');
       expect(classScopes.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('should build namespace, module, and type scopes for declaration-only structures', () => {
+      const file = path.join(testDir, 'scope_declarations.ts');
+      fs.writeFileSync(file, `
+namespace Foo.Bar {
+  export function nested() {}
+}
+
+declare module "pkg/internal" {
+  export interface RemoteConfig {
+    remoteField: string;
+  }
+}
+
+type LocalShape = {
+  localField: string;
+};
+`);
+
+      const { index } = projectIndexBuildSync({ files: [file], dir: testDir });
+
+      const scopes = index.scopesInFileGet(file);
+      expect(scopes.some((scope) => scope.kind === 'namespace')).toBe(true);
+      expect(scopes.some((scope) => scope.kind === 'module')).toBe(true);
+      expect(scopes.some((scope) => scope.kind === 'type')).toBe(true);
     });
   });
 

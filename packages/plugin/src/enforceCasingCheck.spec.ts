@@ -199,6 +199,14 @@ describe('enforceCasingCheck', () => {
         expectedKind: 'method',
       },
       {
+        label: 'interface method signature',
+        fileName: 'sym-kind-interface-method-bad.ts',
+        source: 'export interface MethodHost { BadMethod(): void; }\n',
+        symbols: { method: ['camelCase'] },
+        expectedName: 'BadMethod',
+        expectedKind: 'method',
+      },
+      {
         label: 'variable',
         fileName: 'sym-kind-variable-bad.ts',
         source: 'let BadVariable = 1;\n',
@@ -218,6 +226,14 @@ describe('enforceCasingCheck', () => {
         label: 'field',
         fileName: 'sym-kind-field-bad.ts',
         source: "export class FieldHost { BadField: string = 'x'; }\n",
+        symbols: { field: ['camelCase'] },
+        expectedName: 'BadField',
+        expectedKind: 'field',
+      },
+      {
+        label: 'type literal field signature',
+        fileName: 'sym-kind-type-field-bad.ts',
+        source: 'export type FieldHost = { BadField: string };\n',
         symbols: { field: ['camelCase'] },
         expectedName: 'BadField',
         expectedKind: 'field',
@@ -285,6 +301,12 @@ describe('enforceCasingCheck', () => {
         symbols: { method: ['camelCase'] },
       },
       {
+        label: 'interface method signature',
+        fileName: 'sym-kind-interface-method-ok.ts',
+        source: 'export interface MethodHost { goodMethod(): void; }\n',
+        symbols: { method: ['camelCase'] },
+      },
+      {
         label: 'variable',
         fileName: 'sym-kind-variable-ok.ts',
         source: 'let goodVariable = 1;\n',
@@ -300,6 +322,12 @@ describe('enforceCasingCheck', () => {
         label: 'field',
         fileName: 'sym-kind-field-ok.ts',
         source: "export class FieldHost { goodField: string = 'x'; }\n",
+        symbols: { field: ['camelCase'] },
+      },
+      {
+        label: 'type literal field signature',
+        fileName: 'sym-kind-type-field-ok.ts',
+        source: 'export type FieldHost = { goodField: string };\n',
         symbols: { field: ['camelCase'] },
       },
       {

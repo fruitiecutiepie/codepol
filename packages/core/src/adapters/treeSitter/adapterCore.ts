@@ -405,6 +405,11 @@ function declarationScopeIdGet(
     case 'catch_clause':
       return innermost;
 
+    case 'method_signature':
+    case 'abstract_method_signature':
+    case 'property_signature':
+      return innermost;
+
     default:
       return innermost;
   }

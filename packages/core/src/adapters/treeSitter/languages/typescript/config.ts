@@ -105,6 +105,11 @@ export function typescriptConfigCreate(language: Language): LangConfig {
       byNodeType: {
         'class_declaration': 'class' as const,
         'abstract_class_declaration': 'class' as const,
+        'interface_declaration': 'type' as const,
+        'type_alias_declaration': 'type' as const,
+        'object_type': 'type' as const,
+        'internal_module': 'namespace' as const,
+        'module': 'module' as const,
         'function_declaration': 'function' as const,
         'generator_function_declaration': 'function' as const,
         'function_expression': 'function' as const,

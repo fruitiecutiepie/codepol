@@ -9,6 +9,11 @@ export const SCOPES_QUERY = `
 ; --- Type / class scopes ---
 (class_declaration) @scope
 (abstract_class_declaration) @scope
+(interface_declaration) @scope
+(type_alias_declaration) @scope
+(object_type) @scope
+(internal_module) @scope
+(module) @scope
 
 ; --- Function scopes ---
 (function_declaration) @scope

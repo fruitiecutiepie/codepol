@@ -50,6 +50,30 @@ export const SYMBOLS_QUERY = `
 (method_definition
   name: (number) @name) @decl.method
 
+(method_signature
+  name: (property_identifier) @name) @decl.method
+
+(method_signature
+  name: (private_property_identifier) @name) @decl.method
+
+(method_signature
+  name: (string) @name) @decl.method
+
+(method_signature
+  name: (number) @name) @decl.method
+
+(abstract_method_signature
+  name: (property_identifier) @name) @decl.method
+
+(abstract_method_signature
+  name: (private_property_identifier) @name) @decl.method
+
+(abstract_method_signature
+  name: (string) @name) @decl.method
+
+(abstract_method_signature
+  name: (number) @name) @decl.method
+
 ; =========================
 ;  Fields
 ; =========================
@@ -64,6 +88,18 @@ export const SYMBOLS_QUERY = `
   name: (string) @name) @decl.field
 
 (public_field_definition
+  name: (number) @name) @decl.field
+
+(property_signature
+  name: (property_identifier) @name) @decl.field
+
+(property_signature
+  name: (private_property_identifier) @name) @decl.field
+
+(property_signature
+  name: (string) @name) @decl.field
+
+(property_signature
   name: (number) @name) @decl.field
 
 ; =========================
