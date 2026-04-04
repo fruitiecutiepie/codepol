@@ -11,5 +11,3 @@ export const forbiddenDeclarationsRule: CodepolPluginRule = pluginRuleNew({
     }),
   },
 });
-
-export default forbiddenDeclarationsRule;

@@ -1057,6 +1057,66 @@ const result = compute();
     expect(defaultBinding!.resolvedExportId).toBeDefined();
   });
 
+  it('should resolve default abstract class exports', () => {
+    const abstractExporter = path.join(testDir, 'default_abstract_exporter.ts');
+    fs.writeFileSync(abstractExporter, `
+export default abstract class BaseService {}
+`);
+
+    const abstractConsumer = path.join(testDir, 'default_abstract_consumer.ts');
+    fs.writeFileSync(abstractConsumer, `
+import BaseService from './default_abstract_exporter';
+
+class DerivedService extends BaseService {}
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [abstractExporter, abstractConsumer],
+      dir: testDir,
+    });
+
+    const exports = index.fileExportsGet(abstractExporter);
+    const defaultExport = exports.find(e => e.isDefault);
+    expect(defaultExport).toBeDefined();
+    expect(defaultExport?.exportedName).toBe('default');
+
+    const bindings = index.importBindingsGet(abstractConsumer);
+    const defaultBinding = bindings.find(b => b.isDefault);
+    expect(defaultBinding).toBeDefined();
+    expect(defaultBinding!.resolvedExportId).toBeDefined();
+  });
+
+  it('should resolve default generator function exports', () => {
+    const generatorExporter = path.join(testDir, 'default_generator_exporter.ts');
+    fs.writeFileSync(generatorExporter, `
+export default function* createNumbers() {
+  yield 1;
+}
+`);
+
+    const generatorConsumer = path.join(testDir, 'default_generator_consumer.ts');
+    fs.writeFileSync(generatorConsumer, `
+import createNumbers from './default_generator_exporter';
+
+const iterator = createNumbers();
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [generatorExporter, generatorConsumer],
+      dir: testDir,
+    });
+
+    const exports = index.fileExportsGet(generatorExporter);
+    const defaultExport = exports.find(e => e.isDefault);
+    expect(defaultExport).toBeDefined();
+    expect(defaultExport?.exportedName).toBe('default');
+
+    const bindings = index.importBindingsGet(generatorConsumer);
+    const defaultBinding = bindings.find(b => b.isDefault);
+    expect(defaultBinding).toBeDefined();
+    expect(defaultBinding!.resolvedExportId).toBeDefined();
+  });
+
   // ==========================================================================
   // CommonJS require() imports
   // ==========================================================================
@@ -1091,6 +1151,34 @@ const result = mod();
     expect(requireBinding).toBeDefined();
     expect(requireBinding!.isDefault).toBe(true);
     expect(requireBinding!.resolvedModulePath).toBe(cjsExporter);
+    expect(requireBinding!.resolvedExportId).toBeDefined();
+  });
+
+  it('should resolve import-equals require() to default exports', () => {
+    const requireExporter = path.join(testDir, 'import_equals_exporter.ts');
+    fs.writeFileSync(requireExporter, `
+export default function main() {
+  return 42;
+}
+`);
+
+    const requireConsumer = path.join(testDir, 'import_equals_consumer.ts');
+    fs.writeFileSync(requireConsumer, `
+import main = require('./import_equals_exporter');
+
+const answer = main();
+`);
+
+    const { index } = projectIndexBuildSync({
+      files: [requireExporter, requireConsumer],
+      dir: testDir,
+    });
+
+    const bindings = index.importBindingsGet(requireConsumer);
+    const requireBinding = bindings.find(b => b.moduleSpec === './import_equals_exporter');
+    expect(requireBinding).toBeDefined();
+    expect(requireBinding!.isDefault).toBe(true);
+    expect(requireBinding!.resolvedModulePath).toBe(requireExporter);
     expect(requireBinding!.resolvedExportId).toBeDefined();
   });
 

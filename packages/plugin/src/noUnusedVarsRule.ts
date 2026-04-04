@@ -12,5 +12,3 @@ export const noUnusedVarsRule: CodepolPluginRule = pluginRuleNew({
     requiresProjectIndex: true,
   },
 });
-
-export default noUnusedVarsRule;

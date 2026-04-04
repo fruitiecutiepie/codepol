@@ -55,6 +55,10 @@ export const EXPORTS_QUERY = `
   declaration: (internal_module
     name: (identifier) @export.decl_name)) @export.declaration
 
+(export_statement
+  declaration: (internal_module
+    name: (nested_identifier) @export.decl_name)) @export.declaration
+
 ; =========================
 ;  Named Exports
 ; =========================
@@ -83,6 +87,18 @@ export const EXPORTS_QUERY = `
 (export_statement
   "default"
   (function_declaration
+    name: (identifier) @export.default_name)) @export.default
+
+; export default abstract class Foo { ... }
+(export_statement
+  "default"
+  (abstract_class_declaration
+    name: (type_identifier) @export.default_name)) @export.default
+
+; export default function* gen() { ... }
+(export_statement
+  "default"
+  (generator_function_declaration
     name: (identifier) @export.default_name)) @export.default
 
 ; =========================

@@ -85,6 +85,7 @@ export function typescriptConfigCreate(language: Language): LangConfig {
         'type': 'type' as const,
         'enum': 'enum' as const,
         'enumMember': 'enumMember' as const,
+        'module': 'module' as const,
         'namespace': 'namespace' as const,
         'function': 'function' as const,
         'generator': 'function' as const,

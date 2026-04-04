@@ -22,6 +22,10 @@ export const SYMBOLS_QUERY = `
 (function_declaration
   name: (identifier) @name) @decl.function
 
+; Ambient/overload signatures: declare function foo(): void;
+(function_signature
+  name: (identifier) @name) @decl.function
+
 ; Generator functions: function* gen() {}
 (generator_function_declaration
   name: (identifier) @name) @decl.generator
@@ -37,12 +41,30 @@ export const SYMBOLS_QUERY = `
 (method_definition
   name: (property_identifier) @name) @decl.method
 
+(method_definition
+  name: (private_property_identifier) @name) @decl.method
+
+(method_definition
+  name: (string) @name) @decl.method
+
+(method_definition
+  name: (number) @name) @decl.method
+
 ; =========================
 ;  Fields
 ; =========================
 
 (public_field_definition
   name: (property_identifier) @name) @decl.field
+
+(public_field_definition
+  name: (private_property_identifier) @name) @decl.field
+
+(public_field_definition
+  name: (string) @name) @decl.field
+
+(public_field_definition
+  name: (number) @name) @decl.field
 
 ; =========================
 ;  Variables (var/let/const)
@@ -94,6 +116,19 @@ export const SYMBOLS_QUERY = `
 (internal_module
   name: (identifier) @name) @decl.namespace
 
+(internal_module
+  name: (nested_identifier) @name) @decl.namespace
+
+(module
+  name: (identifier) @name) @decl.module
+
+(module
+  name: (nested_identifier) @name) @decl.module
+
+(module
+  name: (string
+    (string_fragment) @name)) @decl.module
+
 ; =========================
 ;  Import bindings
 ; =========================
@@ -109,5 +144,13 @@ export const SYMBOLS_QUERY = `
 ; Default imports: import foo from "module"
 ; The identifier is directly under import_clause when it's a default import
 (import_clause
+  (identifier) @name) @decl.import_binding
+
+; import foo = require("module")
+(import_require_clause
+  (identifier) @name) @decl.import_binding
+
+; import Foo = Bar.Baz
+(import_alias
   (identifier) @name) @decl.import_binding
 `;

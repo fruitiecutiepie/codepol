@@ -89,6 +89,19 @@ function statement_removal_end_get(source: string, end: number): number {
   return cursor;
 }
 
+/** Byte offset of the first character on the same line as `byteOffset` (start of file if none). */
+function line_start_get(source: string, byteOffset: number): number {
+  let i = byteOffset;
+  while (i > 0) {
+    const ch = source[i - 1];
+    if (ch === '\n' || ch === '\r') {
+      return i;
+    }
+    i--;
+  }
+  return 0;
+}
+
 function local_edits_named_preferred(
   filePath: string,
   source: string,
@@ -125,7 +138,7 @@ function local_edits_named_preferred(
       return undefined;
     }
     const idText = expr.text;
-    const start = defaultStmt.getStart(sourceFile);
+    const start = line_start_get(source, defaultStmt.getStart(sourceFile));
     const end = statement_removal_end_get(source, defaultStmt.getEnd());
 
     if (has_named_export_of_name(sourceFile, idText)) {

@@ -33,6 +33,12 @@ export const IMPORTS_QUERY = `
     (identifier) @import.default_name)
   source: (string) @import.source) @import.default
 
+; import foo = require("module")
+(import_statement
+  (import_require_clause
+    (identifier) @import.default_name
+    source: (string) @import.source)) @import.default
+
 ; =========================
 ;  Namespace Imports
 ; =========================

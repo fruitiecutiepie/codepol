@@ -116,6 +116,26 @@ describe('noMixedExportsFix', () => {
     expect(apply_edits(aSrc, localEdits)).toBe('export const rule = 1;\n');
   });
 
+  it('preferredStyle named: deletes the full line including leading indent', () => {
+    const aPath = path.join(testDir, 'named-delete-indented.ts');
+    const aSrc = 'export const rule = 1;\n  export default rule;\n';
+    fs.writeFileSync(aPath, aSrc, 'utf8');
+
+    const { index } = projectIndexBuildSync({
+      files: [aPath],
+      dir: testDir,
+    });
+    const { rule, context } = contextNew(aPath, aSrc, index, {
+      preferredStyle: 'named',
+    });
+    const v = noMixedExportsCheck(rule, context);
+    expect(v).toHaveLength(1);
+    expect(v[0].fix?.edits).toBeDefined();
+
+    const localEdits = v[0].fix!.edits!.filter((edit) => edit.filePath === aPath);
+    expect(apply_edits(aSrc, localEdits)).toBe('export const rule = 1;\n');
+  });
+
   it('preferredStyle default: safe single named export + default id ref', () => {
     const aPath = path.join(testDir, 'c.ts');
     const bPath = path.join(testDir, 'd.ts');

@@ -375,12 +375,14 @@ function declarationScopeIdGet(
 
   switch (declNode.type) {
     case 'function_declaration':
+    case 'function_signature':
     case 'generator_function_declaration':
     case 'class_declaration':
     case 'abstract_class_declaration':
     case 'interface_declaration':
     case 'type_alias_declaration':
     case 'enum_declaration':
+    case 'module':
     case 'internal_module':
     case 'method_definition':
       return scopeById.get(innermost)?.parent ?? scopes[0]!.id;
@@ -391,6 +393,8 @@ function declarationScopeIdGet(
     case 'import_specifier':
     case 'namespace_import':
     case 'import_clause':
+    case 'import_require_clause':
+    case 'import_alias':
       return scopes[0]!.id;
 
     case 'variable_declarator':
@@ -444,7 +448,9 @@ function symbolBindingBaseGet(
 ): SymbolBindingInfo | undefined {
   if (declNode.type === 'import_specifier' ||
       declNode.type === 'namespace_import' ||
-      declNode.type === 'import_clause') {
+      declNode.type === 'import_clause' ||
+      declNode.type === 'import_require_clause' ||
+      declNode.type === 'import_alias') {
     return {
       bindingKind: 'import',
       hoisted: true,
@@ -461,6 +467,7 @@ function symbolBindingBaseGet(
   }
 
   if (declNode.type === 'function_declaration' ||
+      declNode.type === 'function_signature' ||
       declNode.type === 'generator_function_declaration' ||
       declNode.type === 'type_alias_declaration' ||
       declNode.type === 'interface_declaration') {
@@ -473,6 +480,7 @@ function symbolBindingBaseGet(
   if (declNode.type === 'class_declaration' ||
       declNode.type === 'abstract_class_declaration' ||
       declNode.type === 'enum_declaration' ||
+      declNode.type === 'module' ||
       declNode.type === 'internal_module' ||
       declNode.type === 'method_definition') {
     return {

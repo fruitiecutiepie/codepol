@@ -47,7 +47,7 @@ function wordsToStyle(words: string[], style: CasingStyleName): string {
   }
 }
 
-export type EnforceCasingReplacement = {
+type EnforceCasingReplacement = {
   style: CasingStyleName;
   text: string;
 };

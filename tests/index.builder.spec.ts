@@ -71,6 +71,12 @@ describe('index builder', () => {
         expected: { name: 'goodFunction', kind: 'function' },
       },
       {
+        label: 'function signatures',
+        fileName: 'sym_matrix_function_signature.ts',
+        source: 'declare function declaredFunction(name: string): void;\n',
+        expected: { name: 'declaredFunction', kind: 'function' },
+      },
+      {
         label: 'class methods',
         fileName: 'sym_matrix_method.ts',
         source: 'export class MethodHost { goodMethod() { return 1; } }\n',
@@ -111,6 +117,30 @@ describe('index builder', () => {
         fileName: 'sym_matrix_enum_member.ts',
         source: "export enum GoodEnumMembers { FirstMember = 'first' }\n",
         expected: { name: 'FirstMember', kind: 'enumMember' },
+      },
+      {
+        label: 'module declarations',
+        fileName: 'sym_matrix_module.ts',
+        source: 'declare module "pkg/internal" { export const value: number; }\n',
+        expected: { name: 'pkg/internal', kind: 'module' },
+      },
+      {
+        label: 'nested namespace declarations',
+        fileName: 'sym_matrix_namespace.ts',
+        source: 'namespace Foo.Bar { export const value = 1; }\n',
+        expected: { name: 'Foo.Bar', kind: 'namespace' },
+      },
+      {
+        label: 'import equals require bindings',
+        fileName: 'sym_matrix_import_require.ts',
+        source: "import main = require('./dep');\nvoid main;\n",
+        expected: { name: 'main', kind: 'variable' },
+      },
+      {
+        label: 'import alias bindings',
+        fileName: 'sym_matrix_import_alias.ts',
+        source: 'declare namespace Foo { const Bar: number; }\nimport Alias = Foo.Bar;\nvoid Alias;\n',
+        expected: { name: 'Alias', kind: 'variable' },
       },
     ])('should extract $label with the expected symbol kind', ({ fileName, source, expected }) => {
       const symbols = symbolsFromSource(fileName, source);
@@ -156,6 +186,24 @@ export async function fetchData() {
       expect(fetchData).toBeDefined();
       expect(fetchData!.kind).toBe('function');
       expect(fetchData!.flags & SymbolFlags.Exported).toBeTruthy();
+    });
+
+    it('should extract fields and methods with non-identifier names', () => {
+      const file = path.join(testDir, 'sym_non_identifier_members.ts');
+      fs.writeFileSync(file, `
+class ExoticMembers {
+  #secret = 1;
+  "run"() { return this.#secret; }
+  42 = 2;
+}
+`);
+
+      const { index } = projectIndexBuildSync({ files: [file], dir: testDir });
+      const symbols = index.symbolsInFileGet(file);
+
+      expect(symbols.find((symbol) => symbol.name === '#secret' && symbol.kind === 'field')).toBeDefined();
+      expect(symbols.find((symbol) => symbol.name === '"run"' && symbol.kind === 'method')).toBeDefined();
+      expect(symbols.find((symbol) => symbol.name === '42' && symbol.kind === 'field')).toBeDefined();
     });
 
     it('should detect async flag on async function declarations', () => {
