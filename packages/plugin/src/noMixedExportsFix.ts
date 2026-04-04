@@ -75,6 +75,20 @@ function has_named_export_of_name(sourceFile: ts.SourceFile, name: string): bool
   return false;
 }
 
+function statement_removal_end_get(source: string, end: number): number {
+  let cursor = end;
+  while (cursor < source.length && (source[cursor] === ' ' || source[cursor] === '\t')) {
+    cursor++;
+  }
+  if (source[cursor] === '\r') {
+    cursor++;
+  }
+  if (source[cursor] === '\n') {
+    cursor++;
+  }
+  return cursor;
+}
+
 function local_edits_named_preferred(
   filePath: string,
   source: string,
@@ -112,7 +126,7 @@ function local_edits_named_preferred(
     }
     const idText = expr.text;
     const start = defaultStmt.getStart(sourceFile);
-    const end = defaultStmt.getEnd();
+    const end = statement_removal_end_get(source, defaultStmt.getEnd());
 
     if (has_named_export_of_name(sourceFile, idText)) {
       return [{ filePath, byteRange: { start, end }, text: '' }];

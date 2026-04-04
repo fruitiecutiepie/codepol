@@ -11,6 +11,17 @@ import {
 } from '@codepol/core';
 import { noMixedExportsCheck } from './noMixedExportsCheck';
 
+function apply_edits(source: string, edits: Array<{ byteRange: { start: number; end: number }; text: string }>): string {
+  let result = source;
+  for (const edit of [...edits].sort((a, b) => b.byteRange.start - a.byteRange.start)) {
+    result =
+      result.slice(0, edit.byteRange.start) +
+      edit.text +
+      result.slice(edit.byteRange.end);
+  }
+  return result;
+}
+
 describe('noMixedExportsFix', () => {
   let testDir: string;
 
@@ -83,6 +94,26 @@ describe('noMixedExportsFix', () => {
     const files = new Set(v[0].fix!.edits!.map((e) => e.filePath));
     expect(files.has(aPath)).toBe(true);
     expect(files.has(bPath)).toBe(true);
+  });
+
+  it('preferredStyle named: deletes the redundant default export line', () => {
+    const aPath = path.join(testDir, 'named-delete.ts');
+    const aSrc = 'export const rule = 1;\nexport default rule;\n';
+    fs.writeFileSync(aPath, aSrc, 'utf8');
+
+    const { index } = projectIndexBuildSync({
+      files: [aPath],
+      dir: testDir,
+    });
+    const { rule, context } = contextNew(aPath, aSrc, index, {
+      preferredStyle: 'named',
+    });
+    const v = noMixedExportsCheck(rule, context);
+    expect(v).toHaveLength(1);
+    expect(v[0].fix?.edits).toBeDefined();
+
+    const localEdits = v[0].fix!.edits!.filter((edit) => edit.filePath === aPath);
+    expect(apply_edits(aSrc, localEdits)).toBe('export const rule = 1;\n');
   });
 
   it('preferredStyle default: safe single named export + default id ref', () => {

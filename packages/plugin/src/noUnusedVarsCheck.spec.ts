@@ -165,4 +165,32 @@ demo();
     expect(messages.some((message) => message.includes(`'end'`))).toBe(false);
     expect(messages.some((message) => message.includes(`'range'`))).toBe(false);
   });
+
+  it('treats explicit object-literal property values as reads', () => {
+    const file = path.join(testDir, 'object-pair.ts');
+    const source = `
+function noUnusedVarsCheck() {
+  return 1;
+}
+
+function demo() {
+  const config = {
+    check: noUnusedVarsCheck,
+  };
+  return config.check();
+}
+
+demo();
+`;
+
+    fs.writeFileSync(file, source);
+
+    const { index } = projectIndexBuildSync({ files: [file], dir: testDir });
+    const { rule, context } = createContext(file, source, index);
+    const violations = noUnusedVarsCheck(rule, context);
+    const messages = violations.map((violation) => violation.message);
+
+    expect(messages.some((message) => message.includes(`'noUnusedVarsCheck'`))).toBe(false);
+    expect(messages.some((message) => message.includes(`'config'`))).toBe(false);
+  });
 });

@@ -21,8 +21,9 @@ import { TYPE_RELATIONS_QUERY } from './queries/typeRelations';
  * Filters out identifiers that are not true references.
  */
 function typescriptRefFilter(ctx: RefFilterContext): boolean {
-  // Skip property keys in object literals
-  if (ctx.parentType === 'pair' || ctx.parentType === 'property_signature') {
+  // Skip property signatures in type positions.
+  // Object-literal pair values like { check: noUnusedVarsCheck } are real reads.
+  if (ctx.parentType === 'property_signature') {
     return false;
   }
 
