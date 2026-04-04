@@ -123,6 +123,25 @@ function = ["camelCase"]
 `;
 }
 
+function forbiddenDeclarationsConfigContentCreate(): string {
+  return `[[plugins]]
+id = "@codepol/plugin"
+source = { kind = "builtin" }
+
+[targets.src]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[[rules]]
+id = "forbidden-declarations"
+ruleId = "@codepol/plugin/forbidden-declarations"
+targets = ["src"]
+args.symbols = ["class"]
+args.bindings = ["import"]
+args.syntax = ["var"]
+`;
+}
+
 const SOURCE_VALID = `\
 import { logger } from './logger';
 
@@ -159,6 +178,18 @@ import { BAD_NAME as goodAlias } from './dep';
 
 export function runTask() {
   return goodAlias();
+}
+`;
+
+const SOURCE_FORBIDDEN_DECLARATIONS = `\
+import foo from './dep';
+
+var legacyValue = 1;
+
+class Widget {}
+
+export function runTask() {
+  return foo + legacyValue + Widget.length;
 }
 `;
 
@@ -244,6 +275,29 @@ describe('CLI E2E', () => {
       expect(result.exitCode).toBe(1);
       expect(result.stdout).toContain('run');
       expect(result.stdout).toContain('function-logging');
+    });
+
+    it('loads nested forbidden-declarations args from policy config', async () => {
+      fs.writeFileSync(
+        path.join(projectDir, 'codepol.toml'),
+        forbiddenDeclarationsConfigContentCreate(),
+        'utf8',
+      );
+      fs.mkdirSync(path.join(projectDir, 'src'), { recursive: true });
+      fs.writeFileSync(
+        path.join(projectDir, 'src', 'app.ts'),
+        SOURCE_FORBIDDEN_DECLARATIONS,
+        'utf8',
+      );
+      fs.writeFileSync(path.join(projectDir, 'src', 'dep.ts'), 'export default 1;\n', 'utf8');
+
+      const result = await runCli([], projectDir);
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toContain('forbidden-declarations');
+      expect(result.stdout).toContain('foo');
+      expect(result.stdout).toContain('legacyValue');
+      expect(result.stdout).toContain('Widget');
     });
   });
 

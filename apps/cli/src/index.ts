@@ -19,6 +19,7 @@ import {
   type PolicyFile,
 } from '@codepol/core';
 import {
+  builtinPluginsRefresh,
   ensureWorkspaceRuntimeReady,
   eslintConfigPathDetect,
   type WorkspaceDaemonConnectFn,
@@ -150,6 +151,7 @@ function fsSubNew(options: CliOptions, files: string[], patterns: string[]): voi
 
 async function main(): Promise<void> {
   await ensureWorkspaceRuntimeReady();
+  builtinPluginsRefresh();
 
   const cwd = process.cwd();
   const argv = await yargs(hideBin(process.argv))

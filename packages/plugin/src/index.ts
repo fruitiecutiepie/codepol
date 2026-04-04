@@ -5,6 +5,7 @@ import { loggerTreeCheckProvider } from './policyPluginLogger';
 import { unusedExportsRule } from './unusedExportsRule';
 import { unusedExportsCheck } from './unusedExportsCheck';
 import { forbiddenWordsRule } from './forbiddenWordsRule';
+import { forbiddenDeclarationsRule } from './forbiddenDeclarationsRule';
 import { forbiddenPathWordsRule } from './forbiddenPathWordsRule';
 import { noInterfaceRule } from './noInterfaceRule';
 import { noVerbFunctionNameRule } from './noVerbFunctionNameRule';
@@ -19,6 +20,13 @@ export { unusedExportsCheck };
 export { enforceCasingRule } from './enforceCasingRule';
 export { noMixedExportsRule } from './noMixedExportsRule';
 export { noUnusedVarsRule } from './noUnusedVarsRule';
+export { forbiddenDeclarationsRule } from './forbiddenDeclarationsRule';
+export type {
+  ForbiddenDeclarationsArgs,
+  ForbiddenDeclarationBindingKind,
+  ForbiddenDeclarationSymbolKind,
+  ForbiddenDeclarationSyntaxKind,
+} from './forbiddenDeclarationsCheck';
 export { pythonDeadCodeRule } from '@codepol/plugin-vulture';
 
 export const loggerEnterExitRule: CodepolPluginRule = pluginRuleNew({
@@ -32,6 +40,7 @@ export default [
   loggerEnterExitRule,
   unusedExportsRule,
   pythonDeadCodeRule,
+  forbiddenDeclarationsRule,
   forbiddenWordsRule,
   forbiddenPathWordsRule,
   noVerbFunctionNameRule,

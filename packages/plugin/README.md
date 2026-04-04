@@ -17,7 +17,13 @@ pnpm add -D @codepol/plugin
 
 - **Default export**: an array of all built-in rule plugins (see `src/index.ts`).
 - Named exports include individual rules, for example `loggerEnterExitRule`, `enforceCasingRule`,
-  `unusedExportsRule`, etc.
+  `forbiddenDeclarationsRule`, `unusedExportsRule`, etc.
+
+### forbidden-declarations
+
+Rule id: `@codepol/plugin/forbidden-declarations`. Reports configured declaration categories such
+as `class`, `interface`, `var`, or import bindings in JS/TS files. See
+[docs/rules/forbidden-declarations.md](../../docs/rules/forbidden-declarations.md).
 
 ### enforce-casing
 

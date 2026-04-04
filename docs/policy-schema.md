@@ -159,6 +159,17 @@ targets = ["typescript-src"]
 args.preferredStyle = "named"
 ```
 
+The built-in `forbidden-declarations` rule bans configured declaration categories in JS/TS files. Use `args.symbols`, `args.bindings`, and `args.syntax` to choose which declaration families to report (see [forbidden-declarations](/rules/forbidden-declarations)).
+
+```toml
+[[rules]]
+ruleId = "@codepol/plugin/forbidden-declarations"
+targets = ["typescript-src"]
+args.symbols = ["class", "interface", "type"]
+args.bindings = ["import"]
+args.syntax = ["var"]
+```
+
 ## Plugin Declarations
 
 Codepol no longer resolves plugins as Node module imports from the config file. Policies declare a stable plugin `id` plus a transport-specific `source`.
@@ -224,5 +235,5 @@ If omitted, the rule applies everywhere the host can adapt it.
 ## Notes
 
 - `codepol.toml` is the only discovered config format.
-- Built-in rule IDs keep their namespaced form, for example `@codepol/plugin/no-interface` or `@codepol/plugin/enforce-casing`.
+- Built-in rule IDs keep their namespaced form, for example `@codepol/plugin/no-interface`, `@codepol/plugin/forbidden-declarations`, or `@codepol/plugin/enforce-casing`.
 - Direct ESLint usage should combine `policyPluginRulesGet()` with `providerRulesConfigGet('eslint')`.
