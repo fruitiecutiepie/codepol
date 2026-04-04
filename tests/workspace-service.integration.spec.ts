@@ -6,6 +6,7 @@ import { workspacePathToUri } from '@codepol/core';
 import {
   WorkspaceServiceEngine,
   workspaceServiceCreate,
+  type WorkspaceWatcherCreate,
 } from '@codepol/workspace-service';
 
 function tempWorkspaceCreate(prefix: string): string {
@@ -40,6 +41,49 @@ files = ["src/**/*.ts"]
 ruleId = "@codepol/plugin/no-unused-exports"
 targets = ["src"]
 `;
+}
+
+function noMixedExportsConfigContentCreate(): string {
+  return `[[plugins]]
+id = "@codepol/plugin"
+source = { kind = "builtin" }
+
+[targets.src]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[[rules]]
+ruleId = "@codepol/plugin/no-mixed-exports"
+targets = ["src"]
+args.preferredStyle = "named"
+`;
+}
+
+function workspaceWatcherStubCreate(): {
+  watcherCreate: WorkspaceWatcherCreate;
+  trigger: (eventName: string, filePath: string) => void;
+  closeCallsGet: () => number;
+} {
+  let listener: ((eventName: string, filePath: string) => void) | undefined;
+  let closeCalls = 0;
+  const watcher = {
+    on(_event: 'all', nextListener: (eventName: string, filePath: string) => void) {
+      listener = nextListener;
+      return watcher;
+    },
+    async close() {
+      closeCalls += 1;
+    },
+  };
+  return {
+    watcherCreate: () => watcher,
+    trigger(eventName: string, filePath: string) {
+      listener?.(eventName, filePath);
+    },
+    closeCallsGet() {
+      return closeCalls;
+    },
+  };
 }
 
 async function clientWorkspaceAttach(
@@ -523,6 +567,164 @@ describe('workspace service integration', () => {
       openDocumentCount: 0,
       overlayCount: 0,
       analysisGeneration: 1,
+    });
+  });
+
+  it('invalidates ready workspace state when watched disk files change and closes the watcher on last detach', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = workspacePathToUri(filePath);
+    fs.writeFileSync(
+      filePath,
+      'export interface User {\n  name: string;\n}\n',
+      'utf8',
+    );
+
+    const watcher = workspaceWatcherStubCreate();
+    const service = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine({
+        watcherCreate: watcher.watcherCreate,
+      }),
+    });
+    const attached = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'watched-disk-client',
+    });
+
+    expect(
+      await service.queryDiagnostics({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        uri,
+      }),
+    ).toHaveLength(1);
+    expect(
+      await service.queryIndexStatus({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+      }),
+    ).toMatchObject({
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+      status: 'ready',
+      analysisGeneration: 1,
+    });
+
+    fs.writeFileSync(
+      filePath,
+      'export type User = {\n  name: string;\n};\n',
+      'utf8',
+    );
+    watcher.trigger('change', filePath);
+
+    expect(
+      await service.queryIndexStatus({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+      }),
+    ).toMatchObject({
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+      status: 'cold',
+      analysisGeneration: 1,
+    });
+    expect(
+      await service.queryDiagnostics({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        uri,
+      }),
+    ).toEqual([]);
+    expect(
+      await service.queryIndexStatus({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+      }),
+    ).toMatchObject({
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+      status: 'ready',
+      analysisGeneration: 2,
+    });
+
+    await service.closeClientSession({
+      clientSessionId: attached.clientSessionId,
+    });
+    expect(watcher.closeCallsGet()).toBe(1);
+  });
+
+  it('reloads config after a watched config change invalidates the workspace', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = workspacePathToUri(filePath);
+    fs.writeFileSync(
+      filePath,
+      'export interface User {\n  name: string;\n}\n',
+      'utf8',
+    );
+
+    const watcher = workspaceWatcherStubCreate();
+    const service = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine({
+        watcherCreate: watcher.watcherCreate,
+      }),
+    });
+    const attached = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'watched-config-client',
+    });
+
+    expect(
+      await service.queryDiagnostics({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        uri,
+      }),
+    ).toHaveLength(1);
+
+    fs.writeFileSync(configPath, noMixedExportsConfigContentCreate(), 'utf8');
+    watcher.trigger('change', configPath);
+
+    expect(
+      await service.queryIndexStatus({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+      }),
+    ).toMatchObject({
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+      status: 'cold',
+      analysisGeneration: 1,
+    });
+    expect(
+      await service.queryDiagnostics({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        uri,
+      }),
+    ).toEqual([]);
+    expect(
+      await service.queryIndexStatus({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+      }),
+    ).toMatchObject({
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+      status: 'ready',
+      analysisGeneration: 2,
     });
   });
 });

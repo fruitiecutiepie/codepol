@@ -4,11 +4,14 @@ import {
   WorkspaceServiceEngine,
   policyCheck as workspacePolicyCheck,
   workspaceDaemonServerStart,
+  workspaceWatcherCreate,
 } from '@codepol/workspace-service';
 
 async function main(): Promise<void> {
   const server = await workspaceDaemonServerStart({
-    service: new WorkspaceServiceEngine(),
+    service: new WorkspaceServiceEngine({
+      watcherCreate: workspaceWatcherCreate,
+    }),
     policyCheck: workspacePolicyCheck,
   });
 

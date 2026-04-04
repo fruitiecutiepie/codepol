@@ -26,6 +26,7 @@
     "@codepol/plugin-eslint": "workspace:*",
     "@codepol/plugin-ruff": "workspace:*",
     "@codepol/plugin-vulture": "workspace:*",
+    "chokidar": "^5.0.0",
     "eslint": "^9.39.2"
   },
   "devDependencies": {

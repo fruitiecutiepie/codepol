@@ -152,6 +152,7 @@
   - the daemon-backed workspace-service client now carries `daemonSessionId` on all client-session-bound RPCs, and the daemon rejects stale or missing daemon ids before workspace attach/replay/overlay/read work starts
   - the daemon session now has a workspace-keyed priority queue, with `attach`/`replay`/`status` ahead of diagnostics and diagnostics ahead of code actions or edit-plan work when requests backlog on the same workspace lane
   - diagnostics reads now carry the current overlay document version, index/status reads can carry `analysisGeneration`, and stale diagnostics/status requests are rejected or suppressed before they can publish as current
+  - interactive diagnostics/code-action/status requests now carry logical `requestId`s, and the daemon suppresses older same-class responses as `request_superseded` once a newer request for the same workspace lane arrives
 - Formalize a request envelope that carries enough freshness data to reject or suppress stale work:
   - `daemonSessionId`
   - `clientSessionId`
@@ -184,6 +185,8 @@
   - queueing keeps replay/startup/status work ahead of background warm-up
 
 ### Workstream 4: Workspace Watchers, Invalidation, And Background Warm-Up
+- Started in the repo:
+  - the shared workspace engine now owns one watcher pipeline per attached logical workspace, invalidates base/session state on watched disk changes while keeping `workspaceInstanceId` stable, and lazily reloads config on the next analysis after a watched config-file change
 - Add one watcher pipeline per logical workspace, not per client session.
 - Reuse the existing `chokidar`-based watch knowledge from `apps/cli`, but move ownership into the daemon workspace lifecycle.
 - Track invalidation at the right layer:

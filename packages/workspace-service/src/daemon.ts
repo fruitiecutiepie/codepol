@@ -165,6 +165,10 @@ type WorkspaceDaemonWorkspaceFreshness = {
   replayEpoch?: number;
 };
 
+type WorkspaceDaemonRequestFreshness = {
+  requestId?: string;
+};
+
 type WorkspaceDaemonClientSessionFreshness = {
   clientSessionId: ClientSessionId;
   daemonSessionId?: DaemonSessionId;
@@ -236,6 +240,7 @@ type WorkspaceDaemonCloseOverlayRequest = WorkspaceDaemonMessage & {
 
 type WorkspaceDaemonQueryDiagnosticsRequest = WorkspaceDaemonMessage &
   WorkspaceDaemonClientSessionFreshness &
+  WorkspaceDaemonRequestFreshness &
   WorkspaceDaemonWorkspaceFreshness & {
   type: 'query_diagnostics';
   workspaceId: string;
@@ -245,6 +250,7 @@ type WorkspaceDaemonQueryDiagnosticsRequest = WorkspaceDaemonMessage &
 
 type WorkspaceDaemonQueryCodeActionsRequest = WorkspaceDaemonMessage &
   WorkspaceDaemonClientSessionFreshness &
+  WorkspaceDaemonRequestFreshness &
   WorkspaceDaemonWorkspaceFreshness & {
   type: 'query_code_actions';
   workspaceId: string;
@@ -255,6 +261,7 @@ type WorkspaceDaemonQueryCodeActionsRequest = WorkspaceDaemonMessage &
 
 type WorkspaceDaemonApplyEditPlanRequest = WorkspaceDaemonMessage &
   WorkspaceDaemonClientSessionFreshness &
+  WorkspaceDaemonRequestFreshness &
   WorkspaceDaemonWorkspaceFreshness & {
   type: 'apply_edit_plan';
   workspaceId: string;
@@ -264,6 +271,7 @@ type WorkspaceDaemonApplyEditPlanRequest = WorkspaceDaemonMessage &
 
 type WorkspaceDaemonQueryIndexStatusRequest = WorkspaceDaemonMessage &
   WorkspaceDaemonClientSessionFreshness &
+  WorkspaceDaemonRequestFreshness &
   WorkspaceDaemonWorkspaceFreshness & {
   type: 'query_index_status';
   workspaceId: string;
@@ -755,6 +763,7 @@ export class WorkspaceDaemonSession {
       }>;
     }
   >();
+  private readonly latestRequestIds = new Map<string, string>();
   private nextQueueSequence = 1;
 
   constructor(
@@ -950,6 +959,55 @@ export class WorkspaceDaemonSession {
     return messageErrorCreate('request_cancelled', 'Request cancelled');
   }
 
+  private requestSupersededResponseCreate(): WorkspaceDaemonErrorResponse {
+    return messageErrorCreate('request_superseded', 'Request superseded');
+  }
+
+  private requestSupersessionKeyResolve(
+    message: WorkspaceDaemonMessage,
+  ): string | undefined {
+    switch (message.type) {
+      case 'query_diagnostics': {
+        const input = message as WorkspaceDaemonQueryDiagnosticsRequest;
+        return `query_diagnostics:${input.clientSessionId}:${input.workspaceId}:${input.uri ?? '*'}`;
+      }
+      case 'query_code_actions': {
+        const input = message as WorkspaceDaemonQueryCodeActionsRequest;
+        return `query_code_actions:${input.clientSessionId}:${input.workspaceId}:${input.uri}`;
+      }
+      case 'query_index_status': {
+        const input = message as WorkspaceDaemonQueryIndexStatusRequest;
+        return `query_index_status:${input.clientSessionId}:${input.workspaceId}`;
+      }
+      default:
+        return undefined;
+    }
+  }
+
+  private requestSupersessionRemember(message: WorkspaceDaemonMessage): void {
+    const supersessionKey = this.requestSupersessionKeyResolve(message);
+    if (!supersessionKey || !('requestId' in message) || typeof message.requestId !== 'string') {
+      return;
+    }
+    this.latestRequestIds.set(supersessionKey, message.requestId);
+  }
+
+  private requestSupersededIs(message: WorkspaceDaemonMessage): boolean {
+    const supersessionKey = this.requestSupersessionKeyResolve(message);
+    if (!supersessionKey || !('requestId' in message) || typeof message.requestId !== 'string') {
+      return false;
+    }
+    return this.latestRequestIds.get(supersessionKey) !== message.requestId;
+  }
+
+  private requestSupersessionDeleteAll(clientSessionId: ClientSessionId): void {
+    for (const key of Array.from(this.latestRequestIds.keys())) {
+      if (key.includes(`:${clientSessionId}:`)) {
+        this.latestRequestIds.delete(key);
+      }
+    }
+  }
+
   private requestQueueKeyResolve(message: WorkspaceDaemonMessage): string | undefined {
     switch (message.type) {
       case 'attach_workspace':
@@ -1099,6 +1157,8 @@ export class WorkspaceDaemonSession {
       return this.requestCancelHandle(input.targetId);
     }
 
+    this.requestSupersessionRemember(envelope);
+
     const controller = new AbortController();
     this.activeRequests.set(envelope.id, {
       cancellationState: 'running',
@@ -1112,6 +1172,9 @@ export class WorkspaceDaemonSession {
         if (active?.cancellationState === 'cancel_requested' || active?.signal.aborted) {
           return this.requestCancelledResponseCreate();
         }
+        if (this.requestSupersededIs(envelope)) {
+          return this.requestSupersededResponseCreate();
+        }
         const response = await this.handleMessage(envelope, {
           signal: controller.signal,
         });
@@ -1121,6 +1184,9 @@ export class WorkspaceDaemonSession {
           completed?.signal.aborted
         ) {
           return this.requestCancelledResponseCreate();
+        }
+        if (this.requestSupersededIs(envelope)) {
+          return this.requestSupersededResponseCreate();
         }
         return response;
       });
@@ -1205,6 +1271,7 @@ export class WorkspaceDaemonSession {
           });
           this.daemonSessionDelete(input.clientSessionId);
           this.workspaceReplayStateDeleteAll(input.clientSessionId);
+          this.requestSupersessionDeleteAll(input.clientSessionId);
           return { type: 'close_client_session_ack' };
         }
         case 'attach_workspace': {
@@ -1800,6 +1867,7 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
     clientSessionId: ClientSessionId;
     workspaceId: string;
     uri?: string;
+    requestId?: string;
     documentVersion?: number;
     signal?: AbortSignal;
   }): Promise<WorkspaceDiagnostic[]> {
@@ -1809,6 +1877,7 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
       type: 'query_diagnostics',
       clientSessionId: input.clientSessionId,
       daemonSessionId,
+      requestId: input.requestId,
       workspaceId: input.workspaceId,
       workspaceInstanceId: freshness?.workspaceInstanceId,
       replayEpoch: freshness?.replayEpoch,
@@ -1825,6 +1894,7 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
     uri: string;
     version: number;
     diagnosticIds?: string[];
+    requestId?: string;
     signal?: AbortSignal;
   }): Promise<WorkspaceCodeAction[]> {
     const freshness = this.workspaceFreshnessGet(input);
@@ -1833,6 +1903,7 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
       type: 'query_code_actions',
       clientSessionId: input.clientSessionId,
       daemonSessionId,
+      requestId: input.requestId,
       workspaceId: input.workspaceId,
       workspaceInstanceId: freshness?.workspaceInstanceId,
       replayEpoch: freshness?.replayEpoch,
@@ -1849,6 +1920,7 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
     workspaceId: string;
     planId: string;
     documentVersions: Record<string, number>;
+    requestId?: string;
     signal?: AbortSignal;
   }): Promise<WorkspaceApplyResult> {
     const freshness = this.workspaceFreshnessGet(input);
@@ -1857,6 +1929,7 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
       type: 'apply_edit_plan',
       clientSessionId: input.clientSessionId,
       daemonSessionId,
+      requestId: input.requestId,
       workspaceId: input.workspaceId,
       workspaceInstanceId: freshness?.workspaceInstanceId,
       replayEpoch: freshness?.replayEpoch,
@@ -1870,6 +1943,7 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
   queryIndexStatus(input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;
+    requestId?: string;
     analysisGeneration?: number;
     signal?: AbortSignal;
   }): Promise<IndexStatusResult> {
@@ -1879,6 +1953,7 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
       type: 'query_index_status',
       clientSessionId: input.clientSessionId,
       daemonSessionId,
+      requestId: input.requestId,
       workspaceId: input.workspaceId,
       workspaceInstanceId: freshness?.workspaceInstanceId,
       replayEpoch: freshness?.replayEpoch,

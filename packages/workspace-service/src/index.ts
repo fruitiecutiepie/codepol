@@ -1,9 +1,11 @@
 import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import chokidar from 'chokidar';
 import {
   DEFAULT_EXTENSIONS,
   ESLINT_PLUGIN_NAME_DEFAULT,
+  configCacheClear,
   configGet,
   configGetFromPath,
   crossFileResolveForFile,
@@ -64,6 +66,7 @@ export { builtinPluginsRefresh, ensureWorkspaceRuntimeReady } from './runtime';
 const ESLINT_CONFIG_EXTENSIONS = ['.js', '.mjs', '.cjs', '.ts', '.mts', '.cts'];
 const BIOME_FILE_EXTENSIONS = ['.js', '.mjs', '.cjs', '.jsx', '.ts', '.mts', '.cts', '.tsx'];
 const PYTHON_FILE_EXTENSIONS = ['.py', '.pyw'];
+const WORKSPACE_WATCH_IGNORED = ['**/node_modules/**', '**/.git/**'];
 
 type LintProviderEntry = {
   provider: LintProvider;
@@ -125,6 +128,23 @@ type WorkspaceAnalysisCacheState = {
 
 export type WorkspaceClientKind = 'lsp' | 'cli' | 'test';
 
+export type WorkspaceWatcher = {
+  on: (
+    event: 'all',
+    listener: (eventName: string, filePath: string) => void,
+  ) => WorkspaceWatcher;
+  close: () => Promise<void> | void;
+};
+
+export type WorkspaceWatcherCreate = (input: {
+  rootPath: string;
+  configPath: string;
+}) => WorkspaceWatcher;
+
+export type WorkspaceServiceEngineOptions = {
+  watcherCreate?: WorkspaceWatcherCreate;
+};
+
 type WorkspaceSessionState = WorkspaceDocumentsState &
   WorkspaceAnalysisCacheState & {
     workspaceId: string;
@@ -139,6 +159,9 @@ type WorkspaceState = WorkspaceContextState & {
   workspaceId: string;
   workspaceInstanceId: WorkspaceInstanceId;
   attachedClientSessionIds: Set<ClientSessionId>;
+  configDirty?: boolean;
+  watcher?: WorkspaceWatcher;
+  watchItemsKey?: string;
 };
 
 type ClientSessionState = {
@@ -210,6 +233,7 @@ export type WorkspaceService = {
     clientSessionId: ClientSessionId;
     workspaceId: string;
     uri?: string;
+    requestId?: string;
     documentVersion?: number;
     signal?: AbortSignal;
   }) => Promise<WorkspaceDiagnostic[]>;
@@ -219,6 +243,7 @@ export type WorkspaceService = {
     uri: string;
     version: number;
     diagnosticIds?: string[];
+    requestId?: string;
     signal?: AbortSignal;
   }) => Promise<WorkspaceCodeAction[]>;
   applyEditPlan: (input: {
@@ -226,11 +251,13 @@ export type WorkspaceService = {
     workspaceId: string;
     planId: string;
     documentVersions: Record<string, number>;
+    requestId?: string;
     signal?: AbortSignal;
   }) => Promise<WorkspaceApplyResult>;
   queryIndexStatus: (input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;
+    requestId?: string;
     analysisGeneration?: number;
     signal?: AbortSignal;
   }) => Promise<IndexStatusResult>;
@@ -289,6 +316,104 @@ function severityFromLintSeverity(
 
 function workspaceStateAnalysisInvalidate(state: WorkspaceAnalysisCacheState): void {
   state.lastAnalysis = undefined;
+}
+
+function workspaceWatchItemsResolve(input: {
+  rootPath: string;
+  configPath: string;
+}): string[] {
+  return [...new Set([path.resolve(input.rootPath), path.resolve(input.configPath)])];
+}
+
+function workspaceWatchItemsKeyCreate(input: {
+  rootPath: string;
+  configPath: string;
+}): string {
+  return workspaceWatchItemsResolve(input).join('\0');
+}
+
+export function workspaceWatcherCreate(input: {
+  rootPath: string;
+  configPath: string;
+}): WorkspaceWatcher {
+  return chokidar.watch(workspaceWatchItemsResolve(input), {
+    ignoreInitial: true,
+    ignored: WORKSPACE_WATCH_IGNORED,
+  }) as unknown as WorkspaceWatcher;
+}
+
+async function workspaceWatcherClose(workspace: WorkspaceState): Promise<void> {
+  const watcher = workspace.watcher;
+  workspace.watcher = undefined;
+  workspace.watchItemsKey = undefined;
+  if (!watcher) {
+    return;
+  }
+  await watcher.close();
+}
+
+function workspaceInvalidateFromDisk(
+  workspace: WorkspaceState,
+  clientSessions: Map<ClientSessionId, ClientSessionState>,
+  options: {
+    configDirty?: boolean;
+  } = {},
+): void {
+  workspace.baseIndexState = undefined;
+  if (options.configDirty) {
+    workspace.configDirty = true;
+  }
+  for (const attachedClientSessionId of workspace.attachedClientSessionIds) {
+    const attachedClientSession = clientSessions.get(attachedClientSessionId);
+    const attachedWorkspaceSession = attachedClientSession?.workspaces.get(workspace.workspaceId);
+    if (!attachedWorkspaceSession) {
+      continue;
+    }
+    attachedWorkspaceSession.indexState = undefined;
+    workspaceStateAnalysisInvalidate(attachedWorkspaceSession);
+    attachedWorkspaceSession.status = 'cold';
+    attachedWorkspaceSession.lastError = undefined;
+  }
+}
+
+async function workspaceContextRefreshFromDisk(workspace: WorkspaceState): Promise<void> {
+  if (!workspace.configDirty) {
+    return;
+  }
+  configCacheClear();
+  const { config, configPath: resolvedConfigPath } = await configGetFromPath(workspace.configPath);
+  workspace.config = config;
+  workspace.configPath = resolvedConfigPath;
+  workspace.eslintConfigPath = eslintConfigPathResolve(
+    workspace.rootPath,
+    resolvedConfigPath,
+    config,
+  );
+  workspace.baseIndexState = undefined;
+  workspace.configDirty = false;
+}
+
+async function workspaceWatcherEnsure(input: {
+  workspace: WorkspaceState;
+  clientSessions: Map<ClientSessionId, ClientSessionState>;
+  watcherCreate: WorkspaceWatcherCreate;
+}): Promise<void> {
+  const watchItemsKey = workspaceWatchItemsKeyCreate(input.workspace);
+  if (input.workspace.watcher && input.workspace.watchItemsKey === watchItemsKey) {
+    return;
+  }
+  await workspaceWatcherClose(input.workspace);
+  const watcher = input.watcherCreate({
+    rootPath: input.workspace.rootPath,
+    configPath: input.workspace.configPath,
+  });
+  watcher.on('all', (_eventName, filePath) => {
+    workspaceInvalidateFromDisk(input.workspace, input.clientSessions, {
+      configDirty: path.resolve(filePath) === path.resolve(input.workspace.configPath),
+    });
+  });
+  input.workspace.watcher = watcher;
+  input.workspace.watchItemsKey = watchItemsKey;
 }
 
 function workspaceGet(
@@ -1121,6 +1246,7 @@ async function workspaceSessionAnalysisGet(
   }
 
   try {
+    await workspaceContextRefreshFromDisk(workspace);
     const analysis = await workspaceAnalysisRun(workspace, state, {
       fix: false,
       collectEslintOutput: false,
@@ -1142,6 +1268,11 @@ export class WorkspaceServiceEngine implements WorkspaceService {
   private readonly daemonSessionId: DaemonSessionId = opaqueIdCreate('daemon');
   private readonly workspaces = new Map<string, WorkspaceState>();
   private readonly clientSessions = new Map<ClientSessionId, ClientSessionState>();
+  private readonly watcherCreate?: WorkspaceWatcherCreate;
+
+  constructor(options: WorkspaceServiceEngineOptions = {}) {
+    this.watcherCreate = options.watcherCreate;
+  }
 
   async registerClientSession(input: {
     clientKind: WorkspaceClientKind;
@@ -1184,7 +1315,13 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     const clientSession = clientSessionGet(this.clientSessions, input.clientSessionId);
     for (const workspaceId of clientSession.workspaces.keys()) {
       const workspace = this.workspaces.get(workspaceId);
-      workspace?.attachedClientSessionIds.delete(input.clientSessionId);
+      if (!workspace) {
+        continue;
+      }
+      workspace.attachedClientSessionIds.delete(input.clientSessionId);
+      if (workspace.attachedClientSessionIds.size === 0) {
+        await workspaceWatcherClose(workspace);
+      }
     }
     this.clientSessions.delete(input.clientSessionId);
   }
@@ -1198,6 +1335,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
 
     const rootPath = path.resolve(input.rootPath);
     const configPath = path.resolve(rootPath, input.configPath);
+    configCacheClear();
     const { config, configPath: resolvedConfigPath } = await configGetFromPath(configPath);
     const clientSession = clientSessionGet(this.clientSessions, input.clientSessionId);
     const workspaceId = workspaceIdCreate(rootPath, resolvedConfigPath);
@@ -1216,6 +1354,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
         ),
         config,
         attachedClientSessionIds: new Set(),
+        configDirty: false,
       };
       this.workspaces.set(workspaceId, workspace);
     } else {
@@ -1227,17 +1366,8 @@ export class WorkspaceServiceEngine implements WorkspaceService {
         config,
       );
       workspace.baseIndexState = undefined;
-      for (const attachedClientSessionId of workspace.attachedClientSessionIds) {
-        const attachedClientSession = this.clientSessions.get(attachedClientSessionId);
-        const attachedWorkspaceSession = attachedClientSession?.workspaces.get(workspaceId);
-        if (!attachedWorkspaceSession) {
-          continue;
-        }
-        attachedWorkspaceSession.indexState = undefined;
-        workspaceStateAnalysisInvalidate(attachedWorkspaceSession);
-        attachedWorkspaceSession.status = 'cold';
-        attachedWorkspaceSession.lastError = undefined;
-      }
+      workspace.configDirty = false;
+      workspaceInvalidateFromDisk(workspace, this.clientSessions);
     }
 
     workspace.attachedClientSessionIds.add(input.clientSessionId);
@@ -1251,6 +1381,13 @@ export class WorkspaceServiceEngine implements WorkspaceService {
         codeActionPlans: new Map(),
         status: 'cold',
         analysisGeneration: 0,
+      });
+    }
+    if (this.watcherCreate) {
+      await workspaceWatcherEnsure({
+        workspace,
+        clientSessions: this.clientSessions,
+        watcherCreate: this.watcherCreate,
       });
     }
 
@@ -1389,6 +1526,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     clientSessionId: ClientSessionId;
     workspaceId: string;
     uri?: string;
+    requestId?: string;
     documentVersion?: number;
     signal?: AbortSignal;
   }): Promise<WorkspaceDiagnostic[]> {
@@ -1417,6 +1555,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     uri: string;
     version: number;
     diagnosticIds?: string[];
+    requestId?: string;
     signal?: AbortSignal;
   }): Promise<WorkspaceCodeAction[]> {
     const { workspace, workspaceSession } = workspaceSessionGet(
@@ -1498,6 +1637,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     workspaceId: string;
     planId: string;
     documentVersions: Record<string, number>;
+    requestId?: string;
     signal?: AbortSignal;
   }): Promise<WorkspaceApplyResult> {
     const { workspaceSession } = workspaceSessionGet(
@@ -1548,6 +1688,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
   async queryIndexStatus(input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;
+    requestId?: string;
     analysisGeneration?: number;
     signal?: AbortSignal;
   }): Promise<IndexStatusResult> {
@@ -1648,6 +1789,7 @@ class InProcessWorkspaceService implements WorkspaceService {
     clientSessionId: ClientSessionId;
     workspaceId: string;
     uri?: string;
+    requestId?: string;
     documentVersion?: number;
     signal?: AbortSignal;
   }): Promise<WorkspaceDiagnostic[]> {
@@ -1660,6 +1802,7 @@ class InProcessWorkspaceService implements WorkspaceService {
     uri: string;
     version: number;
     diagnosticIds?: string[];
+    requestId?: string;
     signal?: AbortSignal;
   }): Promise<WorkspaceCodeAction[]> {
     return this.engine.queryCodeActions(input);
@@ -1670,6 +1813,7 @@ class InProcessWorkspaceService implements WorkspaceService {
     workspaceId: string;
     planId: string;
     documentVersions: Record<string, number>;
+    requestId?: string;
     signal?: AbortSignal;
   }): Promise<WorkspaceApplyResult> {
     return this.engine.applyEditPlan(input);
@@ -1678,6 +1822,7 @@ class InProcessWorkspaceService implements WorkspaceService {
   queryIndexStatus(input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;
+    requestId?: string;
     analysisGeneration?: number;
     signal?: AbortSignal;
   }): Promise<IndexStatusResult> {

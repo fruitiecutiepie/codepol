@@ -227,6 +227,10 @@ function staleDocumentVersionErrorIs(error: unknown): boolean {
   return error instanceof Error && error.message.includes('Document version mismatch');
 }
 
+function requestSupersededErrorIs(error: unknown): boolean {
+  return error instanceof Error && error.message.includes('Request superseded');
+}
+
 export class CodepolLspServer {
   private service: WorkspaceService | undefined;
   private readonly serviceFactory: WorkspaceServiceFactory;
@@ -489,6 +493,7 @@ export class CodepolLspServer {
       }
       const signal = this.requestAbortSignalGet(message.id);
       const result = await this.methodHandle(message.method, message.params, {
+        requestId: message.id,
         signal,
       });
       if (this.requestCanceledConsume(message.id)) {
@@ -543,7 +548,7 @@ export class CodepolLspServer {
   private async methodHandle(
     method: string,
     params: unknown,
-    context: { signal?: AbortSignal } = {},
+    context: { requestId?: JsonRpcId; signal?: AbortSignal } = {},
   ): Promise<unknown> {
     switch (method) {
       case 'initialize':
@@ -777,7 +782,7 @@ export class CodepolLspServer {
     textDocument: { uri: string };
     range?: LspRange;
     context: { diagnostics?: Array<{ data?: { id?: string } }> };
-  }, context: { signal?: AbortSignal } = {}): Promise<unknown> {
+  }, context: { requestId?: JsonRpcId; signal?: AbortSignal } = {}): Promise<unknown> {
     if (!this.registeredClientSessionId || !this.workspaceId) {
       return [];
     }
@@ -794,6 +799,10 @@ export class CodepolLspServer {
             clientSessionId: this.registeredClientSessionId!,
             workspaceId: this.workspaceId!,
             uri: params.textDocument.uri,
+            requestId:
+              context.requestId === undefined || context.requestId === null
+                ? undefined
+                : `lsp-code-action:${String(context.requestId)}:diagnostics`,
             documentVersion: document?.version,
             signal: context.signal,
           });
@@ -815,6 +824,10 @@ export class CodepolLspServer {
           uri: params.textDocument.uri,
           version: document?.version ?? 0,
           diagnosticIds: [...diagnosticIds],
+          requestId:
+            context.requestId === undefined || context.requestId === null
+              ? undefined
+              : `lsp-code-action:${String(context.requestId)}:actions`,
           signal: context.signal,
         });
         return actions.map((action: WorkspaceCodeAction) => this.codeActionToLsp(action));
@@ -822,7 +835,7 @@ export class CodepolLspServer {
         signal: context.signal,
       });
     } catch (error) {
-      if (staleDocumentVersionErrorIs(error)) {
+      if (staleDocumentVersionErrorIs(error) || requestSupersededErrorIs(error)) {
         return [];
       }
       throw error;
@@ -845,7 +858,7 @@ export class CodepolLspServer {
   private async executeCommandHandle(params: {
     command: string;
     arguments?: Array<{ planId?: string }>;
-  }, context: { signal?: AbortSignal } = {}): Promise<unknown> {
+  }, context: { requestId?: JsonRpcId; signal?: AbortSignal } = {}): Promise<unknown> {
     if (
       !this.registeredClientSessionId ||
       !this.workspaceId ||
@@ -869,6 +882,10 @@ export class CodepolLspServer {
         workspaceId: this.workspaceId!,
         planId,
         documentVersions,
+        requestId:
+          context.requestId === undefined || context.requestId === null
+            ? undefined
+            : `lsp-execute-command:${String(context.requestId)}`,
         signal: context.signal,
       });
       if (!applyResult.applied || !applyResult.plan) {
@@ -909,10 +926,11 @@ export class CodepolLspServer {
         clientSessionId: expectedClientSessionId,
         workspaceId: expectedWorkspaceId,
         uri,
+        requestId: `lsp-publish-diagnostics:${expectedWorkspaceEpoch}:${options.expectedStateVersion}:${uri}`,
         documentVersion,
       });
     } catch (error) {
-      if (staleDocumentVersionErrorIs(error)) {
+      if (staleDocumentVersionErrorIs(error) || requestSupersededErrorIs(error)) {
         return;
       }
       throw error;

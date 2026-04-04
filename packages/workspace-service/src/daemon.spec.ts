@@ -512,6 +512,179 @@ describe('workspace daemon control plane', () => {
     });
   });
 
+  it('supersedes an older diagnostics request when a newer request for the same lane arrives', async () => {
+    const runtimeDir = tempRuntimeDirCreate();
+    tempDirs.push(runtimeDir);
+
+    let resolveFirstDiagnostics: ((diagnostics: never[]) => void) | undefined;
+    let diagnosticsCalls = 0;
+
+    const service: WorkspaceService = {
+      async registerClientSession(input) {
+        return {
+          clientSessionId: input.clientSessionId ?? 'supersede-client-session',
+          daemonSessionId: 'daemon-supersede-session',
+        };
+      },
+      async closeClientSession() {},
+      async attachWorkspace() {
+        return {
+          workspaceId: 'workspace-supersede',
+          workspaceInstanceId: 'workspace-supersede-instance',
+        };
+      },
+      async subscribeDiagnostics() {
+        return {
+          workspaceId: 'workspace-supersede',
+          workspaceInstanceId: 'workspace-supersede-instance',
+          scope: 'workspace',
+          subscriptionState: 'active',
+        };
+      },
+      async completeReplay() {
+        return {
+          workspaceId: 'workspace-supersede',
+          workspaceInstanceId: 'workspace-supersede-instance',
+          replayEpoch: 1,
+          replayState: 'applied',
+        };
+      },
+      async openOverlay() {},
+      async updateOverlay() {},
+      async closeOverlay() {},
+      async queryDiagnostics() {
+        diagnosticsCalls += 1;
+        if (diagnosticsCalls === 1) {
+          return new Promise((resolve) => {
+            resolveFirstDiagnostics = resolve as (diagnostics: never[]) => void;
+          });
+        }
+        return [];
+      },
+      async queryCodeActions() {
+        return [];
+      },
+      async applyEditPlan() {
+        return {
+          applied: false,
+          failureReason: 'plan_not_found',
+        };
+      },
+      async queryIndexStatus() {
+        return {
+          workspaceId: 'workspace-supersede',
+          workspaceInstanceId: 'workspace-supersede-instance',
+          status: 'ready',
+          indexedFileCount: 0,
+          openDocumentCount: 0,
+          overlayCount: 0,
+          analysisGeneration: 1,
+        };
+      },
+    };
+
+    const { descriptor } = workspaceDaemonDescriptorCreate({ runtimeDir });
+    const session = new WorkspaceDaemonSession({
+      descriptor,
+      service,
+    });
+
+    await expect(
+      session.handleEnvelope({
+        id: 1,
+        type: 'hello',
+        protocolVersion: WORKSPACE_DAEMON_PROTOCOL_VERSION,
+        client: clientIdentityCreate('supersede-diagnostics-client'),
+      }),
+    ).resolves.toMatchObject({
+      type: 'hello_ack',
+      compatibility: 'ok',
+    });
+
+    const registerResponse = await session.handleEnvelope({
+      id: 2,
+      type: 'register_client_session',
+      clientKind: 'test',
+      clientInstanceId: 'supersede-diagnostics-client',
+      clientSessionId: 'supersede-diagnostics-session',
+    });
+    expect(registerResponse.type).toBe('register_client_session_ack');
+    if (registerResponse.type !== 'register_client_session_ack') {
+      return;
+    }
+
+    const attachResponse = await session.handleEnvelope({
+      id: 3,
+      type: 'attach_workspace',
+      clientSessionId: 'supersede-diagnostics-session',
+      daemonSessionId: registerResponse.daemonSessionId,
+      rootPath: runtimeDir,
+      configPath: path.join(runtimeDir, 'codepol.toml'),
+    });
+    expect(attachResponse.type).toBe('attach_workspace_ack');
+    if (attachResponse.type !== 'attach_workspace_ack') {
+      return;
+    }
+
+    await expect(
+      session.handleEnvelope({
+        id: 4,
+        type: 'complete_replay',
+        clientSessionId: 'supersede-diagnostics-session',
+        daemonSessionId: registerResponse.daemonSessionId,
+        workspaceId: attachResponse.workspaceId,
+        workspaceInstanceId: attachResponse.workspaceInstanceId,
+      }),
+    ).resolves.toEqual({
+      type: 'complete_replay_ack',
+      result: {
+        workspaceId: attachResponse.workspaceId,
+        workspaceInstanceId: attachResponse.workspaceInstanceId,
+        replayEpoch: 1,
+        replayState: 'applied',
+      },
+    });
+
+    const firstPromise = session.handleEnvelope({
+      id: 5,
+      type: 'query_diagnostics',
+      clientSessionId: 'supersede-diagnostics-session',
+      daemonSessionId: registerResponse.daemonSessionId,
+      workspaceId: attachResponse.workspaceId,
+      workspaceInstanceId: attachResponse.workspaceInstanceId,
+      replayEpoch: 1,
+      requestId: 'diagnostics-request-1',
+    });
+
+    for (let attempt = 0; attempt < 20 && !resolveFirstDiagnostics; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(resolveFirstDiagnostics).toBeDefined();
+
+    const secondPromise = session.handleEnvelope({
+      id: 6,
+      type: 'query_diagnostics',
+      clientSessionId: 'supersede-diagnostics-session',
+      daemonSessionId: registerResponse.daemonSessionId,
+      workspaceId: attachResponse.workspaceId,
+      workspaceInstanceId: attachResponse.workspaceInstanceId,
+      replayEpoch: 1,
+      requestId: 'diagnostics-request-2',
+    });
+
+    resolveFirstDiagnostics!([]);
+
+    await expect(firstPromise).resolves.toEqual({
+      type: 'error',
+      code: 'request_superseded',
+      message: 'Request superseded',
+    });
+    await expect(secondPromise).resolves.toEqual({
+      type: 'query_diagnostics_ack',
+      diagnostics: [],
+    });
+  });
+
   it('rejects client-session requests for a stale daemon session id', async () => {
     const runtimeDir = tempRuntimeDirCreate();
     tempDirs.push(runtimeDir);
