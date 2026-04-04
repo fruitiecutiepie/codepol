@@ -55,6 +55,9 @@
   - a reusable engine that owns workspace/session state, analysis, invalidation, and status
   - an in-process adapter that preserves today’s direct API for tests and fallback mode
   - a daemon host adapter that will expose the same engine over transport
+- Started in the repo:
+  - `packages/workspace-service` now exposes `WorkspaceServiceEngine`
+  - `workspaceServiceCreate()` is now a thin in-process adapter over that shared engine
 - Add internal state for:
   - `replayEpoch`
   - workspace readiness phase
@@ -80,6 +83,9 @@
   - `apps/lsp`
   - `apps/cli`
   - daemon-focused tests
+- Started in the repo:
+  - `packages/workspace-service/src/daemon.ts` now defines runtime-path resolution, descriptor read/write helpers, a shared launcher flow, and the mandatory `hello` handshake contract
+  - `apps/daemon` now exists as the first daemon entrypoint package
 - Implement the control-plane filesystem layout from the design docs:
   - runtime descriptor
   - launch lock

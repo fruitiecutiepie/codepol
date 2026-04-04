@@ -68,6 +68,31 @@ function packageCacheInvalidateUnderRoot(rootAbs: string): void {
   }
 }
 
+function pluginRuleExportsNormalize(moduleExports: unknown): unknown {
+  if (Array.isArray(moduleExports)) {
+    return moduleExports;
+  }
+  if (moduleExports && typeof moduleExports === 'object') {
+    const obj = moduleExports as Record<string, unknown>;
+    if (Array.isArray(obj.default) || Array.isArray(obj.pluginRules)) {
+      return moduleExports;
+    }
+
+    const namedRules = Object.values(obj).filter((value) => {
+      return (
+        value &&
+        typeof value === 'object' &&
+        'id' in value &&
+        'capabilities' in value
+      );
+    });
+    if (namedRules.length > 0) {
+      return namedRules;
+    }
+  }
+  return moduleExports;
+}
+
 /**
  * Clears Node’s `require` cache for each builtin plugin package and re-registers rules in
  * core. Call before `policyPluginsGet` so long-lived processes see rebuilt package output.
@@ -83,8 +108,8 @@ export function builtinPluginsRefresh(): void {
   }
   for (const pkgName of BUILTIN_PLUGIN_PACKAGES) {
     const mod = nodeRequire(pkgName) as { default?: unknown };
-    const exported = mod.default ?? mod;
-    pluginModuleRegister(pkgName, { default: exported });
+    const exported = pluginRuleExportsNormalize(mod.default ?? mod);
+    pluginModuleRegister(pkgName, exported);
   }
 }
 

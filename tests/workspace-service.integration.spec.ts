@@ -3,7 +3,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { workspacePathToUri } from '@codepol/core';
-import { workspaceServiceCreate } from '@codepol/workspace-service';
+import {
+  WorkspaceServiceEngine,
+  workspaceServiceCreate,
+} from '@codepol/workspace-service';
 
 function tempWorkspaceCreate(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -121,6 +124,54 @@ describe('workspace service integration', () => {
       uri,
     });
     expect(revertedDiagnostics).toHaveLength(1);
+  });
+
+  it('supports multiple service adapters over one shared engine', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(workspaceRoot, 'codepol.toml'), noInterfaceConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = workspacePathToUri(filePath);
+    fs.writeFileSync(
+      filePath,
+      'export interface User {\n  name: string;\n}\n',
+      'utf8',
+    );
+
+    const engine = new WorkspaceServiceEngine();
+    const writerService = workspaceServiceCreate({ engine });
+    const readerService = workspaceServiceCreate({ engine });
+    const { clientSessionId, workspaceId } = await clientWorkspaceAttach(writerService, {
+      rootPath: workspaceRoot,
+      configPath: path.join(workspaceRoot, 'codepol.toml'),
+      clientInstanceId: 'shared-engine-client',
+    });
+
+    expect(
+      await readerService.queryDiagnostics({
+        clientSessionId,
+        workspaceId,
+        uri,
+      }),
+    ).toHaveLength(1);
+
+    await writerService.openOverlay({
+      clientSessionId,
+      workspaceId,
+      uri,
+      version: 1,
+      text: 'export type User = {\n  name: string;\n};\n',
+    });
+
+    expect(
+      await readerService.queryDiagnostics({
+        clientSessionId,
+        workspaceId,
+        uri,
+      }),
+    ).toEqual([]);
   });
 
   it('rejects stale edit-plan application after the document version changes', async () => {

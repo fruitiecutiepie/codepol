@@ -58,6 +58,7 @@ import {
 } from './edits';
 import { builtinPluginsRefresh, ensureWorkspaceRuntimeReady } from './runtime';
 
+export * from './daemon';
 export { builtinPluginsRefresh, ensureWorkspaceRuntimeReady } from './runtime';
 
 const ESLINT_CONFIG_EXTENSIONS = ['.js', '.mjs', '.cjs', '.ts', '.mts', '.cts'];
@@ -214,6 +215,10 @@ export type WorkspaceService = {
     clientSessionId: ClientSessionId;
     workspaceId: string;
   }) => Promise<IndexStatusResult>;
+};
+
+export type WorkspaceServiceCreateOptions = {
+  engine?: WorkspaceServiceEngine;
 };
 
 export type WorkspacePolicyCheckOptions = {
@@ -1059,7 +1064,10 @@ async function workspaceSessionAnalysisGet(
   }
 }
 
-class InProcessWorkspaceService implements WorkspaceService {
+/**
+ * Reusable workspace/session engine shared by in-process and future daemon adapters.
+ */
+export class WorkspaceServiceEngine implements WorkspaceService {
   private readonly daemonSessionId: DaemonSessionId = opaqueIdCreate('daemon');
   private readonly workspaces = new Map<string, WorkspaceState>();
   private readonly clientSessions = new Map<ClientSessionId, ClientSessionState>();
@@ -1410,8 +1418,97 @@ class InProcessWorkspaceService implements WorkspaceService {
   }
 }
 
-export function workspaceServiceCreate(): WorkspaceService {
-  return new InProcessWorkspaceService();
+class InProcessWorkspaceService implements WorkspaceService {
+  constructor(private readonly engine: WorkspaceServiceEngine) {}
+
+  registerClientSession(input: {
+    clientKind: WorkspaceClientKind;
+    clientInstanceId: string;
+  }): Promise<{ clientSessionId: ClientSessionId; daemonSessionId: DaemonSessionId }> {
+    return this.engine.registerClientSession(input);
+  }
+
+  closeClientSession(input: {
+    clientSessionId: ClientSessionId;
+  }): Promise<void> {
+    return this.engine.closeClientSession(input);
+  }
+
+  attachWorkspace(input: {
+    clientSessionId: ClientSessionId;
+    rootPath: string;
+    configPath: string;
+  }): Promise<{ workspaceId: string; workspaceInstanceId: WorkspaceInstanceId }> {
+    return this.engine.attachWorkspace(input);
+  }
+
+  openOverlay(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    version: number;
+    text: string;
+  }): Promise<void> {
+    return this.engine.openOverlay(input);
+  }
+
+  updateOverlay(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    version: number;
+    text: string;
+  }): Promise<void> {
+    return this.engine.updateOverlay(input);
+  }
+
+  closeOverlay(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+  }): Promise<void> {
+    return this.engine.closeOverlay(input);
+  }
+
+  queryDiagnostics(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri?: string;
+  }): Promise<WorkspaceDiagnostic[]> {
+    return this.engine.queryDiagnostics(input);
+  }
+
+  queryCodeActions(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    version: number;
+    diagnosticIds?: string[];
+  }): Promise<WorkspaceCodeAction[]> {
+    return this.engine.queryCodeActions(input);
+  }
+
+  applyEditPlan(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    planId: string;
+    documentVersions: Record<string, number>;
+  }): Promise<WorkspaceApplyResult> {
+    return this.engine.applyEditPlan(input);
+  }
+
+  queryIndexStatus(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+  }): Promise<IndexStatusResult> {
+    return this.engine.queryIndexStatus(input);
+  }
+}
+
+export function workspaceServiceCreate(
+  options: WorkspaceServiceCreateOptions = {},
+): WorkspaceService {
+  return new InProcessWorkspaceService(options.engine ?? new WorkspaceServiceEngine());
 }
 
 function workspaceStateCreateForPolicyCheck(

@@ -136,6 +136,19 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  apps/daemon:
+    dependencies:
+      '@codepol/workspace-service':
+        specifier: workspace:*
+        version: link:../../packages/workspace-service
+    devDependencies:
+      '@types/node':
+        specifier: ^25.0.3
+        version: 25.0.3
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
   apps/lsp:
     dependencies:
       '@codepol/core':
@@ -289,9 +302,6 @@ importers:
       '@codepol/plugin-ruff':
         specifier: workspace:*
         version: link:../plugin-ruff
-      '@codepol/plugin-vulture':
-        specifier: workspace:*
-        version: link:../plugin-vulture
       eslint:
         specifier: ^9.39.2
         version: 9.39.2(jiti@2.6.1)
