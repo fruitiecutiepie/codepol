@@ -273,6 +273,12 @@ type WorkspaceDaemonPolicyCheckRequest = WorkspaceDaemonMessage & {
   options: WorkspacePolicyCheckOptions;
 };
 
+type WorkspaceDaemonQueuePriority =
+  | 'highest'
+  | 'high'
+  | 'medium'
+  | 'low';
+
 type WorkspaceDaemonRegisterClientSessionAck = {
   type: 'register_client_session_ack';
   clientSessionId: ClientSessionId;
@@ -732,6 +738,21 @@ export class WorkspaceDaemonSession {
       abort: () => void;
     }
   >();
+  private readonly requestQueues = new Map<
+    string,
+    {
+      running: boolean;
+      entries: Array<{
+        requestId: number;
+        priority: WorkspaceDaemonQueuePriority;
+        sequence: number;
+        run: () => Promise<WorkspaceDaemonServiceResponse>;
+        resolve: (value: WorkspaceDaemonServiceResponse) => void;
+        reject: (error: unknown) => void;
+      }>;
+    }
+  >();
+  private nextQueueSequence = 1;
 
   constructor(
     private readonly options: {
@@ -888,6 +909,151 @@ export class WorkspaceDaemonSession {
     };
   }
 
+  private requestCancelledResponseCreate(): WorkspaceDaemonErrorResponse {
+    return messageErrorCreate('request_cancelled', 'Request cancelled');
+  }
+
+  private requestQueueKeyResolve(message: WorkspaceDaemonMessage): string | undefined {
+    switch (message.type) {
+      case 'attach_workspace':
+      case 'close_client_session': {
+        const input = message as
+          | WorkspaceDaemonAttachWorkspaceRequest
+          | WorkspaceDaemonCloseClientSessionRequest;
+        return `client:${input.clientSessionId}`;
+      }
+      case 'subscribe_diagnostics':
+      case 'complete_replay':
+      case 'open_overlay':
+      case 'update_overlay':
+      case 'close_overlay':
+      case 'query_diagnostics':
+      case 'query_code_actions':
+      case 'apply_edit_plan':
+      case 'query_index_status': {
+        const input = message as
+          | WorkspaceDaemonSubscribeDiagnosticsRequest
+          | WorkspaceDaemonCompleteReplayRequest
+          | WorkspaceDaemonOpenOverlayRequest
+          | WorkspaceDaemonUpdateOverlayRequest
+          | WorkspaceDaemonCloseOverlayRequest
+          | WorkspaceDaemonQueryDiagnosticsRequest
+          | WorkspaceDaemonQueryCodeActionsRequest
+          | WorkspaceDaemonApplyEditPlanRequest
+          | WorkspaceDaemonQueryIndexStatusRequest;
+        return `workspace:${input.clientSessionId}:${input.workspaceId}`;
+      }
+      default:
+        return undefined;
+    }
+  }
+
+  private requestPriorityResolve(
+    message: WorkspaceDaemonMessage,
+  ): WorkspaceDaemonQueuePriority {
+    switch (message.type) {
+      case 'attach_workspace':
+      case 'close_client_session':
+      case 'subscribe_diagnostics':
+      case 'complete_replay':
+      case 'query_index_status':
+        return 'highest';
+      case 'open_overlay':
+      case 'update_overlay':
+      case 'close_overlay':
+      case 'query_diagnostics':
+        return 'high';
+      case 'query_code_actions':
+      case 'apply_edit_plan':
+        return 'medium';
+      default:
+        return 'low';
+    }
+  }
+
+  private requestPriorityWeightResolve(priority: WorkspaceDaemonQueuePriority): number {
+    switch (priority) {
+      case 'highest':
+        return 0;
+      case 'high':
+        return 1;
+      case 'medium':
+        return 2;
+      case 'low':
+        return 3;
+    }
+  }
+
+  private async requestQueueDrain(queueKey: string): Promise<void> {
+    const queue = this.requestQueues.get(queueKey);
+    if (!queue || queue.running) {
+      return;
+    }
+
+    queue.running = true;
+    try {
+      while (queue.entries.length > 0) {
+        queue.entries.sort((left, right) => {
+          const priorityDifference =
+            this.requestPriorityWeightResolve(left.priority) -
+            this.requestPriorityWeightResolve(right.priority);
+          if (priorityDifference !== 0) {
+            return priorityDifference;
+          }
+          return left.sequence - right.sequence;
+        });
+        const next = queue.entries.shift();
+        if (!next) {
+          continue;
+        }
+        try {
+          next.resolve(await next.run());
+        } catch (error) {
+          next.reject(error);
+        }
+      }
+    } finally {
+      queue.running = false;
+      if (queue.entries.length === 0) {
+        this.requestQueues.delete(queueKey);
+      }
+    }
+  }
+
+  private requestSchedule(
+    message: WorkspaceDaemonMessage,
+    requestId: number,
+    run: () => Promise<WorkspaceDaemonServiceResponse>,
+  ): Promise<WorkspaceDaemonServiceResponse> {
+    const queueKey = this.requestQueueKeyResolve(message);
+    if (!queueKey) {
+      return run();
+    }
+
+    const priority = this.requestPriorityResolve(message);
+    let queue = this.requestQueues.get(queueKey);
+    if (!queue) {
+      queue = {
+        running: false,
+        entries: [],
+      };
+      this.requestQueues.set(queueKey, queue);
+    }
+
+    return new Promise<WorkspaceDaemonServiceResponse>((resolve, reject) => {
+      queue.entries.push({
+        requestId,
+        priority,
+        sequence: this.nextQueueSequence,
+        run,
+        resolve,
+        reject,
+      });
+      this.nextQueueSequence += 1;
+      void this.requestQueueDrain(queueKey);
+    });
+  }
+
   async handleEnvelope(
     envelope: WorkspaceDaemonEnvelope,
   ): Promise<WorkspaceDaemonServiceResponse> {
@@ -904,14 +1070,23 @@ export class WorkspaceDaemonSession {
     });
 
     try {
-      const response = await this.handleMessage(envelope, {
-        signal: controller.signal,
+      return await this.requestSchedule(envelope, envelope.id, async () => {
+        const active = this.activeRequests.get(envelope.id);
+        if (active?.cancellationState === 'cancel_requested' || active?.signal.aborted) {
+          return this.requestCancelledResponseCreate();
+        }
+        const response = await this.handleMessage(envelope, {
+          signal: controller.signal,
+        });
+        const completed = this.activeRequests.get(envelope.id);
+        if (
+          completed?.cancellationState === 'cancel_requested' ||
+          completed?.signal.aborted
+        ) {
+          return this.requestCancelledResponseCreate();
+        }
+        return response;
       });
-      const active = this.activeRequests.get(envelope.id);
-      if (active?.cancellationState === 'cancel_requested') {
-        return messageErrorCreate('request_cancelled', 'Request cancelled');
-      }
-      return response;
     } finally {
       this.activeRequests.delete(envelope.id);
     }

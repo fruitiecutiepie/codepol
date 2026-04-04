@@ -18,7 +18,7 @@ import {
   WorkspaceDaemonSession,
   WORKSPACE_DAEMON_PROTOCOL_VERSION,
 } from './daemon.js';
-import { WorkspaceServiceEngine } from './index.js';
+import { WorkspaceServiceEngine, type WorkspaceService } from './index.js';
 
 function tempRuntimeDirCreate(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-daemon-'));
@@ -454,6 +454,209 @@ describe('workspace daemon control plane', () => {
       code: 'daemon_session_mismatch',
       message: `Daemon session mismatch for client session stale-daemon-session-session: expected ${registerResponse.daemonSessionId}, received daemon-stale-session`,
     });
+  });
+
+  it('prioritizes status ahead of medium-priority work within a workspace queue', async () => {
+    const runtimeDir = tempRuntimeDirCreate();
+    tempDirs.push(runtimeDir);
+
+    const { descriptor } = workspaceDaemonDescriptorCreate({ runtimeDir });
+    const queueCalls: string[] = [];
+    let releaseDiagnostics: ((diagnostics: unknown[]) => void) | undefined;
+
+    const service: WorkspaceService = {
+      async registerClientSession(input) {
+        return {
+          clientSessionId: input.clientSessionId ?? 'queued-client-session',
+          daemonSessionId: 'daemon-queued-session',
+        };
+      },
+      async closeClientSession() {},
+      async attachWorkspace() {
+        return {
+          workspaceId: 'workspace-queued',
+          workspaceInstanceId: 'workspace-queued-instance',
+        };
+      },
+      async subscribeDiagnostics() {
+        return {
+          workspaceId: 'workspace-queued',
+          workspaceInstanceId: 'workspace-queued-instance',
+          scope: 'workspace',
+          subscriptionState: 'active',
+        };
+      },
+      async completeReplay() {
+        return {
+          workspaceId: 'workspace-queued',
+          workspaceInstanceId: 'workspace-queued-instance',
+          replayEpoch: 1,
+          replayState: 'applied',
+        };
+      },
+      async openOverlay() {},
+      async updateOverlay() {},
+      async closeOverlay() {},
+      async queryDiagnostics() {
+        queueCalls.push('queryDiagnostics:start');
+        return new Promise((resolve) => {
+          releaseDiagnostics = (diagnostics) => {
+            queueCalls.push('queryDiagnostics:end');
+            resolve(diagnostics as never);
+          };
+        });
+      },
+      async queryCodeActions() {
+        queueCalls.push('queryCodeActions:start');
+        return [];
+      },
+      async applyEditPlan() {
+        return {
+          applied: false,
+          failureReason: 'plan_not_found',
+        };
+      },
+      async queryIndexStatus() {
+        queueCalls.push('queryIndexStatus:start');
+        return {
+          workspaceId: 'workspace-queued',
+          workspaceInstanceId: 'workspace-queued-instance',
+          status: 'ready',
+          indexedFileCount: 1,
+          openDocumentCount: 1,
+          overlayCount: 1,
+          analysisGeneration: 1,
+        };
+      },
+    };
+
+    const session = new WorkspaceDaemonSession({
+      descriptor,
+      service,
+    });
+
+    await expect(
+      session.handleEnvelope({
+        id: 1,
+        type: 'hello',
+        protocolVersion: WORKSPACE_DAEMON_PROTOCOL_VERSION,
+        client: clientIdentityCreate('queued-priority-client'),
+      }),
+    ).resolves.toMatchObject({
+      type: 'hello_ack',
+      compatibility: 'ok',
+    });
+
+    const registerResponse = await session.handleEnvelope({
+      id: 2,
+      type: 'register_client_session',
+      clientKind: 'test',
+      clientInstanceId: 'queued-priority-client',
+      clientSessionId: 'queued-priority-session',
+    });
+    expect(registerResponse.type).toBe('register_client_session_ack');
+    if (registerResponse.type !== 'register_client_session_ack') {
+      return;
+    }
+
+    const attachResponse = await session.handleEnvelope({
+      id: 3,
+      type: 'attach_workspace',
+      clientSessionId: 'queued-priority-session',
+      daemonSessionId: registerResponse.daemonSessionId,
+      rootPath: runtimeDir,
+      configPath: path.join(runtimeDir, 'codepol.toml'),
+    });
+    expect(attachResponse.type).toBe('attach_workspace_ack');
+    if (attachResponse.type !== 'attach_workspace_ack') {
+      return;
+    }
+
+    await expect(
+      session.handleEnvelope({
+        id: 4,
+        type: 'complete_replay',
+        clientSessionId: 'queued-priority-session',
+        daemonSessionId: registerResponse.daemonSessionId,
+        workspaceId: attachResponse.workspaceId,
+        workspaceInstanceId: attachResponse.workspaceInstanceId,
+      }),
+    ).resolves.toEqual({
+      type: 'complete_replay_ack',
+      result: {
+        workspaceId: attachResponse.workspaceId,
+        workspaceInstanceId: attachResponse.workspaceInstanceId,
+        replayEpoch: 1,
+        replayState: 'applied',
+      },
+    });
+
+    const diagnosticsPromise = session.handleEnvelope({
+      id: 5,
+      type: 'query_diagnostics',
+      clientSessionId: 'queued-priority-session',
+      daemonSessionId: registerResponse.daemonSessionId,
+      workspaceId: attachResponse.workspaceId,
+      workspaceInstanceId: attachResponse.workspaceInstanceId,
+      replayEpoch: 1,
+      uri: workspacePathToUri(path.join(runtimeDir, 'src', 'app.ts')),
+    });
+
+    for (let attempt = 0; attempt < 20 && queueCalls.length === 0; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(queueCalls).toEqual(['queryDiagnostics:start']);
+
+    const codeActionsPromise = session.handleEnvelope({
+      id: 6,
+      type: 'query_code_actions',
+      clientSessionId: 'queued-priority-session',
+      daemonSessionId: registerResponse.daemonSessionId,
+      workspaceId: attachResponse.workspaceId,
+      workspaceInstanceId: attachResponse.workspaceInstanceId,
+      replayEpoch: 1,
+      uri: workspacePathToUri(path.join(runtimeDir, 'src', 'app.ts')),
+      version: 1,
+      diagnosticIds: ['diag-1'],
+    });
+
+    const statusPromise = session.handleEnvelope({
+      id: 7,
+      type: 'query_index_status',
+      clientSessionId: 'queued-priority-session',
+      daemonSessionId: registerResponse.daemonSessionId,
+      workspaceId: attachResponse.workspaceId,
+      workspaceInstanceId: attachResponse.workspaceInstanceId,
+      replayEpoch: 1,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(queueCalls).toEqual(['queryDiagnostics:start']);
+    expect(releaseDiagnostics).toBeDefined();
+
+    releaseDiagnostics?.([]);
+
+    await expect(diagnosticsPromise).resolves.toEqual({
+      type: 'query_diagnostics_ack',
+      diagnostics: [],
+    });
+    await expect(statusPromise).resolves.toMatchObject({
+      type: 'query_index_status_ack',
+      indexStatus: {
+        workspaceId: 'workspace-queued',
+      },
+    });
+    await expect(codeActionsPromise).resolves.toEqual({
+      type: 'query_code_actions_ack',
+      codeActions: [],
+    });
+
+    expect(queueCalls).toEqual([
+      'queryDiagnostics:start',
+      'queryDiagnostics:end',
+      'queryIndexStatus:start',
+      'queryCodeActions:start',
+    ]);
   });
 
   it('acknowledges cancel_request and suppresses a canceled daemon response', async () => {
