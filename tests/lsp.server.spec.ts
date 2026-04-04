@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import type { WorkspaceCodeAction } from '@codepol/core';
 import type {
   WorkspaceDaemonConnectFn,
   WorkspaceDaemonDescriptor,
@@ -612,6 +613,265 @@ describe('CodepolLspServer', () => {
 
     const finalPublish = messages.filter((message) => message.method === 'textDocument/publishDiagnostics')[2];
     expect(finalPublish?.params.diagnostics).toHaveLength(1);
+  });
+
+  it('suppresses stale diagnostics when an older query resolves after a newer change', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(workspaceRoot, 'codepol.toml'), noInterfaceConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = pathToFileURL(filePath).href;
+    const diagnosticsResolvers: Array<(value: any[]) => void> = [];
+
+    const service: WorkspaceService = {
+      async registerClientSession() {
+        return {
+          clientSessionId: 'client-1',
+          daemonSessionId: 'daemon-1',
+        };
+      },
+      async closeClientSession() {},
+      async attachWorkspace() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+        };
+      },
+      async subscribeDiagnostics() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          scope: 'workspace',
+          subscriptionState: 'active',
+        };
+      },
+      async completeReplay() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          replayState: 'applied',
+        };
+      },
+      async openOverlay() {},
+      async updateOverlay() {},
+      async closeOverlay() {},
+      async queryDiagnostics() {
+        return new Promise((resolve) => {
+          diagnosticsResolvers.push(resolve);
+        });
+      },
+      async queryCodeActions() {
+        return [];
+      },
+      async applyEditPlan() {
+        return { applied: false, failureReason: 'plan_not_found' };
+      },
+      async queryIndexStatus() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          status: 'cold',
+          indexedFileCount: 0,
+          openDocumentCount: 0,
+          overlayCount: 0,
+          analysisGeneration: 0,
+        };
+      },
+    };
+
+    const messages: any[] = [];
+    const server = new CodepolLspServer({
+      service,
+      sendMessage: (message) => {
+        messages.push(message);
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        rootUri: pathToFileURL(workspaceRoot).href,
+      },
+    });
+
+    const openPromise = server.handleMessage({
+      jsonrpc: '2.0',
+      method: 'textDocument/didOpen',
+      params: {
+        textDocument: {
+          uri,
+          version: 1,
+          text: 'export interface User {\n  name: string;\n}\n',
+        },
+      },
+    });
+
+    for (let attempt = 0; attempt < 20 && diagnosticsResolvers.length < 1; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(diagnosticsResolvers).toHaveLength(1);
+
+    const changePromise = server.handleMessage({
+      jsonrpc: '2.0',
+      method: 'textDocument/didChange',
+      params: {
+        textDocument: { uri, version: 2 },
+        contentChanges: [{ text: 'export type User = {\n  name: string;\n};\n' }],
+      },
+    });
+
+    for (let attempt = 0; attempt < 20 && diagnosticsResolvers.length < 2; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(diagnosticsResolvers).toHaveLength(2);
+
+    diagnosticsResolvers[1]!([]);
+    await changePromise;
+
+    diagnosticsResolvers[0]!([
+      {
+        id: 'diag-1',
+        uri,
+        source: 'codepol',
+        code: 'no-interface',
+        severity: 'error',
+        message: 'Interfaces are not allowed.',
+        range: {
+          start: { line: 0, character: 7 },
+          end: { line: 0, character: 16 },
+        },
+      },
+    ]);
+    await openPromise;
+
+    const publishMessages = messages.filter(
+      (message) => message.method === 'textDocument/publishDiagnostics',
+    );
+    expect(publishMessages).toHaveLength(1);
+    expect(publishMessages[0]?.params.diagnostics).toEqual([]);
+  });
+
+  it('returns request-cancelled when a code action request is canceled in flight', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');
+    createdDirs.push(workspaceRoot);
+    fs.writeFileSync(path.join(workspaceRoot, 'codepol.toml'), noInterfaceConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    const uri = pathToFileURL(filePath).href;
+    let resolveCodeActions: ((value: WorkspaceCodeAction[]) => void) | undefined;
+
+    const service: WorkspaceService = {
+      async registerClientSession() {
+        return {
+          clientSessionId: 'client-1',
+          daemonSessionId: 'daemon-1',
+        };
+      },
+      async closeClientSession() {},
+      async attachWorkspace() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+        };
+      },
+      async subscribeDiagnostics() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          scope: 'workspace',
+          subscriptionState: 'active',
+        };
+      },
+      async completeReplay() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          replayState: 'applied',
+        };
+      },
+      async openOverlay() {},
+      async updateOverlay() {},
+      async closeOverlay() {},
+      async queryDiagnostics() {
+        return [];
+      },
+      async queryCodeActions() {
+        return new Promise((resolve) => {
+          resolveCodeActions = resolve;
+        });
+      },
+      async applyEditPlan() {
+        return { applied: false, failureReason: 'plan_not_found' };
+      },
+      async queryIndexStatus() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          status: 'cold',
+          indexedFileCount: 0,
+          openDocumentCount: 0,
+          overlayCount: 0,
+          analysisGeneration: 0,
+        };
+      },
+    };
+
+    const messages: any[] = [];
+    const server = new CodepolLspServer({
+      service,
+      sendMessage: (message) => {
+        messages.push(message);
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        rootUri: pathToFileURL(workspaceRoot).href,
+      },
+    });
+
+    const requestPromise = server.handleMessage({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'textDocument/codeAction',
+      params: {
+        textDocument: { uri },
+        context: {
+          diagnostics: [{ data: { id: 'diag-1' } }],
+        },
+      },
+    });
+
+    for (let attempt = 0; attempt < 20 && !resolveCodeActions; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(resolveCodeActions).toBeDefined();
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      method: '$/cancelRequest',
+      params: {
+        id: 2,
+      },
+    });
+
+    resolveCodeActions!([]);
+    await requestPromise;
+
+    const response = messages.find((message) => message.id === 2);
+    expect(response?.error).toEqual({
+      code: -32800,
+      message: 'Request cancelled',
+    });
+    expect(response?.result).toBeUndefined();
   });
 
   it('returns code actions for a related diagnostic range when the editor sends no diagnostic ids', async () => {

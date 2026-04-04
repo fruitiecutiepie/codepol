@@ -144,6 +144,9 @@
   - post-replay diagnostics are republished from the new daemon session
 
 ### Workstream 3: Request Metadata, Queueing, And Cancellation
+- Started in the repo:
+  - `apps/lsp` now treats `$/cancelRequest` as best-effort request cancellation and returns `Request cancelled` for in-flight LSP requests canceled before response publication
+  - diagnostics publication in `apps/lsp` is now freshness-gated by workspace replay epoch plus per-document state version so older diagnostic queries cannot overwrite newer open/change/close state
 - Formalize a request envelope that carries enough freshness data to reject or suppress stale work:
   - `daemonSessionId`
   - `clientSessionId`

@@ -232,10 +232,14 @@ export class CodepolLspServer {
     number,
     { resolve: (value: unknown) => void; reject: (error: Error) => void }
   >();
+  private readonly activeRequestIds = new Set<number | string>();
+  private readonly canceledRequestIds = new Set<number | string>();
+  private readonly diagnosticsStateVersions = new Map<string, number>();
   private registeredClientSessionId: string | undefined;
   private workspaceId: string | undefined;
   private workspaceRootPath: string | undefined;
   private workspaceConfigPath: string | undefined;
+  private workspaceEpoch = 0;
   private nextRequestId = 1;
 
   constructor(options: {
@@ -273,6 +277,72 @@ export class CodepolLspServer {
   private serviceReset(): void {
     this.service = undefined;
     this.servicePromise = undefined;
+  }
+
+  private workspaceEpochBump(): void {
+    this.workspaceEpoch += 1;
+  }
+
+  private diagnosticsStateVersionBump(uri: string): number {
+    const next = (this.diagnosticsStateVersions.get(uri) ?? 0) + 1;
+    this.diagnosticsStateVersions.set(uri, next);
+    return next;
+  }
+
+  private diagnosticsPublishCurrentIs(input: {
+    uri: string;
+    expectedStateVersion: number;
+    expectedWorkspaceEpoch: number;
+    expectedClientSessionId: string;
+    expectedWorkspaceId: string;
+  }): boolean {
+    return (
+      this.workspaceEpoch === input.expectedWorkspaceEpoch &&
+      this.registeredClientSessionId === input.expectedClientSessionId &&
+      this.workspaceId === input.expectedWorkspaceId &&
+      (this.diagnosticsStateVersions.get(input.uri) ?? 0) === input.expectedStateVersion
+    );
+  }
+
+  private requestIdTrackStart(id: JsonRpcId): void {
+    if (typeof id === 'number' || typeof id === 'string') {
+      this.activeRequestIds.add(id);
+    }
+  }
+
+  private requestIdTrackEnd(id: JsonRpcId): void {
+    if (typeof id === 'number' || typeof id === 'string') {
+      this.activeRequestIds.delete(id);
+      this.canceledRequestIds.delete(id);
+    }
+  }
+
+  private requestCanceledConsume(id: JsonRpcId): boolean {
+    if (
+      (typeof id === 'number' || typeof id === 'string') &&
+      this.canceledRequestIds.has(id)
+    ) {
+      this.canceledRequestIds.delete(id);
+      return true;
+    }
+    return false;
+  }
+
+  private requestCancelHandle(params: { id?: JsonRpcId }): void {
+    if (typeof params.id === 'number') {
+      const pending = this.pendingClientRequests.get(params.id);
+      if (pending) {
+        this.pendingClientRequests.delete(params.id);
+        pending.reject(new Error('Request cancelled'));
+        return;
+      }
+    }
+    if (
+      (typeof params.id === 'number' || typeof params.id === 'string') &&
+      this.activeRequestIds.has(params.id)
+    ) {
+      this.canceledRequestIds.add(params.id);
+    }
   }
 
   private serviceErrorRecoverableIs(error: unknown): boolean {
@@ -320,6 +390,7 @@ export class CodepolLspServer {
         workspaceInstanceId: attached.workspaceInstanceId,
       });
       this.workspaceId = attached.workspaceId;
+      this.workspaceEpochBump();
       return service;
     })().finally(() => {
       this.reconnectPromise = undefined;
@@ -374,14 +445,48 @@ export class CodepolLspServer {
   }
 
   private async requestHandle(message: JsonRpcRequest): Promise<void> {
+    this.requestIdTrackStart(message.id);
     try {
+      if (this.requestCanceledConsume(message.id)) {
+        this.sendMessage({
+          jsonrpc: '2.0',
+          id: message.id,
+          error: {
+            code: -32800,
+            message: 'Request cancelled',
+          },
+        });
+        return;
+      }
       const result = await this.methodHandle(message.method, message.params);
+      if (this.requestCanceledConsume(message.id)) {
+        this.sendMessage({
+          jsonrpc: '2.0',
+          id: message.id,
+          error: {
+            code: -32800,
+            message: 'Request cancelled',
+          },
+        });
+        return;
+      }
       this.sendMessage({
         jsonrpc: '2.0',
         id: message.id,
         result,
       });
     } catch (error) {
+      if (this.requestCanceledConsume(message.id)) {
+        this.sendMessage({
+          jsonrpc: '2.0',
+          id: message.id,
+          error: {
+            code: -32800,
+            message: 'Request cancelled',
+          },
+        });
+        return;
+      }
       this.sendMessage({
         jsonrpc: '2.0',
         id: message.id,
@@ -390,10 +495,16 @@ export class CodepolLspServer {
           message: error instanceof Error ? error.message : String(error),
         },
       });
+    } finally {
+      this.requestIdTrackEnd(message.id);
     }
   }
 
   private async notificationHandle(message: JsonRpcNotification): Promise<void> {
+    if (message.method === '$/cancelRequest') {
+      this.requestCancelHandle(message.params as { id?: JsonRpcId });
+      return;
+    }
     await this.methodHandle(message.method, message.params);
   }
 
@@ -480,6 +591,7 @@ export class CodepolLspServer {
           workspaceInstanceId: attached.workspaceInstanceId,
         });
         this.workspaceId = attached.workspaceId;
+        this.workspaceEpochBump();
       } catch {
         this.workspaceId = undefined;
       }
@@ -543,6 +655,9 @@ export class CodepolLspServer {
       version: params.textDocument.version,
       text: params.textDocument.text,
     });
+    const expectedStateVersion = this.diagnosticsStateVersionBump(
+      params.textDocument.uri,
+    );
     await this.serviceCall(async (service) => {
       await service.openOverlay({
         clientSessionId: this.registeredClientSessionId!,
@@ -551,7 +666,10 @@ export class CodepolLspServer {
         version: params.textDocument.version,
         text: params.textDocument.text,
       });
-      await this.publishDiagnostics(params.textDocument.uri, service);
+      await this.publishDiagnostics(params.textDocument.uri, {
+        service,
+        expectedStateVersion,
+      });
     });
   }
 
@@ -580,6 +698,7 @@ export class CodepolLspServer {
       text: nextText,
     };
     this.documents.set(current.uri, nextDocument);
+    const expectedStateVersion = this.diagnosticsStateVersionBump(current.uri);
     await this.serviceCall(async (service) => {
       await service.updateOverlay({
         clientSessionId: this.registeredClientSessionId!,
@@ -588,7 +707,10 @@ export class CodepolLspServer {
         version: nextDocument.version,
         text: nextDocument.text,
       });
-      await this.publishDiagnostics(current.uri, service);
+      await this.publishDiagnostics(current.uri, {
+        service,
+        expectedStateVersion,
+      });
     });
   }
 
@@ -599,13 +721,19 @@ export class CodepolLspServer {
       return;
     }
     this.documents.delete(params.textDocument.uri);
+    const expectedStateVersion = this.diagnosticsStateVersionBump(
+      params.textDocument.uri,
+    );
     await this.serviceCall(async (service) => {
       await service.closeOverlay({
         clientSessionId: this.registeredClientSessionId!,
         workspaceId: this.workspaceId!,
         uri: params.textDocument.uri,
       });
-      await this.publishDiagnostics(params.textDocument.uri, service);
+      await this.publishDiagnostics(params.textDocument.uri, {
+        service,
+        expectedStateVersion,
+      });
     });
   }
 
@@ -705,17 +833,34 @@ export class CodepolLspServer {
 
   private async publishDiagnostics(
     uri: string,
-    service?: WorkspaceService,
+    options: {
+      expectedStateVersion: number;
+      service?: WorkspaceService;
+    },
   ): Promise<void> {
     if (!this.registeredClientSessionId || !this.workspaceId) {
       return;
     }
-    const activeService = service ?? (await this.serviceGet());
+    const expectedWorkspaceEpoch = this.workspaceEpoch;
+    const expectedClientSessionId = this.registeredClientSessionId;
+    const expectedWorkspaceId = this.workspaceId;
+    const activeService = options.service ?? (await this.serviceGet());
     const diagnostics = await activeService.queryDiagnostics({
-      clientSessionId: this.registeredClientSessionId,
-      workspaceId: this.workspaceId,
+      clientSessionId: expectedClientSessionId,
+      workspaceId: expectedWorkspaceId,
       uri,
     });
+    if (
+      !this.diagnosticsPublishCurrentIs({
+        uri,
+        expectedStateVersion: options.expectedStateVersion,
+        expectedWorkspaceEpoch,
+        expectedClientSessionId,
+        expectedWorkspaceId,
+      })
+    ) {
+      return;
+    }
     this.sendMessage({
       jsonrpc: '2.0',
       method: 'textDocument/publishDiagnostics',
