@@ -1,9 +1,14 @@
 #!/usr/bin/env node
 
-import { workspaceDaemonServerStart } from '@codepol/workspace-service';
+import {
+  WorkspaceServiceEngine,
+  workspaceDaemonServerStart,
+} from '@codepol/workspace-service';
 
 async function main(): Promise<void> {
-  const server = await workspaceDaemonServerStart();
+  const server = await workspaceDaemonServerStart({
+    service: new WorkspaceServiceEngine(),
+  });
 
   const shutdown = async (): Promise<void> => {
     process.off('SIGINT', onSigint);

@@ -115,6 +115,9 @@
   - open-document replay
   - authoritative overlay snapshot replay
   - `complete_replay`
+- Started in the repo:
+  - the daemon layer now has hello-gated RPC handling for the current `WorkspaceService` surface, including `register_client_session`, `attach_workspace`, overlay methods, diagnostics, code actions, edit-plan apply, and index status
+  - `WorkspaceDaemonServiceClient` now maps the current daemon RPC surface back to the existing `WorkspaceService` interface
 - Keep `clientSessionId` client-generated and stable for the lifetime of one editor window or CLI consumer.
 - Make reconnect mean full re-registration plus re-attach plus replay. Never assume transport continuity equals session continuity.
 - Use this replay order:

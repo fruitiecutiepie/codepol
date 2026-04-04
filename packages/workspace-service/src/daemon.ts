@@ -3,6 +3,19 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import type {
+  ClientSessionId,
+  DaemonSessionId,
+  IndexStatusResult,
+  WorkspaceApplyResult,
+  WorkspaceCodeAction,
+  WorkspaceDiagnostic,
+  WorkspaceInstanceId,
+} from '@codepol/core';
+import type {
+  WorkspaceClientKind,
+  WorkspaceService,
+} from './index';
 
 export const WORKSPACE_DAEMON_PROTOCOL_VERSION = '0.1';
 export const WORKSPACE_DAEMON_ENGINE_VERSION =
@@ -74,7 +87,7 @@ export type WorkspaceDaemonErrorResponse = {
   message: string;
 };
 
-type WorkspaceDaemonEnvelope = {
+export type WorkspaceDaemonEnvelope = {
   id: number;
   type: string;
 } & JsonObject;
@@ -91,6 +104,7 @@ type WorkspaceDaemonServerStartOptions = {
   buildId?: string;
   installId?: string;
   capabilities?: Record<string, boolean>;
+  service?: WorkspaceService;
 };
 
 type WorkspaceDaemonLaunchLock = {
@@ -130,6 +144,130 @@ export type WorkspaceDaemonLaunchResult = {
   hello: WorkspaceDaemonHelloAck;
   launched: boolean;
 };
+
+type WorkspaceDaemonMessage = Omit<WorkspaceDaemonEnvelope, 'id'>;
+
+type WorkspaceDaemonRegisterClientSessionRequest = WorkspaceDaemonMessage & {
+  type: 'register_client_session';
+  clientKind: WorkspaceClientKind;
+  clientInstanceId: string;
+};
+
+type WorkspaceDaemonCloseClientSessionRequest = WorkspaceDaemonMessage & {
+  type: 'close_client_session';
+  clientSessionId: ClientSessionId;
+};
+
+type WorkspaceDaemonAttachWorkspaceRequest = WorkspaceDaemonMessage & {
+  type: 'attach_workspace';
+  clientSessionId: ClientSessionId;
+  rootPath: string;
+  configPath: string;
+};
+
+type WorkspaceDaemonOpenOverlayRequest = WorkspaceDaemonMessage & {
+  type: 'open_overlay';
+  clientSessionId: ClientSessionId;
+  workspaceId: string;
+  uri: string;
+  version: number;
+  text: string;
+};
+
+type WorkspaceDaemonUpdateOverlayRequest = WorkspaceDaemonMessage & {
+  type: 'update_overlay';
+  clientSessionId: ClientSessionId;
+  workspaceId: string;
+  uri: string;
+  version: number;
+  text: string;
+};
+
+type WorkspaceDaemonCloseOverlayRequest = WorkspaceDaemonMessage & {
+  type: 'close_overlay';
+  clientSessionId: ClientSessionId;
+  workspaceId: string;
+  uri: string;
+};
+
+type WorkspaceDaemonQueryDiagnosticsRequest = WorkspaceDaemonMessage & {
+  type: 'query_diagnostics';
+  clientSessionId: ClientSessionId;
+  workspaceId: string;
+  uri?: string;
+};
+
+type WorkspaceDaemonQueryCodeActionsRequest = WorkspaceDaemonMessage & {
+  type: 'query_code_actions';
+  clientSessionId: ClientSessionId;
+  workspaceId: string;
+  uri: string;
+  version: number;
+  diagnosticIds?: string[];
+};
+
+type WorkspaceDaemonApplyEditPlanRequest = WorkspaceDaemonMessage & {
+  type: 'apply_edit_plan';
+  clientSessionId: ClientSessionId;
+  workspaceId: string;
+  planId: string;
+  documentVersions: Record<string, number>;
+};
+
+type WorkspaceDaemonQueryIndexStatusRequest = WorkspaceDaemonMessage & {
+  type: 'query_index_status';
+  clientSessionId: ClientSessionId;
+  workspaceId: string;
+};
+
+type WorkspaceDaemonRegisterClientSessionAck = {
+  type: 'register_client_session_ack';
+  clientSessionId: ClientSessionId;
+  daemonSessionId: DaemonSessionId;
+};
+
+type WorkspaceDaemonAttachWorkspaceAck = {
+  type: 'attach_workspace_ack';
+  workspaceId: string;
+  workspaceInstanceId: WorkspaceInstanceId;
+};
+
+type WorkspaceDaemonQueryDiagnosticsAck = {
+  type: 'query_diagnostics_ack';
+  diagnostics: WorkspaceDiagnostic[];
+};
+
+type WorkspaceDaemonQueryCodeActionsAck = {
+  type: 'query_code_actions_ack';
+  codeActions: WorkspaceCodeAction[];
+};
+
+type WorkspaceDaemonApplyEditPlanAck = {
+  type: 'apply_edit_plan_ack';
+  result: WorkspaceApplyResult;
+};
+
+type WorkspaceDaemonQueryIndexStatusAck = {
+  type: 'query_index_status_ack';
+  indexStatus: IndexStatusResult;
+};
+
+type WorkspaceDaemonVoidAck =
+  | { type: 'close_client_session_ack' }
+  | { type: 'open_overlay_ack' }
+  | { type: 'update_overlay_ack' }
+  | { type: 'close_overlay_ack' };
+
+type WorkspaceDaemonServiceResponse =
+  | WorkspaceDaemonRegisterClientSessionAck
+  | WorkspaceDaemonAttachWorkspaceAck
+  | WorkspaceDaemonQueryDiagnosticsAck
+  | WorkspaceDaemonQueryCodeActionsAck
+  | WorkspaceDaemonApplyEditPlanAck
+  | WorkspaceDaemonQueryIndexStatusAck
+  | WorkspaceDaemonVoidAck
+  | WorkspaceDaemonHelloAck
+  | WorkspaceDaemonErrorResponse;
 
 function workspaceDaemonOwnerUidGet(): string | undefined {
   if (typeof process.getuid !== 'function') {
@@ -399,7 +537,7 @@ export async function workspaceDaemonHello(
 export function workspaceDaemonRequestHandle(options: {
   descriptor: WorkspaceDaemonDescriptor;
   capabilities?: Record<string, boolean>;
-  message: Omit<WorkspaceDaemonEnvelope, 'id'>;
+  message: WorkspaceDaemonMessage;
 }): WorkspaceDaemonHelloAck | WorkspaceDaemonErrorResponse {
   const capabilities = {
     hello: true,
@@ -441,6 +579,296 @@ export function workspaceDaemonRequestHandle(options: {
     'unsupported_request',
     `Unsupported daemon request: ${options.message.type}`,
   );
+}
+
+export class WorkspaceDaemonSession {
+  private didHello = false;
+
+  constructor(
+    private readonly options: {
+      descriptor: WorkspaceDaemonDescriptor;
+      capabilities?: Record<string, boolean>;
+      service?: WorkspaceService;
+    },
+  ) {}
+
+  async handleMessage(
+    message: WorkspaceDaemonMessage,
+  ): Promise<WorkspaceDaemonServiceResponse> {
+    if (message.type === 'hello') {
+      const response = workspaceDaemonRequestHandle({
+        descriptor: this.options.descriptor,
+        capabilities: this.options.capabilities,
+        message,
+      });
+      if (response.type === 'hello_ack' && response.compatibility === 'ok') {
+        this.didHello = true;
+      }
+      return response;
+    }
+
+    if (!this.didHello) {
+      return messageErrorCreate(
+        'hello_required',
+        'hello handshake required before normal requests',
+      );
+    }
+
+    if (!this.options.service) {
+      return messageErrorCreate(
+        'unsupported_request',
+        `Unsupported daemon request: ${message.type}`,
+      );
+    }
+
+    try {
+      switch (message.type) {
+        case 'register_client_session': {
+          const input = message as WorkspaceDaemonRegisterClientSessionRequest;
+          const result = await this.options.service.registerClientSession({
+            clientKind: input.clientKind,
+            clientInstanceId: input.clientInstanceId,
+          });
+          return {
+            type: 'register_client_session_ack',
+            clientSessionId: result.clientSessionId,
+            daemonSessionId: result.daemonSessionId,
+          };
+        }
+        case 'close_client_session': {
+          const input = message as WorkspaceDaemonCloseClientSessionRequest;
+          await this.options.service.closeClientSession({
+            clientSessionId: input.clientSessionId,
+          });
+          return { type: 'close_client_session_ack' };
+        }
+        case 'attach_workspace': {
+          const input = message as WorkspaceDaemonAttachWorkspaceRequest;
+          const result = await this.options.service.attachWorkspace({
+            clientSessionId: input.clientSessionId,
+            rootPath: input.rootPath,
+            configPath: input.configPath,
+          });
+          return {
+            type: 'attach_workspace_ack',
+            workspaceId: result.workspaceId,
+            workspaceInstanceId: result.workspaceInstanceId,
+          };
+        }
+        case 'open_overlay': {
+          const input = message as WorkspaceDaemonOpenOverlayRequest;
+          await this.options.service.openOverlay(input);
+          return { type: 'open_overlay_ack' };
+        }
+        case 'update_overlay': {
+          const input = message as WorkspaceDaemonUpdateOverlayRequest;
+          await this.options.service.updateOverlay(input);
+          return { type: 'update_overlay_ack' };
+        }
+        case 'close_overlay': {
+          const input = message as WorkspaceDaemonCloseOverlayRequest;
+          await this.options.service.closeOverlay(input);
+          return { type: 'close_overlay_ack' };
+        }
+        case 'query_diagnostics': {
+          const input = message as WorkspaceDaemonQueryDiagnosticsRequest;
+          const diagnostics = await this.options.service.queryDiagnostics(input);
+          return {
+            type: 'query_diagnostics_ack',
+            diagnostics,
+          };
+        }
+        case 'query_code_actions': {
+          const input = message as WorkspaceDaemonQueryCodeActionsRequest;
+          const codeActions = await this.options.service.queryCodeActions(input);
+          return {
+            type: 'query_code_actions_ack',
+            codeActions,
+          };
+        }
+        case 'apply_edit_plan': {
+          const input = message as WorkspaceDaemonApplyEditPlanRequest;
+          const result = await this.options.service.applyEditPlan(input);
+          return {
+            type: 'apply_edit_plan_ack',
+            result,
+          };
+        }
+        case 'query_index_status': {
+          const input = message as WorkspaceDaemonQueryIndexStatusRequest;
+          const indexStatus = await this.options.service.queryIndexStatus(input);
+          return {
+            type: 'query_index_status_ack',
+            indexStatus,
+          };
+        }
+        default:
+          return messageErrorCreate(
+            'unsupported_request',
+            `Unsupported daemon request: ${message.type}`,
+          );
+      }
+    } catch (error) {
+      return messageErrorCreate(
+        'request_failed',
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+}
+
+export class WorkspaceDaemonServiceClient implements WorkspaceService {
+  constructor(private readonly connection: WorkspaceDaemonRequestClient) {}
+
+  registerClientSession(input: {
+    clientKind: WorkspaceClientKind;
+    clientInstanceId: string;
+  }): Promise<{ clientSessionId: ClientSessionId; daemonSessionId: DaemonSessionId }> {
+    return this.connection.request<WorkspaceDaemonRegisterClientSessionAck>({
+      type: 'register_client_session',
+      clientKind: input.clientKind,
+      clientInstanceId: input.clientInstanceId,
+    }).then((response) => ({
+      clientSessionId: response.clientSessionId,
+      daemonSessionId: response.daemonSessionId,
+    }));
+  }
+
+  closeClientSession(input: { clientSessionId: ClientSessionId }): Promise<void> {
+    return this.connection.request<WorkspaceDaemonVoidAck>({
+      type: 'close_client_session',
+      clientSessionId: input.clientSessionId,
+    }).then(() => undefined);
+  }
+
+  attachWorkspace(input: {
+    clientSessionId: ClientSessionId;
+    rootPath: string;
+    configPath: string;
+  }): Promise<{ workspaceId: string; workspaceInstanceId: WorkspaceInstanceId }> {
+    return this.connection.request<WorkspaceDaemonAttachWorkspaceAck>({
+      type: 'attach_workspace',
+      clientSessionId: input.clientSessionId,
+      rootPath: input.rootPath,
+      configPath: input.configPath,
+    }).then((response) => ({
+      workspaceId: response.workspaceId,
+      workspaceInstanceId: response.workspaceInstanceId,
+    }));
+  }
+
+  openOverlay(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    version: number;
+    text: string;
+  }): Promise<void> {
+    return this.connection.request<WorkspaceDaemonVoidAck>({
+      type: 'open_overlay',
+      clientSessionId: input.clientSessionId,
+      workspaceId: input.workspaceId,
+      uri: input.uri,
+      version: input.version,
+      text: input.text,
+    }).then(() => undefined);
+  }
+
+  updateOverlay(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    version: number;
+    text: string;
+  }): Promise<void> {
+    return this.connection.request<WorkspaceDaemonVoidAck>({
+      type: 'update_overlay',
+      clientSessionId: input.clientSessionId,
+      workspaceId: input.workspaceId,
+      uri: input.uri,
+      version: input.version,
+      text: input.text,
+    }).then(() => undefined);
+  }
+
+  closeOverlay(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+  }): Promise<void> {
+    return this.connection.request<WorkspaceDaemonVoidAck>({
+      type: 'close_overlay',
+      clientSessionId: input.clientSessionId,
+      workspaceId: input.workspaceId,
+      uri: input.uri,
+    }).then(() => undefined);
+  }
+
+  queryDiagnostics(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri?: string;
+  }): Promise<WorkspaceDiagnostic[]> {
+    return this.connection.request<WorkspaceDaemonQueryDiagnosticsAck>({
+      type: 'query_diagnostics',
+      clientSessionId: input.clientSessionId,
+      workspaceId: input.workspaceId,
+      uri: input.uri,
+    }).then((response) => response.diagnostics);
+  }
+
+  queryCodeActions(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    version: number;
+    diagnosticIds?: string[];
+  }): Promise<WorkspaceCodeAction[]> {
+    return this.connection.request<WorkspaceDaemonQueryCodeActionsAck>({
+      type: 'query_code_actions',
+      clientSessionId: input.clientSessionId,
+      workspaceId: input.workspaceId,
+      uri: input.uri,
+      version: input.version,
+      diagnosticIds: input.diagnosticIds,
+    }).then((response) => response.codeActions);
+  }
+
+  applyEditPlan(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    planId: string;
+    documentVersions: Record<string, number>;
+  }): Promise<WorkspaceApplyResult> {
+    return this.connection.request<WorkspaceDaemonApplyEditPlanAck>({
+      type: 'apply_edit_plan',
+      clientSessionId: input.clientSessionId,
+      workspaceId: input.workspaceId,
+      planId: input.planId,
+      documentVersions: input.documentVersions,
+    }).then((response) => response.result);
+  }
+
+  queryIndexStatus(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+  }): Promise<IndexStatusResult> {
+    return this.connection.request<WorkspaceDaemonQueryIndexStatusAck>({
+      type: 'query_index_status',
+      clientSessionId: input.clientSessionId,
+      workspaceId: input.workspaceId,
+    }).then((response) => response.indexStatus);
+  }
+
+  close(): Promise<void> {
+    return this.connection.close();
+  }
+}
+
+export function workspaceDaemonServiceClientCreate(options: {
+  connection: WorkspaceDaemonRequestClient;
+}): WorkspaceService {
+  return new WorkspaceDaemonServiceClient(options.connection);
 }
 
 async function workspaceDaemonConnectHealthy(
@@ -623,6 +1051,11 @@ export async function workspaceDaemonServerStart(
   };
 
   const server = net.createServer((socket) => {
+    const session = new WorkspaceDaemonSession({
+      descriptor,
+      capabilities,
+      service: options.service,
+    });
     socket.setEncoding('utf8');
     let buffer = '';
     socket.on('data', (chunk: string | Buffer) => {
@@ -635,14 +1068,24 @@ export async function workspaceDaemonServerStart(
           return;
         }
 
-        envelopeWrite(socket, {
-          id: parsed.id,
-          ...workspaceDaemonRequestHandle({
-            descriptor,
-            capabilities,
-            message: parsed,
-          }),
-        });
+        void session
+          .handleMessage(parsed)
+          .then((response) => {
+            envelopeWrite(socket, {
+              id: parsed.id,
+              ...(response as JsonObject),
+            } as WorkspaceDaemonEnvelope);
+          })
+          .catch((error) => {
+            envelopeWrite(
+              socket,
+              errorEnvelopeCreate(
+                parsed.id,
+                'internal_error',
+                error instanceof Error ? error.message : String(error),
+              ),
+            );
+          });
       });
     });
   });

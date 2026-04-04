@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { workspacePathToUri } from '@codepol/core';
 import type {
   WorkspaceDaemonConnectFn,
   WorkspaceDaemonDescriptor,
@@ -11,10 +12,13 @@ import {
   workspaceDaemonDescriptorCreate,
   workspaceDaemonDescriptorRead,
   workspaceDaemonDescriptorWrite,
+  workspaceDaemonHello,
   workspaceDaemonLaunchOrConnect,
-  workspaceDaemonRequestHandle,
+  WorkspaceDaemonServiceClient,
+  WorkspaceDaemonSession,
   WORKSPACE_DAEMON_PROTOCOL_VERSION,
 } from './daemon.js';
+import { WorkspaceServiceEngine } from './index.js';
 
 function tempRuntimeDirCreate(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-daemon-'));
@@ -30,32 +34,56 @@ function clientIdentityCreate(instanceId: string) {
   };
 }
 
+function noInterfaceConfigContentCreate(): string {
+  return `[[plugins]]
+id = "@codepol/plugin"
+source = { kind = "builtin" }
+
+[targets.src]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[[rules]]
+ruleId = "@codepol/plugin/no-interface"
+targets = ["src"]
+`;
+}
+
 describe('workspace daemon control plane', () => {
-  const runtimeDirs: string[] = [];
-  const liveDescriptors = new Map<string, WorkspaceDaemonDescriptor>();
+  const tempDirs: string[] = [];
+  const liveDaemons = new Map<
+    string,
+    { descriptor: WorkspaceDaemonDescriptor; service?: WorkspaceServiceEngine }
+  >();
 
   afterEach(() => {
-    liveDescriptors.clear();
-    for (const runtimeDir of runtimeDirs.splice(0)) {
-      fs.rmSync(runtimeDir, { recursive: true, force: true });
+    liveDaemons.clear();
+    for (const dir of tempDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
   const connect: WorkspaceDaemonConnectFn = async (
     descriptor: WorkspaceDaemonDescriptor,
   ): Promise<WorkspaceDaemonRequestClient> => {
-    const live = liveDescriptors.get(descriptor.transport.path);
-    if (!live || live.sessionNonce !== descriptor.sessionNonce) {
+    const live = liveDaemons.get(descriptor.transport.path);
+    if (!live || live.descriptor.sessionNonce !== descriptor.sessionNonce) {
       throw new Error('daemon unavailable');
     }
+
+    const session = new WorkspaceDaemonSession({
+      descriptor: live.descriptor,
+      service: live.service,
+    });
+
     return {
       async request<TResponse extends Record<string, unknown>>(
         message: Parameters<WorkspaceDaemonRequestClient['request']>[0],
       ): Promise<TResponse> {
-        const response = workspaceDaemonRequestHandle({
-          descriptor: live,
-          message,
-        });
+        const response = await session.handleMessage(message);
+        if (response.type === 'error') {
+          throw new Error(response.message);
+        }
         return response as unknown as TResponse;
       },
       async close(): Promise<void> {},
@@ -64,11 +92,11 @@ describe('workspace daemon control plane', () => {
 
   it('persists the runtime descriptor and serves the hello contract', async () => {
     const runtimeDir = tempRuntimeDirCreate();
-    runtimeDirs.push(runtimeDir);
+    tempDirs.push(runtimeDir);
 
     const { descriptor } = workspaceDaemonDescriptorCreate({ runtimeDir });
     workspaceDaemonDescriptorWrite(runtimeDir, descriptor);
-    liveDescriptors.set(descriptor.transport.path, descriptor);
+    liveDaemons.set(descriptor.transport.path, { descriptor });
 
     const persisted = workspaceDaemonDescriptorRead(runtimeDir);
     expect(persisted).toMatchObject({
@@ -95,9 +123,72 @@ describe('workspace daemon control plane', () => {
     await launched.connection.close();
   });
 
+  it('requires hello before service RPC and serves the current workspace-service surface after handshake', async () => {
+    const runtimeDir = tempRuntimeDirCreate();
+    tempDirs.push(runtimeDir);
+
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-daemon-workspace-'));
+    tempDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'codepol.toml'),
+      noInterfaceConfigContentCreate(),
+      'utf8',
+    );
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = workspacePathToUri(filePath);
+    fs.writeFileSync(
+      filePath,
+      'export interface User {\n  name: string;\n}\n',
+      'utf8',
+    );
+
+    const engine = new WorkspaceServiceEngine();
+    const { descriptor } = workspaceDaemonDescriptorCreate({ runtimeDir });
+    workspaceDaemonDescriptorWrite(runtimeDir, descriptor);
+    liveDaemons.set(descriptor.transport.path, { descriptor, service: engine });
+
+    const connection = await connect(descriptor);
+    await expect(
+      connection.request({
+        type: 'register_client_session',
+        clientKind: 'test',
+        clientInstanceId: 'before-hello',
+      }),
+    ).rejects.toThrow('hello handshake required');
+
+    await workspaceDaemonHello({
+      connection,
+      client: clientIdentityCreate('service-client'),
+    });
+
+    const service = new WorkspaceDaemonServiceClient(connection);
+    const registered = await service.registerClientSession({
+      clientKind: 'test',
+      clientInstanceId: 'rpc-client',
+    });
+    const attached = await service.attachWorkspace({
+      clientSessionId: registered.clientSessionId,
+      rootPath: workspaceRoot,
+      configPath: path.join(workspaceRoot, 'codepol.toml'),
+    });
+    const diagnostics = await service.queryDiagnostics({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      uri,
+    });
+
+    expect(registered.daemonSessionId).toBeDefined();
+    expect(attached.workspaceInstanceId).toBeDefined();
+    expect(diagnostics).toHaveLength(1);
+
+    await service.close();
+  });
+
   it('launches once through the shared launcher and then reuses the healthy daemon', async () => {
     const runtimeDir = tempRuntimeDirCreate();
-    runtimeDirs.push(runtimeDir);
+    tempDirs.push(runtimeDir);
 
     let descriptor: WorkspaceDaemonDescriptor | undefined;
     let startCalls = 0;
@@ -108,7 +199,7 @@ describe('workspace daemon control plane', () => {
         const created = workspaceDaemonDescriptorCreate({ runtimeDir });
         descriptor = created.descriptor;
         workspaceDaemonDescriptorWrite(runtimeDir, descriptor);
-        liveDescriptors.set(descriptor.transport.path, descriptor);
+        liveDaemons.set(descriptor.transport.path, { descriptor });
       }
     };
 
@@ -136,7 +227,7 @@ describe('workspace daemon control plane', () => {
 
   it('recovers from a stale descriptor by launching a fresh daemon descriptor', async () => {
     const runtimeDir = tempRuntimeDirCreate();
-    runtimeDirs.push(runtimeDir);
+    tempDirs.push(runtimeDir);
 
     workspaceDaemonDescriptorWrite(runtimeDir, {
       transport: {
@@ -161,7 +252,9 @@ describe('workspace daemon control plane', () => {
         const created = workspaceDaemonDescriptorCreate({ runtimeDir });
         startedDescriptor = created.descriptor;
         workspaceDaemonDescriptorWrite(runtimeDir, created.descriptor);
-        liveDescriptors.set(created.descriptor.transport.path, created.descriptor);
+        liveDaemons.set(created.descriptor.transport.path, {
+          descriptor: created.descriptor,
+        });
       },
     });
 
