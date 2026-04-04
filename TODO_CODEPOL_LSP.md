@@ -980,29 +980,38 @@ Likely direction:
 - future extension package
   - custom RPC client plus UI glue
 
+Status on 2026-04-04:
+
+- `packages/workspace-service` exists and owns shared diagnostics orchestration plus a v1 document store
+- `apps/lsp` exists as a stdio server and currently ships diagnostics, code actions, and edit-plan execution
+- `apps/cli` is now a thin adapter over the shared service
+- the current service boundary is document-based and single-client; daemon/session lifecycle is still pending
+
 ## Implementation Phases
 
 ### Phase 0: contracts first
 
-- [ ] Define the workspace service interface before moving code.
-- [ ] Define stable editor-neutral result types for diagnostics, locations, symbols, edits, and index status.
-- [ ] Decide whether `LintDiagnostic` becomes the primary service diagnostic type or whether a new `WorkspaceDiagnostic` type is cleaner.
-- [ ] Decide package boundaries and public APIs before adding transport code.
+- [x] Define the workspace service interface before moving code.
+- [x] Define stable editor-neutral result types for diagnostics, locations, symbols, edits, and index status.
+- [x] Decide whether `LintDiagnostic` becomes the primary service diagnostic type or whether a new `WorkspaceDiagnostic` type is cleaner.
+- [x] Decide package boundaries and public APIs before adding transport code.
 
 ### Phase 1: shared diagnostics service
 
-- [ ] Extract aggregated diagnostics logic from `apps/cli/src/index.ts` into reusable service code.
-- [ ] Preserve current provider filtering semantics from `PolicyRule.providers`.
-- [ ] Preserve current fix ordering semantics while moving the orchestration boundary.
+- [x] Extract aggregated diagnostics logic from `apps/cli/src/index.ts` into reusable service code.
+- [x] Preserve current provider filtering semantics from `PolicyRule.providers`.
+- [x] Preserve current fix ordering semantics while moving the orchestration boundary.
 - [ ] Add async execution and cancellation support for external linter runners.
-- [ ] Ensure the CLI calls the shared service rather than owning the orchestration logic.
+- [x] Ensure the CLI calls the shared service rather than owning the orchestration logic.
 
 ### Phase 2: overlay-aware tree checks and index updates
 
-- [ ] Add source-aware analysis APIs to replace disk-only reads in `packages/core/src/policy/policyTreeCheck.ts`.
+- [x] Add source-aware analysis APIs to replace disk-only reads in `packages/core/src/policy/policyTreeCheck.ts`.
 - [ ] Add per-client overlay registration and update flows.
-- [ ] Reuse the incremental indexing pattern already demonstrated in `packages/plugin-eslint/src/eslintAdapter.ts`.
-- [ ] Make cross-file analysis use overlay-aware snapshots rather than stale on-disk content where possible.
+- [x] Reuse the incremental indexing pattern already demonstrated in `packages/plugin-eslint/src/eslintAdapter.ts`.
+- [x] Make cross-file analysis use overlay-aware snapshots rather than stale on-disk content where possible.
+
+Current gap: the service supports overlay registration and updates for a single in-process client, but it does not isolate overlays per client/session yet.
 
 ### Phase 3: daemon/service host
 
@@ -1014,8 +1023,8 @@ Likely direction:
 
 ### Phase 4: LSP adapter
 
-- [ ] Implement document open/change/close to overlay sync.
-- [ ] Implement diagnostics publication using the shared diagnostic service.
+- [x] Implement document open/change/close to overlay sync.
+- [x] Implement diagnostics publication using the shared diagnostic service.
 - [ ] Implement at least:
   - definition
   - references
@@ -1025,12 +1034,14 @@ Likely direction:
   - rename
 - [ ] Add progress and status signals for cold-start indexing.
 
+Current status: the LSP server also implements `textDocument/codeAction` and `workspace/executeCommand` for normalized edit plans, but the semantic navigation and rename surface is still pending.
+
 ### Phase 5: CLI and tests migrate fully
 
-- [ ] Make CLI and tests use the same service boundary used by the LSP.
-- [ ] Add regression tests covering overlay-aware diagnostics and index freshness.
+- [x] Make CLI and tests use the same service boundary used by the LSP.
+- [x] Add regression tests covering overlay-aware diagnostics and index freshness.
 - [ ] Add daemon-level tests for multi-client overlay isolation.
-- [ ] Add adapter-level tests for LSP request/response mapping.
+- [x] Add adapter-level tests for LSP request/response mapping.
 
 ### Phase 6: extension RPC and richer features
 
@@ -1046,32 +1057,31 @@ Likely direction:
 
 ## Acceptance Criteria For An MVP
 
-- unsaved buffer diagnostics are accurate
-- per-client overlays do not leak across clients
-- the CLI and the LSP use the same aggregated diagnostic service
-- cross-file rules use fresh incremental index state
-- diagnostics preserve severity, source, code, ranges, and fix data
-- daemon restarts do not require architecture changes in adapters
-- cold-start indexing exposes status and does not make the extension feel hung
+- [x] unsaved buffer diagnostics are accurate
+- [ ] per-client overlays do not leak across clients
+- [x] the CLI and the LSP use the same aggregated diagnostic service
+- [x] cross-file rules use fresh incremental index state
+- [ ] diagnostics preserve severity, source, code, ranges, and fix data
+- [ ] daemon restarts do not require architecture changes in adapters
+- [ ] cold-start indexing exposes status and does not make the extension feel hung
+
+Note on diagnostics and fixes: severity, source, code, and ranges are normalized on `WorkspaceDiagnostic`, while fix data currently lives on `WorkspaceCodeAction` and `WorkspaceEditPlan` rather than being embedded directly on diagnostics.
 
 ## Test Coverage To Add
 
-- unit tests for normalized service result types and adapters
-- unit tests for overlay-aware analysis entrypoints
-- integration tests for:
-  - open buffer with unsaved changes
-  - cross-file rename against overlays
-  - diagnostics merged from native tree checks and wrapped linters
-  - cancellation and timeout behavior
-- daemon tests for:
-  - multi-client isolation
-  - workspace reuse
-  - cache invalidation
-  - warm-start behavior
-- LSP adapter tests for:
-  - request translation
-  - response mapping
-  - diagnostics publication
+- [ ] unit tests for normalized service result types and adapters
+- [ ] unit tests for overlay-aware analysis entrypoints
+- [x] integration tests for open buffer with unsaved changes
+- [ ] integration tests for cross-file rename against overlays
+- [ ] integration tests for diagnostics merged from native tree checks and wrapped linters
+- [ ] integration tests for cancellation and timeout behavior
+- [ ] daemon tests for multi-client isolation
+- [ ] daemon tests for workspace reuse
+- [ ] daemon tests for cache invalidation
+- [ ] daemon tests for warm-start behavior
+- [x] LSP adapter tests for request translation
+- [x] LSP adapter tests for response mapping
+- [x] LSP adapter tests for diagnostics publication
 
 ## Risks To Watch
 

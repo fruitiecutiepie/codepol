@@ -2,356 +2,37 @@
 /**
  * @packageDocumentation
  * @codepol/cli - Command-line interface for codepol policy enforcement.
- *
- * Usage:
- *   codepol [options]
- *
- * Options:
- *   --fix          Apply available fixes where possible
- *   --watch        Run policy checks in watch mode
- *   --config       Path to config file (auto-discovered if not specified)
- *   --eslint-config Path to the ESLint config file (uses config file value or auto-detects)
- *   --check-plugins Validate policy and rule plugins, then exit
- *   --help         Show help
- *   --version      Show version
  */
 
-import fs from 'node:fs';
 import path from 'node:path';
 import chokidar from 'chokidar';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import {
-  langAdd,
-  parserInit,
-  policyRuleTargetsResolve,
-  ruleMatchesGet,
-  policyViolationsGetFromDir,
-  policyViolationsGetOutputPretty,
-  policyPluginsGet,
-  pluginGetForRule,
-  pluginModuleRegister,
-  ESLINT_PLUGIN_NAME_DEFAULT,
   configGet,
   configGetFromPath,
-  isErr,
-  type LintProvider,
-  type LintSeverity,
-  type EslintProviderConfig,
-  type RuffProviderConfig,
-  type FixProvider,
-  type PolicyFile,
-  type PolicyViolation,
-  type PolicyWorkspaceEdit,
-  type PolicyRuleTargetContext,
+  policyPluginsGet,
+  policyRuleTargetsResolve,
+  policyViolationsGetOutputPretty,
+  ruleMatchesGet,
   type CodepolConfig,
-  type RuleMatch,
+  type PolicyFile,
 } from '@codepol/core';
-import { biomeCheck, biomeFix, type BiomeProviderConfig } from '@codepol/plugin-biome';
-import { eslintPluginCreate } from '@codepol/plugin-eslint';
-import { ruffCheck, ruffFix } from '@codepol/plugin-ruff';
-import codepolPlugin from '@codepol/plugin';
-import vulturePlugin from '@codepol/plugin-vulture';
-
-pluginModuleRegister('@codepol/plugin', { default: codepolPlugin });
-pluginModuleRegister('@codepol/plugin-vulture', { default: vulturePlugin });
+import {
+  ensureWorkspaceRuntimeReady,
+  eslintConfigPathDetect,
+  policyCheck as workspacePolicyCheck,
+  type WorkspacePolicyCheckResult,
+} from '@codepol/workspace-service';
 
 type CliOptions = {
   fix: boolean;
   watch: boolean;
   checkPlugins: boolean;
-  /** Resolved config path (from auto-discovery or --config flag) */
   configPath: string;
-  /** Resolved ESLint config path */
   eslintConfig: string;
-  /** The loaded config object */
   config: CodepolConfig;
 };
-
-type PolicyCheckResult = {
-  policy: PolicyFile;
-  files: string[];
-  violations: PolicyViolation[];
-};
-
-type LintProviderEntry = {
-  provider: LintProvider;
-  ruleId: string;
-  ruleArgs?: unknown;
-  severity?: LintSeverity;
-};
-
-const ESLINT_CONFIG_EXTENSIONS = ['.js', '.mjs', '.cjs', '.ts', '.mts', '.cts'];
-const BIOME_FILE_EXTENSIONS = ['.js', '.mjs', '.cjs', '.jsx', '.ts', '.mts', '.cts', '.tsx'];
-const PYTHON_FILE_EXTENSIONS = ['.py', '.pyw'];
-
-function fileHasExtension(filePath: string, extensions: string[]): boolean {
-  return extensions.some((extension) => filePath.endsWith(extension));
-}
-
-/**
- * Stable key for grouping Biome subprocess runs. Equivalent configs must produce the same key.
- */
-function biomeProviderConfigKey(config: BiomeProviderConfig | undefined): string {
-  const c = config ?? {};
-  return JSON.stringify({
-    biomeBin: c.biomeBin ?? 'biome',
-    configPath: c.configPath ?? null,
-    extraArgs: c.extraArgs ?? [],
-  });
-}
-
-function biomeProviderConfigFromKey(key: string): BiomeProviderConfig {
-  const parsed = JSON.parse(key) as {
-    biomeBin: string;
-    configPath: string | null;
-    extraArgs: string[];
-  };
-  const out: BiomeProviderConfig = { biomeBin: parsed.biomeBin };
-  if (parsed.configPath != null) {
-    out.configPath = parsed.configPath;
-  }
-  if (parsed.extraArgs.length > 0) {
-    out.extraArgs = parsed.extraArgs;
-  }
-  return out;
-}
-
-/**
- * One resolved Biome config per policy rule. Conflicting configs for the same rule throw.
- */
-function biomeRuleIdToConfigMapBuild(entries: LintProviderEntry[]): Map<string, BiomeProviderConfig> {
-  const map = new Map<string, BiomeProviderConfig>();
-  for (const entry of entries) {
-    if (entry.provider.platform !== 'biome') {
-      continue;
-    }
-    const cfg = entry.provider.config as BiomeProviderConfig;
-    const prev = map.get(entry.ruleId);
-    if (prev !== undefined && biomeProviderConfigKey(prev) !== biomeProviderConfigKey(cfg)) {
-      throw new Error(
-        `Conflicting Biome lint provider configs for rule "${entry.ruleId}". ` +
-        'Use a single Biome provider configuration per rule, or split into separate policy rules.'
-      );
-    }
-    map.set(entry.ruleId, cfg);
-  }
-  return map;
-}
-
-/**
- * Files to pass to Biome: only targets of policy rules that enabled a Biome provider,
- * grouped by normalized Biome CLI config.
- */
-function biomeFilesByConfigKeyCollect(
-  matches: RuleMatch[],
-  ruleIdToBiomeConfig: Map<string, BiomeProviderConfig>,
-): Map<string, Set<string>> {
-  const byKey = new Map<string, Set<string>>();
-  for (const match of matches) {
-    const cfg = ruleIdToBiomeConfig.get(match.rule.ruleId);
-    if (!cfg) {
-      continue;
-    }
-    const key = biomeProviderConfigKey(cfg);
-    let set = byKey.get(key);
-    if (!set) {
-      set = new Set<string>();
-      byKey.set(key, set);
-    }
-    for (const filePath of match.files) {
-      if (fileHasExtension(filePath, BIOME_FILE_EXTENSIONS)) {
-        set.add(filePath);
-      }
-    }
-  }
-  return byKey;
-}
-
-function policyViolationWorkspaceEditsGet(
-  violation: PolicyViolation,
-): PolicyWorkspaceEdit[] {
-  const fix = violation.fix;
-  if (!fix) {
-    return [];
-  }
-  if (fix.edits && fix.edits.length > 0) {
-    return fix.edits;
-  }
-  return [
-    {
-      filePath: violation.filePath,
-      byteRange: fix.byteRange,
-      text: fix.text,
-    },
-  ];
-}
-
-function fileWorkspaceEditsNormalize(
-  edits: PolicyWorkspaceEdit[],
-): PolicyWorkspaceEdit[] {
-  const sorted = [...edits].sort((a, b) => {
-    if (a.byteRange.start !== b.byteRange.start) {
-      return a.byteRange.start - b.byteRange.start;
-    }
-    if (a.byteRange.end !== b.byteRange.end) {
-      return a.byteRange.end - b.byteRange.end;
-    }
-    return a.text.localeCompare(b.text);
-  });
-
-  const normalized: PolicyWorkspaceEdit[] = [];
-  for (const edit of sorted) {
-    const prev = normalized[normalized.length - 1];
-    if (
-      prev &&
-      prev.byteRange.start === edit.byteRange.start &&
-      prev.byteRange.end === edit.byteRange.end &&
-      prev.text === edit.text
-    ) {
-      continue;
-    }
-    if (prev && edit.byteRange.start < prev.byteRange.end) {
-      continue;
-    }
-    normalized.push(edit);
-  }
-
-  return normalized;
-}
-
-function fileWorkspaceEditsApply(
-  source: string,
-  edits: PolicyWorkspaceEdit[],
-): string {
-  if (edits.length === 0) {
-    return source;
-  }
-
-  const input = Buffer.from(source, 'utf8');
-  const chunks: Buffer[] = [];
-  let cursor = 0;
-
-  for (const edit of edits) {
-    chunks.push(input.subarray(cursor, edit.byteRange.start));
-    chunks.push(Buffer.from(edit.text, 'utf8'));
-    cursor = edit.byteRange.end;
-  }
-
-  chunks.push(input.subarray(cursor));
-  return Buffer.concat(chunks).toString('utf8');
-}
-
-function treeCheckFixesApply(violations: PolicyViolation[]): boolean {
-  const editsByFile = new Map<string, PolicyWorkspaceEdit[]>();
-
-  for (const violation of violations) {
-    for (const edit of policyViolationWorkspaceEditsGet(violation)) {
-      const list = editsByFile.get(edit.filePath) ?? [];
-      list.push(edit);
-      editsByFile.set(edit.filePath, list);
-    }
-  }
-
-  let changed = false;
-  for (const [filePath, fileEdits] of editsByFile) {
-    const normalized = fileWorkspaceEditsNormalize(fileEdits);
-    if (normalized.length === 0) {
-      continue;
-    }
-
-    const source = fs.readFileSync(filePath, 'utf8');
-    const next = fileWorkspaceEditsApply(source, normalized);
-    if (next === source) {
-      continue;
-    }
-
-    fs.writeFileSync(filePath, next, 'utf8');
-    changed = true;
-  }
-
-  return changed;
-}
-
-/**
- * Detects the ESLint config file by checking for common file names.
- * Returns the first existing config file path, or falls back to 'eslint.config.js'.
- */
-function eslintConfigPathDetect(cwd: string): string {
-  for (const ext of ESLINT_CONFIG_EXTENSIONS) {
-    const configPath = path.join(cwd, `eslint.config${ext}`);
-    if (fs.existsSync(configPath)) {
-      return configPath;
-    }
-  }
-  // Fall back to default if none found
-  return path.join(cwd, 'eslint.config.js');
-}
-
-function policyRuleTargetsGet(policy: PolicyFile): PolicyRuleTargetContext[] {
-  const targets: PolicyRuleTargetContext[] = [];
-  for (const rule of policy.rules) {
-    const resolvedTargets = policyRuleTargetsResolve(rule, policy);
-    for (const target of resolvedTargets) {
-      targets.push({
-        ruleId: rule.ruleId,
-        description: rule.description,
-        args: rule.args,
-        target,
-      });
-    }
-  }
-  return targets;
-}
-
-/**
- * Generates ESLint rule configurations from lint providers.
- * The CLI injects the adapted codepol ESLint plugin directly at runtime, so
- * this helper only needs to return the enabled rules and their options.
- */
-function eslintConfigGet(
-  providers: LintProviderEntry[],
-  context: { policy: PolicyFile; configPath: string; cwd: string; ruleTargets: PolicyRuleTargetContext[] }
-): Record<string, unknown> {
-  const rules: Record<string, unknown> = {};
-
-  for (const entry of providers) {
-    if (entry.provider.platform !== 'eslint') {
-      continue;
-    }
-    const eslintConfig = entry.provider.config as EslintProviderConfig;
-    // Extract short rule name from namespaced ID (e.g., "@codepol/plugin/require-logger-enter-exit" -> "require-logger-enter-exit")
-    const ruleNameFull = entry.ruleId;
-    const lastSlashIndex = ruleNameFull.lastIndexOf('/');
-    const ruleNameShort = lastSlashIndex !== -1 ? ruleNameFull.slice(lastSlashIndex + 1) : ruleNameFull;
-
-    const pluginName = eslintConfig.pluginName ?? ESLINT_PLUGIN_NAME_DEFAULT;
-    const configKey = `${pluginName}/${ruleNameShort}`;
-    if (rules[configKey]) {
-      throw new Error(`Duplicate ESLint rule configuration detected: ${configKey}.`);
-    }
-    // Get options from provider (or empty object)
-    const options = eslintConfig.ruleOptions?.({
-      ...context,
-      ruleId: entry.ruleId,
-      ruleArgs: entry.ruleArgs,
-    }) ?? {};
-    // Construct [severity, options] - severity from config, defaults to 'error'
-    const severity = entry.severity ?? 'error';
-    rules[configKey] = [severity, options];
-  }
-
-  return { rules };
-}
-
-async function fixProvidersApply(
-  providers: FixProvider[],
-  context: { policy: PolicyFile; configPath: string; cwd: string; files: string[]; ruleTargets: PolicyRuleTargetContext[] }
-): Promise<void> {
-  for (const provider of providers) {
-    await provider.apply(context);
-  }
-}
 
 export async function policyCheck(options: {
   config: CodepolConfig;
@@ -359,187 +40,8 @@ export async function policyCheck(options: {
   eslintConfigPath: string;
   fix: boolean;
   cwd: string;
-}): Promise<PolicyCheckResult> {
-  const { config, configPath, eslintConfigPath, fix, cwd } = options;
-
-  // Use the config directly (CodepolConfig extends PolicyFile)
-  const policy = config as PolicyFile;
-  // Use core policyPluginsGet instead of local implementation
-  const pluginRulesResult = await policyPluginsGet(policy, cwd, { configPath });
-  if ('Err' in pluginRulesResult) {
-    throw new Error(pluginRulesResult.Err);
-  }
-  const pluginRulesMap = pluginRulesResult.Ok;
-  const pluginRules = Array.from(pluginRulesMap.values());
-  const ruleTargets = policyRuleTargetsGet(policy);
-
-  // Collect lint providers from all rule plugins
-  // Args and severity come from policy rules
-  const lintProviderEntries: LintProviderEntry[] = [];
-  for (const rule of policy.rules) {
-    const lookup = pluginGetForRule(pluginRulesMap, rule.ruleId);
-    if (!lookup) {
-      continue;
-    }
-
-    const lintProviders = lookup.plugin.pluginRule.capabilities.lintProviders ?? [];
-    for (const provider of lintProviders) {
-      if (rule.providers && rule.providers.length > 0 && !rule.providers.includes(provider.platform)) {
-        continue;
-      }
-
-      lintProviderEntries.push({
-        provider,
-        ruleId: lookup.resolvedId,
-        ruleArgs: rule.args,
-        severity: rule.severity,
-      });
-    }
-  }
-
-  // Filter to ESLint providers
-  const eslintProviders = lintProviderEntries.filter(
-    entry => entry.provider.platform === 'eslint'
-  );
-
-  const fixProviders = pluginRules
-    .map(entry => entry.pluginRule.capabilities.fixProvider)
-    .filter((provider): provider is FixProvider => provider !== undefined);
-
-  const matches = await ruleMatchesGet(policy, cwd);
-  const files = Array.from(new Set(matches.flatMap(match => match.files)));
-
-  if (fix && fixProviders.length > 0) {
-    await fixProvidersApply(fixProviders, { policy, configPath, cwd, files, ruleTargets });
-  }
-
-  if (fix) {
-    const treeFixViolationsResult = await policyViolationsGetFromDir(policy, cwd, {
-      configPath,
-    });
-    if ('Err' in treeFixViolationsResult) {
-      throw new Error(treeFixViolationsResult.Err);
-    }
-    treeCheckFixesApply(treeFixViolationsResult.Ok);
-  }
-
-  const eslintViolations: PolicyViolation[] = [];
-  if (eslintProviders.length > 0) {
-    let ESLint: typeof import('eslint').ESLint;
-    try {
-      const eslintModule = await import('eslint');
-      ESLint = eslintModule.ESLint;
-    } catch {
-      console.warn(
-        'ESLint is not installed. Skipping ESLint-based rules.\n' +
-        'Install eslint to enable: npm install -D eslint'
-      );
-      ESLint = undefined!;
-    }
-
-    if (ESLint) {
-      const eslint = new ESLint({
-        overrideConfigFile: eslintConfigPath,
-        plugins: {
-          codepol: eslintPluginCreate(pluginRules.map((entry) => entry.pluginRule)) as unknown as import('eslint').ESLint.Plugin,
-        },
-        overrideConfig: eslintConfigGet(eslintProviders, { policy, configPath, cwd, ruleTargets }),
-        fix,
-        cwd,
-      });
-
-      const lintResults = files.length > 0 ? await eslint.lintFiles(files) : [];
-      if (fix) {
-        await ESLint.outputFixes(lintResults);
-      }
-      for (const result of lintResults) {
-        for (const msg of result.messages) {
-          eslintViolations.push({
-            ruleId: msg.ruleId ?? 'unknown',
-            filePath: result.filePath,
-            message: msg.message,
-            line: msg.line,
-            column: msg.column,
-          });
-        }
-      }
-    }
-  }
-
-  const biomeViolations: PolicyViolation[] = [];
-  const biomeLintEntries = lintProviderEntries.filter(
-    entry => entry.provider.platform === 'biome'
-  );
-  if (biomeLintEntries.length > 0) {
-    const ruleIdToBiomeConfig = biomeRuleIdToConfigMapBuild(lintProviderEntries);
-    const biomeFilesByConfigKey = biomeFilesByConfigKeyCollect(matches, ruleIdToBiomeConfig);
-
-    for (const [configKey, fileSet] of biomeFilesByConfigKey) {
-      const biomeFiles = [...fileSet];
-      if (biomeFiles.length === 0) {
-        continue;
-      }
-      const biomeConfig = biomeProviderConfigFromKey(configKey);
-
-      if (fix) {
-        const biomeFixResult = biomeFix(biomeFiles, biomeConfig);
-        if (isErr(biomeFixResult)) {
-          console.warn(`biome fix failed: ${biomeFixResult.Err}`);
-        }
-      }
-
-      const biomeResult = biomeCheck(biomeFiles, biomeConfig);
-      if (isErr(biomeResult)) {
-        console.warn(`biome lint failed: ${biomeResult.Err}`);
-      } else {
-        biomeViolations.push(...biomeResult.Ok);
-      }
-    }
-  }
-
-  // Run ruff on Python files
-  const ruffProviders = lintProviderEntries.filter(
-    entry => entry.provider.platform === 'ruff'
-  );
-
-  const ruffViolations: PolicyViolation[] = [];
-  const pythonFiles = files.filter(filePath => fileHasExtension(filePath, PYTHON_FILE_EXTENSIONS));
-  if (pythonFiles.length > 0 && ruffProviders.length > 0) {
-    const ruffConfig = ruffProviders[0]?.provider.config as RuffProviderConfig | undefined;
-
-    if (fix) {
-      const ruffFixResult = ruffFix(pythonFiles, ruffConfig);
-      if (isErr(ruffFixResult)) {
-        console.warn(`ruff fix failed: ${ruffFixResult.Err}`);
-      }
-    }
-
-    const ruffResult = ruffCheck(pythonFiles, ruffConfig);
-    if (isErr(ruffResult)) {
-      console.warn(`ruff check failed: ${ruffResult.Err}`);
-    } else {
-      ruffViolations.push(...ruffResult.Ok);
-    }
-  }
-
-  const violationsResult = await policyViolationsGetFromDir(policy, cwd, {
-    configPath,
-  });
-
-  if ('Err' in violationsResult) {
-    throw new Error(violationsResult.Err);
-  }
-
-  return {
-    policy,
-    files,
-    violations: [
-      ...eslintViolations,
-      ...biomeViolations,
-      ...ruffViolations,
-      ...violationsResult.Ok,
-    ],
-  };
+}): Promise<WorkspacePolicyCheckResult> {
+  return workspacePolicyCheck(options);
 }
 
 async function policyCheckAndPrintOutput(options: CliOptions): Promise<boolean> {
@@ -565,14 +67,14 @@ async function policyCheckAndPrintOutput(options: CliOptions): Promise<boolean> 
 async function policyPluginsValidateAndPrint(options: CliOptions): Promise<void> {
   const cwd = process.cwd();
   const policy = options.config as PolicyFile;
-  const policyPluginsResult = await policyPluginsGet(policy, cwd, { configPath: options.configPath });
+  const policyPluginsResult = await policyPluginsGet(policy, cwd, {
+    configPath: options.configPath,
+  });
   if ('Err' in policyPluginsResult) {
     throw new Error(policyPluginsResult.Err);
   }
-  
-  // policyPluginsGet now returns PluginRule map, which includes ruleId directly
-  const rulePluginIds = Array.from(policyPluginsResult.Ok.keys()).sort();
 
+  const rulePluginIds = Array.from(policyPluginsResult.Ok.keys()).sort();
   console.log(`✔ Config loaded from: ${options.configPath}`);
   console.log('✔ Plugins validated');
   console.log(`Rule plugins (${rulePluginIds.length}): ${rulePluginIds.join(', ') || 'none'}`);
@@ -618,13 +120,9 @@ function fsSubNew(options: CliOptions, files: string[], patterns: string[]): voi
 }
 
 async function main(): Promise<void> {
-  langAdd({ langId: 'typescript', fileExtensions: ['.ts', '.mts', '.cts', '.js', '.mjs', '.cjs'] });
-  langAdd({ langId: 'tsx', fileExtensions: ['.tsx', '.jsx'] });
-  langAdd({ langId: 'python', fileExtensions: ['.py', '.pyw'] });
-  await parserInit();
+  await ensureWorkspaceRuntimeReady();
 
   const cwd = process.cwd();
-
   const argv = await yargs(hideBin(process.argv))
     .scriptName('codepol')
     .usage('$0 [options]')
@@ -660,39 +158,21 @@ async function main(): Promise<void> {
     .version()
     .parseAsync();
 
-  // Load config: explicit path or auto-discover
-  let configResult;
-  if (argv.config) {
-    configResult = await configGetFromPath(argv.config as string);
-  } else {
-    configResult = await configGet(cwd);
-  }
+  const configResult = argv.config
+    ? await configGetFromPath(argv.config as string)
+    : await configGet(cwd);
   const { config, configPath } = configResult;
 
-  // Resolve ESLint config: CLI flag > config file > auto-detect
   const eslintConfigPath = argv['eslint-config']
     ? path.resolve(argv['eslint-config'] as string)
     : config.eslintConfigPath
       ? path.resolve(path.dirname(configPath), config.eslintConfigPath)
       : eslintConfigPathDetect(cwd);
 
-  let fix = false;
-  if (argv.fix != undefined) {
-    fix = argv.fix;
-  }
-  let watch = false;
-  if (argv.watch != undefined) {
-    watch = argv.watch;
-  }
-  let checkPlugins = false;
-  if (argv['check-plugins'] != undefined) {
-    checkPlugins = argv['check-plugins'];
-  }
-
   const options: CliOptions = {
-    fix,
-    watch,
-    checkPlugins,
+    fix: argv.fix ?? false,
+    watch: argv.watch ?? false,
+    checkPlugins: argv['check-plugins'] ?? false,
     configPath,
     eslintConfig: eslintConfigPath,
     config,
@@ -705,25 +185,28 @@ async function main(): Promise<void> {
 
   const policy = config as PolicyFile;
   const matches = await ruleMatchesGet(policy, cwd);
-  const files = Array.from(new Set(matches.flatMap(match => match.files)));
+  const files = Array.from(new Set(matches.flatMap((match) => match.files)));
   const patterns = Array.from(
-    new Set(policy.rules.flatMap(rule => 
-      policyRuleTargetsResolve(rule, policy).flatMap(target => target.files)
-    ))
+    new Set(
+      policy.rules.flatMap((rule) =>
+        policyRuleTargetsResolve(rule, policy).flatMap((target) => target.files),
+      ),
+    ),
   );
 
   if (options.watch) {
     fsSubNew(options, files, patterns);
-  } else {
-    const success = await policyCheckAndPrintOutput(options);
-    if (!success) {
-      process.exitCode = 1;
-    }
+    return;
+  }
+
+  const success = await policyCheckAndPrintOutput(options);
+  if (!success) {
+    process.exitCode = 1;
   }
 }
 
 if (require.main === module) {
-  void main().catch(error => {
+  void main().catch((error) => {
     console.error(error);
     process.exitCode = 1;
   });

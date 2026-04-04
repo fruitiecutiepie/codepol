@@ -57,7 +57,8 @@ export function policyViolationsGetForFile(
   pluginsMap: PolicyPluginsMap,
   dir: string,
   configPath?: string,
-  projectIndex?: ProjectIndex
+  projectIndex?: ProjectIndex,
+  sourceOverride?: string,
 ): Result<PolicyViolation[], string> {
   if (rule.providers && rule.providers.length > 0 && !rule.providers.includes('tree-sitter')) {
     return Ok([]);
@@ -73,7 +74,7 @@ export function policyViolationsGetForFile(
   }
   const treeCheckProvider = plugin.pluginRule.capabilities.treeCheckProvider!;
 
-  const source = fs.readFileSync(filePath, 'utf8');
+  const source = sourceOverride ?? fs.readFileSync(filePath, 'utf8');
   
   const checkResult = treeCheckProvider.check(rule, {
     filePath: filePath,
@@ -110,7 +111,11 @@ function pluginsRequireProjectIndex(pluginsMap: PolicyPluginsMap): boolean {
 export async function policyViolationsGetFromDir(
   policy: PolicyFile,
   dir: string,
-  options: { configPath?: string } = {}
+  options: {
+    configPath?: string;
+    sourceByFilePath?: ReadonlyMap<string, string>;
+    projectIndex?: ProjectIndex;
+  } = {}
 ): Promise<Result<PolicyViolation[], string>> {
   const pluginsMapResult = await policyPluginsGet(policy, dir, {
     configPath: options.configPath,
@@ -130,8 +135,8 @@ export async function policyViolationsGetFromDir(
   }
 
   // Build project index if any plugin requires it
-  let projectIndex: ProjectIndex | undefined;
-  if (pluginsRequireProjectIndex(pluginsMap) && allFiles.size > 0) {
+  let projectIndex: ProjectIndex | undefined = options.projectIndex;
+  if (!projectIndex && pluginsRequireProjectIndex(pluginsMap) && allFiles.size > 0) {
     try {
       const indexResult = await projectIndexBuild({
         files: Array.from(allFiles),
@@ -158,7 +163,8 @@ export async function policyViolationsGetFromDir(
         pluginsMap,
         dir,
         options.configPath,
-        projectIndex
+        projectIndex,
+        options.sourceByFilePath?.get(filePath),
       );
       if (isErr(violationsResult)) {
         return violationsResult;

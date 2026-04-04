@@ -64,9 +64,29 @@ export type {
   LintDiagnostic,
   TreeCheckAdapterOptions,
   TreeCheckLintAdapter,
+  WorkspacePosition,
+  WorkspaceRange,
+  WorkspaceDiagnosticSeverity,
+  WorkspaceDiagnosticRelatedLocation,
+  WorkspaceEdit,
+  WorkspaceEditPlan,
+  WorkspaceCodeAction,
+  WorkspaceDiagnostic,
+  WorkspaceApplyFailureReason,
+  WorkspaceApplyResult,
+  IndexStatusResult,
 } from './types';
 
 export { pluginRuleNew, treeCheckProviderSupportsLanguage } from './types';
+export {
+  workspacePathToUri,
+  workspaceUriToPath,
+  workspaceIdCreate,
+  workspaceRangeFromLineColumns,
+  workspaceRangeFromByteRange,
+  policyViolationToWorkspaceDiagnostic,
+  lintDiagnosticToWorkspaceDiagnostic,
+} from './types';
 
 /** Default ESLint plugin name for codepol rules */
 export const ESLINT_PLUGIN_NAME_DEFAULT = 'codepol';

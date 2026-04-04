@@ -5,6 +5,10 @@ export default defineConfig({
   resolve: {
     alias: {
       '@codepol/plugin-biome': path.resolve(__dirname, 'packages/plugin-biome/src/index.ts'),
+      '@codepol/workspace-service': path.resolve(
+        __dirname,
+        'packages/workspace-service/src/index.ts',
+      ),
     },
   },
   test: {

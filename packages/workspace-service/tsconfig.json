@@ -2,16 +2,16 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "./dist",
-    "rootDir": "./src",
-    "baseUrl": "../..",
-    "paths": {
-      "@codepol/workspace-service": ["./packages/workspace-service/src/index.ts"]
-    }
+    "rootDir": "./src"
   },
   "include": ["src/**/*.ts"],
   "exclude": ["dist", "node_modules"],
   "references": [
     { "path": "../core" },
-    { "path": "../workspace-service" }
+    { "path": "../plugin-biome" },
+    { "path": "../plugin-eslint" },
+    { "path": "../plugin-ruff" },
+    { "path": "../plugin" },
+    { "path": "../plugin-vulture" }
   ]
 }
