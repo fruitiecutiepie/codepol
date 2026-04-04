@@ -391,8 +391,8 @@ export class CodepolLspServer {
           rootPath,
           configPath,
         });
-        await service.completeReplay({
-          clientSessionId: this.registeredClientSessionId,
+        await this.workspaceReplayApply({
+          service,
           workspaceId: attached.workspaceId,
           workspaceInstanceId: attached.workspaceInstanceId,
         });
@@ -414,6 +414,39 @@ export class CodepolLspServer {
         name: 'codepol-lsp',
       },
     };
+  }
+
+  private async workspaceReplayApply(input: {
+    service: WorkspaceService;
+    workspaceId: string;
+    workspaceInstanceId: string;
+  }): Promise<void> {
+    if (!this.registeredClientSessionId) {
+      return;
+    }
+
+    await input.service.subscribeDiagnostics({
+      clientSessionId: this.registeredClientSessionId,
+      workspaceId: input.workspaceId,
+      workspaceInstanceId: input.workspaceInstanceId,
+      scope: 'workspace',
+    });
+
+    for (const document of this.documents.values()) {
+      await input.service.openOverlay({
+        clientSessionId: this.registeredClientSessionId,
+        workspaceId: input.workspaceId,
+        uri: document.uri,
+        version: document.version,
+        text: document.text,
+      });
+    }
+
+    await input.service.completeReplay({
+      clientSessionId: this.registeredClientSessionId,
+      workspaceId: input.workspaceId,
+      workspaceInstanceId: input.workspaceInstanceId,
+    });
   }
 
   private async didOpenHandle(params: {

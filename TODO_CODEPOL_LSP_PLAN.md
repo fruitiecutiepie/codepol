@@ -120,6 +120,7 @@
   - `WorkspaceDaemonServiceClient` now maps the current daemon RPC surface back to the existing `WorkspaceService` interface
   - `register_client_session` now accepts stable client-generated `clientSessionId` values so reconnect/replay can stop depending on daemon-generated session ids
   - `complete_replay` now exists as an explicit barrier and the daemon rejects normal workspace reads before replay is marked applied
+  - diagnostics subscriptions are now explicit and idempotent in the daemon session, and the LSP initialize path replays diagnostics subscription plus current overlay snapshots before `complete_replay`
 - Keep `clientSessionId` client-generated and stable for the lifetime of one editor window or CLI consumer.
 - Make reconnect mean full re-registration plus re-attach plus replay. Never assume transport continuity equals session continuity.
 - Use this replay order:

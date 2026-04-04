@@ -175,6 +175,12 @@ export type WorkspaceService = {
     rootPath: string;
     configPath: string;
   }) => Promise<{ workspaceId: string; workspaceInstanceId: WorkspaceInstanceId }>;
+  subscribeDiagnostics: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    workspaceInstanceId: WorkspaceInstanceId;
+    scope: WorkspaceDiagnosticsSubscriptionScope;
+  }) => Promise<WorkspaceDiagnosticsSubscriptionResult>;
   completeReplay: (input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;
@@ -249,6 +255,15 @@ export type WorkspaceReplayResult = {
   workspaceId: string;
   workspaceInstanceId: WorkspaceInstanceId;
   replayState: 'applied';
+};
+
+export type WorkspaceDiagnosticsSubscriptionScope = 'workspace';
+
+export type WorkspaceDiagnosticsSubscriptionResult = {
+  workspaceId: string;
+  workspaceInstanceId: WorkspaceInstanceId;
+  scope: WorkspaceDiagnosticsSubscriptionScope;
+  subscriptionState: 'active';
 };
 
 function fileHasExtension(filePath: string, extensions: string[]): boolean {
@@ -1223,6 +1238,31 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     };
   }
 
+  async subscribeDiagnostics(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    workspaceInstanceId: WorkspaceInstanceId;
+    scope: WorkspaceDiagnosticsSubscriptionScope;
+  }): Promise<WorkspaceDiagnosticsSubscriptionResult> {
+    const { workspace, workspaceSession } = workspaceSessionGet(
+      this.workspaces,
+      this.clientSessions,
+      input.clientSessionId,
+      input.workspaceId,
+    );
+    if (workspaceSession.workspaceInstanceId !== input.workspaceInstanceId) {
+      throw new Error(
+        `Workspace instance mismatch for ${input.workspaceId}: expected ${workspaceSession.workspaceInstanceId}, received ${input.workspaceInstanceId}`,
+      );
+    }
+    return {
+      workspaceId: workspace.workspaceId,
+      workspaceInstanceId: workspace.workspaceInstanceId,
+      scope: input.scope,
+      subscriptionState: 'active',
+    };
+  }
+
   async openOverlay(input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;
@@ -1493,6 +1533,15 @@ class InProcessWorkspaceService implements WorkspaceService {
     configPath: string;
   }): Promise<{ workspaceId: string; workspaceInstanceId: WorkspaceInstanceId }> {
     return this.engine.attachWorkspace(input);
+  }
+
+  subscribeDiagnostics(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    workspaceInstanceId: WorkspaceInstanceId;
+    scope: WorkspaceDiagnosticsSubscriptionScope;
+  }): Promise<WorkspaceDiagnosticsSubscriptionResult> {
+    return this.engine.subscribeDiagnostics(input);
   }
 
   completeReplay(input: {

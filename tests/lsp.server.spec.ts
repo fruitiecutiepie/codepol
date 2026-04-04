@@ -129,6 +129,15 @@ describe('CodepolLspServer', () => {
           workspaceInstanceId: 'workspace-instance-1',
         };
       },
+      async subscribeDiagnostics() {
+        calls.push('subscribeDiagnostics');
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          scope: 'workspace',
+          subscriptionState: 'active',
+        };
+      },
       async completeReplay() {
         calls.push('completeReplay');
         return {
@@ -188,7 +197,12 @@ describe('CodepolLspServer', () => {
       },
     });
 
-    expect(calls).toEqual(['registerClientSession', 'attachWorkspace', 'completeReplay']);
+    expect(calls).toEqual([
+      'registerClientSession',
+      'attachWorkspace',
+      'subscribeDiagnostics',
+      'completeReplay',
+    ]);
     expect(registeredInput).toEqual({
       clientKind: 'lsp',
       clientInstanceId: 'lsp-instance-1',
@@ -461,6 +475,14 @@ describe('CodepolLspServer', () => {
           workspaceInstanceId: 'workspace-instance-1',
         };
       },
+      async subscribeDiagnostics() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          scope: 'workspace',
+          subscriptionState: 'active',
+        };
+      },
       async completeReplay() {
         return {
           workspaceId: 'workspace-1',
@@ -596,6 +618,14 @@ describe('CodepolLspServer', () => {
         return {
           workspaceId: 'workspace-1',
           workspaceInstanceId: 'workspace-instance-1',
+        };
+      },
+      async subscribeDiagnostics() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          scope: 'workspace',
+          subscriptionState: 'active',
         };
       },
       async completeReplay() {

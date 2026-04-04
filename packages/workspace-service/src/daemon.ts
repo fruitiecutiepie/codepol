@@ -13,6 +13,8 @@ import type {
   WorkspaceInstanceId,
 } from '@codepol/core';
 import type {
+  WorkspaceDiagnosticsSubscriptionResult,
+  WorkspaceDiagnosticsSubscriptionScope,
   WorkspaceReplayResult,
   WorkspaceClientKind,
   WorkspaceService,
@@ -167,6 +169,14 @@ type WorkspaceDaemonAttachWorkspaceRequest = WorkspaceDaemonMessage & {
   configPath: string;
 };
 
+type WorkspaceDaemonSubscribeDiagnosticsRequest = WorkspaceDaemonMessage & {
+  type: 'subscribe_diagnostics';
+  clientSessionId: ClientSessionId;
+  workspaceId: string;
+  workspaceInstanceId: WorkspaceInstanceId;
+  scope: WorkspaceDiagnosticsSubscriptionScope;
+};
+
 type WorkspaceDaemonCompleteReplayRequest = WorkspaceDaemonMessage & {
   type: 'complete_replay';
   clientSessionId: ClientSessionId;
@@ -241,6 +251,11 @@ type WorkspaceDaemonAttachWorkspaceAck = {
   workspaceInstanceId: WorkspaceInstanceId;
 };
 
+type WorkspaceDaemonSubscribeDiagnosticsAck = {
+  type: 'subscribe_diagnostics_ack';
+  result: WorkspaceDiagnosticsSubscriptionResult;
+};
+
 type WorkspaceDaemonCompleteReplayAck = {
   type: 'complete_replay_ack';
   result: WorkspaceReplayResult;
@@ -275,6 +290,7 @@ type WorkspaceDaemonVoidAck =
 type WorkspaceDaemonServiceResponse =
   | WorkspaceDaemonRegisterClientSessionAck
   | WorkspaceDaemonAttachWorkspaceAck
+  | WorkspaceDaemonSubscribeDiagnosticsAck
   | WorkspaceDaemonCompleteReplayAck
   | WorkspaceDaemonQueryDiagnosticsAck
   | WorkspaceDaemonQueryCodeActionsAck
@@ -600,7 +616,14 @@ export class WorkspaceDaemonSession {
   private didHello = false;
   private readonly attachedWorkspaces = new Map<
     ClientSessionId,
-    Map<string, { workspaceInstanceId: WorkspaceInstanceId; replayApplied: boolean }>
+    Map<
+      string,
+      {
+        workspaceInstanceId: WorkspaceInstanceId;
+        replayApplied: boolean;
+        diagnosticsSubscribed: boolean;
+      }
+    >
   >();
 
   constructor(
@@ -614,7 +637,11 @@ export class WorkspaceDaemonSession {
   private workspaceReplayStateGet(
     clientSessionId: ClientSessionId,
     workspaceId: string,
-  ): { workspaceInstanceId: WorkspaceInstanceId; replayApplied: boolean } | undefined {
+  ): {
+    workspaceInstanceId: WorkspaceInstanceId;
+    replayApplied: boolean;
+    diagnosticsSubscribed: boolean;
+  } | undefined {
     return this.attachedWorkspaces.get(clientSessionId)?.get(workspaceId);
   }
 
@@ -623,6 +650,7 @@ export class WorkspaceDaemonSession {
     workspaceId: string;
     workspaceInstanceId: WorkspaceInstanceId;
     replayApplied: boolean;
+    diagnosticsSubscribed: boolean;
   }): void {
     let workspaces = this.attachedWorkspaces.get(input.clientSessionId);
     if (!workspaces) {
@@ -632,6 +660,7 @@ export class WorkspaceDaemonSession {
     workspaces.set(input.workspaceId, {
       workspaceInstanceId: input.workspaceInstanceId,
       replayApplied: input.replayApplied,
+      diagnosticsSubscribed: input.diagnosticsSubscribed,
     });
   }
 
@@ -717,11 +746,43 @@ export class WorkspaceDaemonSession {
             workspaceId: result.workspaceId,
             workspaceInstanceId: result.workspaceInstanceId,
             replayApplied: false,
+            diagnosticsSubscribed: false,
           });
           return {
             type: 'attach_workspace_ack',
             workspaceId: result.workspaceId,
             workspaceInstanceId: result.workspaceInstanceId,
+          };
+        }
+        case 'subscribe_diagnostics': {
+          const input = message as WorkspaceDaemonSubscribeDiagnosticsRequest;
+          const state = this.workspaceReplayStateGet(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          if (!state) {
+            return messageErrorCreate(
+              'subscription_not_attached',
+              `Workspace ${input.workspaceId} is not attached for client session ${input.clientSessionId}`,
+            );
+          }
+          if (state.workspaceInstanceId !== input.workspaceInstanceId) {
+            return messageErrorCreate(
+              'workspace_instance_mismatch',
+              `Workspace instance mismatch for ${input.workspaceId}: expected ${state.workspaceInstanceId}, received ${input.workspaceInstanceId}`,
+            );
+          }
+          const result = await this.options.service.subscribeDiagnostics(input);
+          this.workspaceReplayStateSet({
+            clientSessionId: input.clientSessionId,
+            workspaceId: input.workspaceId,
+            workspaceInstanceId: input.workspaceInstanceId,
+            replayApplied: state.replayApplied,
+            diagnosticsSubscribed: true,
+          });
+          return {
+            type: 'subscribe_diagnostics_ack',
+            result,
           };
         }
         case 'complete_replay': {
@@ -748,6 +809,7 @@ export class WorkspaceDaemonSession {
             workspaceId: input.workspaceId,
             workspaceInstanceId: input.workspaceInstanceId,
             replayApplied: true,
+            diagnosticsSubscribed: state.diagnosticsSubscribed,
           });
           return {
             type: 'complete_replay_ack',
@@ -877,6 +939,21 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
       workspaceId: response.workspaceId,
       workspaceInstanceId: response.workspaceInstanceId,
     }));
+  }
+
+  subscribeDiagnostics(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    workspaceInstanceId: WorkspaceInstanceId;
+    scope: WorkspaceDiagnosticsSubscriptionScope;
+  }): Promise<WorkspaceDiagnosticsSubscriptionResult> {
+    return this.connection.request<WorkspaceDaemonSubscribeDiagnosticsAck>({
+      type: 'subscribe_diagnostics',
+      clientSessionId: input.clientSessionId,
+      workspaceId: input.workspaceId,
+      workspaceInstanceId: input.workspaceInstanceId,
+      scope: input.scope,
+    }).then((response) => response.result);
   }
 
   completeReplay(input: {
