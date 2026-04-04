@@ -129,6 +129,14 @@ describe('CodepolLspServer', () => {
           workspaceInstanceId: 'workspace-instance-1',
         };
       },
+      async completeReplay() {
+        calls.push('completeReplay');
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          replayState: 'applied',
+        };
+      },
       async openOverlay() {
         calls.push('openOverlay');
       },
@@ -180,7 +188,7 @@ describe('CodepolLspServer', () => {
       },
     });
 
-    expect(calls).toEqual(['registerClientSession', 'attachWorkspace']);
+    expect(calls).toEqual(['registerClientSession', 'attachWorkspace', 'completeReplay']);
     expect(registeredInput).toEqual({
       clientKind: 'lsp',
       clientInstanceId: 'lsp-instance-1',
@@ -290,6 +298,11 @@ describe('CodepolLspServer', () => {
       clientSessionId: registered.clientSessionId,
       rootPath: workspaceRoot,
       configPath: path.join(workspaceRoot, 'codepol.toml'),
+    });
+    await service.completeReplay({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
     });
     const diagnostics = await service.queryDiagnostics({
       clientSessionId: registered.clientSessionId,
@@ -448,6 +461,13 @@ describe('CodepolLspServer', () => {
           workspaceInstanceId: 'workspace-instance-1',
         };
       },
+      async completeReplay() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          replayState: 'applied',
+        };
+      },
       async openOverlay() {},
       async updateOverlay() {},
       async closeOverlay() {},
@@ -576,6 +596,13 @@ describe('CodepolLspServer', () => {
         return {
           workspaceId: 'workspace-1',
           workspaceInstanceId: 'workspace-instance-1',
+        };
+      },
+      async completeReplay() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          replayState: 'applied',
         };
       },
       async openOverlay() {},

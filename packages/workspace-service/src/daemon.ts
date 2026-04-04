@@ -13,6 +13,7 @@ import type {
   WorkspaceInstanceId,
 } from '@codepol/core';
 import type {
+  WorkspaceReplayResult,
   WorkspaceClientKind,
   WorkspaceService,
 } from './index';
@@ -166,6 +167,13 @@ type WorkspaceDaemonAttachWorkspaceRequest = WorkspaceDaemonMessage & {
   configPath: string;
 };
 
+type WorkspaceDaemonCompleteReplayRequest = WorkspaceDaemonMessage & {
+  type: 'complete_replay';
+  clientSessionId: ClientSessionId;
+  workspaceId: string;
+  workspaceInstanceId: WorkspaceInstanceId;
+};
+
 type WorkspaceDaemonOpenOverlayRequest = WorkspaceDaemonMessage & {
   type: 'open_overlay';
   clientSessionId: ClientSessionId;
@@ -233,6 +241,11 @@ type WorkspaceDaemonAttachWorkspaceAck = {
   workspaceInstanceId: WorkspaceInstanceId;
 };
 
+type WorkspaceDaemonCompleteReplayAck = {
+  type: 'complete_replay_ack';
+  result: WorkspaceReplayResult;
+};
+
 type WorkspaceDaemonQueryDiagnosticsAck = {
   type: 'query_diagnostics_ack';
   diagnostics: WorkspaceDiagnostic[];
@@ -262,6 +275,7 @@ type WorkspaceDaemonVoidAck =
 type WorkspaceDaemonServiceResponse =
   | WorkspaceDaemonRegisterClientSessionAck
   | WorkspaceDaemonAttachWorkspaceAck
+  | WorkspaceDaemonCompleteReplayAck
   | WorkspaceDaemonQueryDiagnosticsAck
   | WorkspaceDaemonQueryCodeActionsAck
   | WorkspaceDaemonApplyEditPlanAck
@@ -584,6 +598,10 @@ export function workspaceDaemonRequestHandle(options: {
 
 export class WorkspaceDaemonSession {
   private didHello = false;
+  private readonly attachedWorkspaces = new Map<
+    ClientSessionId,
+    Map<string, { workspaceInstanceId: WorkspaceInstanceId; replayApplied: boolean }>
+  >();
 
   constructor(
     private readonly options: {
@@ -592,6 +610,48 @@ export class WorkspaceDaemonSession {
       service?: WorkspaceService;
     },
   ) {}
+
+  private workspaceReplayStateGet(
+    clientSessionId: ClientSessionId,
+    workspaceId: string,
+  ): { workspaceInstanceId: WorkspaceInstanceId; replayApplied: boolean } | undefined {
+    return this.attachedWorkspaces.get(clientSessionId)?.get(workspaceId);
+  }
+
+  private workspaceReplayStateSet(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    workspaceInstanceId: WorkspaceInstanceId;
+    replayApplied: boolean;
+  }): void {
+    let workspaces = this.attachedWorkspaces.get(input.clientSessionId);
+    if (!workspaces) {
+      workspaces = new Map();
+      this.attachedWorkspaces.set(input.clientSessionId, workspaces);
+    }
+    workspaces.set(input.workspaceId, {
+      workspaceInstanceId: input.workspaceInstanceId,
+      replayApplied: input.replayApplied,
+    });
+  }
+
+  private workspaceReplayStateDeleteAll(clientSessionId: ClientSessionId): void {
+    this.attachedWorkspaces.delete(clientSessionId);
+  }
+
+  private replayGateEnsure(
+    clientSessionId: ClientSessionId,
+    workspaceId: string,
+  ): WorkspaceDaemonErrorResponse | undefined {
+    const state = this.workspaceReplayStateGet(clientSessionId, workspaceId);
+    if (!state || state.replayApplied) {
+      return undefined;
+    }
+    return messageErrorCreate(
+      'replay_required',
+      `complete_replay required before normal requests for workspace ${workspaceId}`,
+    );
+  }
 
   async handleMessage(
     message: WorkspaceDaemonMessage,
@@ -642,6 +702,7 @@ export class WorkspaceDaemonSession {
           await this.options.service.closeClientSession({
             clientSessionId: input.clientSessionId,
           });
+          this.workspaceReplayStateDeleteAll(input.clientSessionId);
           return { type: 'close_client_session_ack' };
         }
         case 'attach_workspace': {
@@ -651,10 +712,46 @@ export class WorkspaceDaemonSession {
             rootPath: input.rootPath,
             configPath: input.configPath,
           });
+          this.workspaceReplayStateSet({
+            clientSessionId: input.clientSessionId,
+            workspaceId: result.workspaceId,
+            workspaceInstanceId: result.workspaceInstanceId,
+            replayApplied: false,
+          });
           return {
             type: 'attach_workspace_ack',
             workspaceId: result.workspaceId,
             workspaceInstanceId: result.workspaceInstanceId,
+          };
+        }
+        case 'complete_replay': {
+          const input = message as WorkspaceDaemonCompleteReplayRequest;
+          const state = this.workspaceReplayStateGet(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          if (!state) {
+            return messageErrorCreate(
+              'replay_not_attached',
+              `Workspace ${input.workspaceId} is not attached for client session ${input.clientSessionId}`,
+            );
+          }
+          if (state.workspaceInstanceId !== input.workspaceInstanceId) {
+            return messageErrorCreate(
+              'workspace_instance_mismatch',
+              `Workspace instance mismatch for ${input.workspaceId}: expected ${state.workspaceInstanceId}, received ${input.workspaceInstanceId}`,
+            );
+          }
+          const result = await this.options.service.completeReplay(input);
+          this.workspaceReplayStateSet({
+            clientSessionId: input.clientSessionId,
+            workspaceId: input.workspaceId,
+            workspaceInstanceId: input.workspaceInstanceId,
+            replayApplied: true,
+          });
+          return {
+            type: 'complete_replay_ack',
+            result,
           };
         }
         case 'open_overlay': {
@@ -674,6 +771,13 @@ export class WorkspaceDaemonSession {
         }
         case 'query_diagnostics': {
           const input = message as WorkspaceDaemonQueryDiagnosticsRequest;
+          const replayGate = this.replayGateEnsure(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          if (replayGate) {
+            return replayGate;
+          }
           const diagnostics = await this.options.service.queryDiagnostics(input);
           return {
             type: 'query_diagnostics_ack',
@@ -682,6 +786,13 @@ export class WorkspaceDaemonSession {
         }
         case 'query_code_actions': {
           const input = message as WorkspaceDaemonQueryCodeActionsRequest;
+          const replayGate = this.replayGateEnsure(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          if (replayGate) {
+            return replayGate;
+          }
           const codeActions = await this.options.service.queryCodeActions(input);
           return {
             type: 'query_code_actions_ack',
@@ -690,6 +801,13 @@ export class WorkspaceDaemonSession {
         }
         case 'apply_edit_plan': {
           const input = message as WorkspaceDaemonApplyEditPlanRequest;
+          const replayGate = this.replayGateEnsure(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          if (replayGate) {
+            return replayGate;
+          }
           const result = await this.options.service.applyEditPlan(input);
           return {
             type: 'apply_edit_plan_ack',
@@ -759,6 +877,19 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
       workspaceId: response.workspaceId,
       workspaceInstanceId: response.workspaceInstanceId,
     }));
+  }
+
+  completeReplay(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    workspaceInstanceId: WorkspaceInstanceId;
+  }): Promise<WorkspaceReplayResult> {
+    return this.connection.request<WorkspaceDaemonCompleteReplayAck>({
+      type: 'complete_replay',
+      clientSessionId: input.clientSessionId,
+      workspaceId: input.workspaceId,
+      workspaceInstanceId: input.workspaceInstanceId,
+    }).then((response) => response.result);
   }
 
   openOverlay(input: {

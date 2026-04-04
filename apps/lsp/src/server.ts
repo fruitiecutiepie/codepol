@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   workspaceUriToPath,
   type WorkspaceCodeAction,
@@ -224,12 +225,13 @@ export class CodepolLspServer {
   private servicePromise: Promise<WorkspaceService> | undefined;
   private readonly sendMessage: SendMessage;
   private readonly clientInstanceId: string;
+  private readonly stableClientSessionId: string;
   private readonly documents = new Map<string, LspDocument>();
   private readonly pendingClientRequests = new Map<
     number,
     { resolve: (value: unknown) => void; reject: (error: Error) => void }
   >();
-  private clientSessionId: string | undefined;
+  private registeredClientSessionId: string | undefined;
   private workspaceId: string | undefined;
   private nextRequestId = 1;
 
@@ -238,11 +240,13 @@ export class CodepolLspServer {
     serviceFactory?: WorkspaceServiceFactory;
     sendMessage: SendMessage;
     clientInstanceId?: string;
+    clientSessionId?: string;
   }) {
     this.service = options.service;
     this.serviceFactory = options.serviceFactory ?? (() => workspaceServiceCreate());
     this.sendMessage = options.sendMessage;
     this.clientInstanceId = options.clientInstanceId ?? `codepol-lsp-${process.pid}`;
+    this.stableClientSessionId = options.clientSessionId ?? `client-${randomUUID()}`;
   }
 
   private async serviceGet(): Promise<WorkspaceService> {
@@ -369,22 +373,28 @@ export class CodepolLspServer {
     const registered = await service.registerClientSession({
       clientKind: 'lsp',
       clientInstanceId: this.clientInstanceId,
+      clientSessionId: this.stableClientSessionId,
     });
-    this.clientSessionId = registered.clientSessionId;
+    this.registeredClientSessionId = registered.clientSessionId;
 
     const rootUri =
       params.rootUri ??
       params.workspaceFolders?.[0]?.uri ??
       (params.rootPath ? `file://${params.rootPath}` : undefined);
 
-    if (rootUri && this.clientSessionId) {
+    if (rootUri && this.registeredClientSessionId) {
       try {
         const rootPath = workspaceUriToPath(rootUri);
         const { configPath } = await configDiscover(rootPath);
         const attached = await service.attachWorkspace({
-          clientSessionId: this.clientSessionId,
+          clientSessionId: this.registeredClientSessionId,
           rootPath,
           configPath,
+        });
+        await service.completeReplay({
+          clientSessionId: this.registeredClientSessionId,
+          workspaceId: attached.workspaceId,
+          workspaceInstanceId: attached.workspaceInstanceId,
         });
         this.workspaceId = attached.workspaceId;
       } catch {
@@ -409,7 +419,7 @@ export class CodepolLspServer {
   private async didOpenHandle(params: {
     textDocument: { uri: string; version: number; text: string };
   }): Promise<void> {
-    if (!this.clientSessionId || !this.workspaceId) {
+    if (!this.registeredClientSessionId || !this.workspaceId) {
       return;
     }
     const service = await this.serviceGet();
@@ -419,7 +429,7 @@ export class CodepolLspServer {
       text: params.textDocument.text,
     });
     await service.openOverlay({
-      clientSessionId: this.clientSessionId,
+      clientSessionId: this.registeredClientSessionId,
       workspaceId: this.workspaceId,
       uri: params.textDocument.uri,
       version: params.textDocument.version,
@@ -438,7 +448,7 @@ export class CodepolLspServer {
       text: string;
     }>;
   }): Promise<void> {
-    if (!this.clientSessionId || !this.workspaceId) {
+    if (!this.registeredClientSessionId || !this.workspaceId) {
       return;
     }
     const service = await this.serviceGet();
@@ -455,7 +465,7 @@ export class CodepolLspServer {
     };
     this.documents.set(current.uri, nextDocument);
     await service.updateOverlay({
-      clientSessionId: this.clientSessionId,
+      clientSessionId: this.registeredClientSessionId,
       workspaceId: this.workspaceId,
       uri: current.uri,
       version: nextDocument.version,
@@ -467,13 +477,13 @@ export class CodepolLspServer {
   private async didCloseHandle(params: {
     textDocument: { uri: string };
   }): Promise<void> {
-    if (!this.clientSessionId || !this.workspaceId) {
+    if (!this.registeredClientSessionId || !this.workspaceId) {
       return;
     }
     const service = await this.serviceGet();
     this.documents.delete(params.textDocument.uri);
     await service.closeOverlay({
-      clientSessionId: this.clientSessionId,
+      clientSessionId: this.registeredClientSessionId,
       workspaceId: this.workspaceId,
       uri: params.textDocument.uri,
     });
@@ -485,7 +495,7 @@ export class CodepolLspServer {
     range?: LspRange;
     context: { diagnostics?: Array<{ data?: { id?: string } }> };
   }): Promise<unknown> {
-    if (!this.clientSessionId || !this.workspaceId) {
+    if (!this.registeredClientSessionId || !this.workspaceId) {
       return [];
     }
     const service = await this.serviceGet();
@@ -497,7 +507,7 @@ export class CodepolLspServer {
     );
     if (params.range) {
       const diagnostics = await service.queryDiagnostics({
-        clientSessionId: this.clientSessionId,
+        clientSessionId: this.registeredClientSessionId,
         workspaceId: this.workspaceId,
         uri: params.textDocument.uri,
       });
@@ -511,7 +521,7 @@ export class CodepolLspServer {
       return [];
     }
     const actions = await service.queryCodeActions({
-      clientSessionId: this.clientSessionId,
+      clientSessionId: this.registeredClientSessionId,
       workspaceId: this.workspaceId,
       uri: params.textDocument.uri,
       version: document?.version ?? 0,
@@ -537,7 +547,11 @@ export class CodepolLspServer {
     command: string;
     arguments?: Array<{ planId?: string }>;
   }): Promise<unknown> {
-    if (!this.clientSessionId || !this.workspaceId || params.command !== APPLY_EDIT_PLAN_COMMAND) {
+    if (
+      !this.registeredClientSessionId ||
+      !this.workspaceId ||
+      params.command !== APPLY_EDIT_PLAN_COMMAND
+    ) {
       return null;
     }
     const service = await this.serviceGet();
@@ -553,7 +567,7 @@ export class CodepolLspServer {
     }
 
     const applyResult = await service.applyEditPlan({
-      clientSessionId: this.clientSessionId,
+      clientSessionId: this.registeredClientSessionId,
       workspaceId: this.workspaceId,
       planId,
       documentVersions,
@@ -570,12 +584,12 @@ export class CodepolLspServer {
   }
 
   private async publishDiagnostics(uri: string): Promise<void> {
-    if (!this.clientSessionId || !this.workspaceId) {
+    if (!this.registeredClientSessionId || !this.workspaceId) {
       return;
     }
     const service = await this.serviceGet();
     const diagnostics = await service.queryDiagnostics({
-      clientSessionId: this.clientSessionId,
+      clientSessionId: this.registeredClientSessionId,
       workspaceId: this.workspaceId,
       uri,
     });

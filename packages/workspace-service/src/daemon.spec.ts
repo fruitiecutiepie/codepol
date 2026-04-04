@@ -179,6 +179,18 @@ describe('workspace daemon control plane', () => {
       rootPath: workspaceRoot,
       configPath: path.join(workspaceRoot, 'codepol.toml'),
     });
+    await expect(
+      service.queryDiagnostics({
+        clientSessionId: registered.clientSessionId,
+        workspaceId: attached.workspaceId,
+        uri,
+      }),
+    ).rejects.toThrow('complete_replay required');
+    const replay = await service.completeReplay({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+    });
     const diagnostics = await service.queryDiagnostics({
       clientSessionId: registered.clientSessionId,
       workspaceId: attached.workspaceId,
@@ -188,6 +200,11 @@ describe('workspace daemon control plane', () => {
     expect(registered.daemonSessionId).toBeDefined();
     expect(registered.clientSessionId).toBe('daemon-stable-client');
     expect(repeated).toEqual(registered);
+    expect(replay).toEqual({
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+      replayState: 'applied',
+    });
     expect(attached.workspaceInstanceId).toBeDefined();
     expect(diagnostics).toHaveLength(1);
 

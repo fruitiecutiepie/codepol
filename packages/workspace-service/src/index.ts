@@ -175,6 +175,11 @@ export type WorkspaceService = {
     rootPath: string;
     configPath: string;
   }) => Promise<{ workspaceId: string; workspaceInstanceId: WorkspaceInstanceId }>;
+  completeReplay: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    workspaceInstanceId: WorkspaceInstanceId;
+  }) => Promise<WorkspaceReplayResult>;
   openOverlay: (input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;
@@ -238,6 +243,12 @@ export type WorkspacePolicyCheckResult = {
   workspaceDiagnostics: WorkspaceDiagnostic[];
   eslintOutput: string;
   eslintHasErrors: boolean;
+};
+
+export type WorkspaceReplayResult = {
+  workspaceId: string;
+  workspaceInstanceId: WorkspaceInstanceId;
+  replayState: 'applied';
 };
 
 function fileHasExtension(filePath: string, extensions: string[]): boolean {
@@ -1189,6 +1200,29 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     };
   }
 
+  async completeReplay(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    workspaceInstanceId: WorkspaceInstanceId;
+  }): Promise<WorkspaceReplayResult> {
+    const { workspace, workspaceSession } = workspaceSessionGet(
+      this.workspaces,
+      this.clientSessions,
+      input.clientSessionId,
+      input.workspaceId,
+    );
+    if (workspaceSession.workspaceInstanceId !== input.workspaceInstanceId) {
+      throw new Error(
+        `Workspace instance mismatch for ${input.workspaceId}: expected ${workspaceSession.workspaceInstanceId}, received ${input.workspaceInstanceId}`,
+      );
+    }
+    return {
+      workspaceId: workspace.workspaceId,
+      workspaceInstanceId: workspace.workspaceInstanceId,
+      replayState: 'applied',
+    };
+  }
+
   async openOverlay(input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;
@@ -1459,6 +1493,14 @@ class InProcessWorkspaceService implements WorkspaceService {
     configPath: string;
   }): Promise<{ workspaceId: string; workspaceInstanceId: WorkspaceInstanceId }> {
     return this.engine.attachWorkspace(input);
+  }
+
+  completeReplay(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    workspaceInstanceId: WorkspaceInstanceId;
+  }): Promise<WorkspaceReplayResult> {
+    return this.engine.completeReplay(input);
   }
 
   openOverlay(input: {
