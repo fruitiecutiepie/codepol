@@ -127,6 +127,7 @@ type WorkspaceAnalysisCacheState = {
   analysisGeneration: number;
   lastAnalysis?: WorkspaceAnalysis;
   indexState?: WorkspaceIndexState;
+  workspaceIndexRequired?: boolean;
 };
 
 export type WorkspaceClientKind = 'lsp' | 'cli' | 'test';
@@ -395,9 +396,15 @@ function workspaceFeatureStatusesCreate(
     editPlans: workspaceFeatureStatusCreate({
       readiness: state.status,
     }),
-    workspaceIndex: workspaceFeatureStatusCreate({
-      readiness: state.status,
-    }),
+    workspaceIndex:
+      state.workspaceIndexRequired === false
+        ? workspaceFeatureStatusCreate({
+            readiness: 'ready',
+            detail: 'Not required by current policy',
+          })
+        : workspaceFeatureStatusCreate({
+            readiness: state.status,
+          }),
   };
 }
 
@@ -406,10 +413,14 @@ function workspaceSessionInvalidate(
   options: {
     clearIndexState?: boolean;
     bumpAnalysisRevision?: boolean;
+    clearWorkspaceIndexRequirement?: boolean;
   } = {},
 ): void {
   if (options.clearIndexState) {
     state.indexState = undefined;
+  }
+  if (options.clearWorkspaceIndexRequirement) {
+    state.workspaceIndexRequired = undefined;
   }
   if (options.bumpAnalysisRevision ?? true) {
     state.analysisRevision += 1;
@@ -746,13 +757,33 @@ function fixProvidersCollect(
     .filter((provider): provider is FixProvider => provider !== undefined);
 }
 
-function pluginsRequireProjectIndex(
+function configuredRulesRequireProjectIndex(
+  rules: PolicyRule[],
   pluginRulesMap: Awaited<ReturnType<typeof policyPluginsGet>> extends Result<infer T, string>
     ? T
     : never,
 ): boolean {
-  for (const [, plugin] of pluginRulesMap) {
-    if (plugin.pluginRule.capabilities.requiresProjectIndex) {
+  for (const rule of rules) {
+    const lookup = pluginGetForRule(pluginRulesMap, rule.ruleId);
+    if (lookup?.plugin.pluginRule.capabilities.requiresProjectIndex) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function matchedRulesRequireProjectIndex(
+  matches: RuleMatch[],
+  pluginRulesMap: Awaited<ReturnType<typeof policyPluginsGet>> extends Result<infer T, string>
+    ? T
+    : never,
+): boolean {
+  for (const match of matches) {
+    if (match.files.length === 0) {
+      continue;
+    }
+    const lookup = pluginGetForRule(pluginRulesMap, match.rule.ruleId);
+    if (lookup?.plugin.pluginRule.capabilities.requiresProjectIndex) {
       return true;
     }
   }
@@ -930,6 +961,29 @@ function workspaceIndexRefreshFromDisk(
     workspacePackages: indexState.workspacePackages,
   });
   indexState.index = projectIndexCreate(indexState.store, indexState.capabilities);
+}
+
+async function workspaceIndexRequirementResolve(
+  workspace: WorkspaceContextState,
+): Promise<boolean | undefined> {
+  try {
+    await ensureWorkspaceRuntimeReady();
+    builtinPluginsRefresh();
+    const policy = workspace.config as PolicyFile;
+    const pluginRulesResult = await policyPluginsGet(policy, workspace.rootPath, {
+      configPath: workspace.configPath,
+    });
+    if (isErr(pluginRulesResult)) {
+      return undefined;
+    }
+    if (!configuredRulesRequireProjectIndex(policy.rules, pluginRulesResult.Ok)) {
+      return false;
+    }
+    const matches = await ruleMatchesGet(policy, workspace.rootPath);
+    return matchedRulesRequireProjectIndex(matches, pluginRulesResult.Ok);
+  } catch {
+    return undefined;
+  }
 }
 
 async function eslintRun(
@@ -1222,7 +1276,8 @@ async function workspaceAnalysisRun(
   const matches = await ruleMatchesGet(policy, workspace.rootPath);
   const files = Array.from(new Set(matches.flatMap((match) => match.files)));
   const sourceByFilePath = workspaceSourceOverridesGet(state);
-  const workspaceIndexRequired = pluginsRequireProjectIndex(pluginRulesMap) && files.length > 0;
+  const workspaceIndexRequired = matchedRulesRequireProjectIndex(matches, pluginRulesMap);
+  state.workspaceIndexRequired = workspaceIndexRequired;
 
   if (options.fix && fixProviders.length > 0) {
     await fixProvidersApply(fixProviders, {
@@ -1335,7 +1390,10 @@ async function workspaceAnalysisRun(
       }),
       workspaceIndex: workspaceIndexRequired
         ? workspaceFeatureStatusCreate({
-            readiness: 'ready',
+            readiness: projectIndex ? 'ready' : 'degraded',
+            detail: projectIndex
+              ? 'Session-derived index ready'
+              : 'Project index required but unavailable',
           })
         : workspaceFeatureStatusCreate({
             readiness: 'ready',
@@ -1472,6 +1530,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       }
       workspaceSessionInvalidate(attachedWorkspaceSession, {
         clearIndexState: true,
+        clearWorkspaceIndexRequirement: options.configDirty,
       });
     }
     this.workspaceBackgroundWarmupScheduleAll(workspace);
@@ -1544,6 +1603,16 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     const workspaceId = workspaceIdCreate(rootPath, resolvedConfigPath);
 
     let workspace = this.workspaces.get(workspaceId);
+    const workspaceIndexRequired = await workspaceIndexRequirementResolve({
+      rootPath,
+      configPath: resolvedConfigPath,
+      eslintConfigPath: eslintConfigPathResolve(
+        rootPath,
+        resolvedConfigPath,
+        config,
+      ),
+      config,
+    });
     if (!workspace) {
       workspace = {
         workspaceId,
@@ -1586,7 +1655,10 @@ export class WorkspaceServiceEngine implements WorkspaceService {
         status: 'cold',
         analysisGeneration: 0,
         analysisRevision: 0,
+        workspaceIndexRequired,
       });
+    } else {
+      existingWorkspaceSession.workspaceIndexRequired = workspaceIndexRequired;
     }
     if (this.watcherCreate) {
       await workspaceWatcherEnsure({

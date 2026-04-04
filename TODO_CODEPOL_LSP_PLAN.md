@@ -190,6 +190,7 @@
   - daemon-mode workspace engines now schedule background warm-up after replay and after watched disk/config invalidation, and `queryIndexStatus` now reports `replayState: 'pending' | 'applied'` so callers can distinguish replay gating from normal warming
   - `queryIndexStatus` now also returns `daemonSessionId`, `replayEpoch`, `workspaceReady`, and structured per-feature readiness metadata so tranche-3 status publication can key off the existing status call instead of needing another transport change
   - diagnostics feature readiness can now report `degraded` when a provider like Biome or Ruff fails but the rest of analysis still completes, instead of mirroring the top-level workspace status
+  - workspace-index readiness is now scoped to the configured and matched rules rather than the whole plugin package, so no-index policies stay `workspaceIndex: ready` with `Not required by current policy` even while other features are still `cold` or `warming`
 - Add one watcher pipeline per logical workspace, not per client session.
 - Reuse the existing `chokidar`-based watch knowledge from `apps/cli`, but move ownership into the daemon workspace lifecycle.
 - Track invalidation at the right layer:

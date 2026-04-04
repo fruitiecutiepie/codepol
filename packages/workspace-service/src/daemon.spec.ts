@@ -241,7 +241,10 @@ describe('workspace daemon control plane', () => {
         diagnostics: { readiness: 'cold' },
         codeActions: { readiness: 'cold' },
         editPlans: { readiness: 'cold' },
-        workspaceIndex: { readiness: 'cold' },
+        workspaceIndex: {
+          readiness: 'ready',
+          detail: 'Not required by current policy',
+        },
       },
     });
     expect(attached.workspaceInstanceId).toBeDefined();

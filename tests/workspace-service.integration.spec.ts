@@ -527,6 +527,22 @@ describe('workspace service integration', () => {
         uri: exporterUri,
       }),
     ).toEqual([]);
+    expect(
+      await service.queryIndexStatus({
+        clientSessionId,
+        workspaceId,
+      }),
+    ).toMatchObject({
+      workspaceId,
+      status: 'ready',
+      featureStatus: {
+        workspaceIndex: {
+          readiness: 'ready',
+          detail: 'Session-derived index ready',
+        },
+      },
+      analysisGeneration: 1,
+    });
 
     await service.openOverlay({
       clientSessionId,
@@ -682,7 +698,10 @@ describe('workspace service integration', () => {
         diagnostics: { readiness: 'cold' },
         codeActions: { readiness: 'cold' },
         editPlans: { readiness: 'cold' },
-        workspaceIndex: { readiness: 'cold' },
+        workspaceIndex: {
+          readiness: 'ready',
+          detail: 'Not required by current policy',
+        },
       },
       indexedFileCount: 0,
       openDocumentCount: 0,
@@ -713,7 +732,10 @@ describe('workspace service integration', () => {
         diagnostics: { readiness: 'ready' },
         codeActions: { readiness: 'ready' },
         editPlans: { readiness: 'ready' },
-        workspaceIndex: { readiness: 'ready' },
+        workspaceIndex: {
+          readiness: 'ready',
+          detail: 'Not required by current policy',
+        },
       },
       openDocumentCount: 0,
       overlayCount: 0,
@@ -928,7 +950,10 @@ describe('workspace service integration', () => {
         diagnostics: { readiness: 'cold' },
         codeActions: { readiness: 'cold' },
         editPlans: { readiness: 'cold' },
-        workspaceIndex: { readiness: 'cold' },
+        workspaceIndex: {
+          readiness: 'ready',
+          detail: 'Not required by current policy',
+        },
       },
       indexedFileCount: 0,
       openDocumentCount: 0,
@@ -960,7 +985,10 @@ describe('workspace service integration', () => {
         diagnostics: { readiness: 'warming' },
         codeActions: { readiness: 'warming' },
         editPlans: { readiness: 'warming' },
-        workspaceIndex: { readiness: 'warming' },
+        workspaceIndex: {
+          readiness: 'ready',
+          detail: 'Not required by current policy',
+        },
       },
       analysisGeneration: 0,
     });
@@ -983,7 +1011,10 @@ describe('workspace service integration', () => {
         diagnostics: { readiness: 'ready' },
         codeActions: { readiness: 'ready' },
         editPlans: { readiness: 'ready' },
-        workspaceIndex: { readiness: 'ready' },
+        workspaceIndex: {
+          readiness: 'ready',
+          detail: 'Not required by current policy',
+        },
       },
       analysisGeneration: 1,
     });
