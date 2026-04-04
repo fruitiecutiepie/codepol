@@ -149,6 +149,7 @@
   - diagnostics publication in `apps/lsp` is now freshness-gated by workspace replay epoch plus per-document state version so older diagnostic queries cannot overwrite newer open/change/close state
   - the daemon transport now supports `cancel_request` against in-flight transport request ids, and daemon-backed workspace-service reads/apply calls now accept abort signals so canceled interactive requests can stop before response publication
   - the daemon protocol now carries and validates `workspaceInstanceId` on overlay/read requests plus `replayEpoch` on post-replay reads/status calls, so stale sessions are rejected at the service boundary instead of only at the LSP adapter
+  - the daemon-backed workspace-service client now carries `daemonSessionId` on all client-session-bound RPCs, and the daemon rejects stale or missing daemon ids before workspace attach/replay/overlay/read work starts
 - Formalize a request envelope that carries enough freshness data to reject or suppress stale work:
   - `daemonSessionId`
   - `clientSessionId`

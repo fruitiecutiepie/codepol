@@ -165,6 +165,11 @@ type WorkspaceDaemonWorkspaceFreshness = {
   replayEpoch?: number;
 };
 
+type WorkspaceDaemonClientSessionFreshness = {
+  clientSessionId: ClientSessionId;
+  daemonSessionId?: DaemonSessionId;
+};
+
 type WorkspaceDaemonCancelRequest = WorkspaceDaemonMessage & {
   type: 'cancel_request';
   targetId: number;
@@ -177,73 +182,70 @@ type WorkspaceDaemonRegisterClientSessionRequest = WorkspaceDaemonMessage & {
   clientSessionId?: ClientSessionId;
 };
 
-type WorkspaceDaemonCloseClientSessionRequest = WorkspaceDaemonMessage & {
-  type: 'close_client_session';
-  clientSessionId: ClientSessionId;
-};
+type WorkspaceDaemonCloseClientSessionRequest = WorkspaceDaemonMessage &
+  WorkspaceDaemonClientSessionFreshness & {
+    type: 'close_client_session';
+  };
 
-type WorkspaceDaemonAttachWorkspaceRequest = WorkspaceDaemonMessage & {
+type WorkspaceDaemonAttachWorkspaceRequest = WorkspaceDaemonMessage &
+  WorkspaceDaemonClientSessionFreshness & {
   type: 'attach_workspace';
-  clientSessionId: ClientSessionId;
   rootPath: string;
   configPath: string;
 };
 
-type WorkspaceDaemonSubscribeDiagnosticsRequest = WorkspaceDaemonMessage & {
+type WorkspaceDaemonSubscribeDiagnosticsRequest = WorkspaceDaemonMessage &
+  WorkspaceDaemonClientSessionFreshness & {
   type: 'subscribe_diagnostics';
-  clientSessionId: ClientSessionId;
   workspaceId: string;
   workspaceInstanceId: WorkspaceInstanceId;
   scope: WorkspaceDiagnosticsSubscriptionScope;
 };
 
-type WorkspaceDaemonCompleteReplayRequest = WorkspaceDaemonMessage & {
+type WorkspaceDaemonCompleteReplayRequest = WorkspaceDaemonMessage &
+  WorkspaceDaemonClientSessionFreshness & {
   type: 'complete_replay';
-  clientSessionId: ClientSessionId;
   workspaceId: string;
   workspaceInstanceId: WorkspaceInstanceId;
 };
 
 type WorkspaceDaemonOpenOverlayRequest = WorkspaceDaemonMessage & {
   type: 'open_overlay';
-  clientSessionId: ClientSessionId;
   workspaceId: string;
   workspaceInstanceId?: WorkspaceInstanceId;
   uri: string;
   version: number;
   text: string;
-};
+} & WorkspaceDaemonClientSessionFreshness;
 
 type WorkspaceDaemonUpdateOverlayRequest = WorkspaceDaemonMessage & {
   type: 'update_overlay';
-  clientSessionId: ClientSessionId;
   workspaceId: string;
   workspaceInstanceId?: WorkspaceInstanceId;
   uri: string;
   version: number;
   text: string;
-};
+} & WorkspaceDaemonClientSessionFreshness;
 
 type WorkspaceDaemonCloseOverlayRequest = WorkspaceDaemonMessage & {
   type: 'close_overlay';
-  clientSessionId: ClientSessionId;
   workspaceId: string;
   workspaceInstanceId?: WorkspaceInstanceId;
   uri: string;
-};
+} & WorkspaceDaemonClientSessionFreshness;
 
 type WorkspaceDaemonQueryDiagnosticsRequest = WorkspaceDaemonMessage &
+  WorkspaceDaemonClientSessionFreshness &
   WorkspaceDaemonWorkspaceFreshness & {
   type: 'query_diagnostics';
-  clientSessionId: ClientSessionId;
   workspaceId: string;
   uri?: string;
 };
 
 type WorkspaceDaemonQueryCodeActionsRequest = WorkspaceDaemonMessage &
+  WorkspaceDaemonClientSessionFreshness &
   WorkspaceDaemonWorkspaceFreshness & {
   type: 'query_code_actions';
-  clientSessionId: ClientSessionId;
   workspaceId: string;
   uri: string;
   version: number;
@@ -251,18 +253,18 @@ type WorkspaceDaemonQueryCodeActionsRequest = WorkspaceDaemonMessage &
 };
 
 type WorkspaceDaemonApplyEditPlanRequest = WorkspaceDaemonMessage &
+  WorkspaceDaemonClientSessionFreshness &
   WorkspaceDaemonWorkspaceFreshness & {
   type: 'apply_edit_plan';
-  clientSessionId: ClientSessionId;
   workspaceId: string;
   planId: string;
   documentVersions: Record<string, number>;
 };
 
 type WorkspaceDaemonQueryIndexStatusRequest = WorkspaceDaemonMessage &
+  WorkspaceDaemonClientSessionFreshness &
   WorkspaceDaemonWorkspaceFreshness & {
   type: 'query_index_status';
-  clientSessionId: ClientSessionId;
   workspaceId: string;
 };
 
@@ -706,6 +708,10 @@ export function workspaceDaemonRequestHandle(options: {
 
 export class WorkspaceDaemonSession {
   private didHello = false;
+  private readonly registeredDaemonSessions = new Map<
+    ClientSessionId,
+    DaemonSessionId
+  >();
   private readonly attachedWorkspaces = new Map<
     ClientSessionId,
     Map<
@@ -773,6 +779,39 @@ export class WorkspaceDaemonSession {
 
   private workspaceReplayStateDeleteAll(clientSessionId: ClientSessionId): void {
     this.attachedWorkspaces.delete(clientSessionId);
+  }
+
+  private daemonSessionSet(
+    clientSessionId: ClientSessionId,
+    daemonSessionId: DaemonSessionId,
+  ): void {
+    this.registeredDaemonSessions.set(clientSessionId, daemonSessionId);
+  }
+
+  private daemonSessionDelete(clientSessionId: ClientSessionId): void {
+    this.registeredDaemonSessions.delete(clientSessionId);
+  }
+
+  private daemonSessionValidate(
+    input: WorkspaceDaemonClientSessionFreshness,
+  ): WorkspaceDaemonErrorResponse | undefined {
+    const expected = this.registeredDaemonSessions.get(input.clientSessionId);
+    if (!expected) {
+      return undefined;
+    }
+    if (input.daemonSessionId === undefined) {
+      return messageErrorCreate(
+        'daemon_session_required',
+        `daemonSessionId required for client session ${input.clientSessionId}`,
+      );
+    }
+    if (expected === input.daemonSessionId) {
+      return undefined;
+    }
+    return messageErrorCreate(
+      'daemon_session_mismatch',
+      `Daemon session mismatch for client session ${input.clientSessionId}: expected ${expected}, received ${input.daemonSessionId}`,
+    );
   }
 
   private replayGateEnsure(
@@ -930,6 +969,7 @@ export class WorkspaceDaemonSession {
             clientInstanceId: input.clientInstanceId,
             clientSessionId: input.clientSessionId,
           });
+          this.daemonSessionSet(result.clientSessionId, result.daemonSessionId);
           return {
             type: 'register_client_session_ack',
             clientSessionId: result.clientSessionId,
@@ -944,9 +984,14 @@ export class WorkspaceDaemonSession {
             );
           }
           const input = message as WorkspaceDaemonCloseClientSessionRequest;
+          const daemonSessionError = this.daemonSessionValidate(input);
+          if (daemonSessionError) {
+            return daemonSessionError;
+          }
           await this.options.service.closeClientSession({
             clientSessionId: input.clientSessionId,
           });
+          this.daemonSessionDelete(input.clientSessionId);
           this.workspaceReplayStateDeleteAll(input.clientSessionId);
           return { type: 'close_client_session_ack' };
         }
@@ -958,6 +1003,10 @@ export class WorkspaceDaemonSession {
             );
           }
           const input = message as WorkspaceDaemonAttachWorkspaceRequest;
+          const daemonSessionError = this.daemonSessionValidate(input);
+          if (daemonSessionError) {
+            return daemonSessionError;
+          }
           const result = await this.options.service.attachWorkspace({
             clientSessionId: input.clientSessionId,
             rootPath: input.rootPath,
@@ -985,6 +1034,10 @@ export class WorkspaceDaemonSession {
             );
           }
           const input = message as WorkspaceDaemonSubscribeDiagnosticsRequest;
+          const daemonSessionError = this.daemonSessionValidate(input);
+          if (daemonSessionError) {
+            return daemonSessionError;
+          }
           const state = this.workspaceReplayStateGet(
             input.clientSessionId,
             input.workspaceId,
@@ -1023,6 +1076,10 @@ export class WorkspaceDaemonSession {
             );
           }
           const input = message as WorkspaceDaemonCompleteReplayRequest;
+          const daemonSessionError = this.daemonSessionValidate(input);
+          if (daemonSessionError) {
+            return daemonSessionError;
+          }
           const state = this.workspaceReplayStateGet(
             input.clientSessionId,
             input.workspaceId,
@@ -1061,6 +1118,10 @@ export class WorkspaceDaemonSession {
             );
           }
           const input = message as WorkspaceDaemonOpenOverlayRequest;
+          const daemonSessionError = this.daemonSessionValidate(input);
+          if (daemonSessionError) {
+            return daemonSessionError;
+          }
           const state = this.workspaceReplayStateGet(
             input.clientSessionId,
             input.workspaceId,
@@ -1080,6 +1141,10 @@ export class WorkspaceDaemonSession {
             );
           }
           const input = message as WorkspaceDaemonUpdateOverlayRequest;
+          const daemonSessionError = this.daemonSessionValidate(input);
+          if (daemonSessionError) {
+            return daemonSessionError;
+          }
           const state = this.workspaceReplayStateGet(
             input.clientSessionId,
             input.workspaceId,
@@ -1099,6 +1164,10 @@ export class WorkspaceDaemonSession {
             );
           }
           const input = message as WorkspaceDaemonCloseOverlayRequest;
+          const daemonSessionError = this.daemonSessionValidate(input);
+          if (daemonSessionError) {
+            return daemonSessionError;
+          }
           const state = this.workspaceReplayStateGet(
             input.clientSessionId,
             input.workspaceId,
@@ -1118,6 +1187,10 @@ export class WorkspaceDaemonSession {
             );
           }
           const input = message as WorkspaceDaemonQueryDiagnosticsRequest;
+          const daemonSessionError = this.daemonSessionValidate(input);
+          if (daemonSessionError) {
+            return daemonSessionError;
+          }
           const replayGate = this.replayGateEnsure(
             input.clientSessionId,
             input.workspaceId,
@@ -1154,6 +1227,10 @@ export class WorkspaceDaemonSession {
             );
           }
           const input = message as WorkspaceDaemonQueryCodeActionsRequest;
+          const daemonSessionError = this.daemonSessionValidate(input);
+          if (daemonSessionError) {
+            return daemonSessionError;
+          }
           const replayGate = this.replayGateEnsure(
             input.clientSessionId,
             input.workspaceId,
@@ -1190,6 +1267,10 @@ export class WorkspaceDaemonSession {
             );
           }
           const input = message as WorkspaceDaemonApplyEditPlanRequest;
+          const daemonSessionError = this.daemonSessionValidate(input);
+          if (daemonSessionError) {
+            return daemonSessionError;
+          }
           const replayGate = this.replayGateEnsure(
             input.clientSessionId,
             input.workspaceId,
@@ -1226,6 +1307,10 @@ export class WorkspaceDaemonSession {
             );
           }
           const input = message as WorkspaceDaemonQueryIndexStatusRequest;
+          const daemonSessionError = this.daemonSessionValidate(input);
+          if (daemonSessionError) {
+            return daemonSessionError;
+          }
           const state = this.workspaceReplayStateGet(
             input.clientSessionId,
             input.workspaceId,
@@ -1263,6 +1348,10 @@ export class WorkspaceDaemonSession {
 }
 
 export class WorkspaceDaemonServiceClient implements WorkspaceService {
+  private readonly clientDaemonSessions = new Map<
+    ClientSessionId,
+    DaemonSessionId
+  >();
   private readonly workspaceFreshness = new Map<
     ClientSessionId,
     Map<
@@ -1275,6 +1364,23 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
   >();
 
   constructor(private readonly connection: WorkspaceDaemonRequestClient) {}
+
+  private daemonSessionIdGet(
+    clientSessionId: ClientSessionId,
+  ): DaemonSessionId | undefined {
+    return this.clientDaemonSessions.get(clientSessionId);
+  }
+
+  private daemonSessionIdSet(
+    clientSessionId: ClientSessionId,
+    daemonSessionId: DaemonSessionId,
+  ): void {
+    this.clientDaemonSessions.set(clientSessionId, daemonSessionId);
+  }
+
+  private daemonSessionIdDelete(clientSessionId: ClientSessionId): void {
+    this.clientDaemonSessions.delete(clientSessionId);
+  }
 
   private workspaceFreshnessGet(input: {
     clientSessionId: ClientSessionId;
@@ -1314,17 +1420,26 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
       clientKind: input.clientKind,
       clientInstanceId: input.clientInstanceId,
       clientSessionId: input.clientSessionId,
-    }).then((response) => ({
-      clientSessionId: response.clientSessionId,
-      daemonSessionId: response.daemonSessionId,
-    }));
+    }).then((response) => {
+      this.daemonSessionIdSet(
+        response.clientSessionId,
+        response.daemonSessionId,
+      );
+      return {
+        clientSessionId: response.clientSessionId,
+        daemonSessionId: response.daemonSessionId,
+      };
+    });
   }
 
   closeClientSession(input: { clientSessionId: ClientSessionId }): Promise<void> {
+    const daemonSessionId = this.daemonSessionIdGet(input.clientSessionId);
     return this.connection.request<WorkspaceDaemonVoidAck>({
       type: 'close_client_session',
       clientSessionId: input.clientSessionId,
+      daemonSessionId,
     }).then(() => {
+      this.daemonSessionIdDelete(input.clientSessionId);
       this.workspaceFreshnessDeleteAll(input.clientSessionId);
       return undefined;
     });
@@ -1335,9 +1450,11 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
     rootPath: string;
     configPath: string;
   }): Promise<{ workspaceId: string; workspaceInstanceId: WorkspaceInstanceId }> {
+    const daemonSessionId = this.daemonSessionIdGet(input.clientSessionId);
     return this.connection.request<WorkspaceDaemonAttachWorkspaceAck>({
       type: 'attach_workspace',
       clientSessionId: input.clientSessionId,
+      daemonSessionId,
       rootPath: input.rootPath,
       configPath: input.configPath,
     }).then((response) => {
@@ -1360,9 +1477,11 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
     workspaceInstanceId: WorkspaceInstanceId;
     scope: WorkspaceDiagnosticsSubscriptionScope;
   }): Promise<WorkspaceDiagnosticsSubscriptionResult> {
+    const daemonSessionId = this.daemonSessionIdGet(input.clientSessionId);
     return this.connection.request<WorkspaceDaemonSubscribeDiagnosticsAck>({
       type: 'subscribe_diagnostics',
       clientSessionId: input.clientSessionId,
+      daemonSessionId,
       workspaceId: input.workspaceId,
       workspaceInstanceId: input.workspaceInstanceId,
       scope: input.scope,
@@ -1374,9 +1493,11 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
     workspaceId: string;
     workspaceInstanceId: WorkspaceInstanceId;
   }): Promise<WorkspaceReplayResult> {
+    const daemonSessionId = this.daemonSessionIdGet(input.clientSessionId);
     return this.connection.request<WorkspaceDaemonCompleteReplayAck>({
       type: 'complete_replay',
       clientSessionId: input.clientSessionId,
+      daemonSessionId,
       workspaceId: input.workspaceId,
       workspaceInstanceId: input.workspaceInstanceId,
     }).then((response) => {
@@ -1398,9 +1519,11 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
     text: string;
   }): Promise<void> {
     const freshness = this.workspaceFreshnessGet(input);
+    const daemonSessionId = this.daemonSessionIdGet(input.clientSessionId);
     return this.connection.request<WorkspaceDaemonVoidAck>({
       type: 'open_overlay',
       clientSessionId: input.clientSessionId,
+      daemonSessionId,
       workspaceId: input.workspaceId,
       workspaceInstanceId: freshness?.workspaceInstanceId,
       uri: input.uri,
@@ -1417,9 +1540,11 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
     text: string;
   }): Promise<void> {
     const freshness = this.workspaceFreshnessGet(input);
+    const daemonSessionId = this.daemonSessionIdGet(input.clientSessionId);
     return this.connection.request<WorkspaceDaemonVoidAck>({
       type: 'update_overlay',
       clientSessionId: input.clientSessionId,
+      daemonSessionId,
       workspaceId: input.workspaceId,
       workspaceInstanceId: freshness?.workspaceInstanceId,
       uri: input.uri,
@@ -1434,9 +1559,11 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
     uri: string;
   }): Promise<void> {
     const freshness = this.workspaceFreshnessGet(input);
+    const daemonSessionId = this.daemonSessionIdGet(input.clientSessionId);
     return this.connection.request<WorkspaceDaemonVoidAck>({
       type: 'close_overlay',
       clientSessionId: input.clientSessionId,
+      daemonSessionId,
       workspaceId: input.workspaceId,
       workspaceInstanceId: freshness?.workspaceInstanceId,
       uri: input.uri,
@@ -1450,9 +1577,11 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
     signal?: AbortSignal;
   }): Promise<WorkspaceDiagnostic[]> {
     const freshness = this.workspaceFreshnessGet(input);
+    const daemonSessionId = this.daemonSessionIdGet(input.clientSessionId);
     return this.connection.request<WorkspaceDaemonQueryDiagnosticsAck>({
       type: 'query_diagnostics',
       clientSessionId: input.clientSessionId,
+      daemonSessionId,
       workspaceId: input.workspaceId,
       workspaceInstanceId: freshness?.workspaceInstanceId,
       replayEpoch: freshness?.replayEpoch,
@@ -1471,9 +1600,11 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
     signal?: AbortSignal;
   }): Promise<WorkspaceCodeAction[]> {
     const freshness = this.workspaceFreshnessGet(input);
+    const daemonSessionId = this.daemonSessionIdGet(input.clientSessionId);
     return this.connection.request<WorkspaceDaemonQueryCodeActionsAck>({
       type: 'query_code_actions',
       clientSessionId: input.clientSessionId,
+      daemonSessionId,
       workspaceId: input.workspaceId,
       workspaceInstanceId: freshness?.workspaceInstanceId,
       replayEpoch: freshness?.replayEpoch,
@@ -1493,9 +1624,11 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
     signal?: AbortSignal;
   }): Promise<WorkspaceApplyResult> {
     const freshness = this.workspaceFreshnessGet(input);
+    const daemonSessionId = this.daemonSessionIdGet(input.clientSessionId);
     return this.connection.request<WorkspaceDaemonApplyEditPlanAck>({
       type: 'apply_edit_plan',
       clientSessionId: input.clientSessionId,
+      daemonSessionId,
       workspaceId: input.workspaceId,
       workspaceInstanceId: freshness?.workspaceInstanceId,
       replayEpoch: freshness?.replayEpoch,
@@ -1512,9 +1645,11 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
     signal?: AbortSignal;
   }): Promise<IndexStatusResult> {
     const freshness = this.workspaceFreshnessGet(input);
+    const daemonSessionId = this.daemonSessionIdGet(input.clientSessionId);
     return this.connection.request<WorkspaceDaemonQueryIndexStatusAck>({
       type: 'query_index_status',
       clientSessionId: input.clientSessionId,
+      daemonSessionId,
       workspaceId: input.workspaceId,
       workspaceInstanceId: freshness?.workspaceInstanceId,
       replayEpoch: freshness?.replayEpoch,
