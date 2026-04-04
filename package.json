@@ -6,6 +6,9 @@
   "scripts": {
     "build:wasm": "node scripts/build-wasm.mjs",
     "build": "pnpm run build:wasm && pnpm -r build",
+    "dev:build": "pnpm exec tsc -b --watch --preserveWatchOutput",
+    "dev:cli": "node --watch --enable-source-maps apps/cli/dist/index.js",
+    "dev:lsp": "node --watch --enable-source-maps apps/lsp/dist/index.js",
     "test": "pnpm build && vitest run --exclude '**/e2e.*.spec.ts'",
     "test:unit": "vitest run packages/",
     "test:integration": "vitest run tests/ --exclude '**/e2e.*.spec.ts'",
