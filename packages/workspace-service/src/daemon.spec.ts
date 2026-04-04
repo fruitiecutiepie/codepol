@@ -167,6 +167,12 @@ describe('workspace daemon control plane', () => {
     const registered = await service.registerClientSession({
       clientKind: 'test',
       clientInstanceId: 'rpc-client',
+      clientSessionId: 'daemon-stable-client',
+    });
+    const repeated = await service.registerClientSession({
+      clientKind: 'test',
+      clientInstanceId: 'rpc-client',
+      clientSessionId: 'daemon-stable-client',
     });
     const attached = await service.attachWorkspace({
       clientSessionId: registered.clientSessionId,
@@ -180,6 +186,8 @@ describe('workspace daemon control plane', () => {
     });
 
     expect(registered.daemonSessionId).toBeDefined();
+    expect(registered.clientSessionId).toBe('daemon-stable-client');
+    expect(repeated).toEqual(registered);
     expect(attached.workspaceInstanceId).toBeDefined();
     expect(diagnostics).toHaveLength(1);
 

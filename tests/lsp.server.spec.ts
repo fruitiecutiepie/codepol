@@ -107,11 +107,15 @@ describe('CodepolLspServer', () => {
     fs.writeFileSync(path.join(workspaceRoot, 'codepol.toml'), noInterfaceConfigContentCreate(), 'utf8');
 
     const calls: string[] = [];
+    let registeredInput:
+      | { clientKind: string; clientInstanceId: string; clientSessionId?: string }
+      | undefined;
     const service: WorkspaceService = {
-      async registerClientSession() {
+      async registerClientSession(input) {
+        registeredInput = input;
         calls.push('registerClientSession');
         return {
-          clientSessionId: 'client-1',
+          clientSessionId: input.clientSessionId ?? 'client-1',
           daemonSessionId: 'daemon-1',
         };
       },
@@ -162,6 +166,8 @@ describe('CodepolLspServer', () => {
 
     const server = new CodepolLspServer({
       service,
+      clientInstanceId: 'lsp-instance-1',
+      clientSessionId: 'lsp-client-session-1',
       sendMessage: () => {},
     });
 
@@ -175,6 +181,11 @@ describe('CodepolLspServer', () => {
     });
 
     expect(calls).toEqual(['registerClientSession', 'attachWorkspace']);
+    expect(registeredInput).toEqual({
+      clientKind: 'lsp',
+      clientInstanceId: 'lsp-instance-1',
+      clientSessionId: 'lsp-client-session-1',
+    });
   });
 
   it('supports an async daemon-backed service factory during initialize and publish flow', async () => {

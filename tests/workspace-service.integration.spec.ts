@@ -49,11 +49,13 @@ async function clientWorkspaceAttach(
     configPath: string;
     clientKind?: 'lsp' | 'cli' | 'test';
     clientInstanceId?: string;
+    clientSessionId?: string;
   },
 ): Promise<{ clientSessionId: string; workspaceId: string; workspaceInstanceId: string }> {
   const registered = await service.registerClientSession({
     clientKind: input.clientKind ?? 'test',
     clientInstanceId: input.clientInstanceId ?? 'vitest',
+    clientSessionId: input.clientSessionId,
   });
   const attached = await service.attachWorkspace({
     clientSessionId: registered.clientSessionId,
@@ -172,6 +174,35 @@ describe('workspace service integration', () => {
         uri,
       }),
     ).toEqual([]);
+  });
+
+  it('accepts stable client-generated session ids and re-registers them idempotently', async () => {
+    const service = workspaceServiceCreate();
+
+    const first = await service.registerClientSession({
+      clientKind: 'test',
+      clientInstanceId: 'stable-client',
+      clientSessionId: 'client-stable-1',
+    });
+    const second = await service.registerClientSession({
+      clientKind: 'test',
+      clientInstanceId: 'stable-client',
+      clientSessionId: 'client-stable-1',
+    });
+
+    expect(first).toEqual({
+      clientSessionId: 'client-stable-1',
+      daemonSessionId: first.daemonSessionId,
+    });
+    expect(second).toEqual(first);
+
+    await expect(
+      service.registerClientSession({
+        clientKind: 'cli',
+        clientInstanceId: 'other-client',
+        clientSessionId: 'client-stable-1',
+      }),
+    ).rejects.toThrow('already registered with a different identity');
   });
 
   it('rejects stale edit-plan application after the document version changes', async () => {

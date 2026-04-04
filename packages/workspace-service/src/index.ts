@@ -167,6 +167,7 @@ export type WorkspaceService = {
   registerClientSession: (input: {
     clientKind: WorkspaceClientKind;
     clientInstanceId: string;
+    clientSessionId?: ClientSessionId;
   }) => Promise<{ clientSessionId: ClientSessionId; daemonSessionId: DaemonSessionId }>;
   closeClientSession: (input: { clientSessionId: ClientSessionId }) => Promise<void>;
   attachWorkspace: (input: {
@@ -1075,9 +1076,26 @@ export class WorkspaceServiceEngine implements WorkspaceService {
   async registerClientSession(input: {
     clientKind: WorkspaceClientKind;
     clientInstanceId: string;
+    clientSessionId?: ClientSessionId;
   }): Promise<{ clientSessionId: ClientSessionId; daemonSessionId: DaemonSessionId }> {
     await ensureWorkspaceRuntimeReady();
-    const clientSessionId = opaqueIdCreate('client') as ClientSessionId;
+    const clientSessionId =
+      input.clientSessionId ?? (opaqueIdCreate('client') as ClientSessionId);
+    const existing = this.clientSessions.get(clientSessionId);
+    if (existing) {
+      if (
+        existing.clientKind !== input.clientKind ||
+        existing.clientInstanceId !== input.clientInstanceId
+      ) {
+        throw new Error(
+          `Client session ${clientSessionId} is already registered with a different identity`,
+        );
+      }
+      return {
+        clientSessionId,
+        daemonSessionId: this.daemonSessionId,
+      };
+    }
     this.clientSessions.set(clientSessionId, {
       clientSessionId,
       clientKind: input.clientKind,
@@ -1424,6 +1442,7 @@ class InProcessWorkspaceService implements WorkspaceService {
   registerClientSession(input: {
     clientKind: WorkspaceClientKind;
     clientInstanceId: string;
+    clientSessionId?: ClientSessionId;
   }): Promise<{ clientSessionId: ClientSessionId; daemonSessionId: DaemonSessionId }> {
     return this.engine.registerClientSession(input);
   }

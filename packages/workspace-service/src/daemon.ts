@@ -151,6 +151,7 @@ type WorkspaceDaemonRegisterClientSessionRequest = WorkspaceDaemonMessage & {
   type: 'register_client_session';
   clientKind: WorkspaceClientKind;
   clientInstanceId: string;
+  clientSessionId?: ClientSessionId;
 };
 
 type WorkspaceDaemonCloseClientSessionRequest = WorkspaceDaemonMessage & {
@@ -628,6 +629,7 @@ export class WorkspaceDaemonSession {
           const result = await this.options.service.registerClientSession({
             clientKind: input.clientKind,
             clientInstanceId: input.clientInstanceId,
+            clientSessionId: input.clientSessionId,
           });
           return {
             type: 'register_client_session_ack',
@@ -723,11 +725,13 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
   registerClientSession(input: {
     clientKind: WorkspaceClientKind;
     clientInstanceId: string;
+    clientSessionId?: ClientSessionId;
   }): Promise<{ clientSessionId: ClientSessionId; daemonSessionId: DaemonSessionId }> {
     return this.connection.request<WorkspaceDaemonRegisterClientSessionAck>({
       type: 'register_client_session',
       clientKind: input.clientKind,
       clientInstanceId: input.clientInstanceId,
+      clientSessionId: input.clientSessionId,
     }).then((response) => ({
       clientSessionId: response.clientSessionId,
       daemonSessionId: response.daemonSessionId,
