@@ -223,6 +223,10 @@ function requestCancelledErrorCreate(): Error {
   return new Error('Request cancelled');
 }
 
+function staleDocumentVersionErrorIs(error: unknown): boolean {
+  return error instanceof Error && error.message.includes('Document version mismatch');
+}
+
 export class CodepolLspServer {
   private service: WorkspaceService | undefined;
   private readonly serviceFactory: WorkspaceServiceFactory;
@@ -778,43 +782,51 @@ export class CodepolLspServer {
       return [];
     }
     const document = this.documents.get(params.textDocument.uri);
-    return this.serviceCall(async (service) => {
-      const diagnosticIds = new Set(
-        (params.context.diagnostics ?? [])
-          .map((diagnostic) => diagnostic.data?.id)
-          .filter((diagnosticId): diagnosticId is string => typeof diagnosticId === 'string'),
-      );
-      if (params.range) {
-        const diagnostics = await service.queryDiagnostics({
+    try {
+      return await this.serviceCall(async (service) => {
+        const diagnosticIds = new Set(
+          (params.context.diagnostics ?? [])
+            .map((diagnostic) => diagnostic.data?.id)
+            .filter((diagnosticId): diagnosticId is string => typeof diagnosticId === 'string'),
+        );
+        if (params.range) {
+          const diagnostics = await service.queryDiagnostics({
+            clientSessionId: this.registeredClientSessionId!,
+            workspaceId: this.workspaceId!,
+            uri: params.textDocument.uri,
+            documentVersion: document?.version,
+            signal: context.signal,
+          });
+          for (const diagnostic of diagnostics) {
+            if (diagnosticTouchesRange(diagnostic, params.textDocument.uri, params.range)) {
+              diagnosticIds.add(diagnostic.id);
+            }
+          }
+        }
+        if (diagnosticIds.size === 0) {
+          return [];
+        }
+        if (context.signal?.aborted) {
+          return [];
+        }
+        const actions = await service.queryCodeActions({
           clientSessionId: this.registeredClientSessionId!,
           workspaceId: this.workspaceId!,
           uri: params.textDocument.uri,
+          version: document?.version ?? 0,
+          diagnosticIds: [...diagnosticIds],
           signal: context.signal,
         });
-        for (const diagnostic of diagnostics) {
-          if (diagnosticTouchesRange(diagnostic, params.textDocument.uri, params.range)) {
-            diagnosticIds.add(diagnostic.id);
-          }
-        }
-      }
-      if (diagnosticIds.size === 0) {
-        return [];
-      }
-      if (context.signal?.aborted) {
-        return [];
-      }
-      const actions = await service.queryCodeActions({
-        clientSessionId: this.registeredClientSessionId!,
-        workspaceId: this.workspaceId!,
-        uri: params.textDocument.uri,
-        version: document?.version ?? 0,
-        diagnosticIds: [...diagnosticIds],
+        return actions.map((action: WorkspaceCodeAction) => this.codeActionToLsp(action));
+      }, {
         signal: context.signal,
       });
-      return actions.map((action: WorkspaceCodeAction) => this.codeActionToLsp(action));
-    }, {
-      signal: context.signal,
-    });
+    } catch (error) {
+      if (staleDocumentVersionErrorIs(error)) {
+        return [];
+      }
+      throw error;
+    }
   }
 
   private codeActionToLsp(action: WorkspaceCodeAction): unknown {
@@ -890,11 +902,21 @@ export class CodepolLspServer {
     const expectedClientSessionId = this.registeredClientSessionId;
     const expectedWorkspaceId = this.workspaceId;
     const activeService = options.service ?? (await this.serviceGet());
-    const diagnostics = await activeService.queryDiagnostics({
-      clientSessionId: expectedClientSessionId,
-      workspaceId: expectedWorkspaceId,
-      uri,
-    });
+    const documentVersion = this.documents.get(uri)?.version;
+    let diagnostics: WorkspaceDiagnostic[];
+    try {
+      diagnostics = await activeService.queryDiagnostics({
+        clientSessionId: expectedClientSessionId,
+        workspaceId: expectedWorkspaceId,
+        uri,
+        documentVersion,
+      });
+    } catch (error) {
+      if (staleDocumentVersionErrorIs(error)) {
+        return;
+      }
+      throw error;
+    }
     if (
       !this.diagnosticsPublishCurrentIs({
         uri,

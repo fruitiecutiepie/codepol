@@ -266,6 +266,59 @@ describe('workspace service integration', () => {
     });
   });
 
+  it('rejects stale diagnostics and status reads when document or analysis freshness lags', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(workspaceRoot, 'codepol.toml'), noInterfaceConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = workspacePathToUri(filePath);
+    fs.writeFileSync(
+      filePath,
+      'export interface User {\n  name: string;\n}\n',
+      'utf8',
+    );
+
+    const service = workspaceServiceCreate();
+    const { clientSessionId, workspaceId } = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath: path.join(workspaceRoot, 'codepol.toml'),
+    });
+
+    await service.openOverlay({
+      clientSessionId,
+      workspaceId,
+      uri,
+      version: 2,
+      text: fs.readFileSync(filePath, 'utf8'),
+    });
+
+    await expect(
+      service.queryDiagnostics({
+        clientSessionId,
+        workspaceId,
+        uri,
+        documentVersion: 1,
+      }),
+    ).rejects.toThrow(`Document version mismatch for ${uri}: expected 2, received 1`);
+
+    await service.queryDiagnostics({
+      clientSessionId,
+      workspaceId,
+      uri,
+      documentVersion: 2,
+    });
+
+    await expect(
+      service.queryIndexStatus({
+        clientSessionId,
+        workspaceId,
+        analysisGeneration: 0,
+      }),
+    ).rejects.toThrow('Analysis generation mismatch: expected 1, received 0');
+  });
+
   it('refreshes cross-file diagnostics from overlay text using the project index', async () => {
     const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
     createdDirs.push(workspaceRoot);

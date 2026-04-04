@@ -210,6 +210,7 @@ export type WorkspaceService = {
     clientSessionId: ClientSessionId;
     workspaceId: string;
     uri?: string;
+    documentVersion?: number;
     signal?: AbortSignal;
   }) => Promise<WorkspaceDiagnostic[]>;
   queryCodeActions: (input: {
@@ -230,6 +231,7 @@ export type WorkspaceService = {
   queryIndexStatus: (input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;
+    analysisGeneration?: number;
     signal?: AbortSignal;
   }) => Promise<IndexStatusResult>;
 };
@@ -589,6 +591,42 @@ function workspaceSourceGet(
     }
   }
   return fs.readFileSync(filePath, 'utf8');
+}
+
+function workspaceDocumentVersionValidate(
+  state: WorkspaceDocumentsState,
+  input: {
+    uri: string;
+    documentVersion?: number;
+  },
+): void {
+  if (input.documentVersion === undefined) {
+    return;
+  }
+  const document = state.documents.get(input.uri);
+  if (!document || document.version === input.documentVersion) {
+    return;
+  }
+  throw new Error(
+    `Document version mismatch for ${input.uri}: expected ${document.version}, received ${input.documentVersion}`,
+  );
+}
+
+function workspaceAnalysisGenerationValidate(
+  state: WorkspaceAnalysisCacheState,
+  input: {
+    analysisGeneration?: number;
+  },
+): void {
+  if (input.analysisGeneration === undefined) {
+    return;
+  }
+  if (state.analysisGeneration === input.analysisGeneration) {
+    return;
+  }
+  throw new Error(
+    `Analysis generation mismatch: expected ${state.analysisGeneration}, received ${input.analysisGeneration}`,
+  );
 }
 
 function workspaceBaseIndexStateGetOrBuild(
@@ -1351,6 +1389,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     clientSessionId: ClientSessionId;
     workspaceId: string;
     uri?: string;
+    documentVersion?: number;
     signal?: AbortSignal;
   }): Promise<WorkspaceDiagnostic[]> {
     const { workspace, workspaceSession } = workspaceSessionGet(
@@ -1359,6 +1398,12 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       input.clientSessionId,
       input.workspaceId,
     );
+    if (input.uri) {
+      workspaceDocumentVersionValidate(workspaceSession, {
+        uri: input.uri,
+        documentVersion: input.documentVersion,
+      });
+    }
     const analysis = await workspaceSessionAnalysisGet(workspace, workspaceSession);
     if (!input.uri) {
       return analysis.diagnostics;
@@ -1380,6 +1425,10 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       input.clientSessionId,
       input.workspaceId,
     );
+    workspaceDocumentVersionValidate(workspaceSession, {
+      uri: input.uri,
+      documentVersion: input.version,
+    });
     workspaceSession.codeActionPlans.clear();
     const analysis = await workspaceSessionAnalysisGet(workspace, workspaceSession);
 
@@ -1499,6 +1548,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
   async queryIndexStatus(input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;
+    analysisGeneration?: number;
     signal?: AbortSignal;
   }): Promise<IndexStatusResult> {
     const { workspace, workspaceSession } = workspaceSessionGet(
@@ -1507,6 +1557,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       input.clientSessionId,
       input.workspaceId,
     );
+    workspaceAnalysisGenerationValidate(workspaceSession, input);
     return {
       workspaceId: workspace.workspaceId,
       workspaceInstanceId: workspace.workspaceInstanceId,
@@ -1597,6 +1648,7 @@ class InProcessWorkspaceService implements WorkspaceService {
     clientSessionId: ClientSessionId;
     workspaceId: string;
     uri?: string;
+    documentVersion?: number;
     signal?: AbortSignal;
   }): Promise<WorkspaceDiagnostic[]> {
     return this.engine.queryDiagnostics(input);
@@ -1626,6 +1678,7 @@ class InProcessWorkspaceService implements WorkspaceService {
   queryIndexStatus(input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;
+    analysisGeneration?: number;
     signal?: AbortSignal;
   }): Promise<IndexStatusResult> {
     return this.engine.queryIndexStatus(input);

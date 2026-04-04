@@ -398,6 +398,120 @@ describe('workspace daemon control plane', () => {
     });
   });
 
+  it('rejects diagnostics reads for a stale overlay document version', async () => {
+    const runtimeDir = tempRuntimeDirCreate();
+    tempDirs.push(runtimeDir);
+
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-daemon-workspace-'));
+    tempDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'codepol.toml'),
+      noInterfaceConfigContentCreate(),
+      'utf8',
+    );
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = workspacePathToUri(filePath);
+    fs.writeFileSync(filePath, 'export interface User {\n  name: string;\n}\n', 'utf8');
+
+    const { descriptor } = workspaceDaemonDescriptorCreate({ runtimeDir });
+    const session = new WorkspaceDaemonSession({
+      descriptor,
+      service: new WorkspaceServiceEngine(),
+    });
+
+    await expect(
+      session.handleEnvelope({
+        id: 1,
+        type: 'hello',
+        protocolVersion: WORKSPACE_DAEMON_PROTOCOL_VERSION,
+        client: clientIdentityCreate('stale-document-version-client'),
+      }),
+    ).resolves.toMatchObject({
+      type: 'hello_ack',
+      compatibility: 'ok',
+    });
+
+    const registerResponse = await session.handleEnvelope({
+      id: 2,
+      type: 'register_client_session',
+      clientKind: 'test',
+      clientInstanceId: 'stale-document-version-client',
+      clientSessionId: 'stale-document-version-session',
+    });
+    expect(registerResponse.type).toBe('register_client_session_ack');
+    if (registerResponse.type !== 'register_client_session_ack') {
+      return;
+    }
+
+    const attachResponse = await session.handleEnvelope({
+      id: 3,
+      type: 'attach_workspace',
+      clientSessionId: 'stale-document-version-session',
+      daemonSessionId: registerResponse.daemonSessionId,
+      rootPath: workspaceRoot,
+      configPath: path.join(workspaceRoot, 'codepol.toml'),
+    });
+    expect(attachResponse.type).toBe('attach_workspace_ack');
+    if (attachResponse.type !== 'attach_workspace_ack') {
+      return;
+    }
+
+    await expect(
+      session.handleEnvelope({
+        id: 4,
+        type: 'open_overlay',
+        clientSessionId: 'stale-document-version-session',
+        daemonSessionId: registerResponse.daemonSessionId,
+        workspaceId: attachResponse.workspaceId,
+        workspaceInstanceId: attachResponse.workspaceInstanceId,
+        uri,
+        version: 2,
+        text: 'export interface User {\n  name: string;\n}\n',
+      }),
+    ).resolves.toEqual({
+      type: 'open_overlay_ack',
+    });
+
+    await expect(
+      session.handleEnvelope({
+        id: 5,
+        type: 'complete_replay',
+        clientSessionId: 'stale-document-version-session',
+        daemonSessionId: registerResponse.daemonSessionId,
+        workspaceId: attachResponse.workspaceId,
+        workspaceInstanceId: attachResponse.workspaceInstanceId,
+      }),
+    ).resolves.toEqual({
+      type: 'complete_replay_ack',
+      result: {
+        workspaceId: attachResponse.workspaceId,
+        workspaceInstanceId: attachResponse.workspaceInstanceId,
+        replayEpoch: 1,
+        replayState: 'applied',
+      },
+    });
+
+    await expect(
+      session.handleEnvelope({
+        id: 6,
+        type: 'query_diagnostics',
+        clientSessionId: 'stale-document-version-session',
+        daemonSessionId: registerResponse.daemonSessionId,
+        workspaceId: attachResponse.workspaceId,
+        workspaceInstanceId: attachResponse.workspaceInstanceId,
+        replayEpoch: 1,
+        uri,
+        documentVersion: 1,
+      }),
+    ).resolves.toEqual({
+      type: 'error',
+      code: 'document_version_mismatch',
+      message: `Document version mismatch for ${uri}: expected 2, received 1`,
+    });
+  });
+
   it('rejects client-session requests for a stale daemon session id', async () => {
     const runtimeDir = tempRuntimeDirCreate();
     tempDirs.push(runtimeDir);
@@ -589,6 +703,22 @@ describe('workspace daemon control plane', () => {
         replayEpoch: 1,
         replayState: 'applied',
       },
+    });
+
+    await expect(
+      session.handleEnvelope({
+        id: 8,
+        type: 'open_overlay',
+        clientSessionId: 'queued-priority-session',
+        daemonSessionId: registerResponse.daemonSessionId,
+        workspaceId: attachResponse.workspaceId,
+        workspaceInstanceId: attachResponse.workspaceInstanceId,
+        uri: workspacePathToUri(path.join(runtimeDir, 'src', 'app.ts')),
+        version: 1,
+        text: 'export interface User {\n  name: string;\n}\n',
+      }),
+    ).resolves.toEqual({
+      type: 'open_overlay_ack',
     });
 
     const diagnosticsPromise = session.handleEnvelope({

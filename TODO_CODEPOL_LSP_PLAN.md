@@ -151,6 +151,7 @@
   - the daemon protocol now carries and validates `workspaceInstanceId` on overlay/read requests plus `replayEpoch` on post-replay reads/status calls, so stale sessions are rejected at the service boundary instead of only at the LSP adapter
   - the daemon-backed workspace-service client now carries `daemonSessionId` on all client-session-bound RPCs, and the daemon rejects stale or missing daemon ids before workspace attach/replay/overlay/read work starts
   - the daemon session now has a workspace-keyed priority queue, with `attach`/`replay`/`status` ahead of diagnostics and diagnostics ahead of code actions or edit-plan work when requests backlog on the same workspace lane
+  - diagnostics reads now carry the current overlay document version, index/status reads can carry `analysisGeneration`, and stale diagnostics/status requests are rejected or suppressed before they can publish as current
 - Formalize a request envelope that carries enough freshness data to reject or suppress stale work:
   - `daemonSessionId`
   - `clientSessionId`

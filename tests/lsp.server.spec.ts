@@ -615,6 +615,118 @@ describe('CodepolLspServer', () => {
     expect(finalPublish?.params.diagnostics).toHaveLength(1);
   });
 
+  it('forwards the current document version when querying diagnostics for open overlays', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(workspaceRoot, 'codepol.toml'), noInterfaceConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = pathToFileURL(filePath).href;
+    const seenDocumentVersions: Array<number | undefined> = [];
+
+    const service: WorkspaceService = {
+      async registerClientSession() {
+        return {
+          clientSessionId: 'client-1',
+          daemonSessionId: 'daemon-1',
+        };
+      },
+      async closeClientSession() {},
+      async attachWorkspace() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+        };
+      },
+      async subscribeDiagnostics() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          scope: 'workspace',
+          subscriptionState: 'active',
+        };
+      },
+      async completeReplay() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          replayEpoch: 1,
+          replayState: 'applied',
+        };
+      },
+      async openOverlay() {},
+      async updateOverlay() {},
+      async closeOverlay() {},
+      async queryDiagnostics(input) {
+        seenDocumentVersions.push(input.documentVersion);
+        return [];
+      },
+      async queryCodeActions() {
+        return [];
+      },
+      async applyEditPlan() {
+        return { applied: false, failureReason: 'plan_not_found' };
+      },
+      async queryIndexStatus() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          status: 'cold',
+          indexedFileCount: 0,
+          openDocumentCount: 0,
+          overlayCount: 0,
+          analysisGeneration: 0,
+        };
+      },
+    };
+
+    const server = new CodepolLspServer({
+      service,
+      sendMessage: () => {},
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        rootUri: pathToFileURL(workspaceRoot).href,
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      method: 'textDocument/didOpen',
+      params: {
+        textDocument: {
+          uri,
+          version: 1,
+          text: 'export interface User {\n  name: string;\n}\n',
+        },
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      method: 'textDocument/didChange',
+      params: {
+        textDocument: { uri, version: 2 },
+        contentChanges: [{ text: 'export type User = {\n  name: string;\n};\n' }],
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      method: 'textDocument/didClose',
+      params: {
+        textDocument: { uri },
+      },
+    });
+
+    expect(seenDocumentVersions).toEqual([1, 2, undefined]);
+  });
+
   it('suppresses stale diagnostics when an older query resolves after a newer change', async () => {
     const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');
     createdDirs.push(workspaceRoot);

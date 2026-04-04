@@ -240,6 +240,7 @@ type WorkspaceDaemonQueryDiagnosticsRequest = WorkspaceDaemonMessage &
   type: 'query_diagnostics';
   workspaceId: string;
   uri?: string;
+  documentVersion?: number;
 };
 
 type WorkspaceDaemonQueryCodeActionsRequest = WorkspaceDaemonMessage &
@@ -266,6 +267,7 @@ type WorkspaceDaemonQueryIndexStatusRequest = WorkspaceDaemonMessage &
   WorkspaceDaemonWorkspaceFreshness & {
   type: 'query_index_status';
   workspaceId: string;
+  analysisGeneration?: number;
 };
 
 type WorkspaceDaemonPolicyCheckRequest = WorkspaceDaemonMessage & {
@@ -727,6 +729,7 @@ export class WorkspaceDaemonSession {
         replayEpoch: number;
         replayApplied: boolean;
         diagnosticsSubscribed: boolean;
+        overlayVersions: Map<string, number>;
       }
     >
   >();
@@ -773,6 +776,7 @@ export class WorkspaceDaemonSession {
     replayEpoch: number;
     replayApplied: boolean;
     diagnosticsSubscribed: boolean;
+    overlayVersions: Map<string, number>;
   } | undefined {
     return this.attachedWorkspaces.get(clientSessionId)?.get(workspaceId);
   }
@@ -784,6 +788,7 @@ export class WorkspaceDaemonSession {
     replayEpoch: number;
     replayApplied: boolean;
     diagnosticsSubscribed: boolean;
+    overlayVersions: Map<string, number>;
   }): void {
     let workspaces = this.attachedWorkspaces.get(input.clientSessionId);
     if (!workspaces) {
@@ -795,6 +800,7 @@ export class WorkspaceDaemonSession {
       replayEpoch: input.replayEpoch,
       replayApplied: input.replayApplied,
       diagnosticsSubscribed: input.diagnosticsSubscribed,
+      overlayVersions: input.overlayVersions,
     });
   }
 
@@ -888,6 +894,37 @@ export class WorkspaceDaemonSession {
     return messageErrorCreate(
       'replay_epoch_mismatch',
       `Replay epoch mismatch for ${input.workspaceId}: expected ${state.replayEpoch}, received ${input.replayEpoch}`,
+    );
+  }
+
+  private documentVersionValidate(
+    state: {
+      overlayVersions: Map<string, number>;
+    } | undefined,
+    input: {
+      uri?: string;
+      version?: number;
+      documentVersion?: number;
+    },
+  ): WorkspaceDaemonErrorResponse | undefined {
+    const uri = input.uri;
+    const expectedVersion = input.documentVersion ?? input.version;
+    if (!state || !uri || expectedVersion === undefined) {
+      return undefined;
+    }
+    const actualVersion = state.overlayVersions.get(uri);
+    if (actualVersion === expectedVersion) {
+      return undefined;
+    }
+    if (actualVersion === undefined) {
+      return messageErrorCreate(
+        'document_version_mismatch',
+        `Document version mismatch for ${uri}: no open overlay for requested version ${expectedVersion}`,
+      );
+    }
+    return messageErrorCreate(
+      'document_version_mismatch',
+      `Document version mismatch for ${uri}: expected ${actualVersion}, received ${expectedVersion}`,
     );
   }
 
@@ -1194,6 +1231,7 @@ export class WorkspaceDaemonSession {
             replayEpoch: 0,
             replayApplied: false,
             diagnosticsSubscribed: false,
+            overlayVersions: new Map(),
           });
           return {
             type: 'attach_workspace_ack',
@@ -1237,6 +1275,7 @@ export class WorkspaceDaemonSession {
             replayEpoch: state.replayEpoch,
             replayApplied: state.replayApplied,
             diagnosticsSubscribed: true,
+            overlayVersions: state.overlayVersions,
           });
           return {
             type: 'subscribe_diagnostics_ack',
@@ -1279,6 +1318,7 @@ export class WorkspaceDaemonSession {
             replayEpoch: result.replayEpoch,
             replayApplied: true,
             diagnosticsSubscribed: state.diagnosticsSubscribed,
+            overlayVersions: state.overlayVersions,
           });
           return {
             type: 'complete_replay_ack',
@@ -1306,6 +1346,7 @@ export class WorkspaceDaemonSession {
             return workspaceInstanceError;
           }
           await this.options.service.openOverlay(input);
+          state?.overlayVersions.set(input.uri, input.version);
           return { type: 'open_overlay_ack' };
         }
         case 'update_overlay': {
@@ -1329,6 +1370,7 @@ export class WorkspaceDaemonSession {
             return workspaceInstanceError;
           }
           await this.options.service.updateOverlay(input);
+          state?.overlayVersions.set(input.uri, input.version);
           return { type: 'update_overlay_ack' };
         }
         case 'close_overlay': {
@@ -1352,6 +1394,7 @@ export class WorkspaceDaemonSession {
             return workspaceInstanceError;
           }
           await this.options.service.closeOverlay(input);
+          state?.overlayVersions.delete(input.uri);
           return { type: 'close_overlay_ack' };
         }
         case 'query_diagnostics': {
@@ -1380,6 +1423,10 @@ export class WorkspaceDaemonSession {
           const workspaceInstanceError = this.workspaceInstanceValidate(state, input);
           if (workspaceInstanceError) {
             return workspaceInstanceError;
+          }
+          const documentVersionError = this.documentVersionValidate(state, input);
+          if (documentVersionError) {
+            return documentVersionError;
           }
           const replayEpochError = this.replayEpochValidate(state, input);
           if (replayEpochError) {
@@ -1420,6 +1467,10 @@ export class WorkspaceDaemonSession {
           const workspaceInstanceError = this.workspaceInstanceValidate(state, input);
           if (workspaceInstanceError) {
             return workspaceInstanceError;
+          }
+          const documentVersionError = this.documentVersionValidate(state, input);
+          if (documentVersionError) {
+            return documentVersionError;
           }
           const replayEpochError = this.replayEpochValidate(state, input);
           if (replayEpochError) {
@@ -1749,6 +1800,7 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
     clientSessionId: ClientSessionId;
     workspaceId: string;
     uri?: string;
+    documentVersion?: number;
     signal?: AbortSignal;
   }): Promise<WorkspaceDiagnostic[]> {
     const freshness = this.workspaceFreshnessGet(input);
@@ -1761,6 +1813,7 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
       workspaceInstanceId: freshness?.workspaceInstanceId,
       replayEpoch: freshness?.replayEpoch,
       uri: input.uri,
+      documentVersion: input.documentVersion,
     }, {
       signal: input.signal,
     }).then((response) => response.diagnostics);
@@ -1817,6 +1870,7 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
   queryIndexStatus(input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;
+    analysisGeneration?: number;
     signal?: AbortSignal;
   }): Promise<IndexStatusResult> {
     const freshness = this.workspaceFreshnessGet(input);
@@ -1828,6 +1882,7 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
       workspaceId: input.workspaceId,
       workspaceInstanceId: freshness?.workspaceInstanceId,
       replayEpoch: freshness?.replayEpoch,
+      analysisGeneration: input.analysisGeneration,
     }, {
       signal: input.signal,
     }).then((response) => response.indexStatus);
