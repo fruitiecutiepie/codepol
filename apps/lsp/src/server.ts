@@ -140,6 +140,7 @@ export class CodepolLspServer {
     number,
     { resolve: (value: unknown) => void; reject: (error: Error) => void }
   >();
+  private clientSessionId: string | undefined;
   private workspaceId: string | undefined;
   private nextRequestId = 1;
 
@@ -252,20 +253,27 @@ export class CodepolLspServer {
     rootPath?: string | null;
     workspaceFolders?: Array<{ uri: string }>;
   }): Promise<unknown> {
+    const registered = await this.service.registerClientSession({
+      clientKind: 'lsp',
+      clientInstanceId: 'codepol-lsp',
+    });
+    this.clientSessionId = registered.clientSessionId;
+
     const rootUri =
       params.rootUri ??
       params.workspaceFolders?.[0]?.uri ??
       (params.rootPath ? `file://${params.rootPath}` : undefined);
 
-    if (rootUri) {
+    if (rootUri && this.clientSessionId) {
       try {
         const rootPath = workspaceUriToPath(rootUri);
         const { configPath } = await configDiscover(rootPath);
-        const opened = await this.service.openWorkspace({
+        const attached = await this.service.attachWorkspace({
+          clientSessionId: this.clientSessionId,
           rootPath,
           configPath,
         });
-        this.workspaceId = opened.workspaceId;
+        this.workspaceId = attached.workspaceId;
       } catch {
         this.workspaceId = undefined;
       }
@@ -288,7 +296,7 @@ export class CodepolLspServer {
   private async didOpenHandle(params: {
     textDocument: { uri: string; version: number; text: string };
   }): Promise<void> {
-    if (!this.workspaceId) {
+    if (!this.clientSessionId || !this.workspaceId) {
       return;
     }
     this.documents.set(params.textDocument.uri, {
@@ -296,7 +304,8 @@ export class CodepolLspServer {
       version: params.textDocument.version,
       text: params.textDocument.text,
     });
-    await this.service.openDocument({
+    await this.service.openOverlay({
+      clientSessionId: this.clientSessionId,
       workspaceId: this.workspaceId,
       uri: params.textDocument.uri,
       version: params.textDocument.version,
@@ -315,7 +324,7 @@ export class CodepolLspServer {
       text: string;
     }>;
   }): Promise<void> {
-    if (!this.workspaceId) {
+    if (!this.clientSessionId || !this.workspaceId) {
       return;
     }
     const current = this.documents.get(params.textDocument.uri);
@@ -330,7 +339,8 @@ export class CodepolLspServer {
       text: nextText,
     };
     this.documents.set(current.uri, nextDocument);
-    await this.service.updateDocument({
+    await this.service.updateOverlay({
+      clientSessionId: this.clientSessionId,
       workspaceId: this.workspaceId,
       uri: current.uri,
       version: nextDocument.version,
@@ -342,11 +352,12 @@ export class CodepolLspServer {
   private async didCloseHandle(params: {
     textDocument: { uri: string };
   }): Promise<void> {
-    if (!this.workspaceId) {
+    if (!this.clientSessionId || !this.workspaceId) {
       return;
     }
     this.documents.delete(params.textDocument.uri);
-    await this.service.closeDocument({
+    await this.service.closeOverlay({
+      clientSessionId: this.clientSessionId,
       workspaceId: this.workspaceId,
       uri: params.textDocument.uri,
     });
@@ -357,7 +368,7 @@ export class CodepolLspServer {
     textDocument: { uri: string };
     context: { diagnostics?: Array<{ data?: { id?: string } }> };
   }): Promise<unknown> {
-    if (!this.workspaceId) {
+    if (!this.clientSessionId || !this.workspaceId) {
       return [];
     }
     const document = this.documents.get(params.textDocument.uri);
@@ -365,6 +376,7 @@ export class CodepolLspServer {
       .map((diagnostic) => diagnostic.data?.id)
       .filter((diagnosticId): diagnosticId is string => typeof diagnosticId === 'string');
     const actions = await this.service.queryCodeActions({
+      clientSessionId: this.clientSessionId,
       workspaceId: this.workspaceId,
       uri: params.textDocument.uri,
       version: document?.version ?? 0,
@@ -390,7 +402,7 @@ export class CodepolLspServer {
     command: string;
     arguments?: Array<{ planId?: string }>;
   }): Promise<unknown> {
-    if (!this.workspaceId || params.command !== APPLY_EDIT_PLAN_COMMAND) {
+    if (!this.clientSessionId || !this.workspaceId || params.command !== APPLY_EDIT_PLAN_COMMAND) {
       return null;
     }
 
@@ -405,6 +417,7 @@ export class CodepolLspServer {
     }
 
     const applyResult = await this.service.applyEditPlan({
+      clientSessionId: this.clientSessionId,
       workspaceId: this.workspaceId,
       planId,
       documentVersions,
@@ -421,10 +434,11 @@ export class CodepolLspServer {
   }
 
   private async publishDiagnostics(uri: string): Promise<void> {
-    if (!this.workspaceId) {
+    if (!this.clientSessionId || !this.workspaceId) {
       return;
     }
     const diagnostics = await this.service.queryDiagnostics({
+      clientSessionId: this.clientSessionId,
       workspaceId: this.workspaceId,
       uri,
     });

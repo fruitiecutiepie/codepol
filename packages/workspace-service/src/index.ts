@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import {
   DEFAULT_EXTENSIONS,
@@ -22,7 +23,9 @@ import {
   workspaceIdCreate,
   workspacePackageMapDiscover,
   workspaceUriToPath,
+  type ClientSessionId,
   type CodepolConfig,
+  type DaemonSessionId,
   type EslintProviderConfig,
   type FixProvider,
   type IndexCapabilities,
@@ -43,6 +46,7 @@ import {
   type WorkspaceDiagnostic,
   type WorkspaceDiagnosticSeverity,
   type WorkspaceEditPlan,
+  type WorkspaceInstanceId,
   type BiomeProviderConfig,
 } from '@codepol/core';
 import { biomeCheck, biomeFix } from '@codepol/plugin-biome';
@@ -74,6 +78,12 @@ type WorkspaceDocument = {
   text: string;
 };
 
+type WorkspaceBaseIndexState = {
+  files: string[];
+  fileKey: string;
+  workspacePackages: Map<string, string>;
+};
+
 type WorkspaceIndexState = {
   store: ReturnType<typeof indexStoreNew>;
   index: ProjectIndex;
@@ -94,18 +104,51 @@ type WorkspaceAnalysis = {
   eslintHasErrors: boolean;
 };
 
-type WorkspaceState = {
-  workspaceId: string;
+type WorkspaceContextState = {
   rootPath: string;
   configPath: string;
   eslintConfigPath: string;
   config: CodepolConfig;
+  baseIndexState?: WorkspaceBaseIndexState;
+};
+
+type WorkspaceDocumentsState = {
   documents: Map<string, WorkspaceDocument>;
-  codeActionPlans: Map<string, WorkspaceEditPlan>;
+};
+
+type WorkspaceAnalysisCacheState = {
   analysisGeneration: number;
   lastAnalysis?: WorkspaceAnalysis;
   indexState?: WorkspaceIndexState;
 };
+
+export type WorkspaceClientKind = 'lsp' | 'cli' | 'test';
+
+type WorkspaceSessionState = WorkspaceDocumentsState &
+  WorkspaceAnalysisCacheState & {
+    workspaceId: string;
+    workspaceInstanceId: WorkspaceInstanceId;
+    codeActionPlans: Map<string, WorkspaceEditPlan>;
+    status: IndexStatusResult['status'];
+    lastError?: string;
+  };
+
+type WorkspaceState = WorkspaceContextState & {
+  workspaceId: string;
+  workspaceInstanceId: WorkspaceInstanceId;
+  attachedClientSessionIds: Set<ClientSessionId>;
+};
+
+type ClientSessionState = {
+  clientSessionId: ClientSessionId;
+  clientKind: WorkspaceClientKind;
+  clientInstanceId: string;
+  workspaces: Map<string, WorkspaceSessionState>;
+};
+
+type PolicyCheckWorkspaceState = WorkspaceContextState &
+  WorkspaceDocumentsState &
+  WorkspaceAnalysisCacheState;
 
 type EslintRunResult = {
   violations: PolicyViolation[];
@@ -120,23 +163,57 @@ type ProviderRunResult = {
 };
 
 export type WorkspaceService = {
-  openWorkspace: (input: { rootPath: string; configPath: string }) => Promise<{ workspaceId: string }>;
-  openDocument: (input: { workspaceId: string; uri: string; version: number; text: string }) => Promise<void>;
-  updateDocument: (input: { workspaceId: string; uri: string; version: number; text: string }) => Promise<void>;
-  closeDocument: (input: { workspaceId: string; uri: string }) => Promise<void>;
-  queryDiagnostics: (input: { workspaceId: string; uri?: string }) => Promise<WorkspaceDiagnostic[]>;
+  registerClientSession: (input: {
+    clientKind: WorkspaceClientKind;
+    clientInstanceId: string;
+  }) => Promise<{ clientSessionId: ClientSessionId; daemonSessionId: DaemonSessionId }>;
+  closeClientSession: (input: { clientSessionId: ClientSessionId }) => Promise<void>;
+  attachWorkspace: (input: {
+    clientSessionId: ClientSessionId;
+    rootPath: string;
+    configPath: string;
+  }) => Promise<{ workspaceId: string; workspaceInstanceId: WorkspaceInstanceId }>;
+  openOverlay: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    version: number;
+    text: string;
+  }) => Promise<void>;
+  updateOverlay: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    version: number;
+    text: string;
+  }) => Promise<void>;
+  closeOverlay: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+  }) => Promise<void>;
+  queryDiagnostics: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri?: string;
+  }) => Promise<WorkspaceDiagnostic[]>;
   queryCodeActions: (input: {
+    clientSessionId: ClientSessionId;
     workspaceId: string;
     uri: string;
     version: number;
     diagnosticIds?: string[];
   }) => Promise<WorkspaceCodeAction[]>;
   applyEditPlan: (input: {
+    clientSessionId: ClientSessionId;
     workspaceId: string;
     planId: string;
     documentVersions: Record<string, number>;
   }) => Promise<WorkspaceApplyResult>;
-  queryIndexStatus: (input: { workspaceId: string }) => Promise<IndexStatusResult>;
+  queryIndexStatus: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+  }) => Promise<IndexStatusResult>;
 };
 
 export type WorkspacePolicyCheckOptions = {
@@ -170,7 +247,7 @@ function severityFromLintSeverity(
   return 'error';
 }
 
-function workspaceStateAnalysisInvalidate(state: WorkspaceState): void {
+function workspaceStateAnalysisInvalidate(state: WorkspaceAnalysisCacheState): void {
   state.lastAnalysis = undefined;
 }
 
@@ -183,6 +260,46 @@ function workspaceGet(
     throw new Error(`Unknown workspace: ${workspaceId}`);
   }
   return workspace;
+}
+
+function clientSessionGet(
+  clientSessions: Map<ClientSessionId, ClientSessionState>,
+  clientSessionId: ClientSessionId,
+): ClientSessionState {
+  const clientSession = clientSessions.get(clientSessionId);
+  if (!clientSession) {
+    throw new Error(`Unknown client session: ${clientSessionId}`);
+  }
+  return clientSession;
+}
+
+function workspaceSessionGet(
+  workspaces: Map<string, WorkspaceState>,
+  clientSessions: Map<ClientSessionId, ClientSessionState>,
+  clientSessionId: ClientSessionId,
+  workspaceId: string,
+): {
+  workspace: WorkspaceState;
+  clientSession: ClientSessionState;
+  workspaceSession: WorkspaceSessionState;
+} {
+  const workspace = workspaceGet(workspaces, workspaceId);
+  const clientSession = clientSessionGet(clientSessions, clientSessionId);
+  const workspaceSession = clientSession.workspaces.get(workspaceId);
+  if (!workspaceSession) {
+    throw new Error(
+      `Client session ${clientSessionId} is not attached to workspace ${workspaceId}`,
+    );
+  }
+  return {
+    workspace,
+    clientSession,
+    workspaceSession,
+  };
+}
+
+function opaqueIdCreate(prefix: string): string {
+  return `${prefix}-${randomUUID()}`;
 }
 
 function biomeProviderConfigKey(config: BiomeProviderConfig | undefined): string {
@@ -414,7 +531,9 @@ async function fixProvidersApply(
   }
 }
 
-function workspaceSourceOverridesGet(state: WorkspaceState): Map<string, string> {
+function workspaceSourceOverridesGet(
+  state: WorkspaceDocumentsState,
+): Map<string, string> {
   const overrides = new Map<string, string>();
   for (const document of state.documents.values()) {
     overrides.set(document.filePath, document.text);
@@ -422,7 +541,10 @@ function workspaceSourceOverridesGet(state: WorkspaceState): Map<string, string>
   return overrides;
 }
 
-function workspaceSourceGet(state: WorkspaceState, filePath: string): string {
+function workspaceSourceGet(
+  state: WorkspaceDocumentsState,
+  filePath: string,
+): string {
   for (const document of state.documents.values()) {
     if (document.filePath === filePath) {
       return document.text;
@@ -431,31 +553,50 @@ function workspaceSourceGet(state: WorkspaceState, filePath: string): string {
   return fs.readFileSync(filePath, 'utf8');
 }
 
-function workspaceIndexGetOrBuild(
-  state: WorkspaceState,
+function workspaceBaseIndexStateGetOrBuild(
+  state: WorkspaceContextState,
   files: string[],
-): ProjectIndex {
+): WorkspaceBaseIndexState {
   const normalizedFiles = [...new Set(files)].sort();
   const fileKey = normalizedFiles.join('\0');
+  let baseIndexState = state.baseIndexState;
+
+  if (!baseIndexState || baseIndexState.fileKey !== fileKey) {
+    baseIndexState = {
+      files: normalizedFiles,
+      fileKey,
+      workspacePackages: workspacePackageMapDiscover(state.rootPath),
+    };
+    state.baseIndexState = baseIndexState;
+  }
+
+  return baseIndexState;
+}
+
+function workspaceIndexGetOrBuild(
+  workspace: WorkspaceContextState,
+  state: WorkspaceDocumentsState & WorkspaceAnalysisCacheState,
+  files: string[],
+): ProjectIndex {
+  const baseIndexState = workspaceBaseIndexStateGetOrBuild(workspace, files);
   let indexState = state.indexState;
 
-  if (!indexState || indexState.fileKey !== fileKey) {
+  if (!indexState || indexState.fileKey !== baseIndexState.fileKey) {
     const store = indexStoreNew();
-    const workspacePackages = workspacePackageMapDiscover(state.rootPath);
     const { index } = projectIndexBuildSync({
-      files: normalizedFiles,
-      dir: state.rootPath,
+      files: baseIndexState.files,
+      dir: workspace.rootPath,
       store,
-      workspacePackages,
+      workspacePackages: baseIndexState.workspacePackages,
     });
 
     indexState = {
       store,
       index,
       capabilities: index.capabilities,
-      files: normalizedFiles,
-      fileKey,
-      workspacePackages,
+      files: baseIndexState.files,
+      fileKey: baseIndexState.fileKey,
+      workspacePackages: baseIndexState.workspacePackages,
     };
     state.indexState = indexState;
   }
@@ -475,7 +616,7 @@ function workspaceIndexGetOrBuild(
       continue;
     }
     crossFileResolveForFile(indexState.store, document.filePath, {
-      baseDir: state.rootPath,
+      baseDir: workspace.rootPath,
       extensions: DEFAULT_EXTENSIONS,
       workspacePackages: indexState.workspacePackages,
     });
@@ -490,7 +631,8 @@ function workspaceIndexGetOrBuild(
 }
 
 function workspaceIndexRefreshFromDisk(
-  state: WorkspaceState,
+  workspace: WorkspaceContextState,
+  state: WorkspaceAnalysisCacheState,
   filePath: string,
 ): void {
   const indexState = state.indexState;
@@ -504,7 +646,7 @@ function workspaceIndexRefreshFromDisk(
   }
 
   crossFileResolveForFile(indexState.store, filePath, {
-    baseDir: state.rootPath,
+    baseDir: workspace.rootPath,
     extensions: DEFAULT_EXTENSIONS,
     workspacePackages: indexState.workspacePackages,
   });
@@ -758,19 +900,23 @@ function ruffRun(
 }
 
 async function workspaceAnalysisRun(
-  state: WorkspaceState,
+  workspace: WorkspaceContextState,
+  state: WorkspaceDocumentsState & WorkspaceAnalysisCacheState,
   options: {
     fix: boolean;
     collectEslintOutput: boolean;
   },
 ): Promise<WorkspaceAnalysis> {
+  if (!options.fix && !options.collectEslintOutput && state.lastAnalysis) {
+    return state.lastAnalysis;
+  }
+
   await ensureWorkspaceRuntimeReady();
-  workspaceStateAnalysisInvalidate(state);
   builtinPluginsRefresh();
 
-  const policy = state.config as PolicyFile;
-  const pluginRulesResult = await policyPluginsGet(policy, state.rootPath, {
-    configPath: state.configPath,
+  const policy = workspace.config as PolicyFile;
+  const pluginRulesResult = await policyPluginsGet(policy, workspace.rootPath, {
+    configPath: workspace.configPath,
   });
   if (isErr(pluginRulesResult)) {
     throw new Error(pluginRulesResult.Err);
@@ -779,15 +925,15 @@ async function workspaceAnalysisRun(
   const ruleTargets = policyRuleTargetsGet(policy);
   const lintProviderEntries = lintProviderEntriesCollect(policy, pluginRulesMap);
   const fixProviders = fixProvidersCollect(pluginRulesMap);
-  const matches = await ruleMatchesGet(policy, state.rootPath);
+  const matches = await ruleMatchesGet(policy, workspace.rootPath);
   const files = Array.from(new Set(matches.flatMap((match) => match.files)));
   const sourceByFilePath = workspaceSourceOverridesGet(state);
 
   if (options.fix && fixProviders.length > 0) {
     await fixProvidersApply(fixProviders, {
       policy,
-      configPath: state.configPath,
-      cwd: state.rootPath,
+      configPath: workspace.configPath,
+      cwd: workspace.rootPath,
       files,
       ruleTargets,
     });
@@ -795,12 +941,12 @@ async function workspaceAnalysisRun(
 
   let projectIndex: ProjectIndex | undefined;
   if (pluginsRequireProjectIndex(pluginRulesMap) && files.length > 0) {
-    projectIndex = workspaceIndexGetOrBuild(state, files);
+    projectIndex = workspaceIndexGetOrBuild(workspace, state, files);
   }
 
   if (options.fix) {
-    const treeFixViolationsResult = await policyViolationsGetFromDir(policy, state.rootPath, {
-      configPath: state.configPath,
+    const treeFixViolationsResult = await policyViolationsGetFromDir(policy, workspace.rootPath, {
+      configPath: workspace.configPath,
       sourceByFilePath,
       projectIndex,
     });
@@ -816,9 +962,9 @@ async function workspaceAnalysisRun(
     files,
     sourceByFilePath,
     policy,
-    configPath: state.configPath,
-    eslintConfigPath: state.eslintConfigPath,
-    cwd: state.rootPath,
+    configPath: workspace.configPath,
+    eslintConfigPath: workspace.eslintConfigPath,
+    cwd: workspace.rootPath,
     lintProviderEntries,
     ruleTargets,
     pluginRules: pluginRulesMap,
@@ -838,11 +984,11 @@ async function workspaceAnalysisRun(
   });
 
   if (pluginsRequireProjectIndex(pluginRulesMap) && files.length > 0) {
-    projectIndex = workspaceIndexGetOrBuild(state, files);
+    projectIndex = workspaceIndexGetOrBuild(workspace, state, files);
   }
 
-  const treeViolationsResult = await policyViolationsGetFromDir(policy, state.rootPath, {
-    configPath: state.configPath,
+  const treeViolationsResult = await policyViolationsGetFromDir(policy, workspace.rootPath, {
+    configPath: workspace.configPath,
     sourceByFilePath,
     projectIndex,
   });
@@ -890,110 +1036,220 @@ async function workspaceAnalysisRun(
   return analysis;
 }
 
-class InProcessWorkspaceService implements WorkspaceService {
-  private readonly workspaces = new Map<string, WorkspaceState>();
+async function workspaceSessionAnalysisGet(
+  workspace: WorkspaceState,
+  state: WorkspaceSessionState,
+): Promise<WorkspaceAnalysis> {
+  if (!state.lastAnalysis) {
+    state.status = 'warming';
+  }
 
-  async openWorkspace(input: {
+  try {
+    const analysis = await workspaceAnalysisRun(workspace, state, {
+      fix: false,
+      collectEslintOutput: false,
+    });
+    state.status = 'ready';
+    state.lastError = undefined;
+    return analysis;
+  } catch (error) {
+    state.status = 'error';
+    state.lastError = error instanceof Error ? error.message : String(error);
+    throw error;
+  }
+}
+
+class InProcessWorkspaceService implements WorkspaceService {
+  private readonly daemonSessionId: DaemonSessionId = opaqueIdCreate('daemon');
+  private readonly workspaces = new Map<string, WorkspaceState>();
+  private readonly clientSessions = new Map<ClientSessionId, ClientSessionState>();
+
+  async registerClientSession(input: {
+    clientKind: WorkspaceClientKind;
+    clientInstanceId: string;
+  }): Promise<{ clientSessionId: ClientSessionId; daemonSessionId: DaemonSessionId }> {
+    await ensureWorkspaceRuntimeReady();
+    const clientSessionId = opaqueIdCreate('client') as ClientSessionId;
+    this.clientSessions.set(clientSessionId, {
+      clientSessionId,
+      clientKind: input.clientKind,
+      clientInstanceId: input.clientInstanceId,
+      workspaces: new Map(),
+    });
+    return {
+      clientSessionId,
+      daemonSessionId: this.daemonSessionId,
+    };
+  }
+
+  async closeClientSession(input: {
+    clientSessionId: ClientSessionId;
+  }): Promise<void> {
+    const clientSession = clientSessionGet(this.clientSessions, input.clientSessionId);
+    for (const workspaceId of clientSession.workspaces.keys()) {
+      const workspace = this.workspaces.get(workspaceId);
+      workspace?.attachedClientSessionIds.delete(input.clientSessionId);
+    }
+    this.clientSessions.delete(input.clientSessionId);
+  }
+
+  async attachWorkspace(input: {
+    clientSessionId: ClientSessionId;
     rootPath: string;
     configPath: string;
-  }): Promise<{ workspaceId: string }> {
+  }): Promise<{ workspaceId: string; workspaceInstanceId: WorkspaceInstanceId }> {
     await ensureWorkspaceRuntimeReady();
 
     const rootPath = path.resolve(input.rootPath);
     const configPath = path.resolve(rootPath, input.configPath);
     const { config, configPath: resolvedConfigPath } = await configGetFromPath(configPath);
+    const clientSession = clientSessionGet(this.clientSessions, input.clientSessionId);
     const workspaceId = workspaceIdCreate(rootPath, resolvedConfigPath);
-    const existing = this.workspaces.get(workspaceId);
-    if (existing) {
-      return { workspaceId };
+
+    let workspace = this.workspaces.get(workspaceId);
+    if (!workspace) {
+      workspace = {
+        workspaceId,
+        workspaceInstanceId: opaqueIdCreate('workspace') as WorkspaceInstanceId,
+        rootPath,
+        configPath: resolvedConfigPath,
+        eslintConfigPath: eslintConfigPathResolve(
+          rootPath,
+          resolvedConfigPath,
+          config,
+        ),
+        config,
+        attachedClientSessionIds: new Set(),
+      };
+      this.workspaces.set(workspaceId, workspace);
+    } else {
+      workspace.config = config;
+      workspace.configPath = resolvedConfigPath;
+      workspace.eslintConfigPath = eslintConfigPathResolve(
+        rootPath,
+        resolvedConfigPath,
+        config,
+      );
+      workspace.baseIndexState = undefined;
+      for (const attachedClientSessionId of workspace.attachedClientSessionIds) {
+        const attachedClientSession = this.clientSessions.get(attachedClientSessionId);
+        const attachedWorkspaceSession = attachedClientSession?.workspaces.get(workspaceId);
+        if (!attachedWorkspaceSession) {
+          continue;
+        }
+        attachedWorkspaceSession.indexState = undefined;
+        workspaceStateAnalysisInvalidate(attachedWorkspaceSession);
+        attachedWorkspaceSession.status = 'cold';
+        attachedWorkspaceSession.lastError = undefined;
+      }
     }
 
-    const eslintConfigPath = eslintConfigPathResolve(
-      rootPath,
-      resolvedConfigPath,
-      config,
-    );
+    workspace.attachedClientSessionIds.add(input.clientSessionId);
+    const existingWorkspaceSession = clientSession.workspaces.get(workspaceId);
+    if (!existingWorkspaceSession) {
+      clientSession.workspaces.set(workspaceId, {
+        workspaceId,
+        workspaceInstanceId: workspace.workspaceInstanceId,
+        documents: new Map(),
+        codeActionPlans: new Map(),
+        status: 'cold',
+        analysisGeneration: 0,
+      });
+    }
 
-    this.workspaces.set(workspaceId, {
+    return {
       workspaceId,
-      rootPath,
-      configPath: resolvedConfigPath,
-      eslintConfigPath,
-      config,
-      documents: new Map(),
-      codeActionPlans: new Map(),
-      analysisGeneration: 0,
-    });
-
-    return { workspaceId };
+      workspaceInstanceId: workspace.workspaceInstanceId,
+    };
   }
 
-  async openDocument(input: {
+  async openOverlay(input: {
+    clientSessionId: ClientSessionId;
     workspaceId: string;
     uri: string;
     version: number;
     text: string;
   }): Promise<void> {
-    const workspace = workspaceGet(this.workspaces, input.workspaceId);
+    const { workspace, workspaceSession } = workspaceSessionGet(
+      this.workspaces,
+      this.clientSessions,
+      input.clientSessionId,
+      input.workspaceId,
+    );
     const filePath = workspaceUriToPath(input.uri);
-    workspace.documents.set(input.uri, {
+    workspaceSession.documents.set(input.uri, {
       uri: input.uri,
       filePath,
       version: input.version,
       text: input.text,
     });
-    workspaceStateAnalysisInvalidate(workspace);
-    if (workspace.indexState && workspace.indexState.files.includes(filePath)) {
+    workspaceStateAnalysisInvalidate(workspaceSession);
+    workspaceSession.status = 'cold';
+    workspaceSession.lastError = undefined;
+
+    if (workspaceSession.indexState && workspaceSession.indexState.files.includes(filePath)) {
       const didUpdate = projectIndexUpdateFileFromSource(
-        workspace.indexState.store,
+        workspaceSession.indexState.store,
         filePath,
         input.text,
       );
       if (didUpdate) {
-        crossFileResolveForFile(workspace.indexState.store, filePath, {
+        crossFileResolveForFile(workspaceSession.indexState.store, filePath, {
           baseDir: workspace.rootPath,
           extensions: DEFAULT_EXTENSIONS,
-          workspacePackages: workspace.indexState.workspacePackages,
+          workspacePackages: workspaceSession.indexState.workspacePackages,
         });
-        workspace.indexState.index = projectIndexCreate(
-          workspace.indexState.store,
-          workspace.indexState.capabilities,
+        workspaceSession.indexState.index = projectIndexCreate(
+          workspaceSession.indexState.store,
+          workspaceSession.indexState.capabilities,
         );
       }
     }
   }
 
-  async updateDocument(input: {
+  async updateOverlay(input: {
+    clientSessionId: ClientSessionId;
     workspaceId: string;
     uri: string;
     version: number;
     text: string;
   }): Promise<void> {
-    await this.openDocument(input);
+    await this.openOverlay(input);
   }
 
-  async closeDocument(input: {
+  async closeOverlay(input: {
+    clientSessionId: ClientSessionId;
     workspaceId: string;
     uri: string;
   }): Promise<void> {
-    const workspace = workspaceGet(this.workspaces, input.workspaceId);
-    const filePath = workspace.documents.get(input.uri)?.filePath;
-    workspace.documents.delete(input.uri);
-    workspaceStateAnalysisInvalidate(workspace);
+    const { workspace, workspaceSession } = workspaceSessionGet(
+      this.workspaces,
+      this.clientSessions,
+      input.clientSessionId,
+      input.workspaceId,
+    );
+    const filePath = workspaceSession.documents.get(input.uri)?.filePath;
+    workspaceSession.documents.delete(input.uri);
+    workspaceStateAnalysisInvalidate(workspaceSession);
+    workspaceSession.status = 'cold';
+    workspaceSession.lastError = undefined;
     if (filePath) {
-      workspaceIndexRefreshFromDisk(workspace, filePath);
+      workspaceIndexRefreshFromDisk(workspace, workspaceSession, filePath);
     }
   }
 
   async queryDiagnostics(input: {
+    clientSessionId: ClientSessionId;
     workspaceId: string;
     uri?: string;
   }): Promise<WorkspaceDiagnostic[]> {
-    const workspace = workspaceGet(this.workspaces, input.workspaceId);
-    const analysis = await workspaceAnalysisRun(workspace, {
-      fix: false,
-      collectEslintOutput: false,
-    });
+    const { workspace, workspaceSession } = workspaceSessionGet(
+      this.workspaces,
+      this.clientSessions,
+      input.clientSessionId,
+      input.workspaceId,
+    );
+    const analysis = await workspaceSessionAnalysisGet(workspace, workspaceSession);
     if (!input.uri) {
       return analysis.diagnostics;
     }
@@ -1001,17 +1257,20 @@ class InProcessWorkspaceService implements WorkspaceService {
   }
 
   async queryCodeActions(input: {
+    clientSessionId: ClientSessionId;
     workspaceId: string;
     uri: string;
     version: number;
     diagnosticIds?: string[];
   }): Promise<WorkspaceCodeAction[]> {
-    const workspace = workspaceGet(this.workspaces, input.workspaceId);
-    workspace.codeActionPlans.clear();
-    const analysis = await workspaceAnalysisRun(workspace, {
-      fix: false,
-      collectEslintOutput: false,
-    });
+    const { workspace, workspaceSession } = workspaceSessionGet(
+      this.workspaces,
+      this.clientSessions,
+      input.clientSessionId,
+      input.workspaceId,
+    );
+    workspaceSession.codeActionPlans.clear();
+    const analysis = await workspaceSessionAnalysisGet(workspace, workspaceSession);
 
     const selectedDiagnosticIds = new Set(
       input.diagnosticIds ??
@@ -1052,13 +1311,14 @@ class InProcessWorkspaceService implements WorkspaceService {
           fix: fixEntry.fix,
           title: fixEntry.title,
           diagnostic,
-          sourceGet: (filePath) => workspaceSourceGet(workspace, filePath),
+          sourceGet: (filePath) => workspaceSourceGet(workspaceSession, filePath),
+          idSalt: input.clientSessionId,
           isPreferred: fixEntry.isPreferred,
         });
         if (isErr(planResult)) {
           continue;
         }
-        workspace.codeActionPlans.set(planResult.Ok.id, planResult.Ok);
+        workspaceSession.codeActionPlans.set(planResult.Ok.id, planResult.Ok);
         actions.push({
           id: planResult.Ok.id,
           title: planResult.Ok.title,
@@ -1074,12 +1334,18 @@ class InProcessWorkspaceService implements WorkspaceService {
   }
 
   async applyEditPlan(input: {
+    clientSessionId: ClientSessionId;
     workspaceId: string;
     planId: string;
     documentVersions: Record<string, number>;
   }): Promise<WorkspaceApplyResult> {
-    const workspace = workspaceGet(this.workspaces, input.workspaceId);
-    const plan = workspace.codeActionPlans.get(input.planId);
+    const { workspaceSession } = workspaceSessionGet(
+      this.workspaces,
+      this.clientSessions,
+      input.clientSessionId,
+      input.workspaceId,
+    );
+    const plan = workspaceSession.codeActionPlans.get(input.planId);
     if (!plan) {
       return {
         applied: false,
@@ -1098,7 +1364,7 @@ class InProcessWorkspaceService implements WorkspaceService {
         };
       }
 
-      for (const document of workspace.documents.values()) {
+      for (const document of workspaceSession.documents.values()) {
         if (document.filePath !== filePath) {
           continue;
         }
@@ -1119,16 +1385,27 @@ class InProcessWorkspaceService implements WorkspaceService {
   }
 
   async queryIndexStatus(input: {
+    clientSessionId: ClientSessionId;
     workspaceId: string;
   }): Promise<IndexStatusResult> {
-    const workspace = workspaceGet(this.workspaces, input.workspaceId);
+    const { workspace, workspaceSession } = workspaceSessionGet(
+      this.workspaces,
+      this.clientSessions,
+      input.clientSessionId,
+      input.workspaceId,
+    );
     return {
       workspaceId: workspace.workspaceId,
-      status: 'ready',
-      indexedFileCount: workspace.indexState?.files.length ?? 0,
-      openDocumentCount: workspace.documents.size,
-      overlayCount: workspace.documents.size,
-      analysisGeneration: workspace.analysisGeneration,
+      workspaceInstanceId: workspace.workspaceInstanceId,
+      status: workspaceSession.status,
+      indexedFileCount:
+        workspaceSession.indexState?.files.length ??
+        workspace.baseIndexState?.files.length ??
+        0,
+      openDocumentCount: workspaceSession.documents.size,
+      overlayCount: workspaceSession.documents.size,
+      analysisGeneration: workspaceSession.analysisGeneration,
+      lastError: workspaceSession.lastError,
     };
   }
 }
@@ -1144,17 +1421,15 @@ function workspaceStateCreateForPolicyCheck(
     configPath: string;
     eslintConfigPath: string;
   },
-): WorkspaceState {
+): PolicyCheckWorkspaceState {
   const rootPath = path.resolve(options.cwd);
   const configPath = path.resolve(rootPath, options.configPath);
   return {
-    workspaceId: workspaceIdCreate(rootPath, configPath),
     rootPath,
     configPath,
     eslintConfigPath: options.eslintConfigPath,
     config: options.config,
     documents: new Map(),
-    codeActionPlans: new Map(),
     analysisGeneration: 0,
   };
 }
@@ -1193,7 +1468,7 @@ export async function policyCheck(
     configPath,
     eslintConfigPath,
   });
-  const analysis = await workspaceAnalysisRun(state, {
+  const analysis = await workspaceAnalysisRun(state, state, {
     fix: options.fix,
     collectEslintOutput: true,
   });

@@ -982,10 +982,11 @@ Likely direction:
 
 Status on 2026-04-04:
 
-- `packages/workspace-service` exists and owns shared diagnostics orchestration plus a v1 document store
-- `apps/lsp` exists as a stdio server and currently ships diagnostics, code actions, and edit-plan execution
+- `packages/workspace-service` exists and now owns shared diagnostics orchestration plus a sessionized in-process workspace/client service
+- `apps/lsp` exists as a stdio server and currently ships diagnostics, code actions, edit-plan execution, and sessionized overlay sync through the shared service
 - `apps/cli` is now a thin adapter over the shared service
-- the current service boundary is document-based and single-client; daemon/session lifecycle is still pending
+- per-client overlay isolation and session-scoped edit plans now exist in the shared service layer
+- daemon transport, replay, file watching, persistence, and scheduling are still pending
 
 ## Implementation Phases
 
@@ -1007,19 +1008,21 @@ Status on 2026-04-04:
 ### Phase 2: overlay-aware tree checks and index updates
 
 - [x] Add source-aware analysis APIs to replace disk-only reads in `packages/core/src/policy/policyTreeCheck.ts`.
-- [ ] Add per-client overlay registration and update flows.
+- [x] Add per-client overlay registration and update flows.
 - [x] Reuse the incremental indexing pattern already demonstrated in `packages/plugin-eslint/src/eslintAdapter.ts`.
 - [x] Make cross-file analysis use overlay-aware snapshots rather than stale on-disk content where possible.
 
-Current gap: the service supports overlay registration and updates for a single in-process client, but it does not isolate overlays per client/session yet.
+Current gap: per-client overlays are now isolated in the in-process service, but daemon replay, watcher-driven invalidation, and persisted warm-state reuse are still pending.
 
 ### Phase 3: daemon/service host
 
-- [ ] Implement workspace instance lifecycle and client/session registration.
+- [x] Implement workspace instance lifecycle and client/session registration in the shared in-process service layer.
 - [ ] Add file watching, invalidation, and background indexing.
 - [ ] Add cache persistence and warm-start behavior.
 - [ ] Add telemetry and health/status reporting.
 - [ ] Add request cancellation, timeouts, and queue prioritization.
+
+Current gap: the service engine now has daemon-session, client-session, workspace-instance, and per-client overlay concepts, but there is still no daemon control plane, replay protocol, watcher loop, or persisted runtime state.
 
 ### Phase 4: LSP adapter
 
@@ -1034,7 +1037,7 @@ Current gap: the service supports overlay registration and updates for a single 
   - rename
 - [ ] Add progress and status signals for cold-start indexing.
 
-Current status: the LSP server also implements `textDocument/codeAction` and `workspace/executeCommand` for normalized edit plans, but the semantic navigation and rename surface is still pending.
+Current status: the LSP server registers a client session, attaches a workspace, and implements overlay sync, diagnostics, `textDocument/codeAction`, and `workspace/executeCommand` against the sessionized service boundary, but the semantic navigation, rename surface, and cold-start status publication are still pending.
 
 ### Phase 5: CLI and tests migrate fully
 
@@ -1042,6 +1045,8 @@ Current status: the LSP server also implements `textDocument/codeAction` and `wo
 - [x] Add regression tests covering overlay-aware diagnostics and index freshness.
 - [ ] Add daemon-level tests for multi-client overlay isolation.
 - [x] Add adapter-level tests for LSP request/response mapping.
+
+Current status: in-process integration coverage now includes multi-client overlay isolation, session-scoped edit-plan ownership, and per-session index-status transitions; daemon-level lifecycle coverage is still pending.
 
 ### Phase 6: extension RPC and richer features
 
@@ -1058,7 +1063,7 @@ Current status: the LSP server also implements `textDocument/codeAction` and `wo
 ## Acceptance Criteria For An MVP
 
 - [x] unsaved buffer diagnostics are accurate
-- [ ] per-client overlays do not leak across clients
+- [x] per-client overlays do not leak across clients
 - [x] the CLI and the LSP use the same aggregated diagnostic service
 - [x] cross-file rules use fresh incremental index state
 - [ ] diagnostics preserve severity, source, code, ranges, and fix data

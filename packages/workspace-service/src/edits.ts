@@ -177,6 +177,7 @@ export function workspaceEditPlanCreateFromFix(
     title: string;
     diagnostic: WorkspaceDiagnostic;
     sourceGet: (filePath: string) => string;
+    idSalt?: string;
     isPreferred?: boolean;
   },
 ): Result<WorkspaceEditPlan, string> {
@@ -189,6 +190,8 @@ export function workspaceEditPlanCreateFromFix(
   }
 
   const id = createHash('sha256')
+    .update(options.idSalt ?? '')
+    .update('\0')
     .update(options.title)
     .update('\0')
     .update(JSON.stringify(workspaceEditsResult.Ok))

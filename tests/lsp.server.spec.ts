@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import type { WorkspaceService } from '@codepol/workspace-service';
 import { CodepolLspServer } from '../apps/lsp/src/server';
 
 function tempWorkspaceCreate(prefix: string): string {
@@ -31,6 +32,82 @@ describe('CodepolLspServer', () => {
     for (const dir of createdDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('registers a client session and attaches the workspace during initialize', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');
+    createdDirs.push(workspaceRoot);
+    fs.writeFileSync(path.join(workspaceRoot, 'codepol.toml'), noInterfaceConfigContentCreate(), 'utf8');
+
+    const calls: string[] = [];
+    const service: WorkspaceService = {
+      async registerClientSession() {
+        calls.push('registerClientSession');
+        return {
+          clientSessionId: 'client-1',
+          daemonSessionId: 'daemon-1',
+        };
+      },
+      async closeClientSession() {
+        calls.push('closeClientSession');
+      },
+      async attachWorkspace() {
+        calls.push('attachWorkspace');
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+        };
+      },
+      async openOverlay() {
+        calls.push('openOverlay');
+      },
+      async updateOverlay() {
+        calls.push('updateOverlay');
+      },
+      async closeOverlay() {
+        calls.push('closeOverlay');
+      },
+      async queryDiagnostics() {
+        calls.push('queryDiagnostics');
+        return [];
+      },
+      async queryCodeActions() {
+        calls.push('queryCodeActions');
+        return [];
+      },
+      async applyEditPlan() {
+        calls.push('applyEditPlan');
+        return { applied: false, failureReason: 'plan_not_found' };
+      },
+      async queryIndexStatus() {
+        calls.push('queryIndexStatus');
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          status: 'cold',
+          indexedFileCount: 0,
+          openDocumentCount: 0,
+          overlayCount: 0,
+          analysisGeneration: 0,
+        };
+      },
+    };
+
+    const server = new CodepolLspServer({
+      service,
+      sendMessage: () => {},
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        rootUri: pathToFileURL(workspaceRoot).href,
+      },
+    });
+
+    expect(calls).toEqual(['registerClientSession', 'attachWorkspace']);
   });
 
   it('publishes diagnostics across open, change, and close', async () => {

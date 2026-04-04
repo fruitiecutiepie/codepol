@@ -18,6 +18,12 @@ export type WorkspaceRange = {
   end: WorkspacePosition;
 };
 
+export type DaemonSessionId = string;
+
+export type ClientSessionId = string;
+
+export type WorkspaceInstanceId = string;
+
 export type WorkspaceDiagnosticSeverity = 'error' | 'warning' | 'info';
 
 export type WorkspaceDiagnosticRelatedLocation = {
@@ -74,11 +80,13 @@ export type WorkspaceApplyResult = {
 
 export type IndexStatusResult = {
   workspaceId: string;
-  status: 'ready';
+  workspaceInstanceId: WorkspaceInstanceId;
+  status: 'cold' | 'warming' | 'ready' | 'error';
   indexedFileCount: number;
   openDocumentCount: number;
   overlayCount: number;
   analysisGeneration: number;
+  lastError?: string;
 };
 
 function diagnosticSeverityFromLintSeverity(

@@ -56,11 +56,20 @@ targets = ["src"]
 
     try {
       const service = workspaceServiceCreate();
-      const { workspaceId } = await service.openWorkspace({
+      const { clientSessionId } = await service.registerClientSession({
+        clientKind: 'test',
+        clientInstanceId: 'runtime-spec',
+      });
+      const { workspaceId } = await service.attachWorkspace({
+        clientSessionId,
         rootPath: dir,
         configPath: pathMod.join(dir, 'codepol.toml'),
       });
-      await service.queryDiagnostics({ workspaceId, uri: workspacePathToUri(filePath) });
+      await service.queryDiagnostics({
+        clientSessionId,
+        workspaceId,
+        uri: workspacePathToUri(filePath),
+      });
       expect(spy).toHaveBeenCalled();
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
