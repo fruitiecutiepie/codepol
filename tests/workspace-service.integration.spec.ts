@@ -1,8 +1,13 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
-import { workspacePathToUri } from '@codepol/core';
+import {
+  pluginModuleRegister,
+  pluginRuleNew,
+  workspacePathToUri,
+} from '@codepol/core';
 import {
   WorkspaceServiceEngine,
   workspaceServiceCreate,
@@ -57,6 +62,36 @@ ruleId = "@codepol/plugin/no-mixed-exports"
 targets = ["src"]
 args.preferredStyle = "named"
 `;
+}
+
+function biomeFailureConfigContentCreate(pluginId: string): string {
+  return `[[plugins]]
+id = "${pluginId}"
+source = { kind = "builtin" }
+
+[targets.src]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[[rules]]
+ruleId = "${pluginId}/mock-biome"
+targets = ["src"]
+providers = ["biome"]
+`;
+}
+
+function mockBiomeFailureScriptCreate(projectDir: string): string {
+  const biomeBin = path.join(projectDir, 'mock-biome-fail.cjs');
+  fs.writeFileSync(
+    biomeBin,
+    `#!/usr/bin/env node
+process.stderr.write('mock biome failure');
+process.exit(2);
+`,
+    'utf8',
+  );
+  fs.chmodSync(biomeBin, 0o755);
+  return biomeBin;
 }
 
 function workspaceWatcherStubCreate(): {
@@ -386,6 +421,81 @@ describe('workspace service integration', () => {
     ).rejects.toThrow('Analysis generation mismatch: expected 1, received 0');
   });
 
+  it('reports diagnostics as degraded when a lint provider fails but analysis still completes', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+
+    const pluginId = `test-biome-status-${randomUUID()}`;
+    const biomeBin = mockBiomeFailureScriptCreate(workspaceRoot);
+    pluginModuleRegister(pluginId, {
+      default: [
+        pluginRuleNew({
+          id: 'mock-biome',
+          capabilities: {
+            lintProviders: [
+              {
+                platform: 'biome',
+                languages: ['typescript'],
+                config: {
+                  biomeBin,
+                },
+              },
+            ],
+          },
+        }),
+      ],
+    });
+
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(configPath, biomeFailureConfigContentCreate(pluginId), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = workspacePathToUri(filePath);
+    fs.writeFileSync(filePath, 'export const value = 1;\n', 'utf8');
+
+    const service = workspaceServiceCreate();
+    const attached = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'provider-degraded-client',
+    });
+
+    expect(
+      await service.queryDiagnostics({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        uri,
+      }),
+    ).toEqual([]);
+
+    expect(
+      await service.queryIndexStatus({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+      }),
+    ).toMatchObject({
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+      status: 'ready',
+      replayState: 'pending',
+      workspaceReady: false,
+      featureStatus: {
+        diagnostics: {
+          readiness: 'degraded',
+          detail: 'Biome lint failed: Failed to execute biome: mock biome failure',
+        },
+        codeActions: { readiness: 'ready' },
+        editPlans: { readiness: 'ready' },
+        workspaceIndex: {
+          readiness: 'ready',
+          detail: 'Not required by current policy',
+        },
+      },
+      analysisGeneration: 1,
+    });
+  });
+
   it('refreshes cross-file diagnostics from overlay text using the project index', async () => {
     const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
     createdDirs.push(workspaceRoot);
@@ -561,11 +671,19 @@ describe('workspace service integration', () => {
         clientSessionId: attached.clientSessionId,
         workspaceId: attached.workspaceId,
       }),
-    ).toEqual({
+    ).toMatchObject({
       workspaceId: attached.workspaceId,
       workspaceInstanceId: attached.workspaceInstanceId,
       status: 'cold',
       replayState: 'pending',
+      replayEpoch: 0,
+      workspaceReady: false,
+      featureStatus: {
+        diagnostics: { readiness: 'cold' },
+        codeActions: { readiness: 'cold' },
+        editPlans: { readiness: 'cold' },
+        workspaceIndex: { readiness: 'cold' },
+      },
       indexedFileCount: 0,
       openDocumentCount: 0,
       overlayCount: 0,
@@ -589,6 +707,14 @@ describe('workspace service integration', () => {
       workspaceInstanceId: attached.workspaceInstanceId,
       status: 'ready',
       replayState: 'pending',
+      replayEpoch: 0,
+      workspaceReady: false,
+      featureStatus: {
+        diagnostics: { readiness: 'ready' },
+        codeActions: { readiness: 'ready' },
+        editPlans: { readiness: 'ready' },
+        workspaceIndex: { readiness: 'ready' },
+      },
       openDocumentCount: 0,
       overlayCount: 0,
       analysisGeneration: 1,
@@ -791,11 +917,19 @@ describe('workspace service integration', () => {
         clientSessionId: attached.clientSessionId,
         workspaceId: attached.workspaceId,
       }),
-    ).toEqual({
+    ).toMatchObject({
       workspaceId: attached.workspaceId,
       workspaceInstanceId: attached.workspaceInstanceId,
       status: 'cold',
       replayState: 'pending',
+      replayEpoch: 0,
+      workspaceReady: false,
+      featureStatus: {
+        diagnostics: { readiness: 'cold' },
+        codeActions: { readiness: 'cold' },
+        editPlans: { readiness: 'cold' },
+        workspaceIndex: { readiness: 'cold' },
+      },
       indexedFileCount: 0,
       openDocumentCount: 0,
       overlayCount: 0,
@@ -820,6 +954,14 @@ describe('workspace service integration', () => {
       workspaceInstanceId: attached.workspaceInstanceId,
       status: 'warming',
       replayState: 'applied',
+      replayEpoch: 1,
+      workspaceReady: false,
+      featureStatus: {
+        diagnostics: { readiness: 'warming' },
+        codeActions: { readiness: 'warming' },
+        editPlans: { readiness: 'warming' },
+        workspaceIndex: { readiness: 'warming' },
+      },
       analysisGeneration: 0,
     });
 
@@ -835,6 +977,14 @@ describe('workspace service integration', () => {
       workspaceInstanceId: attached.workspaceInstanceId,
       status: 'ready',
       replayState: 'applied',
+      replayEpoch: 1,
+      workspaceReady: true,
+      featureStatus: {
+        diagnostics: { readiness: 'ready' },
+        codeActions: { readiness: 'ready' },
+        editPlans: { readiness: 'ready' },
+        workspaceIndex: { readiness: 'ready' },
+      },
       analysisGeneration: 1,
     });
     expect(

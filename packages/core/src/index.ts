@@ -77,6 +77,9 @@ export type {
   WorkspaceDiagnostic,
   WorkspaceApplyFailureReason,
   WorkspaceApplyResult,
+  WorkspaceFeatureReadiness,
+  WorkspaceFeatureStatus,
+  IndexStatusFeatureStatus,
   IndexStatusResult,
 } from './types';
 

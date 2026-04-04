@@ -30,6 +30,7 @@ import {
   type DaemonSessionId,
   type EslintProviderConfig,
   type FixProvider,
+  type IndexStatusFeatureStatus,
   type IndexCapabilities,
   type IndexStatusResult,
   type LintDiagnostic,
@@ -47,6 +48,7 @@ import {
   type WorkspaceCodeAction,
   type WorkspaceDiagnostic,
   type WorkspaceDiagnosticSeverity,
+  type WorkspaceFeatureStatus,
   type WorkspaceEditPlan,
   type WorkspaceInstanceId,
   type BiomeProviderConfig,
@@ -103,6 +105,7 @@ type WorkspaceAnalysis = {
   violations: PolicyViolation[];
   treeViolations: PolicyViolation[];
   diagnostics: WorkspaceDiagnostic[];
+  featureStatus: IndexStatusFeatureStatus;
   fixableTreeViolationsByDiagnosticId: Map<string, PolicyViolation>;
   eslintOutput: string;
   eslintHasErrors: boolean;
@@ -186,11 +189,13 @@ type EslintRunResult = {
   diagnostics: WorkspaceDiagnostic[];
   output: string;
   hasErrors: boolean;
+  issues: string[];
 };
 
 type ProviderRunResult = {
   violations: PolicyViolation[];
   diagnostics: WorkspaceDiagnostic[];
+  issues: string[];
 };
 
 export type WorkspaceService = {
@@ -322,6 +327,78 @@ function severityFromLintSeverity(
 
 function workspaceStateAnalysisInvalidate(state: WorkspaceAnalysisCacheState): void {
   state.lastAnalysis = undefined;
+}
+
+function workspaceFeatureStatusCreate(
+  input: {
+    readiness: WorkspaceFeatureStatus['readiness'];
+    detail?: string;
+  },
+): WorkspaceFeatureStatus {
+  return {
+    readiness: input.readiness,
+    detail: input.detail,
+  };
+}
+
+function workspaceFeatureStatusReadyOrDegraded(
+  issues: string[],
+  options: {
+    readyDetail?: string;
+  } = {},
+): WorkspaceFeatureStatus {
+  if (issues.length > 0) {
+    return workspaceFeatureStatusCreate({
+      readiness: 'degraded',
+      detail: issues.join('; '),
+    });
+  }
+  return workspaceFeatureStatusCreate({
+    readiness: 'ready',
+    detail: options.readyDetail,
+  });
+}
+
+function workspaceFeatureStatusesCreate(
+  state: WorkspaceSessionState,
+): IndexStatusFeatureStatus {
+  if (state.status === 'ready' && state.lastAnalysis) {
+    return state.lastAnalysis.featureStatus;
+  }
+  if (state.status === 'error') {
+    return {
+      diagnostics: workspaceFeatureStatusCreate({
+        readiness: 'error',
+        detail: state.lastError,
+      }),
+      codeActions: workspaceFeatureStatusCreate({
+        readiness: 'error',
+        detail: state.lastError,
+      }),
+      editPlans: workspaceFeatureStatusCreate({
+        readiness: 'error',
+        detail: state.lastError,
+      }),
+      workspaceIndex: workspaceFeatureStatusCreate({
+        readiness: 'error',
+        detail: state.lastError,
+      }),
+    };
+  }
+  return {
+    diagnostics: workspaceFeatureStatusCreate({
+      readiness: state.status,
+    }),
+    codeActions: workspaceFeatureStatusCreate({
+      readiness: state.status,
+    }),
+    editPlans: workspaceFeatureStatusCreate({
+      readiness: state.status,
+    }),
+    workspaceIndex: workspaceFeatureStatusCreate({
+      readiness: state.status,
+    }),
+  };
 }
 
 function workspaceSessionInvalidate(
@@ -876,7 +953,7 @@ async function eslintRun(
     (entry) => entry.provider.platform === 'eslint',
   );
   if (eslintProviders.length === 0) {
-    return { violations: [], diagnostics: [], output: '', hasErrors: false };
+    return { violations: [], diagnostics: [], output: '', hasErrors: false, issues: [] };
   }
 
   let ESLintClass: typeof import('eslint').ESLint | undefined;
@@ -884,11 +961,17 @@ async function eslintRun(
     const eslintModule = await import('eslint');
     ESLintClass = eslintModule.ESLint;
   } catch {
-    console.warn(
+    const issue =
       'ESLint is not installed. Skipping ESLint-based rules.\n' +
-        'Install eslint to enable: npm install -D eslint',
-    );
-    return { violations: [], diagnostics: [], output: '', hasErrors: false };
+        'Install eslint to enable: npm install -D eslint';
+    console.warn(issue);
+    return {
+      violations: [],
+      diagnostics: [],
+      output: '',
+      hasErrors: false,
+      issues: [issue.replace('\n', ' ')],
+    };
   }
 
   const eslint = new ESLintClass({
@@ -1003,6 +1086,7 @@ async function eslintRun(
     diagnostics,
     output,
     hasErrors: lintResults.some((result) => result.errorCount > 0),
+    issues: [],
   };
 }
 
@@ -1031,6 +1115,7 @@ function biomeRun(
   );
 
   const violations: PolicyViolation[] = [];
+  const issues: string[] = [];
   for (const [configKey, filesSet] of biomeFilesByConfigKey) {
     const files = [...filesSet];
     if (files.length === 0) {
@@ -1041,13 +1126,17 @@ function biomeRun(
     if (input.fix) {
       const biomeFixResult = biomeFix(files, config);
       if (isErr(biomeFixResult)) {
-        console.warn(`biome fix failed: ${biomeFixResult.Err}`);
+        const issue = `Biome fix failed: ${biomeFixResult.Err}`;
+        console.warn(issue);
+        issues.push(issue);
       }
     }
 
     const biomeResult = biomeCheck(files, config);
     if (isErr(biomeResult)) {
-      console.warn(`biome lint failed: ${biomeResult.Err}`);
+      const issue = `Biome lint failed: ${biomeResult.Err}`;
+      console.warn(issue);
+      issues.push(issue);
       continue;
     }
     violations.push(...biomeResult.Ok);
@@ -1056,6 +1145,7 @@ function biomeRun(
   return {
     violations,
     diagnostics: providerViolationsToDiagnostics(violations, 'biome'),
+    issues,
   };
 }
 
@@ -1070,14 +1160,14 @@ function ruffRun(
     (entry) => entry.provider.platform === 'ruff',
   );
   if (ruffProviders.length === 0) {
-    return { violations: [], diagnostics: [] };
+    return { violations: [], diagnostics: [], issues: [] };
   }
 
   const pythonFiles = input.files.filter((filePath) =>
     fileHasExtension(filePath, PYTHON_FILE_EXTENSIONS),
   );
   if (pythonFiles.length === 0) {
-    return { violations: [], diagnostics: [] };
+    return { violations: [], diagnostics: [], issues: [] };
   }
 
   const config = ruffProviders[0]?.provider.config as RuffProviderConfig | undefined;
@@ -1085,19 +1175,21 @@ function ruffRun(
   if (input.fix) {
     const ruffFixResult = ruffFix(pythonFiles, config);
     if (isErr(ruffFixResult)) {
-      console.warn(`ruff fix failed: ${ruffFixResult.Err}`);
+      console.warn(`Ruff fix failed: ${ruffFixResult.Err}`);
     }
   }
 
   const ruffResult = ruffCheck(pythonFiles, config);
   if (isErr(ruffResult)) {
-    console.warn(`ruff check failed: ${ruffResult.Err}`);
-    return { violations: [], diagnostics: [] };
+    const issue = `Ruff check failed: ${ruffResult.Err}`;
+    console.warn(issue);
+    return { violations: [], diagnostics: [], issues: [issue] };
   }
 
   return {
     violations: ruffResult.Ok,
     diagnostics: providerViolationsToDiagnostics(ruffResult.Ok, 'ruff'),
+    issues: [],
   };
 }
 
@@ -1130,6 +1222,7 @@ async function workspaceAnalysisRun(
   const matches = await ruleMatchesGet(policy, workspace.rootPath);
   const files = Array.from(new Set(matches.flatMap((match) => match.files)));
   const sourceByFilePath = workspaceSourceOverridesGet(state);
+  const workspaceIndexRequired = pluginsRequireProjectIndex(pluginRulesMap) && files.length > 0;
 
   if (options.fix && fixProviders.length > 0) {
     await fixProvidersApply(fixProviders, {
@@ -1142,7 +1235,7 @@ async function workspaceAnalysisRun(
   }
 
   let projectIndex: ProjectIndex | undefined;
-  if (pluginsRequireProjectIndex(pluginRulesMap) && files.length > 0) {
+  if (workspaceIndexRequired) {
     projectIndex = workspaceIndexGetOrBuild(workspace, state, files);
   }
 
@@ -1185,7 +1278,7 @@ async function workspaceAnalysisRun(
     fix: options.fix,
   });
 
-  if (pluginsRequireProjectIndex(pluginRulesMap) && files.length > 0) {
+  if (workspaceIndexRequired) {
     projectIndex = workspaceIndexGetOrBuild(workspace, state, files);
   }
 
@@ -1228,6 +1321,27 @@ async function workspaceAnalysisRun(
       ...ruffResult.diagnostics,
       ...treeDiagnostics,
     ],
+    featureStatus: {
+      diagnostics: workspaceFeatureStatusReadyOrDegraded([
+        ...eslintResult.issues,
+        ...biomeResult.issues,
+        ...ruffResult.issues,
+      ]),
+      codeActions: workspaceFeatureStatusCreate({
+        readiness: 'ready',
+      }),
+      editPlans: workspaceFeatureStatusCreate({
+        readiness: 'ready',
+      }),
+      workspaceIndex: workspaceIndexRequired
+        ? workspaceFeatureStatusCreate({
+            readiness: 'ready',
+          })
+        : workspaceFeatureStatusCreate({
+            readiness: 'ready',
+            detail: 'Not required by current policy',
+          }),
+    },
     fixableTreeViolationsByDiagnosticId,
     eslintOutput: eslintResult.output,
     eslintHasErrors: eslintResult.hasErrors,
@@ -1793,10 +1907,16 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     );
     workspaceAnalysisGenerationValidate(workspaceSession, input);
     return {
+      daemonSessionId: this.daemonSessionId,
       workspaceId: workspace.workspaceId,
       workspaceInstanceId: workspace.workspaceInstanceId,
       status: workspaceSession.status,
       replayState: workspaceSession.replayState,
+      replayEpoch: workspaceSession.replayEpoch,
+      workspaceReady:
+        workspaceSession.replayState === 'applied' &&
+        workspaceSession.status === 'ready',
+      featureStatus: workspaceFeatureStatusesCreate(workspaceSession),
       indexedFileCount:
         workspaceSession.indexState?.files.length ??
         workspace.baseIndexState?.files.length ??

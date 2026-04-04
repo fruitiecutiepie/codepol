@@ -188,6 +188,8 @@
 - Started in the repo:
   - the shared workspace engine now owns one watcher pipeline per attached logical workspace, invalidates base/session state on watched disk changes while keeping `workspaceInstanceId` stable, and lazily reloads config on the next analysis after a watched config-file change
   - daemon-mode workspace engines now schedule background warm-up after replay and after watched disk/config invalidation, and `queryIndexStatus` now reports `replayState: 'pending' | 'applied'` so callers can distinguish replay gating from normal warming
+  - `queryIndexStatus` now also returns `daemonSessionId`, `replayEpoch`, `workspaceReady`, and structured per-feature readiness metadata so tranche-3 status publication can key off the existing status call instead of needing another transport change
+  - diagnostics feature readiness can now report `degraded` when a provider like Biome or Ruff fails but the rest of analysis still completes, instead of mirroring the top-level workspace status
 - Add one watcher pipeline per logical workspace, not per client session.
 - Reuse the existing `chokidar`-based watch knowledge from `apps/cli`, but move ownership into the daemon workspace lifecycle.
 - Track invalidation at the right layer:

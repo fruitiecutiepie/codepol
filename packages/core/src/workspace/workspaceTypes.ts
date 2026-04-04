@@ -78,11 +78,34 @@ export type WorkspaceApplyResult = {
   plan?: WorkspaceEditPlan;
 };
 
+export type WorkspaceFeatureReadiness =
+  | 'cold'
+  | 'warming'
+  | 'ready'
+  | 'degraded'
+  | 'error';
+
+export type WorkspaceFeatureStatus = {
+  readiness: WorkspaceFeatureReadiness;
+  detail?: string;
+};
+
+export type IndexStatusFeatureStatus = {
+  diagnostics: WorkspaceFeatureStatus;
+  codeActions: WorkspaceFeatureStatus;
+  editPlans: WorkspaceFeatureStatus;
+  workspaceIndex: WorkspaceFeatureStatus;
+};
+
 export type IndexStatusResult = {
+  daemonSessionId?: DaemonSessionId;
   workspaceId: string;
   workspaceInstanceId: WorkspaceInstanceId;
   status: 'cold' | 'warming' | 'ready' | 'error';
   replayState?: 'pending' | 'applied';
+  replayEpoch?: number;
+  workspaceReady?: boolean;
+  featureStatus?: IndexStatusFeatureStatus;
   indexedFileCount: number;
   openDocumentCount: number;
   overlayCount: number;

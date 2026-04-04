@@ -203,6 +203,10 @@ describe('workspace daemon control plane', () => {
       workspaceId: attached.workspaceId,
       workspaceInstanceId: attached.workspaceInstanceId,
     });
+    const indexStatus = await service.queryIndexStatus({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+    });
     const diagnostics = await service.queryDiagnostics({
       clientSessionId: registered.clientSessionId,
       workspaceId: attached.workspaceId,
@@ -224,6 +228,21 @@ describe('workspace daemon control plane', () => {
       workspaceInstanceId: attached.workspaceInstanceId,
       replayEpoch: 1,
       replayState: 'applied',
+    });
+    expect(indexStatus).toMatchObject({
+      daemonSessionId: registered.daemonSessionId,
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+      status: 'cold',
+      replayState: 'applied',
+      replayEpoch: 1,
+      workspaceReady: false,
+      featureStatus: {
+        diagnostics: { readiness: 'cold' },
+        codeActions: { readiness: 'cold' },
+        editPlans: { readiness: 'cold' },
+        workspaceIndex: { readiness: 'cold' },
+      },
     });
     expect(attached.workspaceInstanceId).toBeDefined();
     expect(diagnostics).toHaveLength(1);
