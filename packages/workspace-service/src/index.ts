@@ -129,6 +129,7 @@ type WorkspaceSessionState = WorkspaceDocumentsState &
   WorkspaceAnalysisCacheState & {
     workspaceId: string;
     workspaceInstanceId: WorkspaceInstanceId;
+    replayEpoch: number;
     codeActionPlans: Map<string, WorkspaceEditPlan>;
     status: IndexStatusResult['status'];
     lastError?: string;
@@ -258,6 +259,7 @@ export type WorkspacePolicyCheckResult = {
 export type WorkspaceReplayResult = {
   workspaceId: string;
   workspaceInstanceId: WorkspaceInstanceId;
+  replayEpoch: number;
   replayState: 'applied';
 };
 
@@ -1206,6 +1208,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       clientSession.workspaces.set(workspaceId, {
         workspaceId,
         workspaceInstanceId: workspace.workspaceInstanceId,
+        replayEpoch: 0,
         documents: new Map(),
         codeActionPlans: new Map(),
         status: 'cold',
@@ -1235,9 +1238,11 @@ export class WorkspaceServiceEngine implements WorkspaceService {
         `Workspace instance mismatch for ${input.workspaceId}: expected ${workspaceSession.workspaceInstanceId}, received ${input.workspaceInstanceId}`,
       );
     }
+    workspaceSession.replayEpoch += 1;
     return {
       workspaceId: workspace.workspaceId,
       workspaceInstanceId: workspace.workspaceInstanceId,
+      replayEpoch: workspaceSession.replayEpoch,
       replayState: 'applied',
     };
   }

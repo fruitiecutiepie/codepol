@@ -160,6 +160,11 @@ export type WorkspaceDaemonLaunchResult = {
 
 type WorkspaceDaemonMessage = Omit<WorkspaceDaemonEnvelope, 'id'>;
 
+type WorkspaceDaemonWorkspaceFreshness = {
+  workspaceInstanceId?: WorkspaceInstanceId;
+  replayEpoch?: number;
+};
+
 type WorkspaceDaemonCancelRequest = WorkspaceDaemonMessage & {
   type: 'cancel_request';
   targetId: number;
@@ -203,6 +208,7 @@ type WorkspaceDaemonOpenOverlayRequest = WorkspaceDaemonMessage & {
   type: 'open_overlay';
   clientSessionId: ClientSessionId;
   workspaceId: string;
+  workspaceInstanceId?: WorkspaceInstanceId;
   uri: string;
   version: number;
   text: string;
@@ -212,6 +218,7 @@ type WorkspaceDaemonUpdateOverlayRequest = WorkspaceDaemonMessage & {
   type: 'update_overlay';
   clientSessionId: ClientSessionId;
   workspaceId: string;
+  workspaceInstanceId?: WorkspaceInstanceId;
   uri: string;
   version: number;
   text: string;
@@ -221,17 +228,20 @@ type WorkspaceDaemonCloseOverlayRequest = WorkspaceDaemonMessage & {
   type: 'close_overlay';
   clientSessionId: ClientSessionId;
   workspaceId: string;
+  workspaceInstanceId?: WorkspaceInstanceId;
   uri: string;
 };
 
-type WorkspaceDaemonQueryDiagnosticsRequest = WorkspaceDaemonMessage & {
+type WorkspaceDaemonQueryDiagnosticsRequest = WorkspaceDaemonMessage &
+  WorkspaceDaemonWorkspaceFreshness & {
   type: 'query_diagnostics';
   clientSessionId: ClientSessionId;
   workspaceId: string;
   uri?: string;
 };
 
-type WorkspaceDaemonQueryCodeActionsRequest = WorkspaceDaemonMessage & {
+type WorkspaceDaemonQueryCodeActionsRequest = WorkspaceDaemonMessage &
+  WorkspaceDaemonWorkspaceFreshness & {
   type: 'query_code_actions';
   clientSessionId: ClientSessionId;
   workspaceId: string;
@@ -240,7 +250,8 @@ type WorkspaceDaemonQueryCodeActionsRequest = WorkspaceDaemonMessage & {
   diagnosticIds?: string[];
 };
 
-type WorkspaceDaemonApplyEditPlanRequest = WorkspaceDaemonMessage & {
+type WorkspaceDaemonApplyEditPlanRequest = WorkspaceDaemonMessage &
+  WorkspaceDaemonWorkspaceFreshness & {
   type: 'apply_edit_plan';
   clientSessionId: ClientSessionId;
   workspaceId: string;
@@ -248,7 +259,8 @@ type WorkspaceDaemonApplyEditPlanRequest = WorkspaceDaemonMessage & {
   documentVersions: Record<string, number>;
 };
 
-type WorkspaceDaemonQueryIndexStatusRequest = WorkspaceDaemonMessage & {
+type WorkspaceDaemonQueryIndexStatusRequest = WorkspaceDaemonMessage &
+  WorkspaceDaemonWorkspaceFreshness & {
   type: 'query_index_status';
   clientSessionId: ClientSessionId;
   workspaceId: string;
@@ -700,6 +712,7 @@ export class WorkspaceDaemonSession {
       string,
       {
         workspaceInstanceId: WorkspaceInstanceId;
+        replayEpoch: number;
         replayApplied: boolean;
         diagnosticsSubscribed: boolean;
       }
@@ -730,6 +743,7 @@ export class WorkspaceDaemonSession {
     workspaceId: string,
   ): {
     workspaceInstanceId: WorkspaceInstanceId;
+    replayEpoch: number;
     replayApplied: boolean;
     diagnosticsSubscribed: boolean;
   } | undefined {
@@ -740,6 +754,7 @@ export class WorkspaceDaemonSession {
     clientSessionId: ClientSessionId;
     workspaceId: string;
     workspaceInstanceId: WorkspaceInstanceId;
+    replayEpoch: number;
     replayApplied: boolean;
     diagnosticsSubscribed: boolean;
   }): void {
@@ -750,6 +765,7 @@ export class WorkspaceDaemonSession {
     }
     workspaces.set(input.workspaceId, {
       workspaceInstanceId: input.workspaceInstanceId,
+      replayEpoch: input.replayEpoch,
       replayApplied: input.replayApplied,
       diagnosticsSubscribed: input.diagnosticsSubscribed,
     });
@@ -770,6 +786,48 @@ export class WorkspaceDaemonSession {
     return messageErrorCreate(
       'replay_required',
       `complete_replay required before normal requests for workspace ${workspaceId}`,
+    );
+  }
+
+  private workspaceInstanceValidate(
+    state: {
+      workspaceInstanceId: WorkspaceInstanceId;
+    } | undefined,
+    input: {
+      workspaceId: string;
+      workspaceInstanceId?: WorkspaceInstanceId;
+    },
+  ): WorkspaceDaemonErrorResponse | undefined {
+    if (!state || input.workspaceInstanceId === undefined) {
+      return undefined;
+    }
+    if (state.workspaceInstanceId === input.workspaceInstanceId) {
+      return undefined;
+    }
+    return messageErrorCreate(
+      'workspace_instance_mismatch',
+      `Workspace instance mismatch for ${input.workspaceId}: expected ${state.workspaceInstanceId}, received ${input.workspaceInstanceId}`,
+    );
+  }
+
+  private replayEpochValidate(
+    state: {
+      replayEpoch: number;
+    } | undefined,
+    input: {
+      workspaceId: string;
+      replayEpoch?: number;
+    },
+  ): WorkspaceDaemonErrorResponse | undefined {
+    if (!state || input.replayEpoch === undefined) {
+      return undefined;
+    }
+    if (state.replayEpoch === input.replayEpoch) {
+      return undefined;
+    }
+    return messageErrorCreate(
+      'replay_epoch_mismatch',
+      `Replay epoch mismatch for ${input.workspaceId}: expected ${state.replayEpoch}, received ${input.replayEpoch}`,
     );
   }
 
@@ -909,6 +967,7 @@ export class WorkspaceDaemonSession {
             clientSessionId: input.clientSessionId,
             workspaceId: result.workspaceId,
             workspaceInstanceId: result.workspaceInstanceId,
+            replayEpoch: 0,
             replayApplied: false,
             diagnosticsSubscribed: false,
           });
@@ -947,6 +1006,7 @@ export class WorkspaceDaemonSession {
             clientSessionId: input.clientSessionId,
             workspaceId: input.workspaceId,
             workspaceInstanceId: input.workspaceInstanceId,
+            replayEpoch: state.replayEpoch,
             replayApplied: state.replayApplied,
             diagnosticsSubscribed: true,
           });
@@ -984,6 +1044,7 @@ export class WorkspaceDaemonSession {
             clientSessionId: input.clientSessionId,
             workspaceId: input.workspaceId,
             workspaceInstanceId: input.workspaceInstanceId,
+            replayEpoch: result.replayEpoch,
             replayApplied: true,
             diagnosticsSubscribed: state.diagnosticsSubscribed,
           });
@@ -1000,6 +1061,14 @@ export class WorkspaceDaemonSession {
             );
           }
           const input = message as WorkspaceDaemonOpenOverlayRequest;
+          const state = this.workspaceReplayStateGet(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          const workspaceInstanceError = this.workspaceInstanceValidate(state, input);
+          if (workspaceInstanceError) {
+            return workspaceInstanceError;
+          }
           await this.options.service.openOverlay(input);
           return { type: 'open_overlay_ack' };
         }
@@ -1011,6 +1080,14 @@ export class WorkspaceDaemonSession {
             );
           }
           const input = message as WorkspaceDaemonUpdateOverlayRequest;
+          const state = this.workspaceReplayStateGet(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          const workspaceInstanceError = this.workspaceInstanceValidate(state, input);
+          if (workspaceInstanceError) {
+            return workspaceInstanceError;
+          }
           await this.options.service.updateOverlay(input);
           return { type: 'update_overlay_ack' };
         }
@@ -1022,6 +1099,14 @@ export class WorkspaceDaemonSession {
             );
           }
           const input = message as WorkspaceDaemonCloseOverlayRequest;
+          const state = this.workspaceReplayStateGet(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          const workspaceInstanceError = this.workspaceInstanceValidate(state, input);
+          if (workspaceInstanceError) {
+            return workspaceInstanceError;
+          }
           await this.options.service.closeOverlay(input);
           return { type: 'close_overlay_ack' };
         }
@@ -1039,6 +1124,18 @@ export class WorkspaceDaemonSession {
           );
           if (replayGate) {
             return replayGate;
+          }
+          const state = this.workspaceReplayStateGet(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          const workspaceInstanceError = this.workspaceInstanceValidate(state, input);
+          if (workspaceInstanceError) {
+            return workspaceInstanceError;
+          }
+          const replayEpochError = this.replayEpochValidate(state, input);
+          if (replayEpochError) {
+            return replayEpochError;
           }
           const diagnostics = await this.options.service.queryDiagnostics({
             ...input,
@@ -1064,6 +1161,18 @@ export class WorkspaceDaemonSession {
           if (replayGate) {
             return replayGate;
           }
+          const state = this.workspaceReplayStateGet(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          const workspaceInstanceError = this.workspaceInstanceValidate(state, input);
+          if (workspaceInstanceError) {
+            return workspaceInstanceError;
+          }
+          const replayEpochError = this.replayEpochValidate(state, input);
+          if (replayEpochError) {
+            return replayEpochError;
+          }
           const codeActions = await this.options.service.queryCodeActions({
             ...input,
             signal: options.signal,
@@ -1088,6 +1197,18 @@ export class WorkspaceDaemonSession {
           if (replayGate) {
             return replayGate;
           }
+          const state = this.workspaceReplayStateGet(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          const workspaceInstanceError = this.workspaceInstanceValidate(state, input);
+          if (workspaceInstanceError) {
+            return workspaceInstanceError;
+          }
+          const replayEpochError = this.replayEpochValidate(state, input);
+          if (replayEpochError) {
+            return replayEpochError;
+          }
           const result = await this.options.service.applyEditPlan({
             ...input,
             signal: options.signal,
@@ -1105,6 +1226,18 @@ export class WorkspaceDaemonSession {
             );
           }
           const input = message as WorkspaceDaemonQueryIndexStatusRequest;
+          const state = this.workspaceReplayStateGet(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          const workspaceInstanceError = this.workspaceInstanceValidate(state, input);
+          if (workspaceInstanceError) {
+            return workspaceInstanceError;
+          }
+          const replayEpochError = this.replayEpochValidate(state, input);
+          if (replayEpochError) {
+            return replayEpochError;
+          }
           const indexStatus = await this.options.service.queryIndexStatus({
             ...input,
             signal: options.signal,
@@ -1130,7 +1263,46 @@ export class WorkspaceDaemonSession {
 }
 
 export class WorkspaceDaemonServiceClient implements WorkspaceService {
+  private readonly workspaceFreshness = new Map<
+    ClientSessionId,
+    Map<
+      string,
+      {
+        workspaceInstanceId: WorkspaceInstanceId;
+        replayEpoch: number;
+      }
+    >
+  >();
+
   constructor(private readonly connection: WorkspaceDaemonRequestClient) {}
+
+  private workspaceFreshnessGet(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+  }): { workspaceInstanceId: WorkspaceInstanceId; replayEpoch: number } | undefined {
+    return this.workspaceFreshness.get(input.clientSessionId)?.get(input.workspaceId);
+  }
+
+  private workspaceFreshnessSet(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    workspaceInstanceId: WorkspaceInstanceId;
+    replayEpoch: number;
+  }): void {
+    let workspaces = this.workspaceFreshness.get(input.clientSessionId);
+    if (!workspaces) {
+      workspaces = new Map();
+      this.workspaceFreshness.set(input.clientSessionId, workspaces);
+    }
+    workspaces.set(input.workspaceId, {
+      workspaceInstanceId: input.workspaceInstanceId,
+      replayEpoch: input.replayEpoch,
+    });
+  }
+
+  private workspaceFreshnessDeleteAll(clientSessionId: ClientSessionId): void {
+    this.workspaceFreshness.delete(clientSessionId);
+  }
 
   registerClientSession(input: {
     clientKind: WorkspaceClientKind;
@@ -1152,7 +1324,10 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
     return this.connection.request<WorkspaceDaemonVoidAck>({
       type: 'close_client_session',
       clientSessionId: input.clientSessionId,
-    }).then(() => undefined);
+    }).then(() => {
+      this.workspaceFreshnessDeleteAll(input.clientSessionId);
+      return undefined;
+    });
   }
 
   attachWorkspace(input: {
@@ -1165,10 +1340,18 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
       clientSessionId: input.clientSessionId,
       rootPath: input.rootPath,
       configPath: input.configPath,
-    }).then((response) => ({
-      workspaceId: response.workspaceId,
-      workspaceInstanceId: response.workspaceInstanceId,
-    }));
+    }).then((response) => {
+      this.workspaceFreshnessSet({
+        clientSessionId: input.clientSessionId,
+        workspaceId: response.workspaceId,
+        workspaceInstanceId: response.workspaceInstanceId,
+        replayEpoch: 0,
+      });
+      return {
+        workspaceId: response.workspaceId,
+        workspaceInstanceId: response.workspaceInstanceId,
+      };
+    });
   }
 
   subscribeDiagnostics(input: {
@@ -1196,7 +1379,15 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
       clientSessionId: input.clientSessionId,
       workspaceId: input.workspaceId,
       workspaceInstanceId: input.workspaceInstanceId,
-    }).then((response) => response.result);
+    }).then((response) => {
+      this.workspaceFreshnessSet({
+        clientSessionId: input.clientSessionId,
+        workspaceId: input.workspaceId,
+        workspaceInstanceId: response.result.workspaceInstanceId,
+        replayEpoch: response.result.replayEpoch,
+      });
+      return response.result;
+    });
   }
 
   openOverlay(input: {
@@ -1206,10 +1397,12 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
     version: number;
     text: string;
   }): Promise<void> {
+    const freshness = this.workspaceFreshnessGet(input);
     return this.connection.request<WorkspaceDaemonVoidAck>({
       type: 'open_overlay',
       clientSessionId: input.clientSessionId,
       workspaceId: input.workspaceId,
+      workspaceInstanceId: freshness?.workspaceInstanceId,
       uri: input.uri,
       version: input.version,
       text: input.text,
@@ -1223,10 +1416,12 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
     version: number;
     text: string;
   }): Promise<void> {
+    const freshness = this.workspaceFreshnessGet(input);
     return this.connection.request<WorkspaceDaemonVoidAck>({
       type: 'update_overlay',
       clientSessionId: input.clientSessionId,
       workspaceId: input.workspaceId,
+      workspaceInstanceId: freshness?.workspaceInstanceId,
       uri: input.uri,
       version: input.version,
       text: input.text,
@@ -1238,10 +1433,12 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
     workspaceId: string;
     uri: string;
   }): Promise<void> {
+    const freshness = this.workspaceFreshnessGet(input);
     return this.connection.request<WorkspaceDaemonVoidAck>({
       type: 'close_overlay',
       clientSessionId: input.clientSessionId,
       workspaceId: input.workspaceId,
+      workspaceInstanceId: freshness?.workspaceInstanceId,
       uri: input.uri,
     }).then(() => undefined);
   }
@@ -1252,10 +1449,13 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
     uri?: string;
     signal?: AbortSignal;
   }): Promise<WorkspaceDiagnostic[]> {
+    const freshness = this.workspaceFreshnessGet(input);
     return this.connection.request<WorkspaceDaemonQueryDiagnosticsAck>({
       type: 'query_diagnostics',
       clientSessionId: input.clientSessionId,
       workspaceId: input.workspaceId,
+      workspaceInstanceId: freshness?.workspaceInstanceId,
+      replayEpoch: freshness?.replayEpoch,
       uri: input.uri,
     }, {
       signal: input.signal,
@@ -1270,10 +1470,13 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
     diagnosticIds?: string[];
     signal?: AbortSignal;
   }): Promise<WorkspaceCodeAction[]> {
+    const freshness = this.workspaceFreshnessGet(input);
     return this.connection.request<WorkspaceDaemonQueryCodeActionsAck>({
       type: 'query_code_actions',
       clientSessionId: input.clientSessionId,
       workspaceId: input.workspaceId,
+      workspaceInstanceId: freshness?.workspaceInstanceId,
+      replayEpoch: freshness?.replayEpoch,
       uri: input.uri,
       version: input.version,
       diagnosticIds: input.diagnosticIds,
@@ -1289,10 +1492,13 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
     documentVersions: Record<string, number>;
     signal?: AbortSignal;
   }): Promise<WorkspaceApplyResult> {
+    const freshness = this.workspaceFreshnessGet(input);
     return this.connection.request<WorkspaceDaemonApplyEditPlanAck>({
       type: 'apply_edit_plan',
       clientSessionId: input.clientSessionId,
       workspaceId: input.workspaceId,
+      workspaceInstanceId: freshness?.workspaceInstanceId,
+      replayEpoch: freshness?.replayEpoch,
       planId: input.planId,
       documentVersions: input.documentVersions,
     }, {
@@ -1305,10 +1511,13 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
     workspaceId: string;
     signal?: AbortSignal;
   }): Promise<IndexStatusResult> {
+    const freshness = this.workspaceFreshnessGet(input);
     return this.connection.request<WorkspaceDaemonQueryIndexStatusAck>({
       type: 'query_index_status',
       clientSessionId: input.clientSessionId,
       workspaceId: input.workspaceId,
+      workspaceInstanceId: freshness?.workspaceInstanceId,
+      replayEpoch: freshness?.replayEpoch,
     }, {
       signal: input.signal,
     }).then((response) => response.indexStatus);

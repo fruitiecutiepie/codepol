@@ -222,12 +222,173 @@ describe('workspace daemon control plane', () => {
     expect(replay).toEqual({
       workspaceId: attached.workspaceId,
       workspaceInstanceId: attached.workspaceInstanceId,
+      replayEpoch: 1,
       replayState: 'applied',
     });
     expect(attached.workspaceInstanceId).toBeDefined();
     expect(diagnostics).toHaveLength(1);
 
     await service.close();
+  });
+
+  it('rejects overlay writes for a stale workspace instance id', async () => {
+    const runtimeDir = tempRuntimeDirCreate();
+    tempDirs.push(runtimeDir);
+
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-daemon-workspace-'));
+    tempDirs.push(workspaceRoot);
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'codepol.toml'),
+      noInterfaceConfigContentCreate(),
+      'utf8',
+    );
+
+    const { descriptor } = workspaceDaemonDescriptorCreate({ runtimeDir });
+    const session = new WorkspaceDaemonSession({
+      descriptor,
+      service: new WorkspaceServiceEngine(),
+    });
+
+    await expect(
+      session.handleEnvelope({
+        id: 1,
+        type: 'hello',
+        protocolVersion: WORKSPACE_DAEMON_PROTOCOL_VERSION,
+        client: clientIdentityCreate('stale-workspace-instance-client'),
+      }),
+    ).resolves.toMatchObject({
+      type: 'hello_ack',
+      compatibility: 'ok',
+    });
+
+    const registerResponse = await session.handleEnvelope({
+      id: 2,
+      type: 'register_client_session',
+      clientKind: 'test',
+      clientInstanceId: 'stale-workspace-instance-client',
+      clientSessionId: 'stale-workspace-instance-session',
+    });
+    expect(registerResponse.type).toBe('register_client_session_ack');
+
+    const attachResponse = await session.handleEnvelope({
+      id: 3,
+      type: 'attach_workspace',
+      clientSessionId: 'stale-workspace-instance-session',
+      rootPath: workspaceRoot,
+      configPath: path.join(workspaceRoot, 'codepol.toml'),
+    });
+    expect(attachResponse.type).toBe('attach_workspace_ack');
+
+    if (attachResponse.type !== 'attach_workspace_ack') {
+      return;
+    }
+
+    await expect(
+      session.handleEnvelope({
+        id: 4,
+        type: 'open_overlay',
+        clientSessionId: 'stale-workspace-instance-session',
+        workspaceId: attachResponse.workspaceId,
+        workspaceInstanceId: 'workspace-wrong-instance',
+        uri: workspacePathToUri(path.join(workspaceRoot, 'src', 'app.ts')),
+        version: 1,
+        text: 'export type User = {};\n',
+      }),
+    ).resolves.toEqual({
+      type: 'error',
+      code: 'workspace_instance_mismatch',
+      message: `Workspace instance mismatch for ${attachResponse.workspaceId}: expected ${attachResponse.workspaceInstanceId}, received workspace-wrong-instance`,
+    });
+  });
+
+  it('rejects post-replay reads for a stale replay epoch', async () => {
+    const runtimeDir = tempRuntimeDirCreate();
+    tempDirs.push(runtimeDir);
+
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-daemon-workspace-'));
+    tempDirs.push(workspaceRoot);
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'codepol.toml'),
+      noInterfaceConfigContentCreate(),
+      'utf8',
+    );
+
+    const { descriptor } = workspaceDaemonDescriptorCreate({ runtimeDir });
+    const session = new WorkspaceDaemonSession({
+      descriptor,
+      service: new WorkspaceServiceEngine(),
+    });
+
+    await expect(
+      session.handleEnvelope({
+        id: 1,
+        type: 'hello',
+        protocolVersion: WORKSPACE_DAEMON_PROTOCOL_VERSION,
+        client: clientIdentityCreate('stale-replay-epoch-client'),
+      }),
+    ).resolves.toMatchObject({
+      type: 'hello_ack',
+      compatibility: 'ok',
+    });
+
+    await expect(
+      session.handleEnvelope({
+        id: 2,
+        type: 'register_client_session',
+        clientKind: 'test',
+        clientInstanceId: 'stale-replay-epoch-client',
+        clientSessionId: 'stale-replay-epoch-session',
+      }),
+    ).resolves.toMatchObject({
+      type: 'register_client_session_ack',
+      clientSessionId: 'stale-replay-epoch-session',
+    });
+
+    const attachResponse = await session.handleEnvelope({
+      id: 3,
+      type: 'attach_workspace',
+      clientSessionId: 'stale-replay-epoch-session',
+      rootPath: workspaceRoot,
+      configPath: path.join(workspaceRoot, 'codepol.toml'),
+    });
+    expect(attachResponse.type).toBe('attach_workspace_ack');
+
+    if (attachResponse.type !== 'attach_workspace_ack') {
+      return;
+    }
+
+    await expect(
+      session.handleEnvelope({
+        id: 4,
+        type: 'complete_replay',
+        clientSessionId: 'stale-replay-epoch-session',
+        workspaceId: attachResponse.workspaceId,
+        workspaceInstanceId: attachResponse.workspaceInstanceId,
+      }),
+    ).resolves.toEqual({
+      type: 'complete_replay_ack',
+      result: {
+        workspaceId: attachResponse.workspaceId,
+        workspaceInstanceId: attachResponse.workspaceInstanceId,
+        replayEpoch: 1,
+        replayState: 'applied',
+      },
+    });
+
+    await expect(
+      session.handleEnvelope({
+        id: 5,
+        type: 'query_index_status',
+        clientSessionId: 'stale-replay-epoch-session',
+        workspaceId: attachResponse.workspaceId,
+        workspaceInstanceId: attachResponse.workspaceInstanceId,
+        replayEpoch: 0,
+      }),
+    ).resolves.toEqual({
+      type: 'error',
+      code: 'replay_epoch_mismatch',
+      message: `Replay epoch mismatch for ${attachResponse.workspaceId}: expected 1, received 0`,
+    });
   });
 
   it('acknowledges cancel_request and suppresses a canceled daemon response', async () => {
