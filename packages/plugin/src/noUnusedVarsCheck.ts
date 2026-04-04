@@ -7,6 +7,7 @@ import type {
   SymbolRecord,
 } from '@codepol/core';
 import { ReferenceUsage, SymbolFlags } from '@codepol/core';
+import { noUnusedVarsViolationFixGet } from './noUnusedVarsFix';
 
 export type NoUnusedVarsArgs = {
   args?: 'after-used' | 'all' | 'none';
@@ -280,13 +281,13 @@ export function noUnusedVarsCheck(
     const ignore = ignoreMatchGet(symbol, args);
     if (ignore) {
       if (args.reportUsedIgnorePattern && usage.hasEffectiveUse) {
-        const loc = symbolLocationGet(context.source, symbol);
-        violations.push({
-          ruleId: rule.id || rule.ruleId,
-          filePath: context.filePath,
-          message: ignoredButUsedMessage(symbol, ignore),
-          ...loc,
-        });
+    const loc = symbolLocationGet(context.source, symbol);
+    violations.push({
+      ruleId: rule.id || rule.ruleId,
+      filePath: context.filePath,
+      message: ignoredButUsedMessage(symbol, ignore),
+      ...loc,
+    });
       }
       continue;
     }
@@ -296,11 +297,17 @@ export function noUnusedVarsCheck(
     }
 
     const loc = symbolLocationGet(context.source, symbol);
+    const fix = noUnusedVarsViolationFixGet(
+      context.source,
+      context.filePath,
+      symbol,
+    );
     violations.push({
       ruleId: rule.id || rule.ruleId,
       filePath: context.filePath,
       message: unusedMessage(symbol, usage),
       ...loc,
+      ...(fix ? { fix } : {}),
     });
   }
 

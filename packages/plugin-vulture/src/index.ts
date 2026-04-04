@@ -24,6 +24,4 @@ export { pythonDeadCodeFixApply } from './pythonDeadCodeFix';
 export { pythonDeadCodeRule } from './pythonDeadCodeRule';
 export { vultureFindingMatchesFile } from './vulturePathMatch';
 
-import { pythonDeadCodeRule } from './pythonDeadCodeRule';
-
-export default [pythonDeadCodeRule];
+// export default [pythonDeadCodeRule];

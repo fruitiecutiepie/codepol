@@ -43,6 +43,16 @@ type LspDocument = {
   text: string;
 };
 
+type LspPosition = {
+  line: number;
+  character: number;
+};
+
+type LspRange = {
+  start: LspPosition;
+  end: LspPosition;
+};
+
 type SendMessage = (message: JsonRpcRequest | JsonRpcNotification | JsonRpcResponse) => void;
 
 function messageIsResponse(
@@ -67,24 +77,90 @@ function severityToLsp(severity: WorkspaceDiagnostic['severity']): number {
   return 1;
 }
 
+function positionCompare(a: LspPosition, b: LspPosition): number {
+  if (a.line !== b.line) {
+    return a.line - b.line;
+  }
+  return a.character - b.character;
+}
+
+function rangeIsPoint(range: LspRange): boolean {
+  return positionCompare(range.start, range.end) === 0;
+}
+
+function positionInRange(position: LspPosition, range: LspRange): boolean {
+  return (
+    positionCompare(position, range.start) >= 0 &&
+    positionCompare(position, range.end) <= 0
+  );
+}
+
+function rangesIntersect(a: LspRange, b: LspRange): boolean {
+  if (rangeIsPoint(a)) {
+    return positionInRange(a.start, b);
+  }
+  if (rangeIsPoint(b)) {
+    return positionInRange(b.start, a);
+  }
+  return positionCompare(a.end, b.start) > 0 && positionCompare(b.end, a.start) > 0;
+}
+
+function diagnosticTouchesRange(
+  diagnostic: WorkspaceDiagnostic,
+  uri: string,
+  range: LspRange,
+): boolean {
+  if (rangesIntersect(diagnostic.range, range)) {
+    return true;
+  }
+
+  return diagnostic.relatedLocations?.some(
+    (related) => related.uri === uri && rangesIntersect(related.range, range),
+  ) ?? false;
+}
+
 function diagnosticsToLsp(diagnostics: WorkspaceDiagnostic[]): unknown[] {
-  return diagnostics.map((diagnostic) => ({
-    range: diagnostic.range,
-    severity: severityToLsp(diagnostic.severity),
-    source: diagnostic.source,
-    code: diagnostic.code,
-    message: diagnostic.message,
-    relatedInformation: diagnostic.relatedLocations?.map((related) => ({
-      location: {
-        uri: related.uri,
-        range: related.range,
+  const lspDiagnostics: unknown[] = [];
+
+  for (const diagnostic of diagnostics) {
+    lspDiagnostics.push({
+      range: diagnostic.range,
+      severity: severityToLsp(diagnostic.severity),
+      source: diagnostic.source,
+      code: diagnostic.code,
+      message: diagnostic.message,
+      relatedInformation: diagnostic.relatedLocations
+        ?.filter((related) => related.uri !== diagnostic.uri)
+        .map((related) => ({
+          location: {
+            uri: related.uri,
+            range: related.range,
+          },
+          message: related.message ?? '',
+        })),
+      data: {
+        id: diagnostic.id,
       },
-      message: related.message ?? '',
-    })),
-    data: {
-      id: diagnostic.id,
-    },
-  }));
+    });
+
+    for (const related of diagnostic.relatedLocations ?? []) {
+      if (related.uri !== diagnostic.uri) {
+        continue;
+      }
+      lspDiagnostics.push({
+        range: related.range,
+        severity: severityToLsp(diagnostic.severity),
+        source: diagnostic.source,
+        code: diagnostic.code,
+        message: related.message ?? diagnostic.message,
+        data: {
+          id: diagnostic.id,
+        },
+      });
+    }
+  }
+
+  return lspDiagnostics;
 }
 
 function workspaceEditToLsp(plan: WorkspaceEditPlan): { changes: Record<string, unknown[]> } {
@@ -236,6 +312,7 @@ export class CodepolLspServer {
       case 'textDocument/codeAction':
         return this.codeActionHandle(params as {
           textDocument: { uri: string };
+          range?: LspRange;
           context: { diagnostics?: Array<{ data?: { id?: string } }> };
         });
       case 'workspace/executeCommand':
@@ -366,21 +443,39 @@ export class CodepolLspServer {
 
   private async codeActionHandle(params: {
     textDocument: { uri: string };
+    range?: LspRange;
     context: { diagnostics?: Array<{ data?: { id?: string } }> };
   }): Promise<unknown> {
     if (!this.clientSessionId || !this.workspaceId) {
       return [];
     }
     const document = this.documents.get(params.textDocument.uri);
-    const diagnosticIds = (params.context.diagnostics ?? [])
-      .map((diagnostic) => diagnostic.data?.id)
-      .filter((diagnosticId): diagnosticId is string => typeof diagnosticId === 'string');
+    const diagnosticIds = new Set(
+      (params.context.diagnostics ?? [])
+        .map((diagnostic) => diagnostic.data?.id)
+        .filter((diagnosticId): diagnosticId is string => typeof diagnosticId === 'string'),
+    );
+    if (params.range) {
+      const diagnostics = await this.service.queryDiagnostics({
+        clientSessionId: this.clientSessionId,
+        workspaceId: this.workspaceId,
+        uri: params.textDocument.uri,
+      });
+      for (const diagnostic of diagnostics) {
+        if (diagnosticTouchesRange(diagnostic, params.textDocument.uri, params.range)) {
+          diagnosticIds.add(diagnostic.id);
+        }
+      }
+    }
+    if (diagnosticIds.size === 0) {
+      return [];
+    }
     const actions = await this.service.queryCodeActions({
       clientSessionId: this.clientSessionId,
       workspaceId: this.workspaceId,
       uri: params.textDocument.uri,
       version: document?.version ?? 0,
-      diagnosticIds,
+      diagnosticIds: [...diagnosticIds],
     });
     return actions.map((action: WorkspaceCodeAction) => this.codeActionToLsp(action));
   }

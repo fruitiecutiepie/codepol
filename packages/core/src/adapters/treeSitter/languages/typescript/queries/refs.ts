@@ -13,6 +13,9 @@ export const REFS_QUERY = `
 ; Plain identifiers (most references)
 (identifier) @ref.id
 
+; Object-literal shorthand properties, e.g. { start, end }
+(shorthand_property_identifier) @ref.id
+
 ; Type identifiers used in type positions
 (type_identifier) @ref.type
 

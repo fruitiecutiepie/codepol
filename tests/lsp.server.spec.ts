@@ -175,6 +175,279 @@ describe('CodepolLspServer', () => {
     expect(finalPublish?.params.diagnostics).toHaveLength(1);
   });
 
+  it('returns code actions for a related diagnostic range when the editor sends no diagnostic ids', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');
+    createdDirs.push(workspaceRoot);
+    fs.writeFileSync(path.join(workspaceRoot, 'codepol.toml'), noInterfaceConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, 'export const x = 1;\nexport default x;\n', 'utf8');
+    const uri = pathToFileURL(filePath).href;
+
+    const seenDiagnosticIds: string[][] = [];
+    const service: WorkspaceService = {
+      async registerClientSession() {
+        return {
+          clientSessionId: 'client-1',
+          daemonSessionId: 'daemon-1',
+        };
+      },
+      async closeClientSession() {},
+      async attachWorkspace() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+        };
+      },
+      async openOverlay() {},
+      async updateOverlay() {},
+      async closeOverlay() {},
+      async queryDiagnostics() {
+        return [
+          {
+            id: 'diag-1',
+            uri,
+            source: 'codepol',
+            code: 'no-mixed-exports',
+            severity: 'error',
+            message: 'Do not mix default exports with named exports in the same module; prefer named exports for mixed modules.',
+            range: {
+              start: { line: 1, character: 0 },
+              end: { line: 1, character: 16 },
+            },
+            relatedLocations: [
+              {
+                uri,
+                range: {
+                  start: { line: 0, character: 0 },
+                  end: { line: 0, character: 19 },
+                },
+                message: 'Additional export in mixed module',
+              },
+            ],
+          },
+        ];
+      },
+      async queryCodeActions(input) {
+        seenDiagnosticIds.push(input.diagnosticIds ?? []);
+        if (!input.diagnosticIds?.includes('diag-1')) {
+          return [];
+        }
+        return [
+          {
+            id: 'action-1',
+            title: 'Fix no-mixed-exports',
+            kind: 'quickfix',
+            diagnosticIds: ['diag-1'],
+            isPreferred: true,
+            plan: {
+              id: 'plan-1',
+              title: 'Fix no-mixed-exports',
+              kind: 'quickfix',
+              edits: [],
+              diagnosticIds: ['diag-1'],
+              isPreferred: true,
+            },
+          },
+        ];
+      },
+      async applyEditPlan() {
+        return { applied: false, failureReason: 'plan_not_found' };
+      },
+      async queryIndexStatus() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          status: 'cold',
+          indexedFileCount: 0,
+          openDocumentCount: 0,
+          overlayCount: 0,
+          analysisGeneration: 0,
+        };
+      },
+    };
+
+    const messages: any[] = [];
+    const server = new CodepolLspServer({
+      service,
+      sendMessage: (message) => {
+        messages.push(message);
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        rootUri: pathToFileURL(workspaceRoot).href,
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'textDocument/codeAction',
+      params: {
+        textDocument: { uri },
+        range: {
+          start: { line: 0, character: 0 },
+          end: { line: 0, character: 0 },
+        },
+        context: {
+          diagnostics: [],
+        },
+      },
+    });
+
+    const codeActionResponse = messages.find((message) => message.id === 2);
+    expect(codeActionResponse?.result).toHaveLength(1);
+    expect(seenDiagnosticIds).toEqual([['diag-1']]);
+  });
+
+  it('publishes same-file related locations as separate diagnostics that keep the primary fix id', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');
+    createdDirs.push(workspaceRoot);
+    fs.writeFileSync(path.join(workspaceRoot, 'codepol.toml'), noInterfaceConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, 'export const x = 1;\nexport default x;\n', 'utf8');
+    const uri = pathToFileURL(filePath).href;
+
+    const service: WorkspaceService = {
+      async registerClientSession() {
+        return {
+          clientSessionId: 'client-1',
+          daemonSessionId: 'daemon-1',
+        };
+      },
+      async closeClientSession() {},
+      async attachWorkspace() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+        };
+      },
+      async openOverlay() {},
+      async updateOverlay() {},
+      async closeOverlay() {},
+      async queryDiagnostics() {
+        return [
+          {
+            id: 'diag-1',
+            uri,
+            source: 'codepol',
+            code: 'no-mixed-exports',
+            severity: 'error',
+            message: 'Do not mix default exports with named exports in the same module; prefer named exports for mixed modules.',
+            range: {
+              start: { line: 1, character: 0 },
+              end: { line: 1, character: 16 },
+            },
+            relatedLocations: [
+              {
+                uri,
+                range: {
+                  start: { line: 0, character: 0 },
+                  end: { line: 0, character: 19 },
+                },
+                message: 'Additional export in mixed module',
+              },
+            ],
+          },
+        ];
+      },
+      async queryCodeActions(input) {
+        if (!input.diagnosticIds?.includes('diag-1')) {
+          return [];
+        }
+        return [
+          {
+            id: 'action-1',
+            title: 'Fix no-mixed-exports',
+            kind: 'quickfix',
+            diagnosticIds: ['diag-1'],
+            isPreferred: true,
+            plan: {
+              id: 'plan-1',
+              title: 'Fix no-mixed-exports',
+              kind: 'quickfix',
+              edits: [],
+              diagnosticIds: ['diag-1'],
+              isPreferred: true,
+            },
+          },
+        ];
+      },
+      async applyEditPlan() {
+        return { applied: false, failureReason: 'plan_not_found' };
+      },
+      async queryIndexStatus() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          status: 'cold',
+          indexedFileCount: 0,
+          openDocumentCount: 0,
+          overlayCount: 0,
+          analysisGeneration: 0,
+        };
+      },
+    };
+
+    const messages: any[] = [];
+    const server = new CodepolLspServer({
+      service,
+      sendMessage: (message) => {
+        messages.push(message);
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        rootUri: pathToFileURL(workspaceRoot).href,
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      method: 'textDocument/didOpen',
+      params: {
+        textDocument: {
+          uri,
+          version: 1,
+          text: fs.readFileSync(filePath, 'utf8'),
+        },
+      },
+    });
+
+    const publish = messages.find((message) => message.method === 'textDocument/publishDiagnostics');
+    expect(publish?.params.diagnostics).toHaveLength(2);
+    expect(publish?.params.diagnostics[1]?.message).toBe('Additional export in mixed module');
+    expect(publish?.params.diagnostics[1]?.data?.id).toBe('diag-1');
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'textDocument/codeAction',
+      params: {
+        textDocument: { uri },
+        range: publish.params.diagnostics[1].range,
+        context: {
+          diagnostics: [publish.params.diagnostics[1]],
+        },
+      },
+    });
+
+    const codeActionResponse = messages.find((message) => message.id === 2);
+    expect(codeActionResponse?.result).toHaveLength(1);
+  });
+
   it('returns code actions and applies edit plans through workspace/applyEdit', async () => {
     const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');
     createdDirs.push(workspaceRoot);

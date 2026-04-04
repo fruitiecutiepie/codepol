@@ -140,4 +140,29 @@ demo(1, 2, obj, arr);
     expect(messages.some((message) => message.includes('_slot'))).toBe(false);
     expect(messages.some((message) => message.includes('skipped'))).toBe(false);
   });
+
+  it('treats object-literal shorthand properties as reads', () => {
+    const file = path.join(testDir, 'object-shorthand.ts');
+    const source = `
+function demo() {
+  const start = 1;
+  const end = 2;
+  const range = { start, end };
+  return range;
+}
+
+demo();
+`;
+
+    fs.writeFileSync(file, source);
+
+    const { index } = projectIndexBuildSync({ files: [file], dir: testDir });
+    const { rule, context } = createContext(file, source, index);
+    const violations = noUnusedVarsCheck(rule, context);
+    const messages = violations.map((violation) => violation.message);
+
+    expect(messages.some((message) => message.includes(`'start'`))).toBe(false);
+    expect(messages.some((message) => message.includes(`'end'`))).toBe(false);
+    expect(messages.some((message) => message.includes(`'range'`))).toBe(false);
+  });
 });
