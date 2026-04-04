@@ -21,9 +21,13 @@ import {
 import {
   ensureWorkspaceRuntimeReady,
   eslintConfigPathDetect,
-  policyCheck as workspacePolicyCheck,
+  type WorkspaceDaemonConnectFn,
   type WorkspacePolicyCheckResult,
 } from '@codepol/workspace-service';
+import {
+  cliPolicyCheckerResolve,
+  type CliWorkspaceServiceResolvedInfo,
+} from './serviceFactory';
 
 type CliOptions = {
   fix: boolean;
@@ -35,13 +39,38 @@ type CliOptions = {
 };
 
 export async function policyCheck(options: {
-  config: CodepolConfig;
+  config?: CodepolConfig;
   configPath: string;
-  eslintConfigPath: string;
+  eslintConfigPath?: string;
   fix: boolean;
   cwd: string;
+  env?: NodeJS.ProcessEnv;
+  clientInstanceId?: string;
+  connect?: WorkspaceDaemonConnectFn;
+  startDaemon?: () => Promise<void> | void;
+  allowInProcessFallback?: boolean;
+  onResolved?: (info: CliWorkspaceServiceResolvedInfo) => void;
 }): Promise<WorkspacePolicyCheckResult> {
-  return workspacePolicyCheck(options);
+  const checker = await cliPolicyCheckerResolve({
+    env: options.env,
+    clientInstanceId: options.clientInstanceId,
+    connect: options.connect,
+    startDaemon: options.startDaemon,
+    allowInProcessFallback: options.allowInProcessFallback,
+    onResolved: options.onResolved,
+  });
+
+  try {
+    return await checker.policyCheck({
+      config: options.config,
+      configPath: options.configPath,
+      eslintConfigPath: options.eslintConfigPath,
+      fix: options.fix,
+      cwd: options.cwd,
+    });
+  } finally {
+    await checker.close?.();
+  }
 }
 
 async function policyCheckAndPrintOutput(options: CliOptions): Promise<boolean> {

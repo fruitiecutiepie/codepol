@@ -16,6 +16,7 @@
     "typecheck": "tsc --build --pretty false"
   },
   "dependencies": {
+    "@codepol/daemon": "workspace:*",
     "@codepol/core": "workspace:*",
     "@codepol/plugin": "workspace:*",
     "@codepol/plugin-biome": "workspace:*",

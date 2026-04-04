@@ -15,6 +15,8 @@ import type {
 import type {
   WorkspaceDiagnosticsSubscriptionResult,
   WorkspaceDiagnosticsSubscriptionScope,
+  WorkspacePolicyCheckOptions,
+  WorkspacePolicyCheckResult,
   WorkspaceReplayResult,
   WorkspaceClientKind,
   WorkspaceService,
@@ -108,6 +110,9 @@ type WorkspaceDaemonServerStartOptions = {
   installId?: string;
   capabilities?: Record<string, boolean>;
   service?: WorkspaceService;
+  policyCheck?: (
+    options: WorkspacePolicyCheckOptions,
+  ) => Promise<WorkspacePolicyCheckResult>;
 };
 
 type WorkspaceDaemonLaunchLock = {
@@ -239,6 +244,11 @@ type WorkspaceDaemonQueryIndexStatusRequest = WorkspaceDaemonMessage & {
   workspaceId: string;
 };
 
+type WorkspaceDaemonPolicyCheckRequest = WorkspaceDaemonMessage & {
+  type: 'policy_check';
+  options: WorkspacePolicyCheckOptions;
+};
+
 type WorkspaceDaemonRegisterClientSessionAck = {
   type: 'register_client_session_ack';
   clientSessionId: ClientSessionId;
@@ -281,6 +291,11 @@ type WorkspaceDaemonQueryIndexStatusAck = {
   indexStatus: IndexStatusResult;
 };
 
+type WorkspaceDaemonPolicyCheckAck = {
+  type: 'policy_check_ack';
+  result: WorkspacePolicyCheckResult;
+};
+
 type WorkspaceDaemonVoidAck =
   | { type: 'close_client_session_ack' }
   | { type: 'open_overlay_ack' }
@@ -296,6 +311,7 @@ type WorkspaceDaemonServiceResponse =
   | WorkspaceDaemonQueryCodeActionsAck
   | WorkspaceDaemonApplyEditPlanAck
   | WorkspaceDaemonQueryIndexStatusAck
+  | WorkspaceDaemonPolicyCheckAck
   | WorkspaceDaemonVoidAck
   | WorkspaceDaemonHelloAck
   | WorkspaceDaemonErrorResponse;
@@ -631,6 +647,9 @@ export class WorkspaceDaemonSession {
       descriptor: WorkspaceDaemonDescriptor;
       capabilities?: Record<string, boolean>;
       service?: WorkspaceService;
+      policyCheck?: (
+        options: WorkspacePolicyCheckOptions,
+      ) => Promise<WorkspacePolicyCheckResult>;
     },
   ) {}
 
@@ -704,16 +723,29 @@ export class WorkspaceDaemonSession {
       );
     }
 
-    if (!this.options.service) {
-      return messageErrorCreate(
-        'unsupported_request',
-        `Unsupported daemon request: ${message.type}`,
-      );
-    }
-
     try {
       switch (message.type) {
+        case 'policy_check': {
+          if (!this.options.policyCheck) {
+            return messageErrorCreate(
+              'unsupported_request',
+              `Unsupported daemon request: ${message.type}`,
+            );
+          }
+          const input = message as WorkspaceDaemonPolicyCheckRequest;
+          const result = await this.options.policyCheck(input.options);
+          return {
+            type: 'policy_check_ack',
+            result,
+          };
+        }
         case 'register_client_session': {
+          if (!this.options.service) {
+            return messageErrorCreate(
+              'unsupported_request',
+              `Unsupported daemon request: ${message.type}`,
+            );
+          }
           const input = message as WorkspaceDaemonRegisterClientSessionRequest;
           const result = await this.options.service.registerClientSession({
             clientKind: input.clientKind,
@@ -727,6 +759,12 @@ export class WorkspaceDaemonSession {
           };
         }
         case 'close_client_session': {
+          if (!this.options.service) {
+            return messageErrorCreate(
+              'unsupported_request',
+              `Unsupported daemon request: ${message.type}`,
+            );
+          }
           const input = message as WorkspaceDaemonCloseClientSessionRequest;
           await this.options.service.closeClientSession({
             clientSessionId: input.clientSessionId,
@@ -735,6 +773,12 @@ export class WorkspaceDaemonSession {
           return { type: 'close_client_session_ack' };
         }
         case 'attach_workspace': {
+          if (!this.options.service) {
+            return messageErrorCreate(
+              'unsupported_request',
+              `Unsupported daemon request: ${message.type}`,
+            );
+          }
           const input = message as WorkspaceDaemonAttachWorkspaceRequest;
           const result = await this.options.service.attachWorkspace({
             clientSessionId: input.clientSessionId,
@@ -755,6 +799,12 @@ export class WorkspaceDaemonSession {
           };
         }
         case 'subscribe_diagnostics': {
+          if (!this.options.service) {
+            return messageErrorCreate(
+              'unsupported_request',
+              `Unsupported daemon request: ${message.type}`,
+            );
+          }
           const input = message as WorkspaceDaemonSubscribeDiagnosticsRequest;
           const state = this.workspaceReplayStateGet(
             input.clientSessionId,
@@ -786,6 +836,12 @@ export class WorkspaceDaemonSession {
           };
         }
         case 'complete_replay': {
+          if (!this.options.service) {
+            return messageErrorCreate(
+              'unsupported_request',
+              `Unsupported daemon request: ${message.type}`,
+            );
+          }
           const input = message as WorkspaceDaemonCompleteReplayRequest;
           const state = this.workspaceReplayStateGet(
             input.clientSessionId,
@@ -817,21 +873,45 @@ export class WorkspaceDaemonSession {
           };
         }
         case 'open_overlay': {
+          if (!this.options.service) {
+            return messageErrorCreate(
+              'unsupported_request',
+              `Unsupported daemon request: ${message.type}`,
+            );
+          }
           const input = message as WorkspaceDaemonOpenOverlayRequest;
           await this.options.service.openOverlay(input);
           return { type: 'open_overlay_ack' };
         }
         case 'update_overlay': {
+          if (!this.options.service) {
+            return messageErrorCreate(
+              'unsupported_request',
+              `Unsupported daemon request: ${message.type}`,
+            );
+          }
           const input = message as WorkspaceDaemonUpdateOverlayRequest;
           await this.options.service.updateOverlay(input);
           return { type: 'update_overlay_ack' };
         }
         case 'close_overlay': {
+          if (!this.options.service) {
+            return messageErrorCreate(
+              'unsupported_request',
+              `Unsupported daemon request: ${message.type}`,
+            );
+          }
           const input = message as WorkspaceDaemonCloseOverlayRequest;
           await this.options.service.closeOverlay(input);
           return { type: 'close_overlay_ack' };
         }
         case 'query_diagnostics': {
+          if (!this.options.service) {
+            return messageErrorCreate(
+              'unsupported_request',
+              `Unsupported daemon request: ${message.type}`,
+            );
+          }
           const input = message as WorkspaceDaemonQueryDiagnosticsRequest;
           const replayGate = this.replayGateEnsure(
             input.clientSessionId,
@@ -847,6 +927,12 @@ export class WorkspaceDaemonSession {
           };
         }
         case 'query_code_actions': {
+          if (!this.options.service) {
+            return messageErrorCreate(
+              'unsupported_request',
+              `Unsupported daemon request: ${message.type}`,
+            );
+          }
           const input = message as WorkspaceDaemonQueryCodeActionsRequest;
           const replayGate = this.replayGateEnsure(
             input.clientSessionId,
@@ -862,6 +948,12 @@ export class WorkspaceDaemonSession {
           };
         }
         case 'apply_edit_plan': {
+          if (!this.options.service) {
+            return messageErrorCreate(
+              'unsupported_request',
+              `Unsupported daemon request: ${message.type}`,
+            );
+          }
           const input = message as WorkspaceDaemonApplyEditPlanRequest;
           const replayGate = this.replayGateEnsure(
             input.clientSessionId,
@@ -877,6 +969,12 @@ export class WorkspaceDaemonSession {
           };
         }
         case 'query_index_status': {
+          if (!this.options.service) {
+            return messageErrorCreate(
+              'unsupported_request',
+              `Unsupported daemon request: ${message.type}`,
+            );
+          }
           const input = message as WorkspaceDaemonQueryIndexStatusRequest;
           const indexStatus = await this.options.service.queryIndexStatus(input);
           return {
@@ -1077,10 +1175,33 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
   }
 }
 
+export class WorkspaceDaemonPolicyCheckClient {
+  constructor(private readonly connection: WorkspaceDaemonRequestClient) {}
+
+  policyCheck(
+    options: WorkspacePolicyCheckOptions,
+  ): Promise<WorkspacePolicyCheckResult> {
+    return this.connection.request<WorkspaceDaemonPolicyCheckAck>({
+      type: 'policy_check',
+      options,
+    }).then((response) => response.result);
+  }
+
+  close(): Promise<void> {
+    return this.connection.close();
+  }
+}
+
 export function workspaceDaemonServiceClientCreate(options: {
   connection: WorkspaceDaemonRequestClient;
 }): WorkspaceService {
   return new WorkspaceDaemonServiceClient(options.connection);
+}
+
+export function workspaceDaemonPolicyCheckClientCreate(options: {
+  connection: WorkspaceDaemonRequestClient;
+}): WorkspaceDaemonPolicyCheckClient {
+  return new WorkspaceDaemonPolicyCheckClient(options.connection);
 }
 
 async function workspaceDaemonConnectHealthy(
@@ -1259,6 +1380,7 @@ export async function workspaceDaemonServerStart(
   const capabilities = {
     hello: true,
     sessionized_workspace_service: true,
+    policy_check: Boolean(options.policyCheck),
     ...options.capabilities,
   };
 
@@ -1267,6 +1389,7 @@ export async function workspaceDaemonServerStart(
       descriptor,
       capabilities,
       service: options.service,
+      policyCheck: options.policyCheck,
     });
     socket.setEncoding('utf8');
     let buffer = '';

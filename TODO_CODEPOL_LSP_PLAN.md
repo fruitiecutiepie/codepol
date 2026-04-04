@@ -121,6 +121,7 @@
   - `register_client_session` now accepts stable client-generated `clientSessionId` values so reconnect/replay can stop depending on daemon-generated session ids
   - `complete_replay` now exists as an explicit barrier and the daemon rejects normal workspace reads before replay is marked applied
   - diagnostics subscriptions are now explicit and idempotent in the daemon session, and the LSP initialize path replays diagnostics subscription plus current overlay snapshots before `complete_replay`
+  - `apps/lsp` now retries recoverable daemon transport failures by re-resolving the service, re-registering the stable client session, re-attaching the workspace, replaying open overlays, and then retrying the failed request once
 - Keep `clientSessionId` client-generated and stable for the lifetime of one editor window or CLI consumer.
 - Make reconnect mean full re-registration plus re-attach plus replay. Never assume transport continuity equals session continuity.
 - Use this replay order:
@@ -224,6 +225,8 @@
 - Started in the repo:
   - `apps/lsp/src/serviceFactory.ts` now resolves an opt-in daemon-backed `WorkspaceService` client for `CODEPOL_WORKSPACE_SERVICE_MODE=daemon`
   - `apps/lsp` currently preserves an in-process fallback path when daemon bootstrap fails during rollout
+  - `apps/cli/src/serviceFactory.ts` now resolves an opt-in daemon-backed one-shot policy-check client for `CODEPOL_WORKSPACE_SERVICE_MODE=daemon`
+  - `apps/cli` currently preserves an in-process fallback path when daemon bootstrap fails during rollout
 - Keep the adapter boundary narrow:
   - adapters own transport/bootstrap/reconnect logic
   - the shared engine still owns workspace/session semantics

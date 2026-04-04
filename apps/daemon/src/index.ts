@@ -2,12 +2,14 @@
 
 import {
   WorkspaceServiceEngine,
+  policyCheck as workspacePolicyCheck,
   workspaceDaemonServerStart,
 } from '@codepol/workspace-service';
 
 async function main(): Promise<void> {
   const server = await workspaceDaemonServerStart({
     service: new WorkspaceServiceEngine(),
+    policyCheck: workspacePolicyCheck,
   });
 
   const shutdown = async (): Promise<void> => {

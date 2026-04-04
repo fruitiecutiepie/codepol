@@ -223,6 +223,7 @@ export class CodepolLspServer {
   private service: WorkspaceService | undefined;
   private readonly serviceFactory: WorkspaceServiceFactory;
   private servicePromise: Promise<WorkspaceService> | undefined;
+  private reconnectPromise: Promise<WorkspaceService> | undefined;
   private readonly sendMessage: SendMessage;
   private readonly clientInstanceId: string;
   private readonly stableClientSessionId: string;
@@ -233,6 +234,8 @@ export class CodepolLspServer {
   >();
   private registeredClientSessionId: string | undefined;
   private workspaceId: string | undefined;
+  private workspaceRootPath: string | undefined;
+  private workspaceConfigPath: string | undefined;
   private nextRequestId = 1;
 
   constructor(options: {
@@ -265,6 +268,84 @@ export class CodepolLspServer {
       });
     }
     return this.servicePromise;
+  }
+
+  private serviceReset(): void {
+    this.service = undefined;
+    this.servicePromise = undefined;
+  }
+
+  private serviceErrorRecoverableIs(error: unknown): boolean {
+    if (!(error instanceof Error)) {
+      return false;
+    }
+    return [
+      'Daemon connection closed',
+      'daemon unavailable',
+      'ECONNREFUSED',
+      'ENOENT',
+      'socket hang up',
+      'EPIPE',
+      'write after end',
+    ].some((pattern) => error.message.includes(pattern));
+  }
+
+  private async serviceReconnect(): Promise<WorkspaceService> {
+    if (this.reconnectPromise) {
+      return this.reconnectPromise;
+    }
+
+    this.reconnectPromise = (async () => {
+      this.serviceReset();
+      const service = await this.serviceGet();
+      if (!this.workspaceRootPath || !this.workspaceConfigPath) {
+        return service;
+      }
+
+      const registered = await service.registerClientSession({
+        clientKind: 'lsp',
+        clientInstanceId: this.clientInstanceId,
+        clientSessionId: this.stableClientSessionId,
+      });
+      this.registeredClientSessionId = registered.clientSessionId;
+
+      const attached = await service.attachWorkspace({
+        clientSessionId: this.registeredClientSessionId,
+        rootPath: this.workspaceRootPath,
+        configPath: this.workspaceConfigPath,
+      });
+      await this.workspaceReplayApply({
+        service,
+        workspaceId: attached.workspaceId,
+        workspaceInstanceId: attached.workspaceInstanceId,
+      });
+      this.workspaceId = attached.workspaceId;
+      return service;
+    })().finally(() => {
+      this.reconnectPromise = undefined;
+    });
+
+    return this.reconnectPromise;
+  }
+
+  private async serviceCall<T>(
+    operation: (service: WorkspaceService) => Promise<T>,
+  ): Promise<T> {
+    const service = await this.serviceGet();
+    try {
+      return await operation(service);
+    } catch (error) {
+      if (
+        !this.serviceErrorRecoverableIs(error) ||
+        !this.registeredClientSessionId ||
+        !this.workspaceRootPath ||
+        !this.workspaceConfigPath
+      ) {
+        throw error;
+      }
+      const reconnected = await this.serviceReconnect();
+      return operation(reconnected);
+    }
   }
 
   async handleMessage(message: JsonRpcRequest | JsonRpcNotification | JsonRpcResponse): Promise<void> {
@@ -386,6 +467,8 @@ export class CodepolLspServer {
       try {
         const rootPath = workspaceUriToPath(rootUri);
         const { configPath } = await configDiscover(rootPath);
+        this.workspaceRootPath = rootPath;
+        this.workspaceConfigPath = configPath;
         const attached = await service.attachWorkspace({
           clientSessionId: this.registeredClientSessionId,
           rootPath,
@@ -455,20 +538,21 @@ export class CodepolLspServer {
     if (!this.registeredClientSessionId || !this.workspaceId) {
       return;
     }
-    const service = await this.serviceGet();
     this.documents.set(params.textDocument.uri, {
       uri: params.textDocument.uri,
       version: params.textDocument.version,
       text: params.textDocument.text,
     });
-    await service.openOverlay({
-      clientSessionId: this.registeredClientSessionId,
-      workspaceId: this.workspaceId,
-      uri: params.textDocument.uri,
-      version: params.textDocument.version,
-      text: params.textDocument.text,
+    await this.serviceCall(async (service) => {
+      await service.openOverlay({
+        clientSessionId: this.registeredClientSessionId!,
+        workspaceId: this.workspaceId!,
+        uri: params.textDocument.uri,
+        version: params.textDocument.version,
+        text: params.textDocument.text,
+      });
+      await this.publishDiagnostics(params.textDocument.uri, service);
     });
-    await this.publishDiagnostics(params.textDocument.uri);
   }
 
   private async didChangeHandle(params: {
@@ -484,7 +568,6 @@ export class CodepolLspServer {
     if (!this.registeredClientSessionId || !this.workspaceId) {
       return;
     }
-    const service = await this.serviceGet();
     const current = this.documents.get(params.textDocument.uri);
     if (!current) {
       return;
@@ -497,14 +580,16 @@ export class CodepolLspServer {
       text: nextText,
     };
     this.documents.set(current.uri, nextDocument);
-    await service.updateOverlay({
-      clientSessionId: this.registeredClientSessionId,
-      workspaceId: this.workspaceId,
-      uri: current.uri,
-      version: nextDocument.version,
-      text: nextDocument.text,
+    await this.serviceCall(async (service) => {
+      await service.updateOverlay({
+        clientSessionId: this.registeredClientSessionId!,
+        workspaceId: this.workspaceId!,
+        uri: current.uri,
+        version: nextDocument.version,
+        text: nextDocument.text,
+      });
+      await this.publishDiagnostics(current.uri, service);
     });
-    await this.publishDiagnostics(current.uri);
   }
 
   private async didCloseHandle(params: {
@@ -513,14 +598,15 @@ export class CodepolLspServer {
     if (!this.registeredClientSessionId || !this.workspaceId) {
       return;
     }
-    const service = await this.serviceGet();
     this.documents.delete(params.textDocument.uri);
-    await service.closeOverlay({
-      clientSessionId: this.registeredClientSessionId,
-      workspaceId: this.workspaceId,
-      uri: params.textDocument.uri,
+    await this.serviceCall(async (service) => {
+      await service.closeOverlay({
+        clientSessionId: this.registeredClientSessionId!,
+        workspaceId: this.workspaceId!,
+        uri: params.textDocument.uri,
+      });
+      await this.publishDiagnostics(params.textDocument.uri, service);
     });
-    await this.publishDiagnostics(params.textDocument.uri);
   }
 
   private async codeActionHandle(params: {
@@ -531,36 +617,37 @@ export class CodepolLspServer {
     if (!this.registeredClientSessionId || !this.workspaceId) {
       return [];
     }
-    const service = await this.serviceGet();
     const document = this.documents.get(params.textDocument.uri);
-    const diagnosticIds = new Set(
-      (params.context.diagnostics ?? [])
-        .map((diagnostic) => diagnostic.data?.id)
-        .filter((diagnosticId): diagnosticId is string => typeof diagnosticId === 'string'),
-    );
-    if (params.range) {
-      const diagnostics = await service.queryDiagnostics({
-        clientSessionId: this.registeredClientSessionId,
-        workspaceId: this.workspaceId,
-        uri: params.textDocument.uri,
-      });
-      for (const diagnostic of diagnostics) {
-        if (diagnosticTouchesRange(diagnostic, params.textDocument.uri, params.range)) {
-          diagnosticIds.add(diagnostic.id);
+    return this.serviceCall(async (service) => {
+      const diagnosticIds = new Set(
+        (params.context.diagnostics ?? [])
+          .map((diagnostic) => diagnostic.data?.id)
+          .filter((diagnosticId): diagnosticId is string => typeof diagnosticId === 'string'),
+      );
+      if (params.range) {
+        const diagnostics = await service.queryDiagnostics({
+          clientSessionId: this.registeredClientSessionId!,
+          workspaceId: this.workspaceId!,
+          uri: params.textDocument.uri,
+        });
+        for (const diagnostic of diagnostics) {
+          if (diagnosticTouchesRange(diagnostic, params.textDocument.uri, params.range)) {
+            diagnosticIds.add(diagnostic.id);
+          }
         }
       }
-    }
-    if (diagnosticIds.size === 0) {
-      return [];
-    }
-    const actions = await service.queryCodeActions({
-      clientSessionId: this.registeredClientSessionId,
-      workspaceId: this.workspaceId,
-      uri: params.textDocument.uri,
-      version: document?.version ?? 0,
-      diagnosticIds: [...diagnosticIds],
+      if (diagnosticIds.size === 0) {
+        return [];
+      }
+      const actions = await service.queryCodeActions({
+        clientSessionId: this.registeredClientSessionId!,
+        workspaceId: this.workspaceId!,
+        uri: params.textDocument.uri,
+        version: document?.version ?? 0,
+        diagnosticIds: [...diagnosticIds],
+      });
+      return actions.map((action: WorkspaceCodeAction) => this.codeActionToLsp(action));
     });
-    return actions.map((action: WorkspaceCodeAction) => this.codeActionToLsp(action));
   }
 
   private codeActionToLsp(action: WorkspaceCodeAction): unknown {
@@ -587,8 +674,6 @@ export class CodepolLspServer {
     ) {
       return null;
     }
-    const service = await this.serviceGet();
-
     const planId = params.arguments?.[0]?.planId;
     if (!planId) {
       return null;
@@ -599,29 +684,34 @@ export class CodepolLspServer {
       documentVersions[document.uri] = document.version;
     }
 
-    const applyResult = await service.applyEditPlan({
-      clientSessionId: this.registeredClientSessionId,
-      workspaceId: this.workspaceId,
-      planId,
-      documentVersions,
-    });
-    if (!applyResult.applied || !applyResult.plan) {
-      return null;
-    }
+    return this.serviceCall(async (service) => {
+      const applyResult = await service.applyEditPlan({
+        clientSessionId: this.registeredClientSessionId!,
+        workspaceId: this.workspaceId!,
+        planId,
+        documentVersions,
+      });
+      if (!applyResult.applied || !applyResult.plan) {
+        return null;
+      }
 
-    await this.clientRequest('workspace/applyEdit', {
-      label: applyResult.plan.title,
-      edit: workspaceEditToLsp(applyResult.plan),
+      await this.clientRequest('workspace/applyEdit', {
+        label: applyResult.plan.title,
+        edit: workspaceEditToLsp(applyResult.plan),
+      });
+      return null;
     });
-    return null;
   }
 
-  private async publishDiagnostics(uri: string): Promise<void> {
+  private async publishDiagnostics(
+    uri: string,
+    service?: WorkspaceService,
+  ): Promise<void> {
     if (!this.registeredClientSessionId || !this.workspaceId) {
       return;
     }
-    const service = await this.serviceGet();
-    const diagnostics = await service.queryDiagnostics({
+    const activeService = service ?? (await this.serviceGet());
+    const diagnostics = await activeService.queryDiagnostics({
       clientSessionId: this.registeredClientSessionId,
       workspaceId: this.workspaceId,
       uri,
