@@ -166,6 +166,31 @@ demo();
     expect(messages.some((message) => message.includes(`'range'`))).toBe(false);
   });
 
+  it('treats object-literal pair value identifiers as reads', () => {
+    const file = path.join(testDir, 'object-pair-identifiers.ts');
+    const source = `
+function demo() {
+  const start = 1;
+  const end = 2;
+  const obj = { a: start, b: end };
+  return obj;
+}
+
+demo();
+`;
+
+    fs.writeFileSync(file, source);
+
+    const { index } = projectIndexBuildSync({ files: [file], dir: testDir });
+    const { rule, context } = createContext(file, source, index);
+    const violations = noUnusedVarsCheck(rule, context);
+    const messages = violations.map((violation) => violation.message);
+
+    expect(messages.some((message) => message.includes(`'start'`))).toBe(false);
+    expect(messages.some((message) => message.includes(`'end'`))).toBe(false);
+    expect(messages.some((message) => message.includes(`'obj'`))).toBe(false);
+  });
+
   it('treats explicit object-literal property values as reads', () => {
     const file = path.join(testDir, 'object-pair.ts');
     const source = `

@@ -185,6 +185,17 @@ export type RefFilterContext = {
   parentType: string;
   /** Grandparent node type */
   grandparentType?: string;
+  /**
+   * When the parent is an object-literal `pair`, whether this capture is the
+   * `key` or `value` field. Keys are not value references; values are.
+   */
+  pairParentField?: 'key' | 'value';
+  /**
+   * When the parent is a `property_signature` (e.g. interface member), whether
+   * this node is the property `name` (declaration-like) vs part of the
+   * `type` subtree (type references).
+   */
+  propertySignatureParentField?: 'name' | 'type';
   /** Byte range of the identifier */
   byteRange: ByteRange;
   /** Set of declaration ranges in the file (for filtering out decl sites) */

@@ -725,6 +725,43 @@ function referenceUsageGet(
 // ============================================================================
 
 /**
+ * Parent-field roles for language ref filters (TS/TSX): distinguish object
+ * literal keys from values and interface property names from type references.
+ */
+function refFilterParentFieldsGet(
+  node: Parser.SyntaxNode,
+): Pick<RefFilterContext, 'pairParentField' | 'propertySignatureParentField'> {
+  const parent = node.parent;
+  if (!parent) return {};
+
+  if (parent.type === 'pair') {
+    const keyNode = parent.childForFieldName('key');
+    const valueNode = parent.childForFieldName('value');
+    if (keyNode && node.equals(keyNode)) return { pairParentField: 'key' };
+    if (valueNode && node.equals(valueNode)) return { pairParentField: 'value' };
+    return {};
+  }
+
+  if (parent.type === 'property_signature') {
+    const nameNode = parent.childForFieldName('name');
+    const typeNode = parent.childForFieldName('type');
+    if (nameNode && node.equals(nameNode)) {
+      return { propertySignatureParentField: 'name' };
+    }
+    if (
+      typeNode &&
+      node.startIndex >= typeNode.startIndex &&
+      node.endIndex <= typeNode.endIndex
+    ) {
+      return { propertySignatureParentField: 'type' };
+    }
+    return {};
+  }
+
+  return {};
+}
+
+/**
  * Extract identifier references from Tree-sitter query captures.
  */
 function refsExtract(
@@ -759,11 +796,13 @@ function refsExtract(
 
     // Apply custom filter if provided
     if (cfg.refFilter) {
+      const parentFields = refFilterParentFieldsGet(node);
       const ctx: RefFilterContext = {
         name,
         nodeType: node.type,
         parentType: node.parent?.type ?? '',
         grandparentType: node.parent?.parent?.type,
+        ...parentFields,
         byteRange,
         declarationRanges: declRanges,
       };

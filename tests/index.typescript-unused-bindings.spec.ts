@@ -96,6 +96,44 @@ console.log(bar);
     expect(refs[0]?.resolvedSymbolId).toBe(innerFoo?.id);
   });
 
+  it('documents resolveLocal behavior for a read before a same-scope const (lexical shadowing)', () => {
+    const file = path.join(testDir, 'shadow-before-inner-const.ts');
+    fs.writeFileSync(file, `
+const outer = 1;
+function demo() {
+  console.log(outer);
+  const outer = 2;
+  return outer;
+}
+
+demo();
+`);
+
+    const { index } = projectIndexBuildSync({ files: [file], dir: testDir });
+    const outers = index
+      .symbolsInFileGet(file)
+      .filter((symbol) => symbol.name === 'outer')
+      .sort((a, b) => a.byteRange.start - b.byteRange.start);
+    expect(outers).toHaveLength(2);
+    const outerModule = outers[0];
+    const innerBlock = outers[1];
+
+    const outerRefs = index
+      .referencesInFileGet(file)
+      .filter((ref) => ref.name === 'outer')
+      .sort((a, b) => a.byteRange.start - b.byteRange.start);
+    expect(outerRefs.length).toBeGreaterThanOrEqual(2);
+
+    const readBeforeInnerDecl = outerRefs.find(
+      (ref) => ref.byteRange.start < innerBlock.byteRange.start,
+    );
+    expect(readBeforeInnerDecl).toBeDefined();
+
+    // JavaScript binds this name to the inner `const` for the whole block (TDZ).
+    // When resolveLocal is TDZ-aware, expect readBeforeInnerDecl.resolvedSymbolId === innerBlock.id.
+    expect(readBeforeInnerDecl?.resolvedSymbolId).toBe(outerModule?.id);
+  });
+
   it('marks write-only, self-update, and type-only references distinctly', () => {
     const file = path.join(testDir, 'usage.ts');
     fs.writeFileSync(file, `
