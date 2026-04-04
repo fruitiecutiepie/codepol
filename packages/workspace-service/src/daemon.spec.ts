@@ -230,6 +230,75 @@ describe('workspace daemon control plane', () => {
     await service.close();
   });
 
+  it('acknowledges cancel_request and suppresses a canceled daemon response', async () => {
+    const runtimeDir = tempRuntimeDirCreate();
+    tempDirs.push(runtimeDir);
+
+    const { descriptor } = workspaceDaemonDescriptorCreate({ runtimeDir });
+    const session = new WorkspaceDaemonSession({
+      descriptor,
+      policyCheck: () =>
+        new Promise((resolve) => {
+          setTimeout(() => {
+            resolve({
+              policy: {
+                exclude: [],
+                plugins: [],
+                targets: {},
+                rules: [],
+              } as never,
+              files: [],
+              violations: [],
+              treeViolations: [],
+              workspaceDiagnostics: [],
+              eslintOutput: '',
+              eslintHasErrors: false,
+            });
+          }, 10);
+        }),
+    });
+
+    await expect(
+      session.handleEnvelope({
+        id: 1,
+        type: 'hello',
+        protocolVersion: WORKSPACE_DAEMON_PROTOCOL_VERSION,
+        client: clientIdentityCreate('cancel-client'),
+      }),
+    ).resolves.toMatchObject({
+      type: 'hello_ack',
+      compatibility: 'ok',
+    });
+
+    const requestPromise = session.handleEnvelope({
+      id: 2,
+      type: 'policy_check',
+      options: {
+        configPath: 'codepol.toml',
+        cwd: runtimeDir,
+        fix: false,
+      },
+    });
+
+    await expect(
+      session.handleEnvelope({
+        id: 3,
+        type: 'cancel_request',
+        targetId: 2,
+      }),
+    ).resolves.toEqual({
+      type: 'cancel_request_ack',
+      targetId: 2,
+      cancellationState: 'cancel_requested',
+    });
+
+    await expect(requestPromise).resolves.toEqual({
+      type: 'error',
+      code: 'request_cancelled',
+      message: 'Request cancelled',
+    });
+  });
+
   it('launches once through the shared launcher and then reuses the healthy daemon', async () => {
     const runtimeDir = tempRuntimeDirCreate();
     tempDirs.push(runtimeDir);

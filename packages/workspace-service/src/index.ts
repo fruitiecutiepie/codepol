@@ -209,6 +209,7 @@ export type WorkspaceService = {
     clientSessionId: ClientSessionId;
     workspaceId: string;
     uri?: string;
+    signal?: AbortSignal;
   }) => Promise<WorkspaceDiagnostic[]>;
   queryCodeActions: (input: {
     clientSessionId: ClientSessionId;
@@ -216,16 +217,19 @@ export type WorkspaceService = {
     uri: string;
     version: number;
     diagnosticIds?: string[];
+    signal?: AbortSignal;
   }) => Promise<WorkspaceCodeAction[]>;
   applyEditPlan: (input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;
     planId: string;
     documentVersions: Record<string, number>;
+    signal?: AbortSignal;
   }) => Promise<WorkspaceApplyResult>;
   queryIndexStatus: (input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;
+    signal?: AbortSignal;
   }) => Promise<IndexStatusResult>;
 };
 
@@ -1342,6 +1346,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     clientSessionId: ClientSessionId;
     workspaceId: string;
     uri?: string;
+    signal?: AbortSignal;
   }): Promise<WorkspaceDiagnostic[]> {
     const { workspace, workspaceSession } = workspaceSessionGet(
       this.workspaces,
@@ -1362,6 +1367,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     uri: string;
     version: number;
     diagnosticIds?: string[];
+    signal?: AbortSignal;
   }): Promise<WorkspaceCodeAction[]> {
     const { workspace, workspaceSession } = workspaceSessionGet(
       this.workspaces,
@@ -1438,6 +1444,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     workspaceId: string;
     planId: string;
     documentVersions: Record<string, number>;
+    signal?: AbortSignal;
   }): Promise<WorkspaceApplyResult> {
     const { workspaceSession } = workspaceSessionGet(
       this.workspaces,
@@ -1487,6 +1494,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
   async queryIndexStatus(input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;
+    signal?: AbortSignal;
   }): Promise<IndexStatusResult> {
     const { workspace, workspaceSession } = workspaceSessionGet(
       this.workspaces,
@@ -1584,6 +1592,7 @@ class InProcessWorkspaceService implements WorkspaceService {
     clientSessionId: ClientSessionId;
     workspaceId: string;
     uri?: string;
+    signal?: AbortSignal;
   }): Promise<WorkspaceDiagnostic[]> {
     return this.engine.queryDiagnostics(input);
   }
@@ -1594,6 +1603,7 @@ class InProcessWorkspaceService implements WorkspaceService {
     uri: string;
     version: number;
     diagnosticIds?: string[];
+    signal?: AbortSignal;
   }): Promise<WorkspaceCodeAction[]> {
     return this.engine.queryCodeActions(input);
   }
@@ -1603,6 +1613,7 @@ class InProcessWorkspaceService implements WorkspaceService {
     workspaceId: string;
     planId: string;
     documentVersions: Record<string, number>;
+    signal?: AbortSignal;
   }): Promise<WorkspaceApplyResult> {
     return this.engine.applyEditPlan(input);
   }
@@ -1610,6 +1621,7 @@ class InProcessWorkspaceService implements WorkspaceService {
   queryIndexStatus(input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;
+    signal?: AbortSignal;
   }): Promise<IndexStatusResult> {
     return this.engine.queryIndexStatus(input);
   }

@@ -147,6 +147,7 @@
 - Started in the repo:
   - `apps/lsp` now treats `$/cancelRequest` as best-effort request cancellation and returns `Request cancelled` for in-flight LSP requests canceled before response publication
   - diagnostics publication in `apps/lsp` is now freshness-gated by workspace replay epoch plus per-document state version so older diagnostic queries cannot overwrite newer open/change/close state
+  - the daemon transport now supports `cancel_request` against in-flight transport request ids, and daemon-backed workspace-service reads/apply calls now accept abort signals so canceled interactive requests can stop before response publication
 - Formalize a request envelope that carries enough freshness data to reject or suppress stale work:
   - `daemonSessionId`
   - `clientSessionId`

@@ -122,8 +122,13 @@ type WorkspaceDaemonLaunchLock = {
 export type WorkspaceDaemonRequestClient = {
   request: <TResponse extends JsonObject>(
     message: Omit<WorkspaceDaemonEnvelope, 'id'>,
+    options?: WorkspaceDaemonRequestOptions,
   ) => Promise<TResponse>;
   close: () => Promise<void>;
+};
+
+export type WorkspaceDaemonRequestOptions = {
+  signal?: AbortSignal;
 };
 
 export type WorkspaceDaemonConnectFn = (
@@ -154,6 +159,11 @@ export type WorkspaceDaemonLaunchResult = {
 };
 
 type WorkspaceDaemonMessage = Omit<WorkspaceDaemonEnvelope, 'id'>;
+
+type WorkspaceDaemonCancelRequest = WorkspaceDaemonMessage & {
+  type: 'cancel_request';
+  targetId: number;
+};
 
 type WorkspaceDaemonRegisterClientSessionRequest = WorkspaceDaemonMessage & {
   type: 'register_client_session';
@@ -296,6 +306,12 @@ type WorkspaceDaemonPolicyCheckAck = {
   result: WorkspacePolicyCheckResult;
 };
 
+type WorkspaceDaemonCancelRequestAck = {
+  type: 'cancel_request_ack';
+  targetId: number;
+  cancellationState: 'cancel_requested' | 'not_found';
+};
+
 type WorkspaceDaemonVoidAck =
   | { type: 'close_client_session_ack' }
   | { type: 'open_overlay_ack' }
@@ -312,6 +328,7 @@ type WorkspaceDaemonServiceResponse =
   | WorkspaceDaemonApplyEditPlanAck
   | WorkspaceDaemonQueryIndexStatusAck
   | WorkspaceDaemonPolicyCheckAck
+  | WorkspaceDaemonCancelRequestAck
   | WorkspaceDaemonVoidAck
   | WorkspaceDaemonHelloAck
   | WorkspaceDaemonErrorResponse;
@@ -371,6 +388,10 @@ function messageErrorCreate(code: string, message: string): WorkspaceDaemonError
     code,
     message,
   };
+}
+
+function requestCancelledErrorCreate(): Error {
+  return new Error('Request cancelled');
 }
 
 function lineDispatch(buffer: string, onLine: (line: string) => void): string {
@@ -462,6 +483,7 @@ export class WorkspaceDaemonConnection implements WorkspaceDaemonRequestClient {
     {
       resolve: (value: JsonObject) => void;
       reject: (error: Error) => void;
+      cleanup: () => void;
     }
   >();
   private nextId = 1;
@@ -519,19 +541,48 @@ export class WorkspaceDaemonConnection implements WorkspaceDaemonRequestClient {
 
   request<TResponse extends JsonObject>(
     message: Omit<WorkspaceDaemonEnvelope, 'id'>,
+    options: WorkspaceDaemonRequestOptions = {},
   ): Promise<TResponse> {
+    if (options.signal?.aborted) {
+      return Promise.reject<TResponse>(requestCancelledErrorCreate());
+    }
     const id = this.nextId;
     this.nextId += 1;
     const envelope = {
       id,
       ...(message as JsonObject),
     } as WorkspaceDaemonEnvelope;
-    envelopeWrite(this.socket, envelope);
     return new Promise<TResponse>((resolve, reject) => {
+      const abort = () => {
+        const pending = this.pending.get(id);
+        if (!pending) {
+          return;
+        }
+        this.pending.delete(id);
+        pending.cleanup();
+        reject(requestCancelledErrorCreate());
+        this.cancelRequestWrite(id);
+      };
+      const cleanup = () => {
+        if (options.signal) {
+          options.signal.removeEventListener('abort', abort);
+        }
+      };
+      if (options.signal) {
+        options.signal.addEventListener('abort', abort, { once: true });
+      }
       this.pending.set(id, {
-        resolve: (value) => resolve(value as TResponse),
-        reject,
+        resolve: (value) => {
+          cleanup();
+          resolve(value as TResponse);
+        },
+        reject: (error) => {
+          cleanup();
+          reject(error);
+        },
+        cleanup,
       });
+      envelopeWrite(this.socket, envelope);
     });
   }
 
@@ -554,6 +605,19 @@ export class WorkspaceDaemonConnection implements WorkspaceDaemonRequestClient {
     for (const pending of entries) {
       pending.reject(error);
     }
+  }
+
+  private cancelRequestWrite(targetId: number): void {
+    if (this.socket.destroyed) {
+      return;
+    }
+    const cancelEnvelopeId = this.nextId;
+    this.nextId += 1;
+    envelopeWrite(this.socket, {
+      id: cancelEnvelopeId,
+      type: 'cancel_request',
+      targetId,
+    });
   }
 }
 
@@ -641,6 +705,14 @@ export class WorkspaceDaemonSession {
       }
     >
   >();
+  private readonly activeRequests = new Map<
+    number,
+    {
+      cancellationState: 'running' | 'cancel_requested';
+      signal: AbortSignal;
+      abort: () => void;
+    }
+  >();
 
   constructor(
     private readonly options: {
@@ -701,8 +773,56 @@ export class WorkspaceDaemonSession {
     );
   }
 
+  private requestCancelHandle(targetId: number): WorkspaceDaemonCancelRequestAck {
+    const active = this.activeRequests.get(targetId);
+    if (!active) {
+      return {
+        type: 'cancel_request_ack',
+        targetId,
+        cancellationState: 'not_found',
+      };
+    }
+    active.cancellationState = 'cancel_requested';
+    active.abort();
+    return {
+      type: 'cancel_request_ack',
+      targetId,
+      cancellationState: 'cancel_requested',
+    };
+  }
+
+  async handleEnvelope(
+    envelope: WorkspaceDaemonEnvelope,
+  ): Promise<WorkspaceDaemonServiceResponse> {
+    if (envelope.type === 'cancel_request') {
+      const input = envelope as WorkspaceDaemonCancelRequest & WorkspaceDaemonEnvelope;
+      return this.requestCancelHandle(input.targetId);
+    }
+
+    const controller = new AbortController();
+    this.activeRequests.set(envelope.id, {
+      cancellationState: 'running',
+      signal: controller.signal,
+      abort: () => controller.abort(),
+    });
+
+    try {
+      const response = await this.handleMessage(envelope, {
+        signal: controller.signal,
+      });
+      const active = this.activeRequests.get(envelope.id);
+      if (active?.cancellationState === 'cancel_requested') {
+        return messageErrorCreate('request_cancelled', 'Request cancelled');
+      }
+      return response;
+    } finally {
+      this.activeRequests.delete(envelope.id);
+    }
+  }
+
   async handleMessage(
     message: WorkspaceDaemonMessage,
+    options: { signal?: AbortSignal } = {},
   ): Promise<WorkspaceDaemonServiceResponse> {
     if (message.type === 'hello') {
       const response = workspaceDaemonRequestHandle({
@@ -920,7 +1040,10 @@ export class WorkspaceDaemonSession {
           if (replayGate) {
             return replayGate;
           }
-          const diagnostics = await this.options.service.queryDiagnostics(input);
+          const diagnostics = await this.options.service.queryDiagnostics({
+            ...input,
+            signal: options.signal,
+          });
           return {
             type: 'query_diagnostics_ack',
             diagnostics,
@@ -941,7 +1064,10 @@ export class WorkspaceDaemonSession {
           if (replayGate) {
             return replayGate;
           }
-          const codeActions = await this.options.service.queryCodeActions(input);
+          const codeActions = await this.options.service.queryCodeActions({
+            ...input,
+            signal: options.signal,
+          });
           return {
             type: 'query_code_actions_ack',
             codeActions,
@@ -962,7 +1088,10 @@ export class WorkspaceDaemonSession {
           if (replayGate) {
             return replayGate;
           }
-          const result = await this.options.service.applyEditPlan(input);
+          const result = await this.options.service.applyEditPlan({
+            ...input,
+            signal: options.signal,
+          });
           return {
             type: 'apply_edit_plan_ack',
             result,
@@ -976,7 +1105,10 @@ export class WorkspaceDaemonSession {
             );
           }
           const input = message as WorkspaceDaemonQueryIndexStatusRequest;
-          const indexStatus = await this.options.service.queryIndexStatus(input);
+          const indexStatus = await this.options.service.queryIndexStatus({
+            ...input,
+            signal: options.signal,
+          });
           return {
             type: 'query_index_status_ack',
             indexStatus,
@@ -1118,12 +1250,15 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
     clientSessionId: ClientSessionId;
     workspaceId: string;
     uri?: string;
+    signal?: AbortSignal;
   }): Promise<WorkspaceDiagnostic[]> {
     return this.connection.request<WorkspaceDaemonQueryDiagnosticsAck>({
       type: 'query_diagnostics',
       clientSessionId: input.clientSessionId,
       workspaceId: input.workspaceId,
       uri: input.uri,
+    }, {
+      signal: input.signal,
     }).then((response) => response.diagnostics);
   }
 
@@ -1133,6 +1268,7 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
     uri: string;
     version: number;
     diagnosticIds?: string[];
+    signal?: AbortSignal;
   }): Promise<WorkspaceCodeAction[]> {
     return this.connection.request<WorkspaceDaemonQueryCodeActionsAck>({
       type: 'query_code_actions',
@@ -1141,6 +1277,8 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
       uri: input.uri,
       version: input.version,
       diagnosticIds: input.diagnosticIds,
+    }, {
+      signal: input.signal,
     }).then((response) => response.codeActions);
   }
 
@@ -1149,6 +1287,7 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
     workspaceId: string;
     planId: string;
     documentVersions: Record<string, number>;
+    signal?: AbortSignal;
   }): Promise<WorkspaceApplyResult> {
     return this.connection.request<WorkspaceDaemonApplyEditPlanAck>({
       type: 'apply_edit_plan',
@@ -1156,17 +1295,22 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
       workspaceId: input.workspaceId,
       planId: input.planId,
       documentVersions: input.documentVersions,
+    }, {
+      signal: input.signal,
     }).then((response) => response.result);
   }
 
   queryIndexStatus(input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;
+    signal?: AbortSignal;
   }): Promise<IndexStatusResult> {
     return this.connection.request<WorkspaceDaemonQueryIndexStatusAck>({
       type: 'query_index_status',
       clientSessionId: input.clientSessionId,
       workspaceId: input.workspaceId,
+    }, {
+      signal: input.signal,
     }).then((response) => response.indexStatus);
   }
 
@@ -1404,7 +1548,7 @@ export async function workspaceDaemonServerStart(
         }
 
         void session
-          .handleMessage(parsed)
+          .handleEnvelope(parsed)
           .then((response) => {
             envelopeWrite(socket, {
               id: parsed.id,

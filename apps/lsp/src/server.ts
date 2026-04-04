@@ -219,6 +219,10 @@ function textChangesApply(
   return text;
 }
 
+function requestCancelledErrorCreate(): Error {
+  return new Error('Request cancelled');
+}
+
 export class CodepolLspServer {
   private service: WorkspaceService | undefined;
   private readonly serviceFactory: WorkspaceServiceFactory;
@@ -234,6 +238,10 @@ export class CodepolLspServer {
   >();
   private readonly activeRequestIds = new Set<number | string>();
   private readonly canceledRequestIds = new Set<number | string>();
+  private readonly requestAbortControllers = new Map<
+    number | string,
+    AbortController
+  >();
   private readonly diagnosticsStateVersions = new Map<string, number>();
   private registeredClientSessionId: string | undefined;
   private workspaceId: string | undefined;
@@ -307,6 +315,7 @@ export class CodepolLspServer {
   private requestIdTrackStart(id: JsonRpcId): void {
     if (typeof id === 'number' || typeof id === 'string') {
       this.activeRequestIds.add(id);
+      this.requestAbortControllers.set(id, new AbortController());
     }
   }
 
@@ -314,7 +323,15 @@ export class CodepolLspServer {
     if (typeof id === 'number' || typeof id === 'string') {
       this.activeRequestIds.delete(id);
       this.canceledRequestIds.delete(id);
+      this.requestAbortControllers.delete(id);
     }
+  }
+
+  private requestAbortSignalGet(id: JsonRpcId): AbortSignal | undefined {
+    if (typeof id !== 'number' && typeof id !== 'string') {
+      return undefined;
+    }
+    return this.requestAbortControllers.get(id)?.signal;
   }
 
   private requestCanceledConsume(id: JsonRpcId): boolean {
@@ -341,6 +358,7 @@ export class CodepolLspServer {
       (typeof params.id === 'number' || typeof params.id === 'string') &&
       this.activeRequestIds.has(params.id)
     ) {
+      this.requestAbortControllers.get(params.id)?.abort();
       this.canceledRequestIds.add(params.id);
     }
   }
@@ -401,11 +419,15 @@ export class CodepolLspServer {
 
   private async serviceCall<T>(
     operation: (service: WorkspaceService) => Promise<T>,
+    options: { signal?: AbortSignal } = {},
   ): Promise<T> {
     const service = await this.serviceGet();
     try {
       return await operation(service);
     } catch (error) {
+      if (options.signal?.aborted) {
+        throw requestCancelledErrorCreate();
+      }
       if (
         !this.serviceErrorRecoverableIs(error) ||
         !this.registeredClientSessionId ||
@@ -415,6 +437,9 @@ export class CodepolLspServer {
         throw error;
       }
       const reconnected = await this.serviceReconnect();
+      if (options.signal?.aborted) {
+        throw requestCancelledErrorCreate();
+      }
       return operation(reconnected);
     }
   }
@@ -458,7 +483,10 @@ export class CodepolLspServer {
         });
         return;
       }
-      const result = await this.methodHandle(message.method, message.params);
+      const signal = this.requestAbortSignalGet(message.id);
+      const result = await this.methodHandle(message.method, message.params, {
+        signal,
+      });
       if (this.requestCanceledConsume(message.id)) {
         this.sendMessage({
           jsonrpc: '2.0',
@@ -508,7 +536,11 @@ export class CodepolLspServer {
     await this.methodHandle(message.method, message.params);
   }
 
-  private async methodHandle(method: string, params: unknown): Promise<unknown> {
+  private async methodHandle(
+    method: string,
+    params: unknown,
+    context: { signal?: AbortSignal } = {},
+  ): Promise<unknown> {
     switch (method) {
       case 'initialize':
         return this.initializeHandle(params as {
@@ -545,12 +577,12 @@ export class CodepolLspServer {
           textDocument: { uri: string };
           range?: LspRange;
           context: { diagnostics?: Array<{ data?: { id?: string } }> };
-        });
+        }, context);
       case 'workspace/executeCommand':
         return this.executeCommandHandle(params as {
           command: string;
           arguments?: Array<{ planId?: string }>;
-        });
+        }, context);
       default:
         return null;
     }
@@ -741,7 +773,7 @@ export class CodepolLspServer {
     textDocument: { uri: string };
     range?: LspRange;
     context: { diagnostics?: Array<{ data?: { id?: string } }> };
-  }): Promise<unknown> {
+  }, context: { signal?: AbortSignal } = {}): Promise<unknown> {
     if (!this.registeredClientSessionId || !this.workspaceId) {
       return [];
     }
@@ -757,6 +789,7 @@ export class CodepolLspServer {
           clientSessionId: this.registeredClientSessionId!,
           workspaceId: this.workspaceId!,
           uri: params.textDocument.uri,
+          signal: context.signal,
         });
         for (const diagnostic of diagnostics) {
           if (diagnosticTouchesRange(diagnostic, params.textDocument.uri, params.range)) {
@@ -767,14 +800,20 @@ export class CodepolLspServer {
       if (diagnosticIds.size === 0) {
         return [];
       }
+      if (context.signal?.aborted) {
+        return [];
+      }
       const actions = await service.queryCodeActions({
         clientSessionId: this.registeredClientSessionId!,
         workspaceId: this.workspaceId!,
         uri: params.textDocument.uri,
         version: document?.version ?? 0,
         diagnosticIds: [...diagnosticIds],
+        signal: context.signal,
       });
       return actions.map((action: WorkspaceCodeAction) => this.codeActionToLsp(action));
+    }, {
+      signal: context.signal,
     });
   }
 
@@ -794,7 +833,7 @@ export class CodepolLspServer {
   private async executeCommandHandle(params: {
     command: string;
     arguments?: Array<{ planId?: string }>;
-  }): Promise<unknown> {
+  }, context: { signal?: AbortSignal } = {}): Promise<unknown> {
     if (
       !this.registeredClientSessionId ||
       !this.workspaceId ||
@@ -818,8 +857,12 @@ export class CodepolLspServer {
         workspaceId: this.workspaceId!,
         planId,
         documentVersions,
+        signal: context.signal,
       });
       if (!applyResult.applied || !applyResult.plan) {
+        return null;
+      }
+      if (context.signal?.aborted) {
         return null;
       }
 
@@ -828,6 +871,8 @@ export class CodepolLspServer {
         edit: workspaceEditToLsp(applyResult.plan),
       });
       return null;
+    }, {
+      signal: context.signal,
     });
   }
 
