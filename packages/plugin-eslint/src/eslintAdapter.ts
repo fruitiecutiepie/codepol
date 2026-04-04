@@ -161,6 +161,30 @@ function policyDiagnosticLocationToEslintLoc(
   };
 }
 
+function diagnosticSuggestionsToEslint(
+  currentFilePath: string,
+  suggestions: LintDiagnostic['suggestions'],
+) {
+  if (!suggestions || suggestions.length === 0) {
+    return undefined;
+  }
+
+  const eslintSuggestions = suggestions.flatMap((suggestion) => {
+    const fix = eslintFixFromTreeCheckFix(currentFilePath, suggestion.fix);
+    if (!fix) {
+      return [];
+    }
+
+    return [{
+      messageId: 'treeCheckSuggestion' as const,
+      data: { message: suggestion.message },
+      fix,
+    }];
+  });
+
+  return eslintSuggestions.length > 0 ? eslintSuggestions : undefined;
+}
+
 // ============================================================================
 // Project Index Caching for Cross-File Analysis
 // ============================================================================
@@ -495,16 +519,10 @@ function createAdaptedRule(
               fix: diagnostic.fix
                 ? eslintFixFromTreeCheckFix(filename, diagnostic.fix)
                 : undefined,
-              suggest:
-                diagnostic.suggestions?.map((s) => ({
-                  messageId: 'treeCheckSuggestion' as const,
-                  data: { message: s.message },
-                  fix: (fixer) =>
-                    fixer.replaceTextRange(
-                      [s.fix.byteRange.start, s.fix.byteRange.end],
-                      s.fix.text,
-                    ),
-                })) ?? undefined,
+              suggest: diagnosticSuggestionsToEslint(
+                filename,
+                diagnostic.suggestions,
+              ),
             });
             if (diagnostic.relatedLocations?.length) {
               const currentFile = path.resolve(filename);

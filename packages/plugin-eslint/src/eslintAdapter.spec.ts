@@ -1,5 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import path from 'node:path';
+import { describe, it, expect, vi } from 'vitest';
+import { Ok, pluginRuleNew } from '@codepol/core';
 import {
+  eslintAdapter,
   policyCacheClear,
   projectIndexCacheClear,
 } from './eslintAdapter';
@@ -44,5 +47,97 @@ describe('eslintAdapter cache and state clearing', () => {
       projectIndexCacheClear();
       projectIndexCacheClear();
     });
+  });
+});
+
+describe('eslintAdapter suggestion fixes', () => {
+  it('applies same-file suggestion edit sets through ESLint', () => {
+    const filename = path.join(
+      process.cwd(),
+      'packages/plugin-eslint/src/suggest-fixture.ts',
+    );
+    const report = vi.fn();
+
+    const rule = eslintAdapter.adapt(
+      pluginRuleNew({
+        id: 'enforce-casing',
+        capabilities: {
+          treeCheckProvider: {
+            languages: ['typescript'],
+            check: () =>
+              Ok([
+                {
+                  ruleId: 'enforce-casing',
+                  filePath: filename,
+                  message: 'Rename BAD_NAME',
+                  line: 1,
+                  column: 1,
+                  suggestions: [
+                    {
+                      message: 'Rename to camelCase: badName',
+                      fix: {
+                        byteRange: { start: 6, end: 14 },
+                        text: 'badName',
+                        edits: [
+                          {
+                            filePath: filename,
+                            byteRange: { start: 6, end: 14 },
+                            text: 'badName',
+                          },
+                          {
+                            filePath: filename,
+                            byteRange: { start: 17, end: 25 },
+                            text: 'badName',
+                          },
+                        ],
+                      },
+                    },
+                  ],
+                },
+              ]),
+          },
+        },
+      }),
+    );
+
+    const listeners = rule.create({
+      filename,
+      options: [
+        {
+          configPath: path.join(process.cwd(), 'codepol.toml'),
+          policyExclude: [],
+          ruleTargets: [
+            {
+              ruleId: 'enforce-casing',
+              description: 'Test rule target',
+              target: {
+                language: 'typescript',
+                files: ['packages/plugin-eslint/src/**/*.ts'],
+                exclude: [],
+              },
+            },
+          ],
+        },
+      ],
+      sourceCode: {
+        getText: () => 'const BAD_NAME = BAD_NAME();\n',
+      },
+      report,
+    } as never);
+
+    listeners['Program:exit']?.({ type: 'Program' } as never);
+
+    expect(report).toHaveBeenCalledTimes(1);
+
+    const descriptor = report.mock.calls[0]?.[0];
+    expect(descriptor?.suggest).toHaveLength(1);
+
+    const replaceTextRange = vi.fn((range, text) => ({ range, text }));
+    descriptor.suggest[0].fix({ replaceTextRange } as never);
+
+    expect(replaceTextRange.mock.calls).toEqual([
+      [[17, 25], 'badName'],
+      [[6, 14], 'badName'],
+    ]);
   });
 });
