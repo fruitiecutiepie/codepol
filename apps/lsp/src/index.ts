@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 
 import { CodepolLspServer } from './server';
+import {
+  lspWorkspaceServiceResolve,
+  type LspWorkspaceServiceResolvedInfo,
+} from './serviceFactory';
 
 function frameWrite(payload: unknown): void {
   const json = JSON.stringify(payload);
@@ -9,7 +13,31 @@ function frameWrite(payload: unknown): void {
   process.stdout.write(Buffer.concat([header, content]));
 }
 
+function workspaceServiceModeLog(info: LspWorkspaceServiceResolvedInfo): void {
+  if (info.mode === 'daemon') {
+    const daemonState = info.launched ? 'launched' : 'connected';
+    process.stderr.write(`[codepol-lsp] workspace service mode: daemon (${daemonState})\n`);
+    return;
+  }
+
+  if (info.mode === 'in_process_fallback') {
+    process.stderr.write(
+      `[codepol-lsp] workspace service mode: in_process (daemon fallback: ${info.error.message})\n`,
+    );
+    return;
+  }
+
+  process.stderr.write('[codepol-lsp] workspace service mode: in_process\n');
+}
+
+const clientInstanceId = `codepol-lsp-${process.pid}`;
 const server = new CodepolLspServer({
+  clientInstanceId,
+  serviceFactory: () =>
+    lspWorkspaceServiceResolve({
+      clientInstanceId,
+      onResolved: workspaceServiceModeLog,
+    }),
   sendMessage: frameWrite,
 });
 

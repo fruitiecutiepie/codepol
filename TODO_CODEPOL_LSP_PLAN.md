@@ -218,6 +218,9 @@
 
 ### Workstream 6: Adapter Migration And Rollout
 - Add a daemon-backed client transport for `apps/lsp` and `apps/cli`.
+- Started in the repo:
+  - `apps/lsp/src/serviceFactory.ts` now resolves an opt-in daemon-backed `WorkspaceService` client for `CODEPOL_WORKSPACE_SERVICE_MODE=daemon`
+  - `apps/lsp` currently preserves an in-process fallback path when daemon bootstrap fails during rollout
 - Keep the adapter boundary narrow:
   - adapters own transport/bootstrap/reconnect logic
   - the shared engine still owns workspace/session semantics

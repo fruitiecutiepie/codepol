@@ -3,8 +3,23 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { WorkspaceService } from '@codepol/workspace-service';
+import type {
+  WorkspaceDaemonConnectFn,
+  WorkspaceDaemonDescriptor,
+  WorkspaceDaemonRequestClient,
+  WorkspaceService,
+} from '@codepol/workspace-service';
+import {
+  workspaceDaemonDescriptorCreate,
+  workspaceDaemonDescriptorWrite,
+  WorkspaceDaemonServiceClient,
+  WorkspaceDaemonSession,
+  workspaceDaemonHello,
+  WorkspaceServiceEngine,
+  WORKSPACE_DAEMON_PROTOCOL_VERSION,
+} from '@codepol/workspace-service';
 import { CodepolLspServer } from '../apps/lsp/src/server';
+import { lspWorkspaceServiceResolve } from '../apps/lsp/src/serviceFactory';
 
 function tempWorkspaceCreate(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -23,6 +38,58 @@ files = ["src/**/*.ts"]
 ruleId = "@codepol/plugin/no-interface"
 targets = ["src"]
 `;
+}
+
+function daemonClientIdentityCreate(instanceId: string) {
+  return {
+    kind: 'test',
+    clientVersion: '1.0.0',
+    instanceId,
+    supportedProtocols: [WORKSPACE_DAEMON_PROTOCOL_VERSION],
+    supportsFallbackModes: ['in_process'],
+  };
+}
+
+function daemonConnectCreate(options: {
+  descriptor: WorkspaceDaemonDescriptor;
+  service?: WorkspaceServiceEngine;
+}): WorkspaceDaemonConnectFn {
+  return async (descriptor): Promise<WorkspaceDaemonRequestClient> => {
+    if (descriptor.sessionNonce !== options.descriptor.sessionNonce) {
+      throw new Error('daemon unavailable');
+    }
+    const session = new WorkspaceDaemonSession({
+      descriptor: options.descriptor,
+      service: options.service,
+    });
+    return {
+      async request<TResponse extends Record<string, unknown>>(
+        message: Parameters<WorkspaceDaemonRequestClient['request']>[0],
+      ): Promise<TResponse> {
+        const response = await session.handleMessage(message);
+        if (response.type === 'error') {
+          throw new Error(response.message);
+        }
+        return response as unknown as TResponse;
+      },
+      async close(): Promise<void> {},
+    };
+  };
+}
+
+async function messageWaitFor<T>(
+  messages: T[],
+  predicate: (message: T) => boolean,
+  attempts = 20,
+): Promise<T | undefined> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const found = messages.find(predicate);
+    if (found) {
+      return found;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  return messages.find(predicate);
 }
 
 describe('CodepolLspServer', () => {
@@ -108,6 +175,176 @@ describe('CodepolLspServer', () => {
     });
 
     expect(calls).toEqual(['registerClientSession', 'attachWorkspace']);
+  });
+
+  it('supports an async daemon-backed service factory during initialize and publish flow', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(workspaceRoot, 'codepol.toml'), noInterfaceConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = pathToFileURL(filePath).href;
+    fs.writeFileSync(filePath, 'export interface User {\n  name: string;\n}\n', 'utf8');
+
+    const { descriptor } = workspaceDaemonDescriptorCreate({
+      runtimeDir: workspaceRoot,
+    });
+    const connect = daemonConnectCreate({
+      descriptor,
+      service: new WorkspaceServiceEngine(),
+    });
+    const messages: any[] = [];
+    let serviceFactoryCalls = 0;
+
+    const server = new CodepolLspServer({
+      serviceFactory: async () => {
+        serviceFactoryCalls += 1;
+        const connection = await connect(descriptor);
+        await workspaceDaemonHello({
+          connection,
+          client: daemonClientIdentityCreate('lsp-service-factory'),
+        });
+        return new WorkspaceDaemonServiceClient(connection);
+      },
+      sendMessage: (message) => {
+        messages.push(message);
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        rootUri: pathToFileURL(workspaceRoot).href,
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      method: 'textDocument/didOpen',
+      params: {
+        textDocument: {
+          uri,
+          version: 1,
+          text: fs.readFileSync(filePath, 'utf8'),
+        },
+      },
+    });
+
+    const publish = messages.find((message) => message.method === 'textDocument/publishDiagnostics');
+    expect(serviceFactoryCalls).toBe(1);
+    expect(publish?.params.diagnostics).toHaveLength(1);
+  });
+
+  it('resolves a daemon-backed workspace service when daemon mode is enabled', async () => {
+    const runtimeDir = tempWorkspaceCreate('codepol-lsp-daemon-runtime-');
+    createdDirs.push(runtimeDir);
+
+    const workspaceRoot = tempWorkspaceCreate('codepol-lsp-daemon-workspace-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(workspaceRoot, 'codepol.toml'), noInterfaceConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = pathToFileURL(filePath).href;
+    fs.writeFileSync(filePath, 'export interface User {\n  name: string;\n}\n', 'utf8');
+
+    const { descriptor } = workspaceDaemonDescriptorCreate({ runtimeDir });
+    workspaceDaemonDescriptorWrite(runtimeDir, descriptor);
+    const connect = daemonConnectCreate({
+      descriptor,
+      service: new WorkspaceServiceEngine(),
+    });
+
+    const service = await lspWorkspaceServiceResolve({
+      env: {
+        ...process.env,
+        CODEPOL_WORKSPACE_SERVICE_MODE: 'daemon',
+        CODEPOL_DAEMON_RUNTIME_DIR: runtimeDir,
+      },
+      clientInstanceId: 'lsp-resolve-test',
+      connect,
+      startDaemon: async () => {
+        throw new Error('startDaemon should not run for a healthy daemon descriptor');
+      },
+    });
+
+    const registered = await service.registerClientSession({
+      clientKind: 'lsp',
+      clientInstanceId: 'resolved-service-client',
+    });
+    const attached = await service.attachWorkspace({
+      clientSessionId: registered.clientSessionId,
+      rootPath: workspaceRoot,
+      configPath: path.join(workspaceRoot, 'codepol.toml'),
+    });
+    const diagnostics = await service.queryDiagnostics({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      uri,
+    });
+
+    expect(registered.daemonSessionId).toBeDefined();
+    expect(diagnostics).toHaveLength(1);
+  });
+
+  it('falls back to an in-process workspace service when daemon mode startup fails', async () => {
+    const runtimeDir = tempWorkspaceCreate('codepol-lsp-daemon-runtime-');
+    createdDirs.push(runtimeDir);
+
+    const workspaceRoot = tempWorkspaceCreate('codepol-lsp-daemon-workspace-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(workspaceRoot, 'codepol.toml'), noInterfaceConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = pathToFileURL(filePath).href;
+    fs.writeFileSync(filePath, 'export interface User {\n  name: string;\n}\n', 'utf8');
+
+    const resolved: Array<{ mode: string; error?: string }> = [];
+    const service = await lspWorkspaceServiceResolve({
+      env: {
+        ...process.env,
+        CODEPOL_WORKSPACE_SERVICE_MODE: 'daemon',
+        CODEPOL_DAEMON_RUNTIME_DIR: runtimeDir,
+      },
+      clientInstanceId: 'lsp-fallback-test',
+      startDaemon: async () => {
+        throw new Error('daemon launch failed');
+      },
+      onResolved: (info) => {
+        resolved.push({
+          mode: info.mode,
+          error: 'error' in info ? info.error.message : undefined,
+        });
+      },
+    });
+
+    const registered = await service.registerClientSession({
+      clientKind: 'lsp',
+      clientInstanceId: 'resolved-service-client',
+    });
+    const attached = await service.attachWorkspace({
+      clientSessionId: registered.clientSessionId,
+      rootPath: workspaceRoot,
+      configPath: path.join(workspaceRoot, 'codepol.toml'),
+    });
+    const diagnostics = await service.queryDiagnostics({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      uri,
+    });
+
+    expect(resolved).toEqual([
+      {
+        mode: 'in_process_fallback',
+        error: 'daemon launch failed',
+      },
+    ]);
+    expect(registered.daemonSessionId).toBeDefined();
+    expect(diagnostics).toHaveLength(1);
   });
 
   it('publishes diagnostics across open, change, and close', async () => {
@@ -512,8 +749,10 @@ describe('CodepolLspServer', () => {
       params: codeActionResponse.result[0].command,
     });
 
-    await Promise.resolve();
-    const applyEditRequest = messages.find((message) => message.method === 'workspace/applyEdit');
+    const applyEditRequest = await messageWaitFor(
+      messages,
+      (message) => message.method === 'workspace/applyEdit',
+    );
     expect(applyEditRequest?.params.edit.changes[uri]).toHaveLength(1);
 
     await server.handleMessage({

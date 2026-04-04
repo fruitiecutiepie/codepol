@@ -54,6 +54,16 @@ type LspRange = {
 };
 
 type SendMessage = (message: JsonRpcRequest | JsonRpcNotification | JsonRpcResponse) => void;
+type WorkspaceServiceFactory = () => WorkspaceService | Promise<WorkspaceService>;
+
+function promiseLikeIs<T>(value: T | Promise<T>): value is Promise<T> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'then' in value &&
+    typeof (value as Promise<T>).then === 'function'
+  );
+}
 
 function messageIsResponse(
   message: JsonRpcRequest | JsonRpcNotification | JsonRpcResponse,
@@ -209,8 +219,11 @@ function textChangesApply(
 }
 
 export class CodepolLspServer {
-  private readonly service: WorkspaceService;
+  private service: WorkspaceService | undefined;
+  private readonly serviceFactory: WorkspaceServiceFactory;
+  private servicePromise: Promise<WorkspaceService> | undefined;
   private readonly sendMessage: SendMessage;
+  private readonly clientInstanceId: string;
   private readonly documents = new Map<string, LspDocument>();
   private readonly pendingClientRequests = new Map<
     number,
@@ -222,10 +235,32 @@ export class CodepolLspServer {
 
   constructor(options: {
     service?: WorkspaceService;
+    serviceFactory?: WorkspaceServiceFactory;
     sendMessage: SendMessage;
+    clientInstanceId?: string;
   }) {
-    this.service = options.service ?? workspaceServiceCreate();
+    this.service = options.service;
+    this.serviceFactory = options.serviceFactory ?? (() => workspaceServiceCreate());
     this.sendMessage = options.sendMessage;
+    this.clientInstanceId = options.clientInstanceId ?? `codepol-lsp-${process.pid}`;
+  }
+
+  private async serviceGet(): Promise<WorkspaceService> {
+    if (this.service) {
+      return this.service;
+    }
+    if (!this.servicePromise) {
+      const created = this.serviceFactory();
+      if (!promiseLikeIs(created)) {
+        this.service = created;
+        return created;
+      }
+      this.servicePromise = created.then((service) => {
+        this.service = service;
+        return service;
+      });
+    }
+    return this.servicePromise;
   }
 
   async handleMessage(message: JsonRpcRequest | JsonRpcNotification | JsonRpcResponse): Promise<void> {
@@ -330,9 +365,10 @@ export class CodepolLspServer {
     rootPath?: string | null;
     workspaceFolders?: Array<{ uri: string }>;
   }): Promise<unknown> {
-    const registered = await this.service.registerClientSession({
+    const service = await this.serviceGet();
+    const registered = await service.registerClientSession({
       clientKind: 'lsp',
-      clientInstanceId: 'codepol-lsp',
+      clientInstanceId: this.clientInstanceId,
     });
     this.clientSessionId = registered.clientSessionId;
 
@@ -345,7 +381,7 @@ export class CodepolLspServer {
       try {
         const rootPath = workspaceUriToPath(rootUri);
         const { configPath } = await configDiscover(rootPath);
-        const attached = await this.service.attachWorkspace({
+        const attached = await service.attachWorkspace({
           clientSessionId: this.clientSessionId,
           rootPath,
           configPath,
@@ -376,12 +412,13 @@ export class CodepolLspServer {
     if (!this.clientSessionId || !this.workspaceId) {
       return;
     }
+    const service = await this.serviceGet();
     this.documents.set(params.textDocument.uri, {
       uri: params.textDocument.uri,
       version: params.textDocument.version,
       text: params.textDocument.text,
     });
-    await this.service.openOverlay({
+    await service.openOverlay({
       clientSessionId: this.clientSessionId,
       workspaceId: this.workspaceId,
       uri: params.textDocument.uri,
@@ -404,6 +441,7 @@ export class CodepolLspServer {
     if (!this.clientSessionId || !this.workspaceId) {
       return;
     }
+    const service = await this.serviceGet();
     const current = this.documents.get(params.textDocument.uri);
     if (!current) {
       return;
@@ -416,7 +454,7 @@ export class CodepolLspServer {
       text: nextText,
     };
     this.documents.set(current.uri, nextDocument);
-    await this.service.updateOverlay({
+    await service.updateOverlay({
       clientSessionId: this.clientSessionId,
       workspaceId: this.workspaceId,
       uri: current.uri,
@@ -432,8 +470,9 @@ export class CodepolLspServer {
     if (!this.clientSessionId || !this.workspaceId) {
       return;
     }
+    const service = await this.serviceGet();
     this.documents.delete(params.textDocument.uri);
-    await this.service.closeOverlay({
+    await service.closeOverlay({
       clientSessionId: this.clientSessionId,
       workspaceId: this.workspaceId,
       uri: params.textDocument.uri,
@@ -449,6 +488,7 @@ export class CodepolLspServer {
     if (!this.clientSessionId || !this.workspaceId) {
       return [];
     }
+    const service = await this.serviceGet();
     const document = this.documents.get(params.textDocument.uri);
     const diagnosticIds = new Set(
       (params.context.diagnostics ?? [])
@@ -456,7 +496,7 @@ export class CodepolLspServer {
         .filter((diagnosticId): diagnosticId is string => typeof diagnosticId === 'string'),
     );
     if (params.range) {
-      const diagnostics = await this.service.queryDiagnostics({
+      const diagnostics = await service.queryDiagnostics({
         clientSessionId: this.clientSessionId,
         workspaceId: this.workspaceId,
         uri: params.textDocument.uri,
@@ -470,7 +510,7 @@ export class CodepolLspServer {
     if (diagnosticIds.size === 0) {
       return [];
     }
-    const actions = await this.service.queryCodeActions({
+    const actions = await service.queryCodeActions({
       clientSessionId: this.clientSessionId,
       workspaceId: this.workspaceId,
       uri: params.textDocument.uri,
@@ -500,6 +540,7 @@ export class CodepolLspServer {
     if (!this.clientSessionId || !this.workspaceId || params.command !== APPLY_EDIT_PLAN_COMMAND) {
       return null;
     }
+    const service = await this.serviceGet();
 
     const planId = params.arguments?.[0]?.planId;
     if (!planId) {
@@ -511,7 +552,7 @@ export class CodepolLspServer {
       documentVersions[document.uri] = document.version;
     }
 
-    const applyResult = await this.service.applyEditPlan({
+    const applyResult = await service.applyEditPlan({
       clientSessionId: this.clientSessionId,
       workspaceId: this.workspaceId,
       planId,
@@ -532,7 +573,8 @@ export class CodepolLspServer {
     if (!this.clientSessionId || !this.workspaceId) {
       return;
     }
-    const diagnostics = await this.service.queryDiagnostics({
+    const service = await this.serviceGet();
+    const diagnostics = await service.queryDiagnostics({
       clientSessionId: this.clientSessionId,
       workspaceId: this.workspaceId,
       uri,
@@ -550,14 +592,19 @@ export class CodepolLspServer {
   private clientRequest(method: string, params: unknown): Promise<unknown> {
     const id = this.nextRequestId;
     this.nextRequestId += 1;
-    this.sendMessage({
-      jsonrpc: '2.0',
-      id,
-      method,
-      params,
-    });
     return new Promise((resolve, reject) => {
       this.pendingClientRequests.set(id, { resolve, reject });
+      try {
+        this.sendMessage({
+          jsonrpc: '2.0',
+          id,
+          method,
+          params,
+        });
+      } catch (error) {
+        this.pendingClientRequests.delete(id);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
     });
   }
 }
