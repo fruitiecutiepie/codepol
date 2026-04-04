@@ -143,6 +143,8 @@ export type WorkspaceWatcherCreate = (input: {
 
 export type WorkspaceServiceEngineOptions = {
   watcherCreate?: WorkspaceWatcherCreate;
+  backgroundWarmup?: boolean;
+  backgroundTaskSchedule?: (task: () => Promise<void>) => void;
 };
 
 type WorkspaceSessionState = WorkspaceDocumentsState &
@@ -150,9 +152,13 @@ type WorkspaceSessionState = WorkspaceDocumentsState &
     workspaceId: string;
     workspaceInstanceId: WorkspaceInstanceId;
     replayEpoch: number;
+    replayState: 'pending' | 'applied';
     codeActionPlans: Map<string, WorkspaceEditPlan>;
     status: IndexStatusResult['status'];
     lastError?: string;
+    analysisRevision: number;
+    backgroundWarmupRunning?: boolean;
+    backgroundWarmupQueued?: boolean;
   };
 
 type WorkspaceState = WorkspaceContextState & {
@@ -318,6 +324,27 @@ function workspaceStateAnalysisInvalidate(state: WorkspaceAnalysisCacheState): v
   state.lastAnalysis = undefined;
 }
 
+function workspaceSessionInvalidate(
+  state: WorkspaceSessionState,
+  options: {
+    clearIndexState?: boolean;
+    bumpAnalysisRevision?: boolean;
+  } = {},
+): void {
+  if (options.clearIndexState) {
+    state.indexState = undefined;
+  }
+  if (options.bumpAnalysisRevision ?? true) {
+    state.analysisRevision += 1;
+    if (state.backgroundWarmupRunning) {
+      state.backgroundWarmupQueued = true;
+    }
+  }
+  workspaceStateAnalysisInvalidate(state);
+  state.status = 'cold';
+  state.lastError = undefined;
+}
+
 function workspaceWatchItemsResolve(input: {
   rootPath: string;
   configPath: string;
@@ -352,30 +379,6 @@ async function workspaceWatcherClose(workspace: WorkspaceState): Promise<void> {
   await watcher.close();
 }
 
-function workspaceInvalidateFromDisk(
-  workspace: WorkspaceState,
-  clientSessions: Map<ClientSessionId, ClientSessionState>,
-  options: {
-    configDirty?: boolean;
-  } = {},
-): void {
-  workspace.baseIndexState = undefined;
-  if (options.configDirty) {
-    workspace.configDirty = true;
-  }
-  for (const attachedClientSessionId of workspace.attachedClientSessionIds) {
-    const attachedClientSession = clientSessions.get(attachedClientSessionId);
-    const attachedWorkspaceSession = attachedClientSession?.workspaces.get(workspace.workspaceId);
-    if (!attachedWorkspaceSession) {
-      continue;
-    }
-    attachedWorkspaceSession.indexState = undefined;
-    workspaceStateAnalysisInvalidate(attachedWorkspaceSession);
-    attachedWorkspaceSession.status = 'cold';
-    attachedWorkspaceSession.lastError = undefined;
-  }
-}
-
 async function workspaceContextRefreshFromDisk(workspace: WorkspaceState): Promise<void> {
   if (!workspace.configDirty) {
     return;
@@ -395,8 +398,8 @@ async function workspaceContextRefreshFromDisk(workspace: WorkspaceState): Promi
 
 async function workspaceWatcherEnsure(input: {
   workspace: WorkspaceState;
-  clientSessions: Map<ClientSessionId, ClientSessionState>;
   watcherCreate: WorkspaceWatcherCreate;
+  onInvalidate: (filePath: string) => void;
 }): Promise<void> {
   const watchItemsKey = workspaceWatchItemsKeyCreate(input.workspace);
   if (input.workspace.watcher && input.workspace.watchItemsKey === watchItemsKey) {
@@ -408,9 +411,7 @@ async function workspaceWatcherEnsure(input: {
     configPath: input.workspace.configPath,
   });
   watcher.on('all', (_eventName, filePath) => {
-    workspaceInvalidateFromDisk(input.workspace, input.clientSessions, {
-      configDirty: path.resolve(filePath) === path.resolve(input.workspace.configPath),
-    });
+    input.onInvalidate(filePath);
   });
   input.workspace.watcher = watcher;
   input.workspace.watchItemsKey = watchItemsKey;
@@ -1269,9 +1270,97 @@ export class WorkspaceServiceEngine implements WorkspaceService {
   private readonly workspaces = new Map<string, WorkspaceState>();
   private readonly clientSessions = new Map<ClientSessionId, ClientSessionState>();
   private readonly watcherCreate?: WorkspaceWatcherCreate;
+  private readonly backgroundWarmup: boolean;
+  private readonly backgroundTaskSchedule: (task: () => Promise<void>) => void;
 
   constructor(options: WorkspaceServiceEngineOptions = {}) {
     this.watcherCreate = options.watcherCreate;
+    this.backgroundWarmup = options.backgroundWarmup ?? false;
+    this.backgroundTaskSchedule =
+      options.backgroundTaskSchedule ??
+      ((task) => {
+        queueMicrotask(() => {
+          void task();
+        });
+      });
+  }
+
+  private workspaceBackgroundWarmupSchedule(
+    workspace: WorkspaceState,
+    workspaceSession: WorkspaceSessionState,
+  ): void {
+    if (!this.backgroundWarmup || workspaceSession.replayState !== 'applied') {
+      return;
+    }
+    if (workspaceSession.backgroundWarmupRunning) {
+      workspaceSession.backgroundWarmupQueued = true;
+      return;
+    }
+
+    const startRevision = workspaceSession.analysisRevision;
+    workspaceSession.backgroundWarmupRunning = true;
+    workspaceSession.backgroundWarmupQueued = false;
+    if (!workspaceSession.lastAnalysis) {
+      workspaceSession.status = 'warming';
+    }
+
+    this.backgroundTaskSchedule(async () => {
+      try {
+        await workspaceSessionAnalysisGet(workspace, workspaceSession);
+      } catch {}
+      finally {
+        workspaceSession.backgroundWarmupRunning = false;
+        const staleRun = workspaceSession.analysisRevision !== startRevision;
+        if (staleRun) {
+          workspaceSessionInvalidate(workspaceSession, {
+            clearIndexState: true,
+            bumpAnalysisRevision: false,
+          });
+        }
+        const shouldRerun = workspaceSession.backgroundWarmupQueued || staleRun;
+        workspaceSession.backgroundWarmupQueued = false;
+        if (shouldRerun && workspaceSession.replayState === 'applied') {
+          this.workspaceBackgroundWarmupSchedule(workspace, workspaceSession);
+        }
+      }
+    });
+  }
+
+  private workspaceBackgroundWarmupScheduleAll(workspace: WorkspaceState): void {
+    if (!this.backgroundWarmup) {
+      return;
+    }
+    for (const attachedClientSessionId of workspace.attachedClientSessionIds) {
+      const attachedClientSession = this.clientSessions.get(attachedClientSessionId);
+      const attachedWorkspaceSession = attachedClientSession?.workspaces.get(workspace.workspaceId);
+      if (!attachedWorkspaceSession) {
+        continue;
+      }
+      this.workspaceBackgroundWarmupSchedule(workspace, attachedWorkspaceSession);
+    }
+  }
+
+  private workspaceInvalidateFromDisk(
+    workspace: WorkspaceState,
+    options: {
+      configDirty?: boolean;
+    } = {},
+  ): void {
+    workspace.baseIndexState = undefined;
+    if (options.configDirty) {
+      workspace.configDirty = true;
+    }
+    for (const attachedClientSessionId of workspace.attachedClientSessionIds) {
+      const attachedClientSession = this.clientSessions.get(attachedClientSessionId);
+      const attachedWorkspaceSession = attachedClientSession?.workspaces.get(workspace.workspaceId);
+      if (!attachedWorkspaceSession) {
+        continue;
+      }
+      workspaceSessionInvalidate(attachedWorkspaceSession, {
+        clearIndexState: true,
+      });
+    }
+    this.workspaceBackgroundWarmupScheduleAll(workspace);
   }
 
   async registerClientSession(input: {
@@ -1367,7 +1456,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       );
       workspace.baseIndexState = undefined;
       workspace.configDirty = false;
-      workspaceInvalidateFromDisk(workspace, this.clientSessions);
+      this.workspaceInvalidateFromDisk(workspace);
     }
 
     workspace.attachedClientSessionIds.add(input.clientSessionId);
@@ -1377,17 +1466,23 @@ export class WorkspaceServiceEngine implements WorkspaceService {
         workspaceId,
         workspaceInstanceId: workspace.workspaceInstanceId,
         replayEpoch: 0,
+        replayState: 'pending',
         documents: new Map(),
         codeActionPlans: new Map(),
         status: 'cold',
         analysisGeneration: 0,
+        analysisRevision: 0,
       });
     }
     if (this.watcherCreate) {
       await workspaceWatcherEnsure({
         workspace,
-        clientSessions: this.clientSessions,
         watcherCreate: this.watcherCreate,
+        onInvalidate: (filePath) => {
+          this.workspaceInvalidateFromDisk(workspace, {
+            configDirty: path.resolve(filePath) === path.resolve(workspace.configPath),
+          });
+        },
       });
     }
 
@@ -1414,6 +1509,8 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       );
     }
     workspaceSession.replayEpoch += 1;
+    workspaceSession.replayState = 'applied';
+    this.workspaceBackgroundWarmupSchedule(workspace, workspaceSession);
     return {
       workspaceId: workspace.workspaceId,
       workspaceInstanceId: workspace.workspaceInstanceId,
@@ -1467,9 +1564,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       version: input.version,
       text: input.text,
     });
-    workspaceStateAnalysisInvalidate(workspaceSession);
-    workspaceSession.status = 'cold';
-    workspaceSession.lastError = undefined;
+    workspaceSessionInvalidate(workspaceSession);
 
     if (workspaceSession.indexState && workspaceSession.indexState.files.includes(filePath)) {
       const didUpdate = projectIndexUpdateFileFromSource(
@@ -1514,9 +1609,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     );
     const filePath = workspaceSession.documents.get(input.uri)?.filePath;
     workspaceSession.documents.delete(input.uri);
-    workspaceStateAnalysisInvalidate(workspaceSession);
-    workspaceSession.status = 'cold';
-    workspaceSession.lastError = undefined;
+    workspaceSessionInvalidate(workspaceSession);
     if (filePath) {
       workspaceIndexRefreshFromDisk(workspace, workspaceSession, filePath);
     }
@@ -1703,6 +1796,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       workspaceId: workspace.workspaceId,
       workspaceInstanceId: workspace.workspaceInstanceId,
       status: workspaceSession.status,
+      replayState: workspaceSession.replayState,
       indexedFileCount:
         workspaceSession.indexState?.files.length ??
         workspace.baseIndexState?.files.length ??

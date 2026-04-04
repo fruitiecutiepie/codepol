@@ -110,6 +110,9 @@ importers:
       '@codepol/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@codepol/daemon':
+        specifier: workspace:*
+        version: link:../daemon
       '@codepol/plugin':
         specifier: workspace:*
         version: link:../../packages/plugin
@@ -154,6 +157,9 @@ importers:
       '@codepol/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@codepol/daemon':
+        specifier: workspace:*
+        version: link:../daemon
       '@codepol/workspace-service':
         specifier: workspace:*
         version: link:../../packages/workspace-service
@@ -302,6 +308,12 @@ importers:
       '@codepol/plugin-ruff':
         specifier: workspace:*
         version: link:../plugin-ruff
+      '@codepol/plugin-vulture':
+        specifier: workspace:*
+        version: link:../plugin-vulture
+      chokidar:
+        specifier: ^5.0.0
+        version: 5.0.0
       eslint:
         specifier: ^9.39.2
         version: 9.39.2(jiti@2.6.1)

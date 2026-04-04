@@ -10,6 +10,7 @@ import {
 async function main(): Promise<void> {
   const server = await workspaceDaemonServerStart({
     service: new WorkspaceServiceEngine({
+      backgroundWarmup: true,
       watcherCreate: workspaceWatcherCreate,
     }),
     policyCheck: workspacePolicyCheck,

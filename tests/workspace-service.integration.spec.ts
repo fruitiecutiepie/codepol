@@ -86,6 +86,29 @@ function workspaceWatcherStubCreate(): {
   };
 }
 
+function backgroundTaskQueueCreate(): {
+  schedule: (task: () => Promise<void>) => void;
+  pendingCountGet: () => number;
+  runNext: () => Promise<void>;
+} {
+  const tasks: Array<() => Promise<void>> = [];
+  return {
+    schedule(task) {
+      tasks.push(task);
+    },
+    pendingCountGet() {
+      return tasks.length;
+    },
+    async runNext() {
+      const next = tasks.shift();
+      if (!next) {
+        throw new Error('No background task queued');
+      }
+      await next();
+    },
+  };
+}
+
 async function clientWorkspaceAttach(
   service: ReturnType<typeof workspaceServiceCreate>,
   input: {
@@ -542,6 +565,7 @@ describe('workspace service integration', () => {
       workspaceId: attached.workspaceId,
       workspaceInstanceId: attached.workspaceInstanceId,
       status: 'cold',
+      replayState: 'pending',
       indexedFileCount: 0,
       openDocumentCount: 0,
       overlayCount: 0,
@@ -564,6 +588,7 @@ describe('workspace service integration', () => {
       workspaceId: attached.workspaceId,
       workspaceInstanceId: attached.workspaceInstanceId,
       status: 'ready',
+      replayState: 'pending',
       openDocumentCount: 0,
       overlayCount: 0,
       analysisGeneration: 1,
@@ -613,6 +638,7 @@ describe('workspace service integration', () => {
       workspaceId: attached.workspaceId,
       workspaceInstanceId: attached.workspaceInstanceId,
       status: 'ready',
+      replayState: 'pending',
       analysisGeneration: 1,
     });
 
@@ -632,6 +658,7 @@ describe('workspace service integration', () => {
       workspaceId: attached.workspaceId,
       workspaceInstanceId: attached.workspaceInstanceId,
       status: 'cold',
+      replayState: 'pending',
       analysisGeneration: 1,
     });
     expect(
@@ -650,6 +677,7 @@ describe('workspace service integration', () => {
       workspaceId: attached.workspaceId,
       workspaceInstanceId: attached.workspaceInstanceId,
       status: 'ready',
+      replayState: 'pending',
       analysisGeneration: 2,
     });
 
@@ -706,6 +734,7 @@ describe('workspace service integration', () => {
       workspaceId: attached.workspaceId,
       workspaceInstanceId: attached.workspaceInstanceId,
       status: 'cold',
+      replayState: 'pending',
       analysisGeneration: 1,
     });
     expect(
@@ -724,7 +753,190 @@ describe('workspace service integration', () => {
       workspaceId: attached.workspaceId,
       workspaceInstanceId: attached.workspaceInstanceId,
       status: 'ready',
+      replayState: 'pending',
       analysisGeneration: 2,
     });
+  });
+
+  it('reports replay pending and warms in the background after replay completes', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = workspacePathToUri(filePath);
+    fs.writeFileSync(
+      filePath,
+      'export interface User {\n  name: string;\n}\n',
+      'utf8',
+    );
+
+    const backgroundTasks = backgroundTaskQueueCreate();
+    const service = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine({
+        backgroundWarmup: true,
+        backgroundTaskSchedule: backgroundTasks.schedule,
+      }),
+    });
+    const attached = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'background-warmup-client',
+    });
+
+    expect(
+      await service.queryIndexStatus({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+      }),
+    ).toEqual({
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+      status: 'cold',
+      replayState: 'pending',
+      indexedFileCount: 0,
+      openDocumentCount: 0,
+      overlayCount: 0,
+      analysisGeneration: 0,
+      lastError: undefined,
+    });
+
+    await service.completeReplay({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+    });
+
+    expect(backgroundTasks.pendingCountGet()).toBe(1);
+    expect(
+      await service.queryIndexStatus({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+      }),
+    ).toMatchObject({
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+      status: 'warming',
+      replayState: 'applied',
+      analysisGeneration: 0,
+    });
+
+    await backgroundTasks.runNext();
+
+    expect(
+      await service.queryIndexStatus({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+      }),
+    ).toMatchObject({
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+      status: 'ready',
+      replayState: 'applied',
+      analysisGeneration: 1,
+    });
+    expect(
+      await service.queryDiagnostics({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        uri,
+      }),
+    ).toHaveLength(1);
+  });
+
+  it('re-queues background warm-up after a watched disk invalidation', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = workspacePathToUri(filePath);
+    fs.writeFileSync(
+      filePath,
+      'export interface User {\n  name: string;\n}\n',
+      'utf8',
+    );
+
+    const watcher = workspaceWatcherStubCreate();
+    const backgroundTasks = backgroundTaskQueueCreate();
+    const service = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine({
+        watcherCreate: watcher.watcherCreate,
+        backgroundWarmup: true,
+        backgroundTaskSchedule: backgroundTasks.schedule,
+      }),
+    });
+    const attached = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'background-warmup-watch-client',
+    });
+
+    await service.completeReplay({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+    });
+    await backgroundTasks.runNext();
+
+    expect(
+      await service.queryIndexStatus({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+      }),
+    ).toMatchObject({
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+      status: 'ready',
+      replayState: 'applied',
+      analysisGeneration: 1,
+    });
+
+    fs.writeFileSync(
+      filePath,
+      'export type User = {\n  name: string;\n};\n',
+      'utf8',
+    );
+    watcher.trigger('change', filePath);
+
+    expect(backgroundTasks.pendingCountGet()).toBe(1);
+    expect(
+      await service.queryIndexStatus({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+      }),
+    ).toMatchObject({
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+      status: 'warming',
+      replayState: 'applied',
+      analysisGeneration: 1,
+    });
+
+    await backgroundTasks.runNext();
+
+    expect(
+      await service.queryIndexStatus({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+      }),
+    ).toMatchObject({
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+      status: 'ready',
+      replayState: 'applied',
+      analysisGeneration: 2,
+    });
+    expect(
+      await service.queryDiagnostics({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        uri,
+      }),
+    ).toEqual([]);
   });
 });

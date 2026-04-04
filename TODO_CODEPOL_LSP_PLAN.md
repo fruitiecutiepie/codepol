@@ -187,6 +187,7 @@
 ### Workstream 4: Workspace Watchers, Invalidation, And Background Warm-Up
 - Started in the repo:
   - the shared workspace engine now owns one watcher pipeline per attached logical workspace, invalidates base/session state on watched disk changes while keeping `workspaceInstanceId` stable, and lazily reloads config on the next analysis after a watched config-file change
+  - daemon-mode workspace engines now schedule background warm-up after replay and after watched disk/config invalidation, and `queryIndexStatus` now reports `replayState: 'pending' | 'applied'` so callers can distinguish replay gating from normal warming
 - Add one watcher pipeline per logical workspace, not per client session.
 - Reuse the existing `chokidar`-based watch knowledge from `apps/cli`, but move ownership into the daemon workspace lifecycle.
 - Track invalidation at the right layer:

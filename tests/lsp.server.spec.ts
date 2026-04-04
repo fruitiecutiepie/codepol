@@ -144,6 +144,7 @@ describe('CodepolLspServer', () => {
         return {
           workspaceId: 'workspace-1',
           workspaceInstanceId: 'workspace-instance-1',
+          replayEpoch: 1,
           replayState: 'applied',
         };
       },
@@ -326,6 +327,7 @@ describe('CodepolLspServer', () => {
           return {
             workspaceId: options.workspaceId,
             workspaceInstanceId: `${options.workspaceId}-instance`,
+            replayEpoch: 1,
             replayState: 'applied',
           };
         },
@@ -763,6 +765,7 @@ describe('CodepolLspServer', () => {
         return {
           workspaceId: 'workspace-1',
           workspaceInstanceId: 'workspace-instance-1',
+          replayEpoch: 1,
           replayState: 'applied',
         };
       },
@@ -1003,6 +1006,7 @@ describe('CodepolLspServer', () => {
         return {
           workspaceId: 'workspace-1',
           workspaceInstanceId: 'workspace-instance-1',
+          replayEpoch: 1,
           replayState: 'applied',
         };
       },
@@ -1123,6 +1127,7 @@ describe('CodepolLspServer', () => {
         return {
           workspaceId: 'workspace-1',
           workspaceInstanceId: 'workspace-instance-1',
+          replayEpoch: 1,
           replayState: 'applied',
         };
       },
@@ -1268,6 +1273,7 @@ describe('CodepolLspServer', () => {
         return {
           workspaceId: 'workspace-1',
           workspaceInstanceId: 'workspace-instance-1',
+          replayEpoch: 1,
           replayState: 'applied',
         };
       },

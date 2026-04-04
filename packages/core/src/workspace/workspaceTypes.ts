@@ -82,6 +82,7 @@ export type IndexStatusResult = {
   workspaceId: string;
   workspaceInstanceId: WorkspaceInstanceId;
   status: 'cold' | 'warming' | 'ready' | 'error';
+  replayState?: 'pending' | 'applied';
   indexedFileCount: number;
   openDocumentCount: number;
   overlayCount: number;
