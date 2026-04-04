@@ -6,6 +6,7 @@ import type {
   PolicyFixSuggestion,
   PolicyWorkspaceEdit,
   ProjectIndex,
+  ImportBindingRelation,
   SymbolKind,
   SymbolRecord,
 } from '@codepol/core';
@@ -126,38 +127,70 @@ function symbolViolationMessage(
   return `Symbol '${sym.name}' (${label}) must match one of: ${casingStylesDescribe(allowed)}`;
 }
 
+type SymbolAllowedStyles = {
+  allowed: CasingStyleName[];
+  kindLabel: string;
+  renameStrategy: 'symbol' | 'importAlias';
+};
+
+function importBindingIsExplicitAlias(
+  binding: ImportBindingRelation,
+  localName: string,
+): boolean {
+  return (
+    !binding.isDefault &&
+    !binding.isNamespace &&
+    binding.importedNameByteRange !== undefined &&
+    binding.importedName !== localName
+  );
+}
+
 /**
- * Import bindings are indexed as `variable`. Adjust casing policy:
- * - `import type { X }` → use `[rules.args.symbols].type`
- * - Resolved value imports → use the **exported** symbol kind (function, const,
- *   etc.), not `variable`, when `resolvedExportId` is available
+ * Import bindings are indexed as `variable`, but this rule only checks
+ * explicit local aliases.
+ * - `import { Foo as local_name }` → use the resolved export kind
+ * - `import type { Foo as local_name }` → use `[rules.args.symbols].type`
+ * Plain imports, default imports, and namespace imports are skipped.
  */
 function symbolAllowedStylesGet(
   sym: SymbolRecord,
   projectIndex: ProjectIndex,
   source: string,
   symbolsConfig: EnforceCasingSymbolsArgs,
-): { allowed: CasingStyleName[]; kindLabel: string } | undefined {
-  if (sym.kind === 'variable') {
-    const binding = projectIndex.importBindingGetForSymbol(sym.id);
-    if (binding && importBindingIsTypeOnly(source, sym.byteRange.start)) {
+): SymbolAllowedStyles | undefined {
+  const binding = projectIndex.importBindingGetForSymbol(sym.id);
+  if (binding || sym.binding?.bindingKind === 'import') {
+    if (!binding || !importBindingIsExplicitAlias(binding, sym.name)) {
+      return undefined;
+    }
+
+    if (importBindingIsTypeOnly(source, sym.byteRange.start)) {
       const forTypeImport = symbolsConfig.type;
       if (forTypeImport && forTypeImport.length > 0) {
-        return { allowed: forTypeImport, kindLabel: 'type import' };
+        return {
+          allowed: forTypeImport,
+          kindLabel: 'type import',
+          renameStrategy: 'importAlias',
+        };
       }
       return undefined;
     }
 
-    if (binding?.resolvedExportId) {
+    if (binding.resolvedExportId) {
       const remote = projectIndex.symbolGet(binding.resolvedExportId);
       if (remote && isEnforceableSymbolKind(remote.kind)) {
         const forRemoteKind = symbolsConfig[remote.kind];
         if (forRemoteKind && forRemoteKind.length > 0) {
-          return { allowed: forRemoteKind, kindLabel: remote.kind };
+          return {
+            allowed: forRemoteKind,
+            kindLabel: remote.kind,
+            renameStrategy: 'importAlias',
+          };
         }
-        return undefined;
       }
     }
+
+    return undefined;
   }
 
   if (!isEnforceableSymbolKind(sym.kind)) {
@@ -167,7 +200,7 @@ function symbolAllowedStylesGet(
   if (!allowed || allowed.length === 0) {
     return undefined;
   }
-  return { allowed, kindLabel: sym.kind };
+  return { allowed, kindLabel: sym.kind, renameStrategy: 'symbol' };
 }
 
 function pathViolationMessage(
@@ -207,6 +240,20 @@ function workspaceEditKey(edit: PolicyWorkspaceEdit): string {
   return `${edit.filePath}:${edit.byteRange.start}:${edit.byteRange.end}:${edit.text}`;
 }
 
+function workspaceEditsDedupe(
+  edits: PolicyWorkspaceEdit[],
+): PolicyWorkspaceEdit[] {
+  const seen = new Set<string>();
+  return edits.filter((edit) => {
+    const key = workspaceEditKey(edit);
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
 function referenceNameMatchesRenameTarget(
   referenceName: string,
   symbolName: string,
@@ -243,6 +290,41 @@ function importBindingRenameEditGet(
     byteRange,
     text: nextName,
   };
+}
+
+function importAliasWorkspaceEditsCreate(
+  sym: SymbolRecord,
+  nextName: string,
+  declarationByteRange: { start: number; end: number },
+  projectIndex: ProjectIndex,
+): PolicyWorkspaceEdit[] {
+  const edits: PolicyWorkspaceEdit[] = [
+    {
+      filePath: sym.file,
+      byteRange: declarationByteRange,
+      text: nextName,
+    },
+  ];
+
+  for (const ref of projectIndex.referencesInFileGet(sym.file)) {
+    if (ref.localSymbolId !== sym.id) {
+      continue;
+    }
+    if (!referenceNameMatchesRenameTarget(ref.name, sym.name)) {
+      continue;
+    }
+    const scope = projectIndex.scopeGet(ref.scopeId);
+    if (!scope || scope.file !== sym.file) {
+      continue;
+    }
+    edits.push({
+      filePath: scope.file,
+      byteRange: ref.byteRange,
+      text: nextName,
+    });
+  }
+
+  return workspaceEditsDedupe(edits);
 }
 
 function symbolWorkspaceEditsCreate(
@@ -297,15 +379,31 @@ function symbolWorkspaceEditsCreate(
     }
   }
 
-  const seen = new Set<string>();
-  return edits.filter((edit) => {
-    const key = workspaceEditKey(edit);
-    if (seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
-    return true;
-  });
+  return workspaceEditsDedupe(edits);
+}
+
+function symbolWorkspaceEditsForStrategyCreate(
+  sym: SymbolRecord,
+  nextName: string,
+  declarationByteRange: { start: number; end: number },
+  projectIndex: ProjectIndex,
+  renameStrategy: SymbolAllowedStyles['renameStrategy'],
+): PolicyWorkspaceEdit[] {
+  if (renameStrategy === 'importAlias') {
+    return importAliasWorkspaceEditsCreate(
+      sym,
+      nextName,
+      declarationByteRange,
+      projectIndex,
+    );
+  }
+
+  return symbolWorkspaceEditsCreate(
+    sym,
+    nextName,
+    declarationByteRange,
+    projectIndex,
+  );
 }
 
 export function enforceCasingCheck(
@@ -335,7 +433,7 @@ export function enforceCasingCheck(
       if (!resolved) {
         continue;
       }
-      const { allowed, kindLabel } = resolved;
+      const { allowed, kindLabel, renameStrategy } = resolved;
       if (nameMatchesAnyCasingStyle(sym.name, allowed)) {
         continue;
       }
@@ -373,11 +471,12 @@ export function enforceCasingCheck(
           fix = {
             byteRange: primaryByteRange,
             text: r.text,
-            edits: symbolWorkspaceEditsCreate(
+            edits: symbolWorkspaceEditsForStrategyCreate(
               sym,
               r.text,
               primaryByteRange,
               projectIndex,
+              renameStrategy,
             ),
           };
         } else {
@@ -386,11 +485,12 @@ export function enforceCasingCheck(
             fix: {
               byteRange: { start: offset, end: byteEnd },
               text: r.text,
-              edits: symbolWorkspaceEditsCreate(
+              edits: symbolWorkspaceEditsForStrategyCreate(
                 sym,
                 r.text,
                 { start: offset, end: byteEnd },
                 projectIndex,
+                renameStrategy,
               ),
             },
           }));

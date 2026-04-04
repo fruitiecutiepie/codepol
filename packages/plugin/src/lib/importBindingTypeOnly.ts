@@ -1,7 +1,8 @@
 /**
  * Detects whether an identifier at `byteOffset` belongs to an `import type` statement.
  * The semantic index maps both value and type-only imports to SymbolKind `variable`;
- * casing rules should treat `import type { Foo }` like a type name, not a value binding.
+ * when casing rules inspect an imported alias, `import type` should use the
+ * type-name policy rather than the value-binding policy.
  */
 
 /**

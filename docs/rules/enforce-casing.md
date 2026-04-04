@@ -19,11 +19,13 @@ Keys match indexed `SymbolKind` values. Only listed kinds are checked; each valu
 
 Supported keys: `class`, `interface`, `type`, `function`, `method`, `variable`, `const`, `field`, `parameter`, `enum`, `enumMember`.
 
-**`type`** applies to **type alias** declarations (`type UserId = string`) and to identifiers in **`import type { … }`** statements. The index records import bindings as `variable`, but those names are checked with your **`symbols.type`** styles (not **`symbols.variable`**) when the statement is `import type`.
+**`type`** applies to **type alias** declarations (`type UserId = string`) and to explicit local aliases in **`import type { … as … }`** statements.
 
-**`variable`** applies to `let`/`var` bindings and other locals that are not `import type` bindings.
+**`variable`** applies to `let`/`var` bindings and other non-import locals.
 
-**Value imports** (`import { foo } from './mod'`) are stored as `variable` in the index, but when the import resolves to an indexed export, casing uses the **exported** symbol kind (`function`, `const`, `class`, …) and the matching `[rules.args.symbols]` entry. Unresolved imports (e.g. external packages not in the index) still follow **`variable`**. Mixed names in one import line are handled per binding using each resolved kind.
+Plain imports are not checked in consumer files. `import { foo }`, `import type { Foo }`, default imports, and namespace imports are exempt.
+
+Explicit local import aliases are checked by the imported symbol's semantic kind when resolution is available. For example, `import { goodName as bad_alias }` uses the resolved export kind (`function`, `const`, `class`, …), while `import type { Foo as bad_alias }` uses **`symbols.type`**. Unresolved aliases are skipped.
 
 Supported styles: `camelCase`, `snake_case`, `PascalCase`, `SCREAMING_SNAKE_CASE`, `kebab-case`.
 

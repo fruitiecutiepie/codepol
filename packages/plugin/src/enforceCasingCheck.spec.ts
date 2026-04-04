@@ -466,13 +466,14 @@ describe('enforceCasingCheck', () => {
       expect(violations).toHaveLength(0);
     });
 
-    it('import type bindings use symbols.type, not symbols.variable', () => {
+    it('plain import type bindings are exempt in consumer files', () => {
+      const depPath = path.join(testDir, 'import-type-dep.ts');
+      fs.writeFileSync(depPath, 'export type bad_type = string;\n');
       const filePath = path.join(testDir, 'import-type-casing.ts');
-      const source =
-        "import type {\n  TreeCheckLintAdapter,\n} from '@codepol/core';\n";
+      const source = "import type { bad_type } from './import-type-dep';\n";
       fs.writeFileSync(filePath, source);
       const { index } = projectIndexBuildSync({
-        files: [filePath],
+        files: [depPath, filePath],
         dir: testDir,
       });
       const { rule, context } = contextNew(filePath, source, index, {
@@ -484,7 +485,7 @@ describe('enforceCasingCheck', () => {
       expect(enforceCasingCheck(rule, context)).toHaveLength(0);
     });
 
-    it('value imports use resolved export kind (e.g. function), not variable', () => {
+    it('plain value imports are exempt in consumer files', () => {
       const depPath = path.join(testDir, 'casing-dep.ts');
       fs.writeFileSync(
         depPath,
@@ -509,10 +510,84 @@ describe('enforceCasingCheck', () => {
           },
         },
       );
+      expect(enforceCasingCheck(rule, context)).toHaveLength(0);
+    });
+
+    it('explicit import aliases use imported kind and rename only local references', () => {
+      const depPath = path.join(testDir, 'alias-dep.ts');
+      fs.writeFileSync(
+        depPath,
+        'export function goodName() { return 1; }\n',
+      );
+      const consumerPath = path.join(testDir, 'alias-consumer.ts');
+      const consumerSource = [
+        "import { goodName as bad_alias_name } from './alias-dep';",
+        'const value = bad_alias_name();',
+        '',
+      ].join('\n');
+      fs.writeFileSync(consumerPath, consumerSource);
+      const { index } = projectIndexBuildSync({
+        files: [depPath, consumerPath],
+        dir: testDir,
+      });
+      const { rule, context } = contextNew(
+        consumerPath,
+        consumerSource,
+        index,
+        {
+          symbols: {
+            function: ['camelCase'],
+            variable: ['snake_case'],
+          },
+        },
+      );
+
       const v = enforceCasingCheck(rule, context);
       expect(v).toHaveLength(1);
-      expect(v[0].message).toContain('bad_import_name');
+      expect(v[0].message).toContain('bad_alias_name');
       expect(v[0].message).toContain('function');
+      expect(v[0].fix?.text).toBe('badAliasName');
+
+      const edits = v[0].fix!.edits!;
+      expect(edits).toHaveLength(2);
+      expect(edits.every((edit) => edit.filePath === consumerPath)).toBe(true);
+      expect(edits.every((edit) => edit.text === 'badAliasName')).toBe(true);
+      expect(
+        edits.some(
+          (edit) =>
+            consumerSource.slice(edit.byteRange.start, edit.byteRange.end) ===
+            'goodName',
+        ),
+      ).toBe(false);
+    });
+
+    it('default imports are exempt in consumer files', () => {
+      const depPath = path.join(testDir, 'default-dep.ts');
+      fs.writeFileSync(
+        depPath,
+        'export default function goodName() { return 1; }\n',
+      );
+      const consumerPath = path.join(testDir, 'default-consumer.ts');
+      const consumerSource =
+        "import bad_default_name from './default-dep';\n";
+      fs.writeFileSync(consumerPath, consumerSource);
+      const { index } = projectIndexBuildSync({
+        files: [depPath, consumerPath],
+        dir: testDir,
+      });
+      const { rule, context } = contextNew(
+        consumerPath,
+        consumerSource,
+        index,
+        {
+          symbols: {
+            function: ['camelCase'],
+            variable: ['snake_case'],
+          },
+        },
+      );
+
+      expect(enforceCasingCheck(rule, context)).toHaveLength(0);
     });
 
     it('emits cross-file workspace edits for matching import names and references', () => {
