@@ -9,5 +9,7 @@ export const noMixedExportsRule: CodepolPluginRule = pluginRuleNew({
       languages: ['typescript', 'tsx', 'javascript', 'jsx'],
       check: noMixedExportsCheck,
     }),
+    /** Required for preferredStyle autofix (cross-file import updates). */
+    requiresProjectIndex: true,
   },
 });

@@ -22,6 +22,7 @@ import type {
   ProjectIndex,
   IndexCapabilities,
 } from '@codepol/core';
+import { eslintFixFromTreeCheckFix } from './eslintTreeCheckFix';
 import {
   violationToLintDiagnostic,
   policyCacheClear,
@@ -492,10 +493,7 @@ function createAdaptedRule(
                 message: diagnostic.message,
               },
               fix: diagnostic.fix
-                ? (fixer) => fixer.replaceTextRange(
-                    [diagnostic.fix!.byteRange.start, diagnostic.fix!.byteRange.end],
-                    diagnostic.fix!.text,
-                  )
+                ? eslintFixFromTreeCheckFix(filename, diagnostic.fix)
                 : undefined,
               suggest:
                 diagnostic.suggestions?.map((s) => ({

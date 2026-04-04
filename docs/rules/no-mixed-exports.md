@@ -48,6 +48,15 @@ Without `args.preferredStyle`, the primary violation is anchored on the **first 
 
 With `args.preferredStyle`, the primary violation is anchored on the **first export statement that uses the non-preferred style**, and the other export statements in the file are listed as related locations. In ESLint, related locations appear as additional diagnostics for the same rule.
 
+## Autofix
+
+Autofix is only available when `args.preferredStyle` is set and a project-wide semantic index is available (this rule enables `requiresProjectIndex` so the index is built for policy checks).
+
+- **`preferredStyle = "named"`**: Rewrites supported default-export forms (for example `export default function Name…` / `export default class Name…`, or `export default Name` when a matching named export already exists) and updates **default** imports from other files to **named** imports when the index resolves them.
+- **`preferredStyle = "default"` (safe cases only)**: Applies only when the file has a **single** local named export (for example one `export function` / `export const` / `export class` / `export type` / `export interface` / `export enum`) and a default export of the form `export default <identifier>` referencing that same binding. It removes `export` from the named declaration and may rewrite **named** imports in importers to **default** imports when the index resolves them. Modules with multiple named exports, re-export-only named forms, or other ambiguous shapes are reported without a fix.
+
+Fixes may span multiple files via `fix.edits`. **ESLint** only applies fixes that stay within the current file; use the Codepol CLI `--fix`, workspace integrations, or other consumers that apply full workspace edits for multi-file fixes.
+
 ## See also
 
 - [Policy schema](../policy-schema.md)

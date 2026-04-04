@@ -18,6 +18,7 @@ export {
   policyCacheClear,
   projectIndexCacheClear,
 };
+export { eslintFixFromTreeCheckFix } from './eslintTreeCheckFix';
 
 /**
  * ESLint rule map type.

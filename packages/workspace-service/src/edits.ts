@@ -181,8 +181,13 @@ export function workspaceEditPlanCreateFromFix(
     isPreferred?: boolean;
   },
 ): Result<WorkspaceEditPlan, string> {
+  const flatEdits = policyFixWorkspaceEditsGet(options.filePath, options.fix);
   const editsByFile = new Map<string, PolicyWorkspaceEdit[]>();
-  editsByFile.set(options.filePath, policyFixWorkspaceEditsGet(options.filePath, options.fix));
+  for (const edit of flatEdits) {
+    const list = editsByFile.get(edit.filePath) ?? [];
+    list.push(edit);
+    editsByFile.set(edit.filePath, list);
+  }
 
   const workspaceEditsResult = workspaceEditsCreate(editsByFile, options.sourceGet);
   if ('Err' in workspaceEditsResult) {
