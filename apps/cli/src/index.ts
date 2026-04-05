@@ -22,7 +22,9 @@ import {
   builtinPluginsRefresh,
   ensureWorkspaceRuntimeReady,
   eslintConfigPathDetect,
+  policyCheck as workspacePolicyCheck,
   type WorkspaceDaemonConnectFn,
+  type WorkspacePolicyCheckOptions,
   type WorkspacePolicyCheckResult,
 } from '@codepol/workspace-service';
 import {
@@ -38,6 +40,21 @@ type CliOptions = {
   eslintConfig: string;
   config: CodepolConfig;
 };
+
+function errorAsError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+function daemonBuiltinPluginFallbackNeeded(
+  config: CodepolConfig | undefined,
+  allowInProcessFallback: boolean | undefined,
+  error: unknown,
+): boolean {
+  if (config === undefined || allowInProcessFallback === false) {
+    return false;
+  }
+  return /Builtin plugin .+ is not registered\./.test(errorAsError(error).message);
+}
 
 export async function policyCheck(options: {
   config?: CodepolConfig;
@@ -61,14 +78,21 @@ export async function policyCheck(options: {
     onResolved: options.onResolved,
   });
 
+  const policyCheckOptions: WorkspacePolicyCheckOptions = {
+    config: options.config,
+    configPath: options.configPath,
+    eslintConfigPath: options.eslintConfigPath,
+    fix: options.fix,
+    cwd: options.cwd,
+  };
+
   try {
-    return await checker.policyCheck({
-      config: options.config,
-      configPath: options.configPath,
-      eslintConfigPath: options.eslintConfigPath,
-      fix: options.fix,
-      cwd: options.cwd,
-    });
+    return await checker.policyCheck(policyCheckOptions);
+  } catch (error) {
+    if (!daemonBuiltinPluginFallbackNeeded(options.config, options.allowInProcessFallback, error)) {
+      throw error;
+    }
+    return await workspacePolicyCheck(policyCheckOptions);
   } finally {
     await checker.close?.();
   }

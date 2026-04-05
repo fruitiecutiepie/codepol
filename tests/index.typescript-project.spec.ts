@@ -393,7 +393,7 @@ describe('typescript adapter – fixture project', () => {
       const configFile = fixtureFile('config.ts');
       const symbols = index.symbolsInFileGet(configFile);
       const varNames = symbols
-        .filter(s => s.kind === 'variable')
+        .filter(s => s.kind === 'variable' || s.kind === 'const')
         .map(s => s.name);
 
       const expected = [

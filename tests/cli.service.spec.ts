@@ -155,6 +155,59 @@ describe('CLI daemon policy checks', () => {
     expect(resolved).toEqual([{ mode: 'daemon', launched: false }]);
   });
 
+  it('falls back to in-process policy checks when a daemon misses in-memory builtin plugin registrations', async () => {
+    const runtimeDir = tempWorkspaceCreate('codepol-cli-daemon-runtime-');
+    createdDirs.push(runtimeDir);
+
+    const workspaceRoot = tempWorkspaceCreate('codepol-cli-daemon-workspace-');
+    createdDirs.push(workspaceRoot);
+    fs.writeFileSync(path.join(workspaceRoot, 'codepol.toml'), '# inline config\n', 'utf8');
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'eslint.config.mjs'),
+      `export default [{ files: ['**/*.ts'], rules: {} }];\n`,
+      'utf8',
+    );
+
+    const { descriptor } = workspaceDaemonDescriptorCreate({ runtimeDir });
+    workspaceDaemonDescriptorWrite(runtimeDir, descriptor);
+    const connect = daemonConnectCreate({
+      descriptor,
+      policyCheck: async () => {
+        throw new Error(
+          'Builtin plugin test-inline-plugin is not registered. Register it with pluginBuiltinRegister() before loading the config.',
+        );
+      },
+    });
+
+    const result = await policyCheck({
+      config: {
+        exclude: [],
+        plugins: [],
+        targets: {},
+        rules: [],
+      } as WorkspacePolicyCheckResult['policy'],
+      configPath: 'codepol.toml',
+      eslintConfigPath: path.join(workspaceRoot, 'eslint.config.mjs'),
+      fix: false,
+      cwd: workspaceRoot,
+      env: {
+        ...process.env,
+        CODEPOL_DAEMON_RUNTIME_DIR: runtimeDir,
+      },
+      connect,
+      startDaemon: async () => {
+        throw new Error('startDaemon should not run for a healthy daemon descriptor');
+      },
+    });
+
+    expect(result.files).toEqual([]);
+    expect(result.violations).toEqual([]);
+    expect(result.treeViolations).toEqual([]);
+    expect(result.workspaceDiagnostics).toEqual([]);
+    expect(result.eslintOutput).toBe('');
+    expect(result.eslintHasErrors).toBe(false);
+  });
+
   it('preserves one-shot fix behavior through the daemon-backed policy check', async () => {
     const runtimeDir = tempWorkspaceCreate('codepol-cli-daemon-runtime-');
     createdDirs.push(runtimeDir);
