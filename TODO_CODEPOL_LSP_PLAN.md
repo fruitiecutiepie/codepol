@@ -254,7 +254,7 @@
   - `apps/cli/src/serviceFactory.ts` now resolves a daemon-backed one-shot policy-check client by default, with `CODEPOL_WORKSPACE_SERVICE_MODE=in_process` as the rollout escape hatch
   - `apps/cli` currently preserves an in-process fallback path when daemon bootstrap fails during rollout
   - daemon handshake compatibility failures now short-circuit as explicit errors instead of being treated as generic unhealthy-daemon retries, and the CLI/LSP factories now pass `CODEPOL_INSTALL_ID` through the `hello` expectation so mismatched runtime dirs fall back deterministically without relaunching
-  - adapter coverage now proves both the default daemon path and the explicit `in_process` override for CLI and LSP
+  - adapter coverage now proves both the default daemon path and the explicit `in_process` override for CLI and LSP, and CLI daemon-mode tests now cover both one-shot check and one-shot fix behavior
   - launcher coverage now proves parallel clients serialize behind one daemon start, that a stale `daemon.lock` is cleared during recovery, and that daemon startup removes a stale `daemon.sock` path before binding
 - Keep the adapter boundary narrow:
   - adapters own transport/bootstrap/reconnect logic

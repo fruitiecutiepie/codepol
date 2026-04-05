@@ -10,6 +10,7 @@ import type {
   WorkspacePolicyCheckResult,
 } from '@codepol/workspace-service';
 import {
+  policyCheck as workspacePolicyCheck,
   workspaceDaemonDescriptorCreate,
   workspaceDaemonDescriptorWrite,
   WorkspaceDaemonSession,
@@ -137,6 +138,59 @@ describe('CLI daemon policy checks', () => {
 
     expect(result).toEqual(expectedResult);
     expect(resolved).toEqual([{ mode: 'daemon', launched: false }]);
+  });
+
+  it('preserves one-shot fix behavior through the daemon-backed policy check', async () => {
+    const runtimeDir = tempWorkspaceCreate('codepol-cli-daemon-runtime-');
+    createdDirs.push(runtimeDir);
+
+    const workspaceRoot = tempWorkspaceCreate('codepol-cli-daemon-workspace-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'codepol.toml'),
+      noInterfaceConfigContentCreate(),
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'eslint.config.mjs'),
+      `export default [{ files: ['**/*.ts'], rules: {} }];\n`,
+      'utf8',
+    );
+
+    const appPath = path.join(workspaceRoot, 'src', 'app.ts');
+    fs.writeFileSync(
+      appPath,
+      'export interface User {\n  name: string;\n}\n',
+      'utf8',
+    );
+
+    const { descriptor } = workspaceDaemonDescriptorCreate({ runtimeDir });
+    workspaceDaemonDescriptorWrite(runtimeDir, descriptor);
+    const connect = daemonConnectCreate({
+      descriptor,
+      policyCheck: workspacePolicyCheck,
+    });
+
+    const result = await policyCheck({
+      configPath: path.join(workspaceRoot, 'codepol.toml'),
+      eslintConfigPath: path.join(workspaceRoot, 'eslint.config.mjs'),
+      fix: true,
+      cwd: workspaceRoot,
+      env: {
+        ...process.env,
+        CODEPOL_DAEMON_RUNTIME_DIR: runtimeDir,
+      },
+      connect,
+      startDaemon: async () => {
+        throw new Error('startDaemon should not run for a healthy daemon descriptor');
+      },
+    });
+
+    expect(fs.readFileSync(appPath, 'utf8')).toContain('type User =');
+    expect(fs.readFileSync(appPath, 'utf8')).not.toContain('interface User');
+    expect(result.violations).toHaveLength(0);
+    expect(result.workspaceDiagnostics).toHaveLength(0);
   });
 
   it('uses an in-process policy check when explicitly requested', async () => {
