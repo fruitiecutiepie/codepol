@@ -3,7 +3,7 @@
 ## Current Repo State
 - Tranche 1 is complete in the repo: the shared service is now a **sessionized in-process engine** with per-client overlay isolation, session-scoped edit plans, and adapter migration in `apps/lsp` and `apps/cli`.
 - Tranche 2 is complete in the repo: the **daemon control plane and long-lived host** now sit over the same engine, with reconnect, replay, invalidation, persistence, queueing/cancellation, and rollout coverage in place without widening the semantic feature surface yet.
-- Tranche 3 is substantially complete in the repo for the narrowed Phase-4/Phase-6 cut: the LSP now ships **narrow `workspace/symbol`**, **cold-start status/progress**, and **read-only `codepol/*` RPC** over the existing LSP JSON-RPC stream, with a short follow-up list still remaining.
+- Tranche 3 is complete in the repo for the narrowed Phase-4/Phase-6 cut: the LSP now ships **narrow `workspace/symbol`**, **cold-start status/progress**, and **read-only `codepol/*` RPC** over the existing LSP JSON-RPC stream.
 - Keep Phase 4 scoped to **Codepol-owned semantics only**. Do not add generic hover or generic rename that compete with `tsserver`, `Pylance`, or `Pyright`.
 - Keep `WorkspaceDiagnostic` narrow. Fixes remain surfaced through `WorkspaceCodeAction` and `WorkspaceEditPlan`, not embedded into diagnostics.
 - Keep `queryIndexStatus` as the status source of truth and expand it for daemon/readiness reporting rather than inventing a parallel status API.
@@ -303,7 +303,7 @@
 - Request freshness metadata, queueing, and cancellation prevent stale diagnostics or status from being published as current.
 - `queryIndexStatus` reports enough structured readiness to drive future LSP status/progress work in tranche 3 without changing the transport model again.
 
-## Tranche 3: Narrow LSP Surface and Read-Only Codepol RPC (Substantially Complete In Repo)
+## Tranche 3: Narrow LSP Surface and Read-Only Codepol RPC (Complete In Repo)
 
 ### Scope That Shipped
 - Keep default LSP ownership narrow:
@@ -347,7 +347,7 @@
 ### Runtime Behavior Now In Repo
 - LSP-attached sessions now enable and warm a project index even when current policy rules do not require one, because tranche-3 reads depend on index-backed data.
 - `workspace/symbol` is intentionally narrow and Codepol-specific:
-  - currently returns module results only
+  - currently returns module-only `workspace_module` results
   - searches indexed basename plus workspace-relative path
   - maps each result to the file URI with a zero-width range at file start
   - tags results as Codepol-owned in adapter metadata so they do not masquerade as generic language-server symbols
@@ -382,19 +382,21 @@
 - Daemon coverage now includes:
   - read-only RPCs for workspace symbols, dependency graph, semantic search, and architecture summary work through `WorkspaceDaemonServiceClient`
   - superseded workspace-symbol requests are suppressed as stale
+  - superseded semantic-search requests are suppressed as stale
+  - stale `analysisGeneration` is rejected separately for workspace symbols, dependency graph, semantic search, and architecture summary
   - replayed overlays still win over restored warm-cache state for semantic search
 - LSP adapter coverage now includes:
   - `initialize` advertises `workspaceSymbolProvider`
   - `workspace/symbol` returns Codepol-owned module results
   - `codepol/*` requests reuse the active overlay-aware session
   - work-done progress covers `cold -> warming -> ready`, reopens after invalidation, and ends on error
+  - reconnect-plus-progress coverage verifies status polling resumes after a recoverable daemon reconnect
 
-### Remaining Tranche 3 Follow-Ups
-- Tighten the wording around `workspace/symbol`: the current implementation returns `workspace_module` results only, not a distinct mix of `file` and `module` kinds.
-- Add an explicit daemon test for `query_semantic_search` supersession, not just `query_workspace_symbols`.
-- Add an explicit LSP reconnect-plus-progress regression test so status polling after daemon reconnect is covered directly, not only inferred from the current reconnect and progress tests.
-- Decide whether the new read-method freshness coverage is sufficient as shared-path coverage, or whether each read RPC should have its own dedicated stale-generation test.
-- Keep generic `definition`, `references`, `hover`, `prepareRename`, and `rename` deferred; tranche 3 is not done if those are still considered in scope.
+### Tranche 3 Completion Notes
+- `workspace/symbol` wording is now tightened to the shipped module-only `workspace_module` behavior.
+- Daemon regression coverage now includes explicit `query_semantic_search` supersession plus dedicated stale-`analysisGeneration` checks for each tranche-3 read RPC.
+- LSP regression coverage now includes reconnect-plus-progress behavior so status polling after daemon reconnect is covered directly.
+- Keep generic `definition`, `references`, `hover`, `prepareRename`, and `rename` deferred; tranche 3 is complete without widening into those surfaces.
 
 ### Explicit Deferrals After Tranche 3
 - Keep generic `definition`, `references`, `hover`, `prepareRename`, and `rename` out of scope until Codepol-owned semantics for those surfaces are explicitly defined.

@@ -663,6 +663,261 @@ describe('CodepolLspServer', () => {
     expect(timers.pendingCountGet()).toBe(0);
   });
 
+  it('resumes status polling and progress after reconnecting from a recoverable index-status failure', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(workspaceRoot, 'codepol.toml'), noInterfaceConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = pathToFileURL(filePath).href;
+    const fileText = 'export interface User {\n  name: string;\n}\n';
+    fs.writeFileSync(filePath, fileText, 'utf8');
+
+    const messages: any[] = [];
+    const timers = manualTimerQueueCreate();
+    const firstCalls: string[] = [];
+    const secondCalls: string[] = [];
+    let serviceFactoryCalls = 0;
+
+    function serviceMockCreate(options: {
+      calls: string[];
+      daemonSessionId: string;
+      workspaceId: string;
+      failIndexStatus?: boolean;
+      statusResults?: Array<{
+        workspaceId: string;
+        workspaceInstanceId: string;
+        status: 'cold' | 'warming' | 'ready' | 'error';
+        replayState?: 'pending' | 'applied';
+        replayEpoch?: number;
+        workspaceReady?: boolean;
+        indexedFileCount: number;
+        openDocumentCount: number;
+        overlayCount: number;
+        analysisGeneration: number;
+        lastError?: string;
+      }>;
+    }): WorkspaceService {
+      let queryIndexStatusCalls = 0;
+
+      return {
+        ...workspaceReadQueriesStubCreate(),
+        async registerClientSession(input) {
+          options.calls.push(`register:${input.clientSessionId ?? 'generated'}`);
+          return {
+            clientSessionId: input.clientSessionId ?? 'client-1',
+            daemonSessionId: options.daemonSessionId,
+          };
+        },
+        async closeClientSession() {
+          options.calls.push('closeClientSession');
+        },
+        async attachWorkspace() {
+          options.calls.push('attachWorkspace');
+          return {
+            workspaceId: options.workspaceId,
+            workspaceInstanceId: `${options.workspaceId}-instance`,
+          };
+        },
+        async subscribeDiagnostics(input) {
+          options.calls.push(`subscribeDiagnostics:${input.scope}`);
+          return {
+            workspaceId: options.workspaceId,
+            workspaceInstanceId: `${options.workspaceId}-instance`,
+            scope: input.scope,
+            subscriptionState: 'active',
+          };
+        },
+        async completeReplay() {
+          options.calls.push('completeReplay');
+          return {
+            workspaceId: options.workspaceId,
+            workspaceInstanceId: `${options.workspaceId}-instance`,
+            replayEpoch: 1,
+            replayState: 'applied',
+          };
+        },
+        async openOverlay(input) {
+          options.calls.push(`openOverlay:${input.uri}@${input.version}`);
+        },
+        async updateOverlay(input) {
+          options.calls.push(`updateOverlay:${input.uri}@${input.version}`);
+        },
+        async closeOverlay(input) {
+          options.calls.push(`closeOverlay:${input.uri}`);
+        },
+        async queryDiagnostics() {
+          return [];
+        },
+        async queryCodeActions() {
+          return [];
+        },
+        async applyEditPlan() {
+          return { applied: false, failureReason: 'plan_not_found' };
+        },
+        async queryIndexStatus() {
+          queryIndexStatusCalls += 1;
+          options.calls.push(`queryIndexStatus:${queryIndexStatusCalls}`);
+          if (options.failIndexStatus) {
+            throw new Error('Daemon connection closed');
+          }
+          const results = options.statusResults ?? [
+            {
+              workspaceId: options.workspaceId,
+              workspaceInstanceId: `${options.workspaceId}-instance`,
+              status: 'ready' as const,
+              replayState: 'applied' as const,
+              replayEpoch: 1,
+              workspaceReady: true,
+              indexedFileCount: 1,
+              openDocumentCount: 1,
+              overlayCount: 1,
+              analysisGeneration: 1,
+            },
+          ];
+          return results[Math.min(queryIndexStatusCalls - 1, results.length - 1)]!;
+        },
+      };
+    }
+
+    const server = new CodepolLspServer({
+      clientInstanceId: 'lsp-progress-reconnect-instance',
+      clientSessionId: 'lsp-progress-reconnect-session',
+      serviceFactory: async () => {
+        serviceFactoryCalls += 1;
+        return serviceFactoryCalls === 1
+          ? serviceMockCreate({
+              calls: firstCalls,
+              daemonSessionId: 'daemon-1',
+              workspaceId: 'workspace-a',
+              failIndexStatus: true,
+            })
+          : serviceMockCreate({
+              calls: secondCalls,
+              daemonSessionId: 'daemon-2',
+              workspaceId: 'workspace-b',
+              statusResults: [
+                {
+                  workspaceId: 'workspace-b',
+                  workspaceInstanceId: 'workspace-b-instance',
+                  status: 'cold',
+                  replayState: 'applied',
+                  replayEpoch: 1,
+                  workspaceReady: false,
+                  indexedFileCount: 0,
+                  openDocumentCount: 1,
+                  overlayCount: 1,
+                  analysisGeneration: 0,
+                },
+                {
+                  workspaceId: 'workspace-b',
+                  workspaceInstanceId: 'workspace-b-instance',
+                  status: 'cold',
+                  replayState: 'applied',
+                  replayEpoch: 1,
+                  workspaceReady: false,
+                  indexedFileCount: 0,
+                  openDocumentCount: 1,
+                  overlayCount: 1,
+                  analysisGeneration: 0,
+                },
+                {
+                  workspaceId: 'workspace-b',
+                  workspaceInstanceId: 'workspace-b-instance',
+                  status: 'ready',
+                  replayState: 'applied',
+                  replayEpoch: 1,
+                  workspaceReady: true,
+                  indexedFileCount: 1,
+                  openDocumentCount: 1,
+                  overlayCount: 1,
+                  analysisGeneration: 1,
+                },
+              ],
+            });
+      },
+      sendMessage: (message) => {
+        messages.push(message);
+      },
+      timers: timers.timers,
+      statusPollIntervalsMs: {
+        active: 0,
+        idle: 0,
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        rootUri: pathToFileURL(workspaceRoot).href,
+        capabilities: {
+          window: {
+            workDoneProgress: true,
+          },
+        },
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      method: 'textDocument/didOpen',
+      params: {
+        textDocument: {
+          uri,
+          version: 1,
+          text: fileText,
+        },
+      },
+    });
+
+    expect(timers.pendingCountGet()).toBe(1);
+    await timers.runNext();
+
+    expect(serviceFactoryCalls).toBe(2);
+    expect(firstCalls).toContain('queryIndexStatus:1');
+    for (
+      let attempt = 0;
+      attempt < 20 && !secondCalls.includes('register:lsp-progress-reconnect-session');
+      attempt += 1
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(secondCalls).toContain('register:lsp-progress-reconnect-session');
+    expect(secondCalls).toContain('attachWorkspace');
+    expect(secondCalls).toContain('subscribeDiagnostics:workspace');
+    expect(secondCalls).toContain(`openOverlay:${uri}@1`);
+    expect(secondCalls).toContain('completeReplay');
+    expect(secondCalls).toContain('queryIndexStatus:1');
+
+    expect(timers.pendingCountGet()).toBe(1);
+    await timers.runNext();
+    await timers.runNext();
+
+    const progressCreates = messages.filter(
+      (message) => message.method === 'window/workDoneProgress/create',
+    );
+    const progressUpdates = messages.filter((message) => message.method === '$/progress');
+    expect(secondCalls).toContain('queryIndexStatus:2');
+    expect(secondCalls).toContain('queryIndexStatus:3');
+    expect(progressCreates).toHaveLength(1);
+    expect(progressUpdates.map((message) => message.params.value.kind)).toEqual([
+      'begin',
+      'end',
+    ]);
+    expect(progressUpdates[0]?.params.value.message).toBe('Preparing workspace index');
+    expect(progressUpdates[1]?.params.value.message).toBe('Workspace ready (1 indexed files)');
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 9,
+      method: 'shutdown',
+    });
+    expect(timers.pendingCountGet()).toBe(0);
+  });
+
   it('supports an async daemon-backed service factory during initialize and publish flow', async () => {
     const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');
     createdDirs.push(workspaceRoot);

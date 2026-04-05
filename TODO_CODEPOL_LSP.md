@@ -1028,20 +1028,20 @@ Current gap: the daemon/session lifecycle is now in place, but richer observabil
 
 - [x] Implement document open/change/close to overlay sync.
 - [x] Implement diagnostics publication using the shared diagnostic service.
-- [x] Implement `workspace/symbol` as a narrow Codepol-owned module/file surface.
+- [x] Implement `workspace/symbol` as a narrow Codepol-owned module-only `workspace_module` surface.
 - [x] Add progress and status signals for cold-start indexing.
 - [ ] Keep generic `definition`, `references`, `hover`, `prepare rename`, and `rename` deferred until Codepol-owned semantics for those surfaces are defined.
 
-Current status: the LSP server registers a client session, attaches a workspace, and implements overlay sync, diagnostics, `textDocument/codeAction`, `workspace/executeCommand`, `workspace/symbol`, cold-start status publication, and read-only `codepol/indexStatus`, `codepol/dependencyGraph`, `codepol/semanticSearch`, and `codepol/architectureSummary` requests against the sessionized service boundary. Generic semantic navigation and rename are still pending by design.
+Current status: the LSP server registers a client session, attaches a workspace, and implements overlay sync, diagnostics, `textDocument/codeAction`, `workspace/executeCommand`, module-only `workspace/symbol`, cold-start status publication, and read-only `codepol/indexStatus`, `codepol/dependencyGraph`, `codepol/semanticSearch`, and `codepol/architectureSummary` requests against the sessionized service boundary. Generic semantic navigation and rename are still pending by design.
 
 ### Phase 5: CLI and tests migrate fully
 
 - [x] Make CLI and tests use the same service boundary used by the LSP.
 - [x] Add regression tests covering overlay-aware diagnostics and index freshness.
-- [ ] Add daemon-level tests for multi-client overlay isolation.
+- [x] Add daemon-level tests for multi-client overlay isolation.
 - [x] Add adapter-level tests for LSP request/response mapping.
 
-Current status: in-process integration coverage now includes multi-client overlay isolation, session-scoped edit-plan ownership, and per-session index-status transitions; daemon-level lifecycle coverage is still pending.
+Current status: in-process integration coverage now includes multi-client overlay isolation, session-scoped edit-plan ownership, and per-session index-status transitions; daemon and adapter regression coverage now also includes read-RPC freshness, read-request supersession, and reconnect-driven status-progress behavior.
 
 ### Phase 6: extension RPC and richer features
 

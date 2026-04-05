@@ -358,6 +358,71 @@ describe('workspace daemon control plane', () => {
     return new WorkspaceDaemonServiceClient(connection);
   }
 
+  async function daemonReadWorkspaceCreate(): Promise<{
+    service: WorkspaceDaemonServiceClient;
+    registered: Awaited<
+      ReturnType<WorkspaceDaemonServiceClient['registerClientSession']>
+    >;
+    attached: Awaited<
+      ReturnType<WorkspaceDaemonServiceClient['attachWorkspace']>
+    >;
+    sharedUri: string;
+  }> {
+    const runtimeDir = tempRuntimeDirCreate();
+    tempDirs.push(runtimeDir);
+
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-daemon-workspace-'));
+    tempDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
+
+    const sharedPath = path.join(workspaceRoot, 'src', 'shared.ts');
+    const appPath = path.join(workspaceRoot, 'src', 'app.ts');
+    const sharedUri = workspacePathToUri(sharedPath);
+    fs.writeFileSync(sharedPath, 'export const sharedValue = 1;\n', 'utf8');
+    fs.writeFileSync(
+      appPath,
+      "import { sharedValue } from './shared';\nexport const appValue = sharedValue;\n",
+      'utf8',
+    );
+
+    const descriptor = workspaceDaemonDescriptorCreate({ runtimeDir }).descriptor;
+    liveDaemons.set(descriptor.transport.path, {
+      descriptor,
+      service: new WorkspaceServiceEngine(),
+    });
+
+    const clientInstanceId = `daemon-read-client-${randomUUID()}`;
+    const clientSessionId = `daemon-read-session-${randomUUID()}`;
+    const service = await daemonServiceClientCreate({
+      descriptor,
+      clientInstanceId,
+    });
+    const registered = await service.registerClientSession({
+      clientKind: 'test',
+      clientInstanceId,
+      clientSessionId,
+    });
+    const attached = await service.attachWorkspace({
+      clientSessionId: registered.clientSessionId,
+      rootPath: workspaceRoot,
+      configPath,
+    });
+    await service.completeReplay({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+    });
+
+    return {
+      service,
+      registered,
+      attached,
+      sharedUri,
+    };
+  }
+
   it('persists the runtime descriptor and serves the hello contract', async () => {
     const runtimeDir = tempRuntimeDirCreate();
     tempDirs.push(runtimeDir);
@@ -1500,6 +1565,232 @@ describe('workspace daemon control plane', () => {
     });
   });
 
+  it('rejects stale analysisGeneration for workspace symbol reads through the daemon service client', async () => {
+    const setup = await daemonReadWorkspaceCreate();
+
+    try {
+      expect(
+        await setup.service.queryWorkspaceSymbols({
+          clientSessionId: setup.registered.clientSessionId,
+          workspaceId: setup.attached.workspaceId,
+          query: 'shared',
+        }),
+      ).toHaveLength(1);
+
+      const initialStatus = await setup.service.queryIndexStatus({
+        clientSessionId: setup.registered.clientSessionId,
+        workspaceId: setup.attached.workspaceId,
+      });
+
+      await setup.service.openOverlay({
+        clientSessionId: setup.registered.clientSessionId,
+        workspaceId: setup.attached.workspaceId,
+        uri: setup.sharedUri,
+        version: 1,
+        text: 'export const sharedValue = 1;\nexport const OverlayOnly = 2;\n',
+      });
+
+      expect(
+        await setup.service.queryWorkspaceSymbols({
+          clientSessionId: setup.registered.clientSessionId,
+          workspaceId: setup.attached.workspaceId,
+          query: 'shared',
+        }),
+      ).toHaveLength(1);
+
+      const currentStatus = await setup.service.queryIndexStatus({
+        clientSessionId: setup.registered.clientSessionId,
+        workspaceId: setup.attached.workspaceId,
+      });
+      expect(currentStatus.analysisGeneration).toBeGreaterThan(initialStatus.analysisGeneration);
+
+      await expect(
+        setup.service.queryWorkspaceSymbols({
+          clientSessionId: setup.registered.clientSessionId,
+          workspaceId: setup.attached.workspaceId,
+          query: 'shared',
+          analysisGeneration: initialStatus.analysisGeneration,
+        }),
+      ).rejects.toThrow(
+        `Analysis generation mismatch: expected ${currentStatus.analysisGeneration}, received ${initialStatus.analysisGeneration}`,
+      );
+    } finally {
+      await setup.service.close();
+    }
+  });
+
+  it('rejects stale analysisGeneration for dependency-graph reads through the daemon service client', async () => {
+    const setup = await daemonReadWorkspaceCreate();
+
+    try {
+      expect(
+        await setup.service.queryDependencyGraph({
+          clientSessionId: setup.registered.clientSessionId,
+          workspaceId: setup.attached.workspaceId,
+        }),
+      ).toMatchObject({
+        nodes: expect.any(Array),
+      });
+
+      const initialStatus = await setup.service.queryIndexStatus({
+        clientSessionId: setup.registered.clientSessionId,
+        workspaceId: setup.attached.workspaceId,
+      });
+
+      await setup.service.openOverlay({
+        clientSessionId: setup.registered.clientSessionId,
+        workspaceId: setup.attached.workspaceId,
+        uri: setup.sharedUri,
+        version: 1,
+        text: 'export const sharedValue = 1;\nexport const OverlayOnly = 2;\n',
+      });
+
+      expect(
+        await setup.service.queryDependencyGraph({
+          clientSessionId: setup.registered.clientSessionId,
+          workspaceId: setup.attached.workspaceId,
+        }),
+      ).toMatchObject({
+        nodes: expect.any(Array),
+      });
+
+      const currentStatus = await setup.service.queryIndexStatus({
+        clientSessionId: setup.registered.clientSessionId,
+        workspaceId: setup.attached.workspaceId,
+      });
+      expect(currentStatus.analysisGeneration).toBeGreaterThan(initialStatus.analysisGeneration);
+
+      await expect(
+        setup.service.queryDependencyGraph({
+          clientSessionId: setup.registered.clientSessionId,
+          workspaceId: setup.attached.workspaceId,
+          analysisGeneration: initialStatus.analysisGeneration,
+        }),
+      ).rejects.toThrow(
+        `Analysis generation mismatch: expected ${currentStatus.analysisGeneration}, received ${initialStatus.analysisGeneration}`,
+      );
+    } finally {
+      await setup.service.close();
+    }
+  });
+
+  it('rejects stale analysisGeneration for semantic-search reads through the daemon service client', async () => {
+    const setup = await daemonReadWorkspaceCreate();
+
+    try {
+      expect(
+        await setup.service.querySemanticSearch({
+          clientSessionId: setup.registered.clientSessionId,
+          workspaceId: setup.attached.workspaceId,
+          query: 'sharedValue',
+        }),
+      ).toContainEqual(
+        expect.objectContaining({
+          name: 'sharedValue',
+        }),
+      );
+
+      const initialStatus = await setup.service.queryIndexStatus({
+        clientSessionId: setup.registered.clientSessionId,
+        workspaceId: setup.attached.workspaceId,
+      });
+
+      await setup.service.openOverlay({
+        clientSessionId: setup.registered.clientSessionId,
+        workspaceId: setup.attached.workspaceId,
+        uri: setup.sharedUri,
+        version: 1,
+        text: 'export const sharedValue = 1;\nexport const OverlayOnly = 2;\n',
+      });
+
+      expect(
+        await setup.service.querySemanticSearch({
+          clientSessionId: setup.registered.clientSessionId,
+          workspaceId: setup.attached.workspaceId,
+          query: 'OverlayOnly',
+        }),
+      ).toContainEqual(
+        expect.objectContaining({
+          name: 'OverlayOnly',
+        }),
+      );
+
+      const currentStatus = await setup.service.queryIndexStatus({
+        clientSessionId: setup.registered.clientSessionId,
+        workspaceId: setup.attached.workspaceId,
+      });
+      expect(currentStatus.analysisGeneration).toBeGreaterThan(initialStatus.analysisGeneration);
+
+      await expect(
+        setup.service.querySemanticSearch({
+          clientSessionId: setup.registered.clientSessionId,
+          workspaceId: setup.attached.workspaceId,
+          query: 'OverlayOnly',
+          analysisGeneration: initialStatus.analysisGeneration,
+        }),
+      ).rejects.toThrow(
+        `Analysis generation mismatch: expected ${currentStatus.analysisGeneration}, received ${initialStatus.analysisGeneration}`,
+      );
+    } finally {
+      await setup.service.close();
+    }
+  });
+
+  it('rejects stale analysisGeneration for architecture-summary reads through the daemon service client', async () => {
+    const setup = await daemonReadWorkspaceCreate();
+
+    try {
+      expect(
+        await setup.service.queryArchitectureSummary({
+          clientSessionId: setup.registered.clientSessionId,
+          workspaceId: setup.attached.workspaceId,
+        }),
+      ).toMatchObject({
+        indexedFileCount: 2,
+      });
+
+      const initialStatus = await setup.service.queryIndexStatus({
+        clientSessionId: setup.registered.clientSessionId,
+        workspaceId: setup.attached.workspaceId,
+      });
+
+      await setup.service.openOverlay({
+        clientSessionId: setup.registered.clientSessionId,
+        workspaceId: setup.attached.workspaceId,
+        uri: setup.sharedUri,
+        version: 1,
+        text: 'export const sharedValue = 1;\nexport const OverlayOnly = 2;\n',
+      });
+
+      expect(
+        await setup.service.queryArchitectureSummary({
+          clientSessionId: setup.registered.clientSessionId,
+          workspaceId: setup.attached.workspaceId,
+        }),
+      ).toMatchObject({
+        indexedFileCount: 2,
+      });
+
+      const currentStatus = await setup.service.queryIndexStatus({
+        clientSessionId: setup.registered.clientSessionId,
+        workspaceId: setup.attached.workspaceId,
+      });
+      expect(currentStatus.analysisGeneration).toBeGreaterThan(initialStatus.analysisGeneration);
+
+      await expect(
+        setup.service.queryArchitectureSummary({
+          clientSessionId: setup.registered.clientSessionId,
+          workspaceId: setup.attached.workspaceId,
+          analysisGeneration: initialStatus.analysisGeneration,
+        }),
+      ).rejects.toThrow(
+        `Analysis generation mismatch: expected ${currentStatus.analysisGeneration}, received ${initialStatus.analysisGeneration}`,
+      );
+    } finally {
+      await setup.service.close();
+    }
+  });
+
   it('restores a warm index-backed workspace across daemon incarnations', async () => {
     const runtimeDir = tempRuntimeDirCreate();
     tempDirs.push(runtimeDir);
@@ -2279,6 +2570,213 @@ describe('workspace daemon control plane', () => {
     await expect(secondPromise).resolves.toEqual({
       type: 'query_workspace_symbols_ack',
       symbols: [],
+    });
+  });
+
+  it('supersedes an older semantic-search request when a newer request for the same lane arrives', async () => {
+    const runtimeDir = tempRuntimeDirCreate();
+    tempDirs.push(runtimeDir);
+
+    let resolveFirstSearch:
+      | ((results: Array<{ name: string; kind: 'exported_symbol' }>) => void)
+      | undefined;
+    let searchCalls = 0;
+
+    const service: WorkspaceService = {
+      ...workspaceReadQueriesStubCreate(),
+      async registerClientSession(input) {
+        return {
+          clientSessionId: input.clientSessionId ?? 'supersede-search-client-session',
+          daemonSessionId: 'daemon-supersede-search-session',
+        };
+      },
+      async closeClientSession() {},
+      async attachWorkspace() {
+        return {
+          workspaceId: 'workspace-supersede-search',
+          workspaceInstanceId: 'workspace-supersede-search-instance',
+        };
+      },
+      async subscribeDiagnostics() {
+        return {
+          workspaceId: 'workspace-supersede-search',
+          workspaceInstanceId: 'workspace-supersede-search-instance',
+          scope: 'workspace',
+          subscriptionState: 'active',
+        };
+      },
+      async completeReplay() {
+        return {
+          workspaceId: 'workspace-supersede-search',
+          workspaceInstanceId: 'workspace-supersede-search-instance',
+          replayEpoch: 1,
+          replayState: 'applied',
+        };
+      },
+      async openOverlay() {},
+      async updateOverlay() {},
+      async closeOverlay() {},
+      async queryDiagnostics() {
+        return [];
+      },
+      async queryWorkspaceSymbols() {
+        return [];
+      },
+      async querySemanticSearch() {
+        searchCalls += 1;
+        if (searchCalls === 1) {
+          return new Promise((resolve) => {
+            resolveFirstSearch = resolve as (results: Array<{
+              name: string;
+              kind: 'exported_symbol';
+            }>) => void;
+          });
+        }
+        return [];
+      },
+      async queryCodeActions() {
+        return [];
+      },
+      async applyEditPlan() {
+        return {
+          applied: false,
+          failureReason: 'plan_not_found',
+        };
+      },
+      async queryIndexStatus() {
+        return {
+          workspaceId: 'workspace-supersede-search',
+          workspaceInstanceId: 'workspace-supersede-search-instance',
+          status: 'ready',
+          indexedFileCount: 1,
+          openDocumentCount: 0,
+          overlayCount: 0,
+          analysisGeneration: 1,
+        };
+      },
+      async queryDependencyGraph() {
+        return {
+          nodes: [],
+          edges: [],
+          entryPoints: [],
+          cycles: [],
+        };
+      },
+      async queryArchitectureSummary() {
+        return {
+          summary: '',
+          indexedFileCount: 0,
+          symbolCount: 0,
+          scopeCount: 0,
+          relationCount: 0,
+          entryPointCount: 0,
+          cycleCount: 0,
+          hotspots: [],
+        };
+      },
+    };
+
+    const { descriptor } = workspaceDaemonDescriptorCreate({ runtimeDir });
+    const session = new WorkspaceDaemonSession({
+      descriptor,
+      service,
+    });
+
+    await expect(
+      session.handleEnvelope({
+        id: 1,
+        type: 'hello',
+        protocolVersion: WORKSPACE_DAEMON_PROTOCOL_VERSION,
+        client: clientIdentityCreate('supersede-search-client'),
+      }),
+    ).resolves.toMatchObject({
+      type: 'hello_ack',
+      compatibility: 'ok',
+    });
+
+    const registerResponse = await session.handleEnvelope({
+      id: 2,
+      type: 'register_client_session',
+      clientKind: 'test',
+      clientInstanceId: 'supersede-search-client',
+      clientSessionId: 'supersede-search-session',
+    });
+    expect(registerResponse.type).toBe('register_client_session_ack');
+    if (registerResponse.type !== 'register_client_session_ack') {
+      return;
+    }
+
+    const attachResponse = await session.handleEnvelope({
+      id: 3,
+      type: 'attach_workspace',
+      clientSessionId: 'supersede-search-session',
+      daemonSessionId: registerResponse.daemonSessionId,
+      rootPath: runtimeDir,
+      configPath: path.join(runtimeDir, 'codepol.toml'),
+    });
+    expect(attachResponse.type).toBe('attach_workspace_ack');
+    if (attachResponse.type !== 'attach_workspace_ack') {
+      return;
+    }
+
+    await expect(
+      session.handleEnvelope({
+        id: 4,
+        type: 'complete_replay',
+        clientSessionId: 'supersede-search-session',
+        daemonSessionId: registerResponse.daemonSessionId,
+        workspaceId: attachResponse.workspaceId,
+        workspaceInstanceId: attachResponse.workspaceInstanceId,
+      }),
+    ).resolves.toEqual({
+      type: 'complete_replay_ack',
+      result: {
+        workspaceId: attachResponse.workspaceId,
+        workspaceInstanceId: attachResponse.workspaceInstanceId,
+        replayEpoch: 1,
+        replayState: 'applied',
+      },
+    });
+
+    const firstPromise = session.handleEnvelope({
+      id: 5,
+      type: 'query_semantic_search',
+      clientSessionId: 'supersede-search-session',
+      daemonSessionId: registerResponse.daemonSessionId,
+      workspaceId: attachResponse.workspaceId,
+      workspaceInstanceId: attachResponse.workspaceInstanceId,
+      replayEpoch: 1,
+      query: 'OverlayOnly',
+      requestId: 'semantic-search-request-1',
+    });
+
+    for (let attempt = 0; attempt < 20 && !resolveFirstSearch; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(resolveFirstSearch).toBeDefined();
+
+    const secondPromise = session.handleEnvelope({
+      id: 6,
+      type: 'query_semantic_search',
+      clientSessionId: 'supersede-search-session',
+      daemonSessionId: registerResponse.daemonSessionId,
+      workspaceId: attachResponse.workspaceId,
+      workspaceInstanceId: attachResponse.workspaceInstanceId,
+      replayEpoch: 1,
+      query: 'OverlayOnly',
+      requestId: 'semantic-search-request-2',
+    });
+
+    resolveFirstSearch!([]);
+
+    await expect(firstPromise).resolves.toEqual({
+      type: 'error',
+      code: 'request_superseded',
+      message: 'Request superseded',
+    });
+    await expect(secondPromise).resolves.toEqual({
+      type: 'query_semantic_search_ack',
+      results: [],
     });
   });
 
