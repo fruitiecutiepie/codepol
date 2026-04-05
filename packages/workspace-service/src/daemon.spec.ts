@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { workspacePathToUri } from '@codepol/core';
 import type {
   WorkspaceDaemonConnectFn,
@@ -15,6 +15,7 @@ import {
   workspaceDaemonHello,
   workspaceDaemonLaunchOrConnect,
   workspaceDaemonRuntimePathsResolve,
+  workspaceDaemonServerStart,
   WorkspaceDaemonServiceClient,
   WorkspaceDaemonSession,
   WORKSPACE_DAEMON_PROTOCOL_VERSION,
@@ -1405,6 +1406,27 @@ describe('workspace daemon control plane', () => {
     expect(launched.descriptor.sessionNonce).toBe(startedDescriptor?.sessionNonce);
     expect(fs.existsSync(paths.lockPath)).toBe(false);
     await launched.connection.close();
+  });
+
+  it('recovers from a stale socket path by removing it before daemon startup', async () => {
+    const runtimeDir = tempRuntimeDirCreate();
+    tempDirs.push(runtimeDir);
+
+    const paths = workspaceDaemonRuntimePathsResolve(runtimeDir);
+    fs.mkdirSync(paths.runtimeDir, { recursive: true });
+    fs.writeFileSync(paths.socketPath, 'stale socket', 'utf8');
+    expect(fs.statSync(paths.socketPath).isFile()).toBe(true);
+
+    const server = await workspaceDaemonServerStart({ runtimeDir });
+
+    expect(server.descriptor.transport.path).toBe(paths.socketPath);
+    expect(workspaceDaemonDescriptorRead(runtimeDir)?.sessionNonce).toBe(
+      server.descriptor.sessionNonce,
+    );
+    expect(fs.statSync(paths.socketPath).isSocket()).toBe(true);
+
+    await server.stop();
+    expect(fs.existsSync(paths.socketPath)).toBe(false);
   });
 
   it('recovers from a stale descriptor by launching a fresh daemon descriptor', async () => {
