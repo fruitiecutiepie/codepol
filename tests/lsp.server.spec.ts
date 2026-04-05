@@ -273,6 +273,89 @@ describe('CodepolLspServer', () => {
     expect(publish?.params.diagnostics).toHaveLength(1);
   });
 
+  it('preserves initialize/open/change/close diagnostics behavior through a daemon-backed service factory', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(workspaceRoot, 'codepol.toml'), noInterfaceConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = pathToFileURL(filePath).href;
+    fs.writeFileSync(filePath, 'export interface User {\n  name: string;\n}\n', 'utf8');
+
+    const { descriptor } = workspaceDaemonDescriptorCreate({
+      runtimeDir: workspaceRoot,
+    });
+    const connect = daemonConnectCreate({
+      descriptor,
+      service: new WorkspaceServiceEngine(),
+    });
+    const messages: any[] = [];
+    let serviceFactoryCalls = 0;
+
+    const server = new CodepolLspServer({
+      serviceFactory: async () => {
+        serviceFactoryCalls += 1;
+        const connection = await connect(descriptor);
+        await workspaceDaemonHello({
+          connection,
+          client: daemonClientIdentityCreate('lsp-service-factory-open-change-close'),
+        });
+        return new WorkspaceDaemonServiceClient(connection);
+      },
+      sendMessage: (message) => {
+        messages.push(message);
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        rootUri: pathToFileURL(workspaceRoot).href,
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      method: 'textDocument/didOpen',
+      params: {
+        textDocument: {
+          uri,
+          version: 1,
+          text: fs.readFileSync(filePath, 'utf8'),
+        },
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      method: 'textDocument/didChange',
+      params: {
+        textDocument: { uri, version: 2 },
+        contentChanges: [{ text: 'export type User = {\n  name: string;\n};\n' }],
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      method: 'textDocument/didClose',
+      params: {
+        textDocument: { uri },
+      },
+    });
+
+    const publishMessages = messages.filter(
+      (message) => message.method === 'textDocument/publishDiagnostics',
+    );
+    expect(serviceFactoryCalls).toBe(1);
+    expect(publishMessages).toHaveLength(3);
+    expect(publishMessages[0]?.params.diagnostics).toHaveLength(1);
+    expect(publishMessages[1]?.params.diagnostics).toEqual([]);
+    expect(publishMessages[2]?.params.diagnostics).toHaveLength(1);
+  });
+
   it('reconnects, re-attaches, and replays open documents after daemon loss', async () => {
     const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');
     createdDirs.push(workspaceRoot);
