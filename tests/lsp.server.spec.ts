@@ -521,6 +521,194 @@ describe('CodepolLspServer', () => {
     expect(publish?.params.diagnostics).toHaveLength(1);
   });
 
+  it('refreshes diagnostics from the reconnected daemon instead of preserving stale continuity', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(workspaceRoot, 'codepol.toml'), noInterfaceConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = pathToFileURL(filePath).href;
+    fs.writeFileSync(filePath, 'export interface User {\n  name: string;\n}\n', 'utf8');
+
+    const messages: any[] = [];
+    const firstCalls: string[] = [];
+    const secondCalls: string[] = [];
+    let serviceFactoryCalls = 0;
+
+    function serviceMockCreate(options: {
+      calls: string[];
+      daemonSessionId: string;
+      workspaceId: string;
+      failOnDocumentVersion?: number;
+      diagnosticsByDocumentVersion: Record<number, WorkspaceDiagnostic[]>;
+    }): WorkspaceService {
+      return {
+        async registerClientSession(input) {
+          options.calls.push(`register:${input.clientSessionId ?? 'generated'}`);
+          return {
+            clientSessionId: input.clientSessionId ?? 'client-1',
+            daemonSessionId: options.daemonSessionId,
+          };
+        },
+        async closeClientSession() {
+          options.calls.push('closeClientSession');
+        },
+        async attachWorkspace() {
+          options.calls.push('attachWorkspace');
+          return {
+            workspaceId: options.workspaceId,
+            workspaceInstanceId: `${options.workspaceId}-instance`,
+          };
+        },
+        async subscribeDiagnostics(input) {
+          options.calls.push(`subscribeDiagnostics:${input.scope}`);
+          return {
+            workspaceId: options.workspaceId,
+            workspaceInstanceId: `${options.workspaceId}-instance`,
+            scope: input.scope,
+            subscriptionState: 'active',
+          };
+        },
+        async completeReplay() {
+          options.calls.push('completeReplay');
+          return {
+            workspaceId: options.workspaceId,
+            workspaceInstanceId: `${options.workspaceId}-instance`,
+            replayEpoch: 1,
+            replayState: 'applied',
+          };
+        },
+        async openOverlay(input) {
+          options.calls.push(`openOverlay:${input.uri}@${input.version}`);
+        },
+        async updateOverlay(input) {
+          options.calls.push(`updateOverlay:${input.uri}@${input.version}`);
+        },
+        async closeOverlay(input) {
+          options.calls.push(`closeOverlay:${input.uri}`);
+        },
+        async queryDiagnostics(input) {
+          const version = input.documentVersion ?? 0;
+          options.calls.push(`queryDiagnostics:${input.uri ?? '*'}@${version}`);
+          if (options.failOnDocumentVersion === version) {
+            throw new Error('Daemon connection closed');
+          }
+          return options.diagnosticsByDocumentVersion[version] ?? [];
+        },
+        async queryCodeActions() {
+          options.calls.push('queryCodeActions');
+          return [];
+        },
+        async applyEditPlan() {
+          options.calls.push('applyEditPlan');
+          return { applied: false, failureReason: 'plan_not_found' };
+        },
+        async queryIndexStatus() {
+          options.calls.push('queryIndexStatus');
+          return {
+            workspaceId: options.workspaceId,
+            workspaceInstanceId: `${options.workspaceId}-instance`,
+            status: 'ready',
+            indexedFileCount: 1,
+            openDocumentCount: 1,
+            overlayCount: 1,
+            analysisGeneration: 1,
+          };
+        },
+      };
+    }
+
+    const staleDiagnostic: WorkspaceDiagnostic = {
+      id: 'diag-stale',
+      uri,
+      source: 'codepol',
+      code: 'no-interface',
+      severity: 'error',
+      message: 'Interfaces are not allowed.',
+      range: {
+        start: { line: 0, character: 7 },
+        end: { line: 0, character: 16 },
+      },
+    };
+
+    const server = new CodepolLspServer({
+      clientInstanceId: 'lsp-restart-refresh-instance',
+      clientSessionId: 'lsp-restart-refresh-session',
+      serviceFactory: async () => {
+        serviceFactoryCalls += 1;
+        return serviceFactoryCalls === 1
+          ? serviceMockCreate({
+              calls: firstCalls,
+              daemonSessionId: 'daemon-1',
+              workspaceId: 'workspace-a',
+              failOnDocumentVersion: 2,
+              diagnosticsByDocumentVersion: {
+                1: [staleDiagnostic],
+              },
+            })
+          : serviceMockCreate({
+              calls: secondCalls,
+              daemonSessionId: 'daemon-2',
+              workspaceId: 'workspace-b',
+              diagnosticsByDocumentVersion: {
+                2: [],
+              },
+            });
+      },
+      sendMessage: (message) => {
+        messages.push(message);
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        rootUri: pathToFileURL(workspaceRoot).href,
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      method: 'textDocument/didOpen',
+      params: {
+        textDocument: {
+          uri,
+          version: 1,
+          text: fs.readFileSync(filePath, 'utf8'),
+        },
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      method: 'textDocument/didChange',
+      params: {
+        textDocument: { uri, version: 2 },
+        contentChanges: [{ text: 'export type User = {\n  name: string;\n};\n' }],
+      },
+    });
+
+    const publishMessages = messages.filter(
+      (message) => message.method === 'textDocument/publishDiagnostics',
+    );
+    expect(serviceFactoryCalls).toBe(2);
+    expect(firstCalls).toContain(`queryDiagnostics:${uri}@1`);
+    expect(firstCalls).toContain(`queryDiagnostics:${uri}@2`);
+    expect(secondCalls).toContain('register:lsp-restart-refresh-session');
+    expect(secondCalls).toContain('attachWorkspace');
+    expect(secondCalls).toContain('subscribeDiagnostics:workspace');
+    expect(secondCalls).toContain(`openOverlay:${uri}@2`);
+    expect(secondCalls).toContain('completeReplay');
+    expect(secondCalls).toContain(`updateOverlay:${uri}@2`);
+    expect(secondCalls).toContain(`queryDiagnostics:${uri}@2`);
+    expect(publishMessages).toHaveLength(2);
+    expect(publishMessages[0]?.params.diagnostics).toHaveLength(1);
+    expect(publishMessages[1]?.params.diagnostics).toEqual([]);
+  });
+
   it('resolves a daemon-backed workspace service by default', async () => {
     const runtimeDir = tempWorkspaceCreate('codepol-lsp-daemon-runtime-');
     createdDirs.push(runtimeDir);
