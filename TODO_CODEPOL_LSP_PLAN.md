@@ -4,6 +4,7 @@
 - Tranche 1 is complete in the repo: the shared service is now a **sessionized in-process engine** with per-client overlay isolation, session-scoped edit plans, and adapter migration in `apps/lsp` and `apps/cli`.
 - Tranche 2 is complete in the repo: the **daemon control plane and long-lived host** now sit over the same engine, with reconnect, replay, invalidation, persistence, queueing/cancellation, and rollout coverage in place without widening the semantic feature surface yet.
 - Tranche 3 is complete in the repo for the narrowed Phase-4/Phase-6 cut: the LSP now ships **narrow `workspace/symbol`**, **cold-start status/progress**, and **read-only `codepol/*` RPC** over the existing LSP JSON-RPC stream.
+- Tranche 4 is complete in the repo for its first real replacement slice: the analyzer ownership/scorecard foundation is in place, and `@codepol/plugin/no-unused-vars` is the first shipped native-over-wrapped JS/TS migration with parity coverage on the current service, daemon, CLI, and LSP surfaces.
 - Keep Phase 4 scoped to **Codepol-owned semantics only**. Do not add generic hover or generic rename that compete with `tsserver`, `Pylance`, or `Pyright`.
 - Keep `WorkspaceDiagnostic` narrow. Fixes remain surfaced through `WorkspaceCodeAction` and `WorkspaceEditPlan`, not embedded into diagnostics.
 - Keep `queryIndexStatus` as the status source of truth and expand it for daemon/readiness reporting rather than inventing a parallel status API.
@@ -404,52 +405,52 @@
 - Any future refactor or rename flow must continue to validate exact snapshot preconditions and return `WorkspaceEditPlan`s rather than ad hoc edits.
 - Add a separate extension RPC transport only if later UI workflows outgrow the current LSP JSON-RPC carrier.
 
-## Tranche 4: Replacement Roadmap
-- Scope this tranche to a JS/TS-first replacement program behind the existing workspace-service boundary.
+## Tranche 4: Replacement Program (Completed)
+- Scope of the shipped tranche:
+  - a JS/TS-first replacement program behind the existing workspace-service boundary
+  - one real dual-path migration to prove the mechanism end to end
 - Keep adapters and public interfaces stable:
   - no `WorkspaceService` surface changes
   - no daemon RPC changes
   - no new LSP methods
   - no widening of generic `hover`/`definition`/`references`/`rename` ownership
-- Land tranche 4 in two phases:
+- Tranche 4 shipped in two phases:
   - `4A foundation`: analyzer ownership matrix, internal analyzer-runner contract, per-analysis scorecards, and parity/inventory coverage
   - `4B migration`: switch one real JS/TS wrapped analyzer path to Codepol-native ownership only after parity passes
-- Current repo status after 4A:
+- `4A` foundation is complete in the repo:
   - native tree checks and wrapped analyzers now run through one internal scorecarded contract in `packages/workspace-service`
   - JS/TS rules that expose both a tree check and a wrapped lint provider now prefer the native Codepol path before execution instead of deduping after the fact
   - wrapped-only JS/TS rules still run unchanged
   - native-owned rule failures now degrade diagnostics instead of silently falling back to wrapped output in the same analysis run
   - each analysis generation now also records an internal JS/TS wrapped-candidate inventory with ownership, wrapped platforms, recent diagnostic counts, latency buckets, and fix-surface notes for test verification
   - analyzer scorecards persist through warm-cache restore for service and daemon tests
-- `4B` has now landed for the first real in-tree dual-path rule:
+- `4B` is complete for the first real in-tree dual-path rule:
   - `@codepol/plugin/no-unused-vars` now ships as a real non-test builtin JS/TS rule with both native and wrapped ESLint implementations, and the workspace service selects the native path before execution
   - parity is now covered for ownership reporting plus diagnostic and fix behavior on the current service, daemon, CLI, and LSP surfaces
   - do not replace generic third-party ESLint or Biome ecosystems; keep them wrapped unless Codepol owns the semantics end-to-end
+- Tranche 4 itself is therefore complete:
+  - one real migration was enough to prove the ownership, parity, and adapter-stability model
+  - future rule migrations are optional follow-on work, not tranche-4 blockers
 - Migration gate for any future `4B` candidate:
   - diagnostic code, range, severity, and source behavior must stay stable or improve
   - existing fix behavior on current CLI/LSP surfaces must be preserved or improved
   - no runtime fallback from failed native execution to wrapped output inside the same analysis pass
 
-## Test Plan
-- Service integration must cover two client sessions attached to the same workspace opening the same URI with different overlays and receiving isolated diagnostics.
-- Service integration must cover cross-file overlay changes in one session not affecting another session’s diagnostics.
-- Service integration must cover session-scoped code actions and `planId`s so one session cannot apply another session’s plan.
-- Service integration must cover closing one session overlay reverting only that session to disk state.
-- Service integration must cover stale document versions being rejected per session, not globally.
-- LSP adapter tests must cover session registration and workspace attachment during `initialize`.
-- LSP adapter tests must cover diagnostics publication staying correct after the API replacement.
-- LSP adapter tests must cover `workspace/executeCommand` applying only plans owned by the active client session.
-- CLI/e2e tests must continue to cover one-shot check/fix behavior and the existing cross-file fix flow.
-- Daemon-phase tests must cover reconnect as full re-registration plus replay, stale daemon-session output discard, and deterministic warm-start status transitions.
-- Tranche-4 service tests must cover:
-  - a synthetic dual-capability JS/TS rule preferring native output without double-reporting
-  - a wrapped-only JS/TS rule continuing to emit wrapped diagnostics
+## Tranche 4 Coverage Now In Repo
+- Service integration now covers:
+  - dual-capability JS/TS rules preferring native output without double-reporting
+  - wrapped-only JS/TS rules continuing to emit wrapped diagnostics
   - native-owned rule failure degrading diagnostics without wrapped fallback
-  - analyzer scorecards surviving warm restore
-- Tranche-4 daemon tests must cover analyzer scorecard restore for a native-owned JS/TS rule across daemon incarnations
+  - analyzer scorecards and analyzer inventory surviving warm restore
+- Daemon coverage now includes:
+  - analyzer scorecard restore for a native-owned JS/TS rule across daemon incarnations
+  - cancellation of a long-running external analyzer through daemon request signals
+- LSP and CLI coverage now includes:
+  - `@codepol/plugin/no-unused-vars` diagnostic parity on current user-facing surfaces
+  - tree-backed code-action and one-shot fix behavior staying stable after native ownership selection
 
 ## Assumptions and Defaults
-- Tranche 4 executed `4A foundation` first and now includes a completed first `4B` migration for `@codepol/plugin/no-unused-vars`; future candidates stay opt-in behind the same parity gate.
+- Tranche 4 is complete after `4A foundation` plus the first `4B` migration for `@codepol/plugin/no-unused-vars`; future candidates stay opt-in behind the same parity gate.
 - Phase 4 remains Codepol-only in scope until a later explicit decision changes the ownership matrix.
 - Fix payloads stay separate from diagnostics.
 - Session-local derived indexes are an acceptable tranche-1 tradeoff; shared-index optimization is deferred.
