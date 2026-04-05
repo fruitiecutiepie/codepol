@@ -256,6 +256,7 @@
   - daemon handshake compatibility failures now short-circuit as explicit errors instead of being treated as generic unhealthy-daemon retries, and the CLI/LSP factories now pass `CODEPOL_INSTALL_ID` through the `hello` expectation so mismatched runtime dirs fall back deterministically without relaunching
   - adapter coverage now proves both the default daemon path and the explicit `in_process` override for CLI and LSP, CLI daemon-mode tests now cover both one-shot check and one-shot fix behavior, and LSP daemon-backed tests now cover initialize/open/change/close diagnostics parity plus reconnect-driven diagnostics refresh after daemon restart
   - launcher coverage now proves parallel clients serialize behind one daemon start, that a stale `daemon.lock` is cleared during recovery, and that daemon startup removes a stale `daemon.sock` path before binding
+  - daemon-backed workspace integration coverage now proves two client sessions can attach to the same daemon workspace, share one base workspace identity, and still keep overlay diagnostics isolated
 - Keep the adapter boundary narrow:
   - adapters own transport/bootstrap/reconnect logic
   - the shared engine still owns workspace/session semantics

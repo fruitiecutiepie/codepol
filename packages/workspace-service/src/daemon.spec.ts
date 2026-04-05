@@ -116,6 +116,18 @@ describe('workspace daemon control plane', () => {
     };
   };
 
+  async function daemonServiceClientCreate(input: {
+    descriptor: WorkspaceDaemonDescriptor;
+    clientInstanceId: string;
+  }): Promise<WorkspaceDaemonServiceClient> {
+    const connection = await connect(input.descriptor);
+    await workspaceDaemonHello({
+      connection,
+      client: clientIdentityCreate(input.clientInstanceId),
+    });
+    return new WorkspaceDaemonServiceClient(connection);
+  }
+
   it('persists the runtime descriptor and serves the hello contract', async () => {
     const runtimeDir = tempRuntimeDirCreate();
     tempDirs.push(runtimeDir);
@@ -327,6 +339,139 @@ describe('workspace daemon control plane', () => {
     expect(diagnostics).toHaveLength(1);
 
     await service.close();
+  });
+
+  it('shares daemon workspace base state across client sessions while keeping overlays isolated', async () => {
+    const runtimeDir = tempRuntimeDirCreate();
+    tempDirs.push(runtimeDir);
+
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-daemon-workspace-'));
+    tempDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = workspacePathToUri(filePath);
+    fs.writeFileSync(
+      filePath,
+      'export interface User {\n  name: string;\n}\n',
+      'utf8',
+    );
+
+    const engine = new WorkspaceServiceEngine();
+    const { descriptor } = workspaceDaemonDescriptorCreate({ runtimeDir });
+    workspaceDaemonDescriptorWrite(runtimeDir, descriptor);
+    liveDaemons.set(descriptor.transport.path, { descriptor, service: engine });
+
+    const writer = await daemonServiceClientCreate({
+      descriptor,
+      clientInstanceId: 'daemon-overlay-writer',
+    });
+    const reader = await daemonServiceClientCreate({
+      descriptor,
+      clientInstanceId: 'daemon-overlay-reader',
+    });
+
+    const writerRegistered = await writer.registerClientSession({
+      clientKind: 'test',
+      clientInstanceId: 'daemon-overlay-writer',
+      clientSessionId: 'daemon-overlay-writer-session',
+    });
+    const readerRegistered = await reader.registerClientSession({
+      clientKind: 'test',
+      clientInstanceId: 'daemon-overlay-reader',
+      clientSessionId: 'daemon-overlay-reader-session',
+    });
+
+    const writerAttached = await writer.attachWorkspace({
+      clientSessionId: writerRegistered.clientSessionId,
+      rootPath: workspaceRoot,
+      configPath,
+    });
+    const readerAttached = await reader.attachWorkspace({
+      clientSessionId: readerRegistered.clientSessionId,
+      rootPath: workspaceRoot,
+      configPath,
+    });
+
+    expect(readerAttached.workspaceId).toBe(writerAttached.workspaceId);
+    expect(readerAttached.workspaceInstanceId).toBe(writerAttached.workspaceInstanceId);
+
+    await writer.completeReplay({
+      clientSessionId: writerRegistered.clientSessionId,
+      workspaceId: writerAttached.workspaceId,
+      workspaceInstanceId: writerAttached.workspaceInstanceId,
+    });
+    await reader.completeReplay({
+      clientSessionId: readerRegistered.clientSessionId,
+      workspaceId: readerAttached.workspaceId,
+      workspaceInstanceId: readerAttached.workspaceInstanceId,
+    });
+
+    expect(
+      await writer.queryDiagnostics({
+        clientSessionId: writerRegistered.clientSessionId,
+        workspaceId: writerAttached.workspaceId,
+        uri,
+      }),
+    ).toHaveLength(1);
+    expect(
+      await reader.queryDiagnostics({
+        clientSessionId: readerRegistered.clientSessionId,
+        workspaceId: readerAttached.workspaceId,
+        uri,
+      }),
+    ).toHaveLength(1);
+
+    await writer.openOverlay({
+      clientSessionId: writerRegistered.clientSessionId,
+      workspaceId: writerAttached.workspaceId,
+      uri,
+      version: 1,
+      text: 'export type User = {\n  name: string;\n};\n',
+    });
+
+    expect(
+      await writer.queryDiagnostics({
+        clientSessionId: writerRegistered.clientSessionId,
+        workspaceId: writerAttached.workspaceId,
+        uri,
+      }),
+    ).toEqual([]);
+    expect(
+      await reader.queryDiagnostics({
+        clientSessionId: readerRegistered.clientSessionId,
+        workspaceId: readerAttached.workspaceId,
+        uri,
+      }),
+    ).toHaveLength(1);
+
+    await reader.openOverlay({
+      clientSessionId: readerRegistered.clientSessionId,
+      workspaceId: readerAttached.workspaceId,
+      uri,
+      version: 1,
+      text: 'export interface User {\n  name: string;\n  age: number;\n}\n',
+    });
+
+    expect(
+      await writer.queryDiagnostics({
+        clientSessionId: writerRegistered.clientSessionId,
+        workspaceId: writerAttached.workspaceId,
+        uri,
+      }),
+    ).toEqual([]);
+    expect(
+      await reader.queryDiagnostics({
+        clientSessionId: readerRegistered.clientSessionId,
+        workspaceId: readerAttached.workspaceId,
+        uri,
+      }),
+    ).toHaveLength(1);
+
+    await writer.close();
+    await reader.close();
   });
 
   it('restores a warm index-backed workspace across daemon incarnations', async () => {
