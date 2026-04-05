@@ -3,15 +3,27 @@
 import {
   WorkspaceServiceEngine,
   policyCheck as workspacePolicyCheck,
+  WORKSPACE_DAEMON_BUILD_ID,
+  WORKSPACE_DAEMON_ENGINE_VERSION,
   workspaceDaemonServerStart,
+  workspaceDaemonRuntimePathsResolve,
   workspaceWatcherCreate,
+  workspaceWarmCacheFsStoreCreate,
 } from '@codepol/workspace-service';
 
 async function main(): Promise<void> {
+  const runtimeDir = workspaceDaemonRuntimePathsResolve(
+    process.env.CODEPOL_DAEMON_RUNTIME_DIR,
+  ).runtimeDir;
   const server = await workspaceDaemonServerStart({
     service: new WorkspaceServiceEngine({
       backgroundWarmup: true,
       watcherCreate: workspaceWatcherCreate,
+      warmCache: workspaceWarmCacheFsStoreCreate({
+        runtimeDir,
+        engineVersion: WORKSPACE_DAEMON_ENGINE_VERSION,
+        buildId: WORKSPACE_DAEMON_BUILD_ID,
+      }),
     }),
     policyCheck: workspacePolicyCheck,
   });

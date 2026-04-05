@@ -61,9 +61,16 @@ import {
   workspaceEditPlanCreateFromFix,
 } from './edits';
 import { builtinPluginsRefresh, ensureWorkspaceRuntimeReady } from './runtime';
+import {
+  WORKSPACE_WARM_CACHE_COMPAT_VERSION,
+  type WorkspaceWarmCacheFileFingerprint,
+  type WorkspaceWarmCacheSnapshot,
+  type WorkspaceWarmCacheStore,
+} from './warmCache';
 
 export * from './daemon';
 export { builtinPluginsRefresh, ensureWorkspaceRuntimeReady } from './runtime';
+export * from './warmCache';
 
 const ESLINT_CONFIG_EXTENSIONS = ['.js', '.mjs', '.cjs', '.ts', '.mts', '.cts'];
 const BIOME_FILE_EXTENSIONS = ['.js', '.mjs', '.cjs', '.jsx', '.ts', '.mts', '.cts', '.tsx'];
@@ -149,6 +156,7 @@ export type WorkspaceServiceEngineOptions = {
   watcherCreate?: WorkspaceWatcherCreate;
   backgroundWarmup?: boolean;
   backgroundTaskSchedule?: (task: () => Promise<void>) => void;
+  warmCache?: WorkspaceWarmCacheStore;
 };
 
 type WorkspaceSessionState = WorkspaceDocumentsState &
@@ -963,6 +971,284 @@ function workspaceIndexRefreshFromDisk(
   indexState.index = projectIndexCreate(indexState.store, indexState.capabilities);
 }
 
+function workspaceFilesNormalize(files: string[]): string[] {
+  return [...new Set(files.map((filePath) => path.resolve(filePath)))].sort();
+}
+
+function workspaceWarmCacheKeyCreate(workspace: WorkspaceContextState & { workspaceId: string }): {
+  workspaceId: string;
+  rootPath: string;
+  configPath: string;
+} {
+  return {
+    workspaceId: workspace.workspaceId,
+    rootPath: workspace.rootPath,
+    configPath: workspace.configPath,
+  };
+}
+
+function workspaceWarmCacheFileFingerprintRead(
+  filePath: string,
+): WorkspaceWarmCacheFileFingerprint | undefined {
+  try {
+    const stats = fs.statSync(filePath);
+    if (!stats.isFile()) {
+      return undefined;
+    }
+    return {
+      path: path.resolve(filePath),
+      size: stats.size,
+      mtimeMs: stats.mtimeMs,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function workspaceWarmCacheFingerprintsRead(input: {
+  files: string[];
+  configPath: string;
+  eslintConfigPath: string;
+}): {
+  configFingerprint: WorkspaceWarmCacheFileFingerprint;
+  eslintConfigFingerprint?: WorkspaceWarmCacheFileFingerprint;
+  fileFingerprints: WorkspaceWarmCacheFileFingerprint[];
+} | undefined {
+  const configFingerprint = workspaceWarmCacheFileFingerprintRead(input.configPath);
+  if (!configFingerprint) {
+    return undefined;
+  }
+
+  const fileFingerprints: WorkspaceWarmCacheFileFingerprint[] = [];
+  for (const filePath of workspaceFilesNormalize(input.files)) {
+    const fingerprint = workspaceWarmCacheFileFingerprintRead(filePath);
+    if (!fingerprint) {
+      return undefined;
+    }
+    fileFingerprints.push(fingerprint);
+  }
+
+  return {
+    configFingerprint,
+    eslintConfigFingerprint: workspaceWarmCacheFileFingerprintRead(input.eslintConfigPath),
+    fileFingerprints,
+  };
+}
+
+function workspaceWarmCacheFingerprintEquals(
+  left: WorkspaceWarmCacheFileFingerprint | undefined,
+  right: WorkspaceWarmCacheFileFingerprint | undefined,
+): boolean {
+  if (!left || !right) {
+    return left === right;
+  }
+  return left.path === right.path && left.size === right.size && left.mtimeMs === right.mtimeMs;
+}
+
+function workspaceWarmCacheBaseIndexSnapshotCreate(
+  baseIndexState: WorkspaceBaseIndexState | undefined,
+) {
+  if (!baseIndexState) {
+    return undefined;
+  }
+  return {
+    files: [...baseIndexState.files],
+    fileKey: baseIndexState.fileKey,
+    workspacePackages: Array.from(baseIndexState.workspacePackages.entries()),
+  };
+}
+
+function workspaceWarmCacheBaseIndexRestore(
+  snapshot:
+    | WorkspaceWarmCacheSnapshot['baseIndexState']
+    | undefined,
+): WorkspaceBaseIndexState | undefined {
+  if (!snapshot) {
+    return undefined;
+  }
+  return {
+    files: [...snapshot.files],
+    fileKey: snapshot.fileKey,
+    workspacePackages: new Map(snapshot.workspacePackages),
+  };
+}
+
+function workspaceWarmCacheAnalysisRestore(
+  workspace: WorkspaceContextState,
+  snapshot: WorkspaceWarmCacheSnapshot,
+): WorkspaceAnalysis {
+  const policy = workspace.config as PolicyFile;
+  const fixableTreeViolationsByDiagnosticId = new Map<string, PolicyViolation>();
+  for (const violation of snapshot.treeViolations) {
+    const severity = severityFromLintSeverity(policyRuleGet(policy, violation.ruleId)?.severity);
+    const diagnostic = policyViolationToWorkspaceDiagnostic(violation, {
+      severity,
+      source: 'codepol',
+    });
+    if (violation.fix || (violation.suggestions && violation.suggestions.length > 0)) {
+      fixableTreeViolationsByDiagnosticId.set(diagnostic.id, violation);
+    }
+  }
+
+  return {
+    policy,
+    files: [...snapshot.files],
+    violations: [...snapshot.treeViolations],
+    treeViolations: [...snapshot.treeViolations],
+    diagnostics: [...snapshot.diagnostics],
+    featureStatus: snapshot.featureStatus,
+    fixableTreeViolationsByDiagnosticId,
+    eslintOutput: '',
+    eslintHasErrors: false,
+  };
+}
+
+async function workspaceWarmCacheSnapshotRestore(input: {
+  warmCache?: WorkspaceWarmCacheStore;
+  workspace: WorkspaceState;
+  workspaceIndexRequired?: boolean;
+}): Promise<
+  | {
+      analysisGeneration: number;
+      workspaceIndexRequired: boolean;
+      lastAnalysis: WorkspaceAnalysis;
+      baseIndexState?: WorkspaceBaseIndexState;
+    }
+  | undefined
+> {
+  if (!input.warmCache) {
+    return undefined;
+  }
+
+  const cacheKey = workspaceWarmCacheKeyCreate(input.workspace);
+  const snapshot = await input.warmCache.read(cacheKey);
+  if (!snapshot) {
+    return undefined;
+  }
+
+  if (
+    snapshot.workspaceId !== input.workspace.workspaceId ||
+    path.resolve(snapshot.rootPath) !== input.workspace.rootPath ||
+    path.resolve(snapshot.configPath) !== input.workspace.configPath
+  ) {
+    await input.warmCache.delete(cacheKey);
+    return undefined;
+  }
+
+  try {
+    const policy = input.workspace.config as PolicyFile;
+    const matches = await ruleMatchesGet(policy, input.workspace.rootPath);
+    const currentFiles = workspaceFilesNormalize(matches.flatMap((match) => match.files));
+    const snapshotFiles = workspaceFilesNormalize(snapshot.files);
+    if (
+      currentFiles.length !== snapshotFiles.length ||
+      currentFiles.some((filePath, index) => filePath !== snapshotFiles[index])
+    ) {
+      await input.warmCache.delete(cacheKey);
+      return undefined;
+    }
+
+    const currentFingerprints = workspaceWarmCacheFingerprintsRead({
+      files: currentFiles,
+      configPath: input.workspace.configPath,
+      eslintConfigPath: input.workspace.eslintConfigPath,
+    });
+    if (!currentFingerprints) {
+      await input.warmCache.delete(cacheKey);
+      return undefined;
+    }
+
+    const snapshotFingerprints = workspaceWarmCacheFingerprintsRead({
+      files: snapshot.files,
+      configPath: snapshot.configPath,
+      eslintConfigPath: snapshot.eslintConfigPath,
+    });
+    if (!snapshotFingerprints) {
+      await input.warmCache.delete(cacheKey);
+      return undefined;
+    }
+
+    if (
+      !workspaceWarmCacheFingerprintEquals(
+        currentFingerprints.configFingerprint,
+        snapshot.configFingerprint,
+      ) ||
+      !workspaceWarmCacheFingerprintEquals(
+        currentFingerprints.eslintConfigFingerprint,
+        snapshot.eslintConfigFingerprint,
+      ) ||
+      currentFingerprints.fileFingerprints.length !== snapshot.fileFingerprints.length ||
+      currentFingerprints.fileFingerprints.some((fingerprint, index) => {
+        return !workspaceWarmCacheFingerprintEquals(
+          fingerprint,
+          snapshot.fileFingerprints[index],
+        );
+      })
+    ) {
+      await input.warmCache.delete(cacheKey);
+      return undefined;
+    }
+
+    if (
+      input.workspaceIndexRequired !== undefined &&
+      snapshot.workspaceIndexRequired !== input.workspaceIndexRequired
+    ) {
+      await input.warmCache.delete(cacheKey);
+      return undefined;
+    }
+
+    return {
+      analysisGeneration: snapshot.analysisGeneration,
+      workspaceIndexRequired: snapshot.workspaceIndexRequired,
+      lastAnalysis: workspaceWarmCacheAnalysisRestore(input.workspace, snapshot),
+      baseIndexState: workspaceWarmCacheBaseIndexRestore(snapshot.baseIndexState),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+async function workspaceWarmCacheSnapshotPersist(input: {
+  warmCache?: WorkspaceWarmCacheStore;
+  workspace: WorkspaceState;
+  workspaceSession: WorkspaceSessionState;
+}): Promise<void> {
+  if (!input.warmCache || input.workspaceSession.status !== 'ready') {
+    return;
+  }
+  if (input.workspaceSession.documents.size > 0 || !input.workspaceSession.lastAnalysis) {
+    return;
+  }
+
+  const fingerprints = workspaceWarmCacheFingerprintsRead({
+    files: input.workspaceSession.lastAnalysis.files,
+    configPath: input.workspace.configPath,
+    eslintConfigPath: input.workspace.eslintConfigPath,
+  });
+  if (!fingerprints) {
+    return;
+  }
+
+  await input.warmCache.write(workspaceWarmCacheKeyCreate(input.workspace), {
+    compatVersion: WORKSPACE_WARM_CACHE_COMPAT_VERSION,
+    workspaceId: input.workspace.workspaceId,
+    rootPath: input.workspace.rootPath,
+    configPath: input.workspace.configPath,
+    eslintConfigPath: input.workspace.eslintConfigPath,
+    analysisGeneration: input.workspaceSession.analysisGeneration,
+    workspaceIndexRequired: input.workspaceSession.workspaceIndexRequired ?? false,
+    files: [...input.workspaceSession.lastAnalysis.files],
+    diagnostics: [...input.workspaceSession.lastAnalysis.diagnostics],
+    treeViolations: [...input.workspaceSession.lastAnalysis.treeViolations],
+    featureStatus: input.workspaceSession.lastAnalysis.featureStatus,
+    baseIndexState: workspaceWarmCacheBaseIndexSnapshotCreate(input.workspace.baseIndexState),
+    configFingerprint: fingerprints.configFingerprint,
+    eslintConfigFingerprint: fingerprints.eslintConfigFingerprint,
+    fileFingerprints: fingerprints.fileFingerprints,
+    createdAtUnixMs: Date.now(),
+  });
+}
+
 async function workspaceIndexRequirementResolve(
   workspace: WorkspaceContextState,
 ): Promise<boolean | undefined> {
@@ -1444,10 +1730,12 @@ export class WorkspaceServiceEngine implements WorkspaceService {
   private readonly watcherCreate?: WorkspaceWatcherCreate;
   private readonly backgroundWarmup: boolean;
   private readonly backgroundTaskSchedule: (task: () => Promise<void>) => void;
+  private readonly warmCache?: WorkspaceWarmCacheStore;
 
   constructor(options: WorkspaceServiceEngineOptions = {}) {
     this.watcherCreate = options.watcherCreate;
     this.backgroundWarmup = options.backgroundWarmup ?? false;
+    this.warmCache = options.warmCache;
     this.backgroundTaskSchedule =
       options.backgroundTaskSchedule ??
       ((task) => {
@@ -1457,11 +1745,27 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       });
   }
 
+  private async workspaceSessionAnalysisEnsure(
+    workspace: WorkspaceState,
+    workspaceSession: WorkspaceSessionState,
+  ): Promise<WorkspaceAnalysis> {
+    const analysis = await workspaceSessionAnalysisGet(workspace, workspaceSession);
+    await workspaceWarmCacheSnapshotPersist({
+      warmCache: this.warmCache,
+      workspace,
+      workspaceSession,
+    });
+    return analysis;
+  }
+
   private workspaceBackgroundWarmupSchedule(
     workspace: WorkspaceState,
     workspaceSession: WorkspaceSessionState,
   ): void {
     if (!this.backgroundWarmup || workspaceSession.replayState !== 'applied') {
+      return;
+    }
+    if (workspaceSession.lastAnalysis && workspaceSession.status === 'ready') {
       return;
     }
     if (workspaceSession.backgroundWarmupRunning) {
@@ -1478,7 +1782,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
 
     this.backgroundTaskSchedule(async () => {
       try {
-        await workspaceSessionAnalysisGet(workspace, workspaceSession);
+        await this.workspaceSessionAnalysisEnsure(workspace, workspaceSession);
       } catch {}
       finally {
         workspaceSession.backgroundWarmupRunning = false;
@@ -1645,6 +1949,14 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     workspace.attachedClientSessionIds.add(input.clientSessionId);
     const existingWorkspaceSession = clientSession.workspaces.get(workspaceId);
     if (!existingWorkspaceSession) {
+      const restoredWarmCache = await workspaceWarmCacheSnapshotRestore({
+        warmCache: this.warmCache,
+        workspace,
+        workspaceIndexRequired,
+      });
+      if (restoredWarmCache?.baseIndexState) {
+        workspace.baseIndexState = restoredWarmCache.baseIndexState;
+      }
       clientSession.workspaces.set(workspaceId, {
         workspaceId,
         workspaceInstanceId: workspace.workspaceInstanceId,
@@ -1652,10 +1964,12 @@ export class WorkspaceServiceEngine implements WorkspaceService {
         replayState: 'pending',
         documents: new Map(),
         codeActionPlans: new Map(),
-        status: 'cold',
-        analysisGeneration: 0,
+        status: restoredWarmCache ? 'ready' : 'cold',
+        analysisGeneration: restoredWarmCache?.analysisGeneration ?? 0,
         analysisRevision: 0,
-        workspaceIndexRequired,
+        workspaceIndexRequired:
+          restoredWarmCache?.workspaceIndexRequired ?? workspaceIndexRequired,
+        lastAnalysis: restoredWarmCache?.lastAnalysis,
       });
     } else {
       existingWorkspaceSession.workspaceIndexRequired = workspaceIndexRequired;
@@ -1821,7 +2135,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
         documentVersion: input.documentVersion,
       });
     }
-    const analysis = await workspaceSessionAnalysisGet(workspace, workspaceSession);
+    const analysis = await this.workspaceSessionAnalysisEnsure(workspace, workspaceSession);
     if (!input.uri) {
       return analysis.diagnostics;
     }

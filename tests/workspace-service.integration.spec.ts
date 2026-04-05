@@ -11,6 +11,7 @@ import {
 import {
   WorkspaceServiceEngine,
   workspaceServiceCreate,
+  workspaceWarmCacheFsStoreCreate,
   type WorkspaceWatcherCreate,
 } from '@codepol/workspace-service';
 
@@ -904,6 +905,186 @@ describe('workspace service integration', () => {
       replayState: 'pending',
       analysisGeneration: 2,
     });
+  });
+
+  it('restores a persisted warm cache on attach and lets overlay replay win over it', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    const runtimeDir = tempWorkspaceCreate('codepol-workspace-cache-');
+    createdDirs.push(workspaceRoot, runtimeDir);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = workspacePathToUri(filePath);
+    fs.writeFileSync(
+      filePath,
+      'export interface User {\n  name: string;\n}\n',
+      'utf8',
+    );
+
+    const warmCache = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const writerService = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine({
+        warmCache,
+      }),
+    });
+    const written = await clientWorkspaceAttach(writerService, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'warm-cache-writer',
+    });
+
+    expect(
+      await writerService.queryDiagnostics({
+        clientSessionId: written.clientSessionId,
+        workspaceId: written.workspaceId,
+        uri,
+      }),
+    ).toHaveLength(1);
+    await writerService.closeClientSession({
+      clientSessionId: written.clientSessionId,
+    });
+
+    const backgroundTasks = backgroundTaskQueueCreate();
+    const readerService = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine({
+        backgroundWarmup: true,
+        backgroundTaskSchedule: backgroundTasks.schedule,
+        warmCache,
+      }),
+    });
+    const restored = await clientWorkspaceAttach(readerService, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'warm-cache-reader',
+    });
+
+    expect(
+      await readerService.queryIndexStatus({
+        clientSessionId: restored.clientSessionId,
+        workspaceId: restored.workspaceId,
+      }),
+    ).toMatchObject({
+      workspaceId: restored.workspaceId,
+      workspaceInstanceId: restored.workspaceInstanceId,
+      status: 'ready',
+      replayState: 'pending',
+      workspaceReady: false,
+      featureStatus: {
+        diagnostics: { readiness: 'ready' },
+        codeActions: { readiness: 'ready' },
+        editPlans: { readiness: 'ready' },
+        workspaceIndex: {
+          readiness: 'ready',
+          detail: 'Not required by current policy',
+        },
+      },
+      analysisGeneration: 1,
+    });
+
+    await readerService.completeReplay({
+      clientSessionId: restored.clientSessionId,
+      workspaceId: restored.workspaceId,
+      workspaceInstanceId: restored.workspaceInstanceId,
+    });
+
+    expect(backgroundTasks.pendingCountGet()).toBe(0);
+    expect(
+      await readerService.queryDiagnostics({
+        clientSessionId: restored.clientSessionId,
+        workspaceId: restored.workspaceId,
+        uri,
+      }),
+    ).toHaveLength(1);
+
+    await readerService.openOverlay({
+      clientSessionId: restored.clientSessionId,
+      workspaceId: restored.workspaceId,
+      uri,
+      version: 1,
+      text: 'export type User = {\n  name: string;\n};\n',
+    });
+
+    expect(
+      await readerService.queryDiagnostics({
+        clientSessionId: restored.clientSessionId,
+        workspaceId: restored.workspaceId,
+        uri,
+      }),
+    ).toEqual([]);
+  });
+
+  it('discards a stale warm cache when the disk-backed workspace state changes', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    const runtimeDir = tempWorkspaceCreate('codepol-workspace-cache-');
+    createdDirs.push(workspaceRoot, runtimeDir);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = workspacePathToUri(filePath);
+    fs.writeFileSync(
+      filePath,
+      'export interface User {\n  name: string;\n}\n',
+      'utf8',
+    );
+
+    const warmCache = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const writerService = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine({
+        warmCache,
+      }),
+    });
+    const written = await clientWorkspaceAttach(writerService, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'warm-cache-stale-writer',
+    });
+    await writerService.queryDiagnostics({
+      clientSessionId: written.clientSessionId,
+      workspaceId: written.workspaceId,
+      uri,
+    });
+
+    fs.writeFileSync(
+      filePath,
+      'export type User = {\n  name: string;\n};\n',
+      'utf8',
+    );
+
+    const readerService = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine({
+        warmCache,
+      }),
+    });
+    const restored = await clientWorkspaceAttach(readerService, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'warm-cache-stale-reader',
+    });
+
+    expect(
+      await readerService.queryIndexStatus({
+        clientSessionId: restored.clientSessionId,
+        workspaceId: restored.workspaceId,
+      }),
+    ).toMatchObject({
+      workspaceId: restored.workspaceId,
+      workspaceInstanceId: restored.workspaceInstanceId,
+      status: 'cold',
+      replayState: 'pending',
+      workspaceReady: false,
+      analysisGeneration: 0,
+    });
+    expect(
+      await readerService.queryDiagnostics({
+        clientSessionId: restored.clientSessionId,
+        workspaceId: restored.workspaceId,
+        uri,
+      }),
+    ).toEqual([]);
   });
 
   it('reports replay pending and warms in the background after replay completes', async () => {

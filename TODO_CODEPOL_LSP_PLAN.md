@@ -213,6 +213,10 @@
   - warm-up status transitions are deterministic and queryable
 
 ### Workstream 5: Persistence And Warm Start
+- Started in the repo:
+  - the workspace engine can now restore a validated warm-analysis snapshot on attach, rehydrate per-session ready state from daemon-owned disk-backed data, and skip replay-time warm-up when the restored snapshot is already current
+  - warm-cache persistence is now filesystem-backed in the daemon runtime directory, keyed by workspace identity plus engine/build/environment identity, and it automatically discards corrupt cache files on read
+  - persisted state is limited to daemon-owned disk-derived analysis/base-index metadata; overlay-derived analysis is never written, and replayed overlays still invalidate restored snapshots before foreground reads
 - Persist only daemon-owned workspace state:
   - base disk-derived index/cache metadata
   - workspace config/environment identity
