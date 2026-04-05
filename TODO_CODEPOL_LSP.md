@@ -980,13 +980,13 @@ Likely direction:
 - future extension package
   - custom RPC client plus UI glue
 
-Status on 2026-04-04:
+Status on 2026-04-05:
 
-- `packages/workspace-service` exists and now owns shared diagnostics orchestration plus a sessionized in-process workspace/client service
-- `apps/lsp` exists as a stdio server and currently ships diagnostics, code actions, edit-plan execution, and sessionized overlay sync through the shared service
+- `packages/workspace-service` now owns shared diagnostics orchestration plus a sessionized workspace service with daemon transport, replay, watcher invalidation, warm-cache restore, and queueing/freshness control
+- `apps/lsp` exists as a stdio server and now ships diagnostics, code actions, edit-plan execution, `workspace/symbol`, read-only `codepol/*` RPC, sessionized overlay sync, and cold-start index status/progress through the shared service
 - `apps/cli` is now a thin adapter over the shared service
 - per-client overlay isolation and session-scoped edit plans now exist in the shared service layer
-- daemon transport, replay, file watching, persistence, and scheduling are still pending
+- generic hover, rename, definition, and references remain deferred until Codepol-owned semantics are defined for those surfaces
 
 ## Implementation Phases
 
@@ -1017,27 +1017,22 @@ Current gap: per-client overlays are now isolated in the in-process service, but
 ### Phase 3: daemon/service host
 
 - [x] Implement workspace instance lifecycle and client/session registration in the shared in-process service layer.
-- [ ] Add file watching, invalidation, and background indexing.
-- [ ] Add cache persistence and warm-start behavior.
-- [ ] Add telemetry and health/status reporting.
-- [ ] Add request cancellation, timeouts, and queue prioritization.
+- [x] Add file watching, invalidation, and background indexing.
+- [x] Add cache persistence and warm-start behavior.
+- [x] Add telemetry and health/status reporting.
+- [x] Add request cancellation, timeouts, and queue prioritization.
 
-Current gap: the service engine now has daemon-session, client-session, workspace-instance, and per-client overlay concepts, but there is still no daemon control plane, replay protocol, watcher loop, or persisted runtime state.
+Current gap: the daemon/session lifecycle is now in place, but richer observability and more explicit latency budgeting are still follow-up work.
 
 ### Phase 4: LSP adapter
 
 - [x] Implement document open/change/close to overlay sync.
 - [x] Implement diagnostics publication using the shared diagnostic service.
-- [ ] Implement at least:
-  - definition
-  - references
-  - hover
-  - workspace symbols
-  - prepare rename
-  - rename
-- [ ] Add progress and status signals for cold-start indexing.
+- [x] Implement `workspace/symbol` as a narrow Codepol-owned module/file surface.
+- [x] Add progress and status signals for cold-start indexing.
+- [ ] Keep generic `definition`, `references`, `hover`, `prepare rename`, and `rename` deferred until Codepol-owned semantics for those surfaces are defined.
 
-Current status: the LSP server registers a client session, attaches a workspace, and implements overlay sync, diagnostics, `textDocument/codeAction`, and `workspace/executeCommand` against the sessionized service boundary, but the semantic navigation, rename surface, and cold-start status publication are still pending.
+Current status: the LSP server registers a client session, attaches a workspace, and implements overlay sync, diagnostics, `textDocument/codeAction`, `workspace/executeCommand`, `workspace/symbol`, cold-start status publication, and read-only `codepol/indexStatus`, `codepol/dependencyGraph`, `codepol/semanticSearch`, and `codepol/architectureSummary` requests against the sessionized service boundary. Generic semantic navigation and rename are still pending by design.
 
 ### Phase 5: CLI and tests migrate fully
 
@@ -1050,9 +1045,10 @@ Current status: in-process integration coverage now includes multi-client overla
 
 ### Phase 6: extension RPC and richer features
 
-- [ ] Add a custom RPC adapter for features that do not fit LSP cleanly.
-- [ ] Add first extension-only features only after the service API is stable.
-- [ ] Prefer read-only capabilities first, such as dependency graphs or index status, before more invasive workflows.
+- [x] Use the existing LSP JSON-RPC stream as the first custom RPC carrier for read-only Codepol capabilities.
+- [x] Add first read-only custom RPC methods for dependency graphs, semantic search, index status, and architecture summaries.
+- [ ] Add a separate extension RPC adapter only if later UI workflows outgrow the current LSP JSON-RPC carrier.
+- [ ] Add more invasive extension-only workflows only after the service API is stable.
 
 ### Phase 7: replacement roadmap
 

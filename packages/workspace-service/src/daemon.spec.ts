@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -115,6 +116,43 @@ function backgroundTaskQueueCreate(): {
         throw new Error('No background task queued');
       }
       await next();
+    },
+  };
+}
+
+function workspaceReadQueriesStubCreate(): Pick<
+  WorkspaceService,
+  | 'queryWorkspaceSymbols'
+  | 'queryDependencyGraph'
+  | 'querySemanticSearch'
+  | 'queryArchitectureSummary'
+> {
+  return {
+    async queryWorkspaceSymbols() {
+      return [];
+    },
+    async queryDependencyGraph() {
+      return {
+        nodes: [],
+        edges: [],
+        entryPoints: [],
+        cycles: [],
+      };
+    },
+    async querySemanticSearch() {
+      return [];
+    },
+    async queryArchitectureSummary() {
+      return {
+        summary: '',
+        indexedFileCount: 0,
+        symbolCount: 0,
+        scopeCount: 0,
+        relationCount: 0,
+        entryPointCount: 0,
+        cycleCount: 0,
+        hotspots: [],
+      };
     },
   };
 }
@@ -917,7 +955,7 @@ describe('workspace daemon control plane', () => {
       workspaceId: secondAttached.workspaceId,
       uri,
       version: 1,
-      text: 'export type User = {\n  name: string;\n};\n',
+      text: 'export type User = {\n  name: string;\n};\nexport const OverlayOnly = 1;\n',
     });
     await secondService.completeReplay({
       clientSessionId: secondRegistered.clientSessionId,
@@ -932,8 +970,177 @@ describe('workspace daemon control plane', () => {
         uri,
       }),
     ).toEqual([]);
+    expect(
+      await secondService.querySemanticSearch({
+        clientSessionId: secondRegistered.clientSessionId,
+        workspaceId: secondAttached.workspaceId,
+        query: 'OverlayOnly',
+      }),
+    ).toContainEqual(
+      expect.objectContaining({
+        name: 'OverlayOnly',
+        kind: 'exported_symbol',
+        location: expect.objectContaining({
+          uri,
+        }),
+      }),
+    );
 
     await secondService.close();
+  });
+
+  it('serves workspace symbol, graph, semantic search, and architecture summary RPCs through the daemon service client', async () => {
+    const runtimeDir = tempRuntimeDirCreate();
+    tempDirs.push(runtimeDir);
+
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-daemon-workspace-'));
+    tempDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
+
+    const sharedPath = path.join(workspaceRoot, 'src', 'shared.ts');
+    const appPath = path.join(workspaceRoot, 'src', 'app.ts');
+    const sharedUri = workspacePathToUri(sharedPath);
+    const appUri = workspacePathToUri(appPath);
+    fs.writeFileSync(sharedPath, 'export const sharedValue = 1;\n', 'utf8');
+    fs.writeFileSync(
+      appPath,
+      "import { sharedValue } from './shared';\nexport const appValue = sharedValue;\n",
+      'utf8',
+    );
+
+    const descriptor = workspaceDaemonDescriptorCreate({ runtimeDir }).descriptor;
+    liveDaemons.set(descriptor.transport.path, {
+      descriptor,
+      service: new WorkspaceServiceEngine(),
+    });
+
+    const service = await daemonServiceClientCreate({
+      descriptor,
+      clientInstanceId: 'daemon-read-rpc-client',
+    });
+    const registered = await service.registerClientSession({
+      clientKind: 'test',
+      clientInstanceId: 'daemon-read-rpc-client',
+      clientSessionId: 'daemon-read-rpc-session',
+    });
+    const attached = await service.attachWorkspace({
+      clientSessionId: registered.clientSessionId,
+      rootPath: workspaceRoot,
+      configPath,
+    });
+    await service.openOverlay({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      uri: sharedUri,
+      version: 1,
+      text: 'export const sharedValue = 1;\nexport const OverlayOnly = 2;\n',
+    });
+    await service.completeReplay({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+    });
+
+    expect(
+      await service.queryWorkspaceSymbols({
+        clientSessionId: registered.clientSessionId,
+        workspaceId: attached.workspaceId,
+        query: 'shared',
+      }),
+    ).toEqual([
+      {
+        name: 'shared.ts',
+        kind: 'module',
+        location: {
+          uri: sharedUri,
+          range: {
+            start: { line: 0, character: 0 },
+            end: { line: 0, character: 0 },
+          },
+        },
+        containerName: 'src',
+        detail: 'src/shared.ts',
+        source: 'codepol',
+        semanticClass: 'workspace_module',
+        score: expect.any(Number),
+      },
+    ]);
+    expect(
+      await service.querySemanticSearch({
+        clientSessionId: registered.clientSessionId,
+        workspaceId: attached.workspaceId,
+        query: 'OverlayOnly',
+      }),
+    ).toContainEqual(
+      expect.objectContaining({
+        name: 'OverlayOnly',
+        kind: 'exported_symbol',
+        location: expect.objectContaining({
+          uri: sharedUri,
+          range: expect.objectContaining({
+            start: { line: 1, character: 13 },
+            end: expect.objectContaining({
+              line: 1,
+              character: expect.any(Number),
+            }),
+          }),
+        }),
+        detail: 'src/shared.ts • const',
+        source: 'codepol',
+        semanticClass: 'exported_symbol',
+      }),
+    );
+    expect(
+      await service.queryDependencyGraph({
+        clientSessionId: registered.clientSessionId,
+        workspaceId: attached.workspaceId,
+      }),
+    ).toEqual({
+      nodes: [
+        {
+          uri: appUri,
+          workspaceRelativePath: 'src/app.ts',
+        },
+        {
+          uri: sharedUri,
+          workspaceRelativePath: 'src/shared.ts',
+        },
+      ],
+      edges: [
+        {
+          fromUri: appUri,
+          toUri: sharedUri,
+        },
+      ],
+      entryPoints: [appUri],
+      cycles: [],
+    });
+    expect(
+      await service.queryArchitectureSummary({
+        clientSessionId: registered.clientSessionId,
+        workspaceId: attached.workspaceId,
+      }),
+    ).toMatchObject({
+      indexedFileCount: 2,
+      entryPointCount: 1,
+      cycleCount: 0,
+      hotspots: [
+        {
+          uri: sharedUri,
+          workspaceRelativePath: 'src/shared.ts',
+          importerCount: 1,
+          importeeCount: 0,
+        },
+        {
+          uri: appUri,
+          workspaceRelativePath: 'src/app.ts',
+          importerCount: 0,
+          importeeCount: 1,
+        },
+      ],
+    });
   });
 
   it('restores a warm index-backed workspace across daemon incarnations', async () => {
@@ -1373,6 +1580,7 @@ describe('workspace daemon control plane', () => {
     let diagnosticsCalls = 0;
 
     const service: WorkspaceService = {
+      ...workspaceReadQueriesStubCreate(),
       async registerClientSession(input) {
         return {
           clientSessionId: input.clientSessionId ?? 'supersede-client-session',
@@ -1538,6 +1746,185 @@ describe('workspace daemon control plane', () => {
     });
   });
 
+  it('supersedes an older workspace-symbol request when a newer request for the same lane arrives', async () => {
+    const runtimeDir = tempRuntimeDirCreate();
+    tempDirs.push(runtimeDir);
+
+    let resolveFirstSymbols: ((symbols: never[]) => void) | undefined;
+    let symbolCalls = 0;
+
+    const service: WorkspaceService = {
+      ...workspaceReadQueriesStubCreate(),
+      async registerClientSession(input) {
+        return {
+          clientSessionId: input.clientSessionId ?? 'supersede-symbol-client-session',
+          daemonSessionId: 'daemon-supersede-symbol-session',
+        };
+      },
+      async closeClientSession() {},
+      async attachWorkspace() {
+        return {
+          workspaceId: 'workspace-supersede-symbol',
+          workspaceInstanceId: 'workspace-supersede-symbol-instance',
+        };
+      },
+      async subscribeDiagnostics() {
+        return {
+          workspaceId: 'workspace-supersede-symbol',
+          workspaceInstanceId: 'workspace-supersede-symbol-instance',
+          scope: 'workspace',
+          subscriptionState: 'active',
+        };
+      },
+      async completeReplay() {
+        return {
+          workspaceId: 'workspace-supersede-symbol',
+          workspaceInstanceId: 'workspace-supersede-symbol-instance',
+          replayEpoch: 1,
+          replayState: 'applied',
+        };
+      },
+      async openOverlay() {},
+      async updateOverlay() {},
+      async closeOverlay() {},
+      async queryDiagnostics() {
+        return [];
+      },
+      async queryWorkspaceSymbols() {
+        symbolCalls += 1;
+        if (symbolCalls === 1) {
+          return new Promise((resolve) => {
+            resolveFirstSymbols = resolve as (symbols: never[]) => void;
+          });
+        }
+        return [];
+      },
+      async queryCodeActions() {
+        return [];
+      },
+      async applyEditPlan() {
+        return {
+          applied: false,
+          failureReason: 'plan_not_found',
+        };
+      },
+      async queryIndexStatus() {
+        return {
+          workspaceId: 'workspace-supersede-symbol',
+          workspaceInstanceId: 'workspace-supersede-symbol-instance',
+          status: 'ready',
+          indexedFileCount: 1,
+          openDocumentCount: 0,
+          overlayCount: 0,
+          analysisGeneration: 1,
+        };
+      },
+    };
+
+    const { descriptor } = workspaceDaemonDescriptorCreate({ runtimeDir });
+    const session = new WorkspaceDaemonSession({
+      descriptor,
+      service,
+    });
+
+    await expect(
+      session.handleEnvelope({
+        id: 1,
+        type: 'hello',
+        protocolVersion: WORKSPACE_DAEMON_PROTOCOL_VERSION,
+        client: clientIdentityCreate('supersede-symbol-client'),
+      }),
+    ).resolves.toMatchObject({
+      type: 'hello_ack',
+      compatibility: 'ok',
+    });
+
+    const registerResponse = await session.handleEnvelope({
+      id: 2,
+      type: 'register_client_session',
+      clientKind: 'test',
+      clientInstanceId: 'supersede-symbol-client',
+      clientSessionId: 'supersede-symbol-session',
+    });
+    expect(registerResponse.type).toBe('register_client_session_ack');
+    if (registerResponse.type !== 'register_client_session_ack') {
+      return;
+    }
+
+    const attachResponse = await session.handleEnvelope({
+      id: 3,
+      type: 'attach_workspace',
+      clientSessionId: 'supersede-symbol-session',
+      daemonSessionId: registerResponse.daemonSessionId,
+      rootPath: runtimeDir,
+      configPath: path.join(runtimeDir, 'codepol.toml'),
+    });
+    expect(attachResponse.type).toBe('attach_workspace_ack');
+    if (attachResponse.type !== 'attach_workspace_ack') {
+      return;
+    }
+
+    await expect(
+      session.handleEnvelope({
+        id: 4,
+        type: 'complete_replay',
+        clientSessionId: 'supersede-symbol-session',
+        daemonSessionId: registerResponse.daemonSessionId,
+        workspaceId: attachResponse.workspaceId,
+        workspaceInstanceId: attachResponse.workspaceInstanceId,
+      }),
+    ).resolves.toEqual({
+      type: 'complete_replay_ack',
+      result: {
+        workspaceId: attachResponse.workspaceId,
+        workspaceInstanceId: attachResponse.workspaceInstanceId,
+        replayEpoch: 1,
+        replayState: 'applied',
+      },
+    });
+
+    const firstPromise = session.handleEnvelope({
+      id: 5,
+      type: 'query_workspace_symbols',
+      clientSessionId: 'supersede-symbol-session',
+      daemonSessionId: registerResponse.daemonSessionId,
+      workspaceId: attachResponse.workspaceId,
+      workspaceInstanceId: attachResponse.workspaceInstanceId,
+      replayEpoch: 1,
+      query: 'app',
+      requestId: 'workspace-symbols-request-1',
+    });
+
+    for (let attempt = 0; attempt < 20 && !resolveFirstSymbols; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(resolveFirstSymbols).toBeDefined();
+
+    const secondPromise = session.handleEnvelope({
+      id: 6,
+      type: 'query_workspace_symbols',
+      clientSessionId: 'supersede-symbol-session',
+      daemonSessionId: registerResponse.daemonSessionId,
+      workspaceId: attachResponse.workspaceId,
+      workspaceInstanceId: attachResponse.workspaceInstanceId,
+      replayEpoch: 1,
+      query: 'app',
+      requestId: 'workspace-symbols-request-2',
+    });
+
+    resolveFirstSymbols!([]);
+
+    await expect(firstPromise).resolves.toEqual({
+      type: 'error',
+      code: 'request_superseded',
+      message: 'Request superseded',
+    });
+    await expect(secondPromise).resolves.toEqual({
+      type: 'query_workspace_symbols_ack',
+      symbols: [],
+    });
+  });
+
   it('rejects client-session requests for a stale daemon session id', async () => {
     const runtimeDir = tempRuntimeDirCreate();
     tempDirs.push(runtimeDir);
@@ -1605,6 +1992,7 @@ describe('workspace daemon control plane', () => {
     let releaseDiagnostics: ((diagnostics: unknown[]) => void) | undefined;
 
     const service: WorkspaceService = {
+      ...workspaceReadQueriesStubCreate(),
       async registerClientSession(input) {
         return {
           clientSessionId: input.clientSessionId ?? 'queued-client-session',
@@ -2024,16 +2412,34 @@ describe('workspace daemon control plane', () => {
     fs.writeFileSync(paths.socketPath, 'stale socket', 'utf8');
     expect(fs.statSync(paths.socketPath).isFile()).toBe(true);
 
-    const server = await workspaceDaemonServerStart({ runtimeDir });
+    const fakeServer = {
+      once: vi.fn().mockReturnThis(),
+      removeListener: vi.fn().mockReturnThis(),
+      listen: vi.fn((socketPath: string, callback?: () => void) => {
+        expect(socketPath).toBe(paths.socketPath);
+        expect(fs.existsSync(paths.socketPath)).toBe(false);
+        callback?.();
+        return fakeServer;
+      }),
+      close: vi.fn((callback?: (error?: Error) => void) => {
+        callback?.();
+        return fakeServer;
+      }),
+    } as unknown as net.Server;
+    const createServerSpy = vi.spyOn(net, 'createServer').mockReturnValue(fakeServer);
+    try {
+      const server = await workspaceDaemonServerStart({ runtimeDir });
 
-    expect(server.descriptor.transport.path).toBe(paths.socketPath);
-    expect(workspaceDaemonDescriptorRead(runtimeDir)?.sessionNonce).toBe(
-      server.descriptor.sessionNonce,
-    );
-    expect(fs.statSync(paths.socketPath).isSocket()).toBe(true);
-
-    await server.stop();
-    expect(fs.existsSync(paths.socketPath)).toBe(false);
+      expect(createServerSpy).toHaveBeenCalledOnce();
+      expect(server.descriptor.transport.path).toBe(paths.socketPath);
+      expect(workspaceDaemonDescriptorRead(runtimeDir)?.sessionNonce).toBe(
+        server.descriptor.sessionNonce,
+      );
+      expect(fs.existsSync(paths.socketPath)).toBe(false);
+      await server.stop();
+    } finally {
+      createServerSpy.mockRestore();
+    }
   });
 
   it('recovers from a stale descriptor by launching a fresh daemon descriptor', async () => {

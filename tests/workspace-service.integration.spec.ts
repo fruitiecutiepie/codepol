@@ -853,6 +853,223 @@ describe('workspace service integration', () => {
     });
   });
 
+  it('warms index-backed read features for LSP sessions and keeps semantic search overlay-aware', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
+
+    const sharedPath = path.join(workspaceRoot, 'src', 'shared.ts');
+    const appPath = path.join(workspaceRoot, 'src', 'app.ts');
+    const sharedUri = workspacePathToUri(sharedPath);
+    const appUri = workspacePathToUri(appPath);
+    fs.writeFileSync(sharedPath, 'export const sharedValue = 1;\n', 'utf8');
+    fs.writeFileSync(
+      appPath,
+      "import { sharedValue } from './shared';\nexport const appValue = sharedValue;\n",
+      'utf8',
+    );
+
+    const backgroundTasks = backgroundTaskQueueCreate();
+    const service = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine({
+        backgroundWarmup: true,
+        backgroundTaskSchedule: backgroundTasks.schedule,
+      }),
+    });
+    const attached = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientKind: 'lsp',
+      clientInstanceId: 'lsp-read-feature-client',
+    });
+
+    expect(
+      await service.queryIndexStatus({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+      }),
+    ).toMatchObject({
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+      status: 'cold',
+      replayState: 'pending',
+      featureStatus: {
+        workspaceIndex: { readiness: 'cold' },
+        workspaceSymbols: { readiness: 'cold' },
+        semanticSearch: { readiness: 'cold' },
+        dependencyGraph: { readiness: 'cold' },
+        architectureSummary: { readiness: 'cold' },
+      },
+      analysisGeneration: 0,
+    });
+
+    await service.completeReplay({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+    });
+
+    expect(backgroundTasks.pendingCountGet()).toBe(1);
+    expect(
+      await service.queryIndexStatus({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+      }),
+    ).toMatchObject({
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+      status: 'warming',
+      replayState: 'applied',
+      workspaceReady: false,
+      featureStatus: {
+        workspaceIndex: { readiness: 'warming' },
+        workspaceSymbols: { readiness: 'warming' },
+        semanticSearch: { readiness: 'warming' },
+        dependencyGraph: { readiness: 'warming' },
+        architectureSummary: { readiness: 'warming' },
+      },
+      analysisGeneration: 0,
+    });
+
+    await backgroundTasks.runNext();
+
+    const readyStatus = await service.queryIndexStatus({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+    });
+    expect(readyStatus).toMatchObject({
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+      status: 'ready',
+      replayState: 'applied',
+      workspaceReady: true,
+      featureStatus: {
+        workspaceIndex: {
+          readiness: 'ready',
+          detail: 'Session-derived index ready',
+        },
+        workspaceSymbols: { readiness: 'ready' },
+        semanticSearch: { readiness: 'ready' },
+        dependencyGraph: { readiness: 'ready' },
+        architectureSummary: { readiness: 'ready' },
+      },
+      indexedFileCount: 2,
+      analysisGeneration: 1,
+    });
+
+    const workspaceSymbols = await service.queryWorkspaceSymbols({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      query: 'shared',
+    });
+    expect(workspaceSymbols).toEqual([
+      {
+        name: 'shared.ts',
+        kind: 'module',
+        location: {
+          uri: sharedUri,
+          range: {
+            start: { line: 0, character: 0 },
+            end: { line: 0, character: 0 },
+          },
+        },
+        containerName: 'src',
+        detail: 'src/shared.ts',
+        source: 'codepol',
+        semanticClass: 'workspace_module',
+        score: workspaceSymbols[0]?.score,
+      },
+    ]);
+
+    const dependencyGraph = await service.queryDependencyGraph({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+    });
+    expect(dependencyGraph.nodes).toEqual([
+      {
+        uri: appUri,
+        workspaceRelativePath: 'src/app.ts',
+      },
+      {
+        uri: sharedUri,
+        workspaceRelativePath: 'src/shared.ts',
+      },
+    ]);
+    expect(dependencyGraph.edges).toEqual([
+      {
+        fromUri: appUri,
+        toUri: sharedUri,
+      },
+    ]);
+
+    const architectureSummary = await service.queryArchitectureSummary({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+    });
+    expect(architectureSummary).toMatchObject({
+      indexedFileCount: 2,
+      entryPointCount: 1,
+      cycleCount: 0,
+    });
+    expect(architectureSummary.summary).toContain('Indexed 2 files');
+    expect(architectureSummary.hotspots).toEqual([
+      expect.objectContaining({
+        uri: sharedUri,
+        workspaceRelativePath: 'src/shared.ts',
+      }),
+      expect.objectContaining({
+        uri: appUri,
+        workspaceRelativePath: 'src/app.ts',
+      }),
+    ]);
+
+    await service.openOverlay({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      uri: sharedUri,
+      version: 1,
+      text: 'export const sharedValue = 1;\nexport const OverlayOnly = 2;\n',
+    });
+
+    const semanticResults = await service.querySemanticSearch({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      query: 'OverlayOnly',
+    });
+    expect(semanticResults).toContainEqual(
+      expect.objectContaining({
+        name: 'OverlayOnly',
+        kind: 'exported_symbol',
+        location: expect.objectContaining({
+          uri: sharedUri,
+          range: expect.objectContaining({
+            start: { line: 1, character: 13 },
+            end: expect.objectContaining({
+              line: 1,
+              character: expect.any(Number),
+            }),
+          }),
+        }),
+        detail: 'src/shared.ts • const',
+        source: 'codepol',
+        semanticClass: 'exported_symbol',
+      }),
+    );
+
+    await expect(
+      service.querySemanticSearch({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        query: 'OverlayOnly',
+        analysisGeneration: readyStatus.analysisGeneration,
+      }),
+    ).rejects.toThrow(
+      `Analysis generation mismatch: expected ${readyStatus.analysisGeneration! + 1}, received ${readyStatus.analysisGeneration}`,
+    );
+  });
+
   it('invalidates ready workspace state when watched disk files change and closes the watcher on last detach', async () => {
     const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
     createdDirs.push(workspaceRoot);
@@ -1314,6 +1531,45 @@ describe('workspace service integration', () => {
       },
       indexedFileCount: 2,
       analysisGeneration: 1,
+    });
+
+    expect(
+      await readerService.querySemanticSearch({
+        clientSessionId: restored.clientSessionId,
+        workspaceId: restored.workspaceId,
+        query: 'sharedValue',
+      }),
+    ).toContainEqual(
+      expect.objectContaining({
+        name: 'sharedValue',
+        kind: 'exported_symbol',
+        location: expect.objectContaining({
+          uri: exporterUri,
+        }),
+      }),
+    );
+    expect(
+      await readerService.queryDependencyGraph({
+        clientSessionId: restored.clientSessionId,
+        workspaceId: restored.workspaceId,
+      }),
+    ).toMatchObject({
+      nodes: [
+        {
+          uri: exporterUri,
+          workspaceRelativePath: 'src/exporter.ts',
+        },
+        {
+          uri: importerUri,
+          workspaceRelativePath: 'src/importer.ts',
+        },
+      ],
+      edges: [
+        {
+          fromUri: importerUri,
+          toUri: exporterUri,
+        },
+      ],
     });
 
     await readerService.completeReplay({

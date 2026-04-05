@@ -25,6 +25,8 @@ import {
   projectIndexUpdateFileSync,
   ruleMatchesGet,
   workspaceIdCreate,
+  workspacePathToUri,
+  workspaceRangeFromByteRange,
   workspacePackageMapDiscover,
   workspaceUriToPath,
   type ClientSessionId,
@@ -49,12 +51,16 @@ import {
   type RuffProviderConfig,
   type RuleMatch,
   type WorkspaceApplyResult,
+  type WorkspaceArchitectureSummaryResult,
   type WorkspaceCodeAction,
+  type WorkspaceDependencyGraphResult,
   type WorkspaceDiagnostic,
   type WorkspaceDiagnosticSeverity,
   type WorkspaceFeatureStatus,
   type WorkspaceEditPlan,
   type WorkspaceInstanceId,
+  type WorkspaceSearchResult,
+  type WorkspaceSymbolResult,
   type BiomeProviderConfig,
 } from '@codepol/core';
 import { biomeCheck, biomeFix } from '@codepol/plugin-biome';
@@ -84,6 +90,8 @@ const ESLINT_CONFIG_EXTENSIONS = ['.js', '.mjs', '.cjs', '.ts', '.mts', '.cts'];
 const BIOME_FILE_EXTENSIONS = ['.js', '.mjs', '.cjs', '.jsx', '.ts', '.mts', '.cts', '.tsx'];
 const PYTHON_FILE_EXTENSIONS = ['.py', '.pyw'];
 const WORKSPACE_WATCH_IGNORED = ['**/node_modules/**', '**/.git/**'];
+const WORKSPACE_SYMBOL_LIMIT_DEFAULT = 50;
+const WORKSPACE_SEARCH_LIMIT_DEFAULT = 20;
 
 type LintProviderEntry = {
   provider: LintProvider;
@@ -290,6 +298,38 @@ export type WorkspaceService = {
     analysisGeneration?: number;
     signal?: AbortSignal;
   }) => Promise<IndexStatusResult>;
+  queryWorkspaceSymbols: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    query: string;
+    limit?: number;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceSymbolResult[]>;
+  queryDependencyGraph: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceDependencyGraphResult>;
+  querySemanticSearch: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    query: string;
+    limit?: number;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceSearchResult[]>;
+  queryArchitectureSummary: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceArchitectureSummaryResult>;
 };
 
 export type WorkspaceServiceCreateOptions = {
@@ -378,6 +418,27 @@ function workspaceFeatureStatusReadyOrDegraded(
   });
 }
 
+function workspaceIndexBackedFeatureStatusCreate(input: {
+  indexReady: boolean;
+  indexRequired: boolean;
+}): WorkspaceFeatureStatus {
+  if (input.indexReady) {
+    return workspaceFeatureStatusCreate({
+      readiness: 'ready',
+    });
+  }
+  if (input.indexRequired) {
+    return workspaceFeatureStatusCreate({
+      readiness: 'degraded',
+      detail: 'Workspace index required but unavailable',
+    });
+  }
+  return workspaceFeatureStatusCreate({
+    readiness: 'cold',
+    detail: 'Workspace index not built for this session',
+  });
+}
+
 function workspaceFeatureStatusesCreate(
   state: WorkspaceSessionState,
 ): IndexStatusFeatureStatus {
@@ -402,8 +463,30 @@ function workspaceFeatureStatusesCreate(
         readiness: 'error',
         detail: state.lastError,
       }),
+      workspaceSymbols: workspaceFeatureStatusCreate({
+        readiness: 'error',
+        detail: state.lastError,
+      }),
+      semanticSearch: workspaceFeatureStatusCreate({
+        readiness: 'error',
+        detail: state.lastError,
+      }),
+      dependencyGraph: workspaceFeatureStatusCreate({
+        readiness: 'error',
+        detail: state.lastError,
+      }),
+      architectureSummary: workspaceFeatureStatusCreate({
+        readiness: 'error',
+        detail: state.lastError,
+      }),
     };
   }
+  const indexBackedReadiness =
+    state.workspaceIndexRequired === false ? 'cold' : state.status;
+  const indexBackedDetail =
+    state.workspaceIndexRequired === false
+      ? 'Workspace index not built for this session'
+      : undefined;
   return {
     diagnostics: workspaceFeatureStatusCreate({
       readiness: state.status,
@@ -423,6 +506,22 @@ function workspaceFeatureStatusesCreate(
         : workspaceFeatureStatusCreate({
             readiness: state.status,
           }),
+    workspaceSymbols: workspaceFeatureStatusCreate({
+      readiness: indexBackedReadiness,
+      detail: indexBackedDetail,
+    }),
+    semanticSearch: workspaceFeatureStatusCreate({
+      readiness: indexBackedReadiness,
+      detail: indexBackedDetail,
+    }),
+    dependencyGraph: workspaceFeatureStatusCreate({
+      readiness: indexBackedReadiness,
+      detail: indexBackedDetail,
+    }),
+    architectureSummary: workspaceFeatureStatusCreate({
+      readiness: indexBackedReadiness,
+      detail: indexBackedDetail,
+    }),
   };
 }
 
@@ -845,6 +944,318 @@ function workspaceSourceGet(
   return fs.readFileSync(filePath, 'utf8');
 }
 
+function workspaceRelativePathCreate(
+  rootPath: string,
+  filePath: string,
+): string {
+  const relativePath = path.relative(rootPath, filePath);
+  return relativePath.length > 0
+    ? relativePath.split(path.sep).join('/')
+    : path.basename(filePath);
+}
+
+function workspaceSearchTokensNormalize(
+  query: string,
+): string[] {
+  return query
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((token) => token.length > 0);
+}
+
+function workspaceSearchScoreResolve(
+  query: string,
+  candidates: string[],
+): number | undefined {
+  const normalizedCandidates = candidates
+    .map((candidate) => candidate.toLowerCase())
+    .filter((candidate) => candidate.length > 0);
+  const tokens = workspaceSearchTokensNormalize(query);
+
+  if (tokens.length === 0) {
+    return 1;
+  }
+
+  let score = 0;
+  for (const token of tokens) {
+    let tokenScore = 0;
+    for (const candidate of normalizedCandidates) {
+      if (candidate === token) {
+        tokenScore = Math.max(tokenScore, 120);
+        continue;
+      }
+      if (candidate.startsWith(token)) {
+        tokenScore = Math.max(tokenScore, 90);
+        continue;
+      }
+      if (candidate.includes(token)) {
+        tokenScore = Math.max(tokenScore, 60);
+      }
+
+      const segments = candidate.split(/[\/._-]/).filter((segment) => segment.length > 0);
+      if (segments.some((segment) => segment === token)) {
+        tokenScore = Math.max(tokenScore, 80);
+        continue;
+      }
+      if (segments.some((segment) => segment.startsWith(token))) {
+        tokenScore = Math.max(tokenScore, 70);
+      }
+    }
+    if (tokenScore === 0) {
+      return undefined;
+    }
+    score += tokenScore;
+  }
+
+  return score;
+}
+
+function workspaceSearchLimitResolve(
+  limit: number | undefined,
+  fallback: number,
+): number {
+  if (limit === undefined || !Number.isFinite(limit)) {
+    return fallback;
+  }
+  return Math.max(1, Math.floor(limit));
+}
+
+function workspaceModuleSymbolResultsGet(
+  workspace: WorkspaceContextState,
+  index: ProjectIndex,
+  input: {
+    query: string;
+    limit?: number;
+  },
+): WorkspaceSymbolResult[] {
+  const limit = workspaceSearchLimitResolve(
+    input.limit,
+    WORKSPACE_SYMBOL_LIMIT_DEFAULT,
+  );
+  const results: WorkspaceSymbolResult[] = [];
+
+  for (const filePath of index.filesGet()) {
+    const workspaceRelativePath = workspaceRelativePathCreate(
+      workspace.rootPath,
+      filePath,
+    );
+    const basename = path.basename(filePath);
+    const score = workspaceSearchScoreResolve(input.query, [
+      basename,
+      workspaceRelativePath,
+    ]);
+    if (score === undefined) {
+      continue;
+    }
+
+    results.push({
+      name: basename,
+      kind: 'module',
+      location: {
+        uri: workspacePathToUri(filePath),
+        range: {
+          start: { line: 0, character: 0 },
+          end: { line: 0, character: 0 },
+        },
+      },
+      containerName: path.dirname(workspaceRelativePath) === '.'
+        ? undefined
+        : path.dirname(workspaceRelativePath),
+      detail: workspaceRelativePath,
+      source: 'codepol',
+      semanticClass: 'workspace_module',
+      score,
+    });
+  }
+
+  results.sort((left, right) => {
+    const scoreDifference = (right.score ?? 0) - (left.score ?? 0);
+    if (scoreDifference !== 0) {
+      return scoreDifference;
+    }
+    const detailDifference = (left.detail ?? '').localeCompare(right.detail ?? '');
+    if (detailDifference !== 0) {
+      return detailDifference;
+    }
+    return left.name.localeCompare(right.name);
+  });
+  return results.slice(0, limit);
+}
+
+function workspaceSemanticSearchResultsGet(
+  workspace: WorkspaceContextState,
+  state: WorkspaceDocumentsState,
+  index: ProjectIndex,
+  input: {
+    query: string;
+    limit?: number;
+  },
+): WorkspaceSearchResult[] {
+  const limit = workspaceSearchLimitResolve(
+    input.limit,
+    WORKSPACE_SEARCH_LIMIT_DEFAULT,
+  );
+  const results: WorkspaceSearchResult[] = [];
+
+  for (const filePath of index.filesGet()) {
+    const workspaceRelativePath = workspaceRelativePathCreate(
+      workspace.rootPath,
+      filePath,
+    );
+    const basename = path.basename(filePath);
+    const score = workspaceSearchScoreResolve(input.query, [
+      basename,
+      workspaceRelativePath,
+    ]);
+    if (score === undefined) {
+      continue;
+    }
+
+    results.push({
+      name: basename,
+      kind: 'module',
+      location: {
+        uri: workspacePathToUri(filePath),
+        range: {
+          start: { line: 0, character: 0 },
+          end: { line: 0, character: 0 },
+        },
+      },
+      detail: workspaceRelativePath,
+      source: 'codepol',
+      semanticClass: 'workspace_module',
+      score,
+    });
+  }
+
+  for (const symbol of index.exportedSymbolsGet()) {
+    const workspaceRelativePath = workspaceRelativePathCreate(
+      workspace.rootPath,
+      symbol.file,
+    );
+    const basename = path.basename(symbol.file);
+    const score = workspaceSearchScoreResolve(input.query, [
+      symbol.name,
+      symbol.qualName,
+      basename,
+      workspaceRelativePath,
+    ]);
+    if (score === undefined) {
+      continue;
+    }
+
+    results.push({
+      name: symbol.name,
+      kind: 'exported_symbol',
+      location: {
+        uri: workspacePathToUri(symbol.file),
+        range: workspaceRangeFromByteRange(
+          workspaceSourceGet(state, symbol.file),
+          symbol.byteRange,
+        ),
+      },
+      detail: `${workspaceRelativePath} • ${symbol.kind}`,
+      source: 'codepol',
+      semanticClass: 'exported_symbol',
+      score: score + 20,
+    });
+  }
+
+  results.sort((left, right) => {
+    const scoreDifference = right.score - left.score;
+    if (scoreDifference !== 0) {
+      return scoreDifference;
+    }
+    const kindDifference =
+      left.kind === right.kind ? 0 : left.kind === 'exported_symbol' ? -1 : 1;
+    if (kindDifference !== 0) {
+      return kindDifference;
+    }
+    const detailDifference = (left.detail ?? '').localeCompare(right.detail ?? '');
+    if (detailDifference !== 0) {
+      return detailDifference;
+    }
+    return left.name.localeCompare(right.name);
+  });
+  return results.slice(0, limit);
+}
+
+function workspaceDependencyGraphResultCreate(
+  workspace: WorkspaceContextState,
+  index: ProjectIndex,
+): WorkspaceDependencyGraphResult {
+  const files = [...index.filesGet()].sort();
+  return {
+    nodes: files.map((filePath) => ({
+      uri: workspacePathToUri(filePath),
+      workspaceRelativePath: workspaceRelativePathCreate(workspace.rootPath, filePath),
+    })),
+    edges: files.flatMap((filePath) =>
+      index
+        .moduleImporteesGet(filePath)
+        .sort()
+        .map((importeePath) => ({
+          fromUri: workspacePathToUri(filePath),
+          toUri: workspacePathToUri(importeePath),
+        })),
+    ),
+    entryPoints: index
+      .moduleEntryPointsGet()
+      .map((filePath) => workspacePathToUri(filePath)),
+    cycles: index
+      .moduleCyclesGet()
+      .map((cycle) => cycle.map((filePath) => workspacePathToUri(filePath))),
+  };
+}
+
+function workspaceArchitectureSummaryResultCreate(
+  workspace: WorkspaceContextState,
+  index: ProjectIndex,
+): WorkspaceArchitectureSummaryResult {
+  const stats = index.statsGet();
+  const hotspots = index
+    .filesGet()
+    .map((filePath) => ({
+      uri: workspacePathToUri(filePath),
+      workspaceRelativePath: workspaceRelativePathCreate(workspace.rootPath, filePath),
+      importerCount: index.moduleImportersGet(filePath).length,
+      importeeCount: index.moduleImporteesGet(filePath).length,
+    }))
+    .sort((left, right) => {
+      const importerDifference = right.importerCount - left.importerCount;
+      if (importerDifference !== 0) {
+        return importerDifference;
+      }
+      const importeeDifference = right.importeeCount - left.importeeCount;
+      if (importeeDifference !== 0) {
+        return importeeDifference;
+      }
+      return left.workspaceRelativePath.localeCompare(right.workspaceRelativePath);
+    })
+    .slice(0, 5);
+  const cycleCount = index.moduleCyclesGet().length;
+  const entryPointCount = index.moduleEntryPointsGet().length;
+  const hottestModule = hotspots[0];
+  const hottestModuleSummary = hottestModule
+    ? ` Hotspot: ${hottestModule.workspaceRelativePath} (${hottestModule.importerCount} importers, ${hottestModule.importeeCount} importees).`
+    : '';
+
+  return {
+    summary:
+      `Indexed ${stats.files} files, ${stats.symbols} symbols, ` +
+      `${entryPointCount} entry points, ${cycleCount} cycles.` +
+      hottestModuleSummary,
+    indexedFileCount: stats.files,
+    symbolCount: stats.symbols,
+    scopeCount: stats.scopes,
+    relationCount: stats.relations,
+    entryPointCount,
+    cycleCount,
+    hotspots,
+  };
+}
+
 function workspaceDocumentVersionValidate(
   state: WorkspaceDocumentsState,
   input: {
@@ -956,6 +1367,20 @@ function workspaceIndexGetOrBuild(
   }
 
   return indexState.index;
+}
+
+function workspaceSessionIndexEnable(
+  state: WorkspaceSessionState,
+): void {
+  if (state.workspaceIndexRequired === true && state.indexState) {
+    return;
+  }
+  state.workspaceIndexRequired = true;
+  workspaceSessionInvalidate(state, {
+    clearIndexState: true,
+    clearWorkspaceIndexRequirement: false,
+  });
+  state.workspaceIndexRequired = true;
 }
 
 function workspaceIndexRefreshFromDisk(
@@ -1857,7 +2282,12 @@ async function workspaceAnalysisRun(
   const matches = await ruleMatchesGet(policy, workspace.rootPath);
   const files = Array.from(new Set(matches.flatMap((match) => match.files)));
   const sourceByFilePath = workspaceSourceOverridesGet(state);
-  const workspaceIndexRequired = matchedRulesRequireProjectIndex(matches, pluginRulesMap);
+  const policyWorkspaceIndexRequired = matchedRulesRequireProjectIndex(
+    matches,
+    pluginRulesMap,
+  );
+  const workspaceIndexRequired =
+    (state.workspaceIndexRequired ?? false) || policyWorkspaceIndexRequired;
   state.workspaceIndexRequired = workspaceIndexRequired;
   state.toolFingerprints = workspaceToolFingerprintsRead(workspace, lintProviderEntries);
 
@@ -1981,6 +2411,22 @@ async function workspaceAnalysisRun(
             readiness: 'ready',
             detail: 'Not required by current policy',
           }),
+      workspaceSymbols: workspaceIndexBackedFeatureStatusCreate({
+        indexReady: projectIndex !== undefined,
+        indexRequired: workspaceIndexRequired,
+      }),
+      semanticSearch: workspaceIndexBackedFeatureStatusCreate({
+        indexReady: projectIndex !== undefined,
+        indexRequired: workspaceIndexRequired,
+      }),
+      dependencyGraph: workspaceIndexBackedFeatureStatusCreate({
+        indexReady: projectIndex !== undefined,
+        indexRequired: workspaceIndexRequired,
+      }),
+      architectureSummary: workspaceIndexBackedFeatureStatusCreate({
+        indexReady: projectIndex !== undefined,
+        indexRequired: workspaceIndexRequired,
+      }),
     },
     fixableTreeViolationsByDiagnosticId,
     eslintOutput: eslintResult.output,
@@ -2052,6 +2498,20 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       workspaceSession,
     });
     return analysis;
+  }
+
+  private async workspaceSessionIndexEnsure(
+    workspace: WorkspaceState,
+    workspaceSession: WorkspaceSessionState,
+  ): Promise<ProjectIndex> {
+    if (!workspaceSession.indexState || workspaceSession.workspaceIndexRequired !== true) {
+      workspaceSessionIndexEnable(workspaceSession);
+    }
+    await this.workspaceSessionAnalysisEnsure(workspace, workspaceSession);
+    if (!workspaceSession.indexState) {
+      throw new Error('Workspace index unavailable');
+    }
+    return workspaceSession.indexState.index;
   }
 
   private workspaceBackgroundWarmupSchedule(
@@ -2203,7 +2663,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     const workspaceId = workspaceIdCreate(rootPath, resolvedConfigPath);
 
     let workspace = this.workspaces.get(workspaceId);
-    const workspaceIndexRequired = await workspaceIndexRequirementResolve({
+    const policyWorkspaceIndexRequired = await workspaceIndexRequirementResolve({
       rootPath,
       configPath: resolvedConfigPath,
       eslintConfigPath: eslintConfigPathResolve(
@@ -2213,6 +2673,8 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       ),
       config,
     });
+    const workspaceIndexRequired =
+      clientSession.clientKind === 'lsp' || policyWorkspaceIndexRequired === true;
     if (!workspace) {
       workspace = {
         workspaceId,
@@ -2264,13 +2726,14 @@ export class WorkspaceServiceEngine implements WorkspaceService {
         analysisGeneration: restoredWarmCache?.analysisGeneration ?? 0,
         analysisRevision: 0,
         workspaceIndexRequired:
-          restoredWarmCache?.workspaceIndexRequired ?? workspaceIndexRequired,
+          restoredWarmCache?.workspaceIndexRequired === true || workspaceIndexRequired,
         lastAnalysis: restoredWarmCache?.lastAnalysis,
         toolFingerprints: restoredWarmCache?.toolFingerprints,
         indexState: restoredWarmCache?.indexState,
       });
     } else {
-      existingWorkspaceSession.workspaceIndexRequired = workspaceIndexRequired;
+      existingWorkspaceSession.workspaceIndexRequired =
+        existingWorkspaceSession.workspaceIndexRequired === true || workspaceIndexRequired;
     }
     if (this.watcherCreate) {
       await workspaceWatcherEnsure({
@@ -2611,6 +3074,82 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       lastError: workspaceSession.lastError,
     };
   }
+
+  async queryWorkspaceSymbols(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    query: string;
+    limit?: number;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceSymbolResult[]> {
+    const { workspace, workspaceSession } = workspaceSessionGet(
+      this.workspaces,
+      this.clientSessions,
+      input.clientSessionId,
+      input.workspaceId,
+    );
+    const index = await this.workspaceSessionIndexEnsure(workspace, workspaceSession);
+    workspaceAnalysisGenerationValidate(workspaceSession, input);
+    return workspaceModuleSymbolResultsGet(workspace, index, input);
+  }
+
+  async queryDependencyGraph(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceDependencyGraphResult> {
+    const { workspace, workspaceSession } = workspaceSessionGet(
+      this.workspaces,
+      this.clientSessions,
+      input.clientSessionId,
+      input.workspaceId,
+    );
+    const index = await this.workspaceSessionIndexEnsure(workspace, workspaceSession);
+    workspaceAnalysisGenerationValidate(workspaceSession, input);
+    return workspaceDependencyGraphResultCreate(workspace, index);
+  }
+
+  async querySemanticSearch(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    query: string;
+    limit?: number;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceSearchResult[]> {
+    const { workspace, workspaceSession } = workspaceSessionGet(
+      this.workspaces,
+      this.clientSessions,
+      input.clientSessionId,
+      input.workspaceId,
+    );
+    const index = await this.workspaceSessionIndexEnsure(workspace, workspaceSession);
+    workspaceAnalysisGenerationValidate(workspaceSession, input);
+    return workspaceSemanticSearchResultsGet(workspace, workspaceSession, index, input);
+  }
+
+  async queryArchitectureSummary(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceArchitectureSummaryResult> {
+    const { workspace, workspaceSession } = workspaceSessionGet(
+      this.workspaces,
+      this.clientSessions,
+      input.clientSessionId,
+      input.workspaceId,
+    );
+    const index = await this.workspaceSessionIndexEnsure(workspace, workspaceSession);
+    workspaceAnalysisGenerationValidate(workspaceSession, input);
+    return workspaceArchitectureSummaryResultCreate(workspace, index);
+  }
 }
 
 class InProcessWorkspaceService implements WorkspaceService {
@@ -2725,6 +3264,50 @@ class InProcessWorkspaceService implements WorkspaceService {
     signal?: AbortSignal;
   }): Promise<IndexStatusResult> {
     return this.engine.queryIndexStatus(input);
+  }
+
+  queryWorkspaceSymbols(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    query: string;
+    limit?: number;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceSymbolResult[]> {
+    return this.engine.queryWorkspaceSymbols(input);
+  }
+
+  queryDependencyGraph(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceDependencyGraphResult> {
+    return this.engine.queryDependencyGraph(input);
+  }
+
+  querySemanticSearch(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    query: string;
+    limit?: number;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceSearchResult[]> {
+    return this.engine.querySemanticSearch(input);
+  }
+
+  queryArchitectureSummary(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceArchitectureSummaryResult> {
+    return this.engine.queryArchitectureSummary(input);
   }
 }
 

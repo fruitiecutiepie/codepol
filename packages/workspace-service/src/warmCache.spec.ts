@@ -48,6 +48,10 @@ describe('workspace warm cache store', () => {
         codeActions: { readiness: 'ready' },
         editPlans: { readiness: 'ready' },
         workspaceIndex: { readiness: 'ready' },
+        workspaceSymbols: { readiness: 'ready' },
+        semanticSearch: { readiness: 'ready' },
+        dependencyGraph: { readiness: 'ready' },
+        architectureSummary: { readiness: 'ready' },
       },
       configFingerprint: {
         path: key.configPath,
@@ -94,6 +98,10 @@ describe('workspace warm cache store', () => {
         codeActions: { readiness: 'ready' },
         editPlans: { readiness: 'ready' },
         workspaceIndex: { readiness: 'ready' },
+        workspaceSymbols: { readiness: 'ready' },
+        semanticSearch: { readiness: 'ready' },
+        dependencyGraph: { readiness: 'ready' },
+        architectureSummary: { readiness: 'ready' },
       },
       configFingerprint: {
         path: key.configPath,

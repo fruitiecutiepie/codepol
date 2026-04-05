@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import {
   WorkspaceDaemonServiceClient,
+  WorkspaceServiceEngine,
   workspaceDaemonLaunchOrConnect,
   workspaceServiceCreate,
   WORKSPACE_DAEMON_PROTOCOL_VERSION,
@@ -58,7 +59,11 @@ export async function lspWorkspaceServiceResolve(options: {
   const mode = lspWorkspaceServiceModeGet(env);
 
   if (mode === 'in_process') {
-    const service = workspaceServiceCreate();
+    const service = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine({
+        backgroundWarmup: true,
+      }),
+    });
     options.onResolved?.({ mode: 'in_process' });
     return service;
   }
@@ -90,7 +95,11 @@ export async function lspWorkspaceServiceResolve(options: {
       throw daemonError;
     }
 
-    const service = workspaceServiceCreate();
+    const service = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine({
+        backgroundWarmup: true,
+      }),
+    });
     options.onResolved?.({
       mode: 'in_process_fallback',
       error: daemonError,

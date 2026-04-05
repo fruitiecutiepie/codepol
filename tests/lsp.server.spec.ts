@@ -17,6 +17,7 @@ import {
   WorkspaceDaemonSession,
   workspaceDaemonHello,
   WorkspaceServiceEngine,
+  workspaceServiceCreate,
   WORKSPACE_DAEMON_PROTOCOL_VERSION,
 } from '@codepol/workspace-service';
 import { CodepolLspServer } from '../apps/lsp/src/server';
@@ -93,6 +94,92 @@ async function messageWaitFor<T>(
   return messages.find(predicate);
 }
 
+function workspaceReadQueriesStubCreate(): Pick<
+  WorkspaceService,
+  | 'queryWorkspaceSymbols'
+  | 'queryDependencyGraph'
+  | 'querySemanticSearch'
+  | 'queryArchitectureSummary'
+> {
+  return {
+    async queryWorkspaceSymbols() {
+      return [];
+    },
+    async queryDependencyGraph() {
+      return {
+        nodes: [],
+        edges: [],
+        entryPoints: [],
+        cycles: [],
+      };
+    },
+    async querySemanticSearch() {
+      return [];
+    },
+    async queryArchitectureSummary() {
+      return {
+        summary: '',
+        indexedFileCount: 0,
+        symbolCount: 0,
+        scopeCount: 0,
+        relationCount: 0,
+        entryPointCount: 0,
+        cycleCount: 0,
+        hotspots: [],
+      };
+    },
+  };
+}
+
+function manualTimerQueueCreate(): {
+  timers: {
+    setTimeout: (callback: () => void, delayMs: number) => number;
+    clearTimeout: (handle: number | undefined) => void;
+  };
+  pendingCountGet: () => number;
+  runNext: () => Promise<void>;
+} {
+  let nextHandle = 1;
+  const callbacks = new Map<number, () => void>();
+  const queue: number[] = [];
+
+  return {
+    timers: {
+      setTimeout(callback) {
+        const handle = nextHandle;
+        nextHandle += 1;
+        callbacks.set(handle, callback);
+        queue.push(handle);
+        return handle;
+      },
+      clearTimeout(handle) {
+        if (handle === undefined) {
+          return;
+        }
+        callbacks.delete(handle);
+        const index = queue.indexOf(handle);
+        if (index !== -1) {
+          queue.splice(index, 1);
+        }
+      },
+    },
+    pendingCountGet() {
+      return queue.filter((handle) => callbacks.has(handle)).length;
+    },
+    async runNext() {
+      const handle = queue.shift();
+      if (handle === undefined) {
+        throw new Error('No timer queued');
+      }
+      const callback = callbacks.get(handle);
+      callbacks.delete(handle);
+      callback?.();
+      await Promise.resolve();
+      await Promise.resolve();
+    },
+  };
+}
+
 describe('CodepolLspServer', () => {
   const createdDirs: string[] = [];
 
@@ -112,6 +199,7 @@ describe('CodepolLspServer', () => {
       | { clientKind: string; clientInstanceId: string; clientSessionId?: string }
       | undefined;
     const service: WorkspaceService = {
+      ...workspaceReadQueriesStubCreate(),
       async registerClientSession(input) {
         registeredInput = input;
         calls.push('registerClientSession');
@@ -210,6 +298,369 @@ describe('CodepolLspServer', () => {
       clientInstanceId: 'lsp-instance-1',
       clientSessionId: 'lsp-client-session-1',
     });
+  });
+
+  it('advertises workspace symbols and serves Codepol read RPCs over the active LSP session', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(workspaceRoot, 'codepol.toml'), noInterfaceConfigContentCreate(), 'utf8');
+
+    const sharedPath = path.join(workspaceRoot, 'src', 'shared.ts');
+    const appPath = path.join(workspaceRoot, 'src', 'app.ts');
+    const sharedUri = pathToFileURL(sharedPath).href;
+    const appUri = pathToFileURL(appPath).href;
+    fs.writeFileSync(sharedPath, 'export const sharedValue = 1;\n', 'utf8');
+    fs.writeFileSync(
+      appPath,
+      "import { sharedValue } from './shared';\nexport const appValue = sharedValue;\n",
+      'utf8',
+    );
+
+    const messages: any[] = [];
+    const service = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine(),
+    });
+    const server = new CodepolLspServer({
+      service,
+      sendMessage: (message) => {
+        messages.push(message);
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        rootUri: pathToFileURL(workspaceRoot).href,
+      },
+    });
+
+    expect(
+      messages.find((message) => message.id === 1 && 'result' in message)?.result.capabilities
+        .workspaceSymbolProvider,
+    ).toBe(true);
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      method: 'textDocument/didOpen',
+      params: {
+        textDocument: {
+          uri: sharedUri,
+          version: 1,
+          text: 'export const sharedValue = 1;\nexport const OverlayOnly = 2;\n',
+        },
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'workspace/symbol',
+      params: {
+        query: 'shared',
+      },
+    });
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 3,
+      method: 'codepol/semanticSearch',
+      params: {
+        query: 'OverlayOnly',
+      },
+    });
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 4,
+      method: 'codepol/indexStatus',
+    });
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 5,
+      method: 'codepol/dependencyGraph',
+    });
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 6,
+      method: 'codepol/architectureSummary',
+    });
+
+    expect(messages.find((message) => message.id === 2)?.result).toEqual([
+      {
+        name: 'shared.ts',
+        kind: 2,
+        location: {
+          uri: sharedUri,
+          range: {
+            start: { line: 0, character: 0 },
+            end: { line: 0, character: 0 },
+          },
+        },
+        containerName: 'src',
+        data: {
+          source: 'codepol',
+          semanticClass: 'workspace_module',
+          detail: 'src/shared.ts',
+          score: expect.any(Number),
+        },
+      },
+    ]);
+    expect(messages.find((message) => message.id === 3)?.result).toContainEqual(
+      expect.objectContaining({
+        name: 'OverlayOnly',
+        kind: 'exported_symbol',
+        location: expect.objectContaining({
+          uri: sharedUri,
+          range: expect.objectContaining({
+            start: { line: 1, character: 13 },
+            end: expect.objectContaining({
+              line: 1,
+              character: expect.any(Number),
+            }),
+          }),
+        }),
+        detail: 'src/shared.ts • const',
+        source: 'codepol',
+        semanticClass: 'exported_symbol',
+      }),
+    );
+    expect(messages.find((message) => message.id === 4)?.result).toMatchObject({
+      status: 'ready',
+      workspaceReady: true,
+      indexedFileCount: 2,
+      featureStatus: {
+        workspaceSymbols: { readiness: 'ready' },
+        semanticSearch: { readiness: 'ready' },
+        dependencyGraph: { readiness: 'ready' },
+        architectureSummary: { readiness: 'ready' },
+      },
+    });
+    expect(messages.find((message) => message.id === 5)?.result).toEqual({
+      nodes: [
+        {
+          uri: appUri,
+          workspaceRelativePath: 'src/app.ts',
+        },
+        {
+          uri: sharedUri,
+          workspaceRelativePath: 'src/shared.ts',
+        },
+      ],
+      edges: [
+        {
+          fromUri: appUri,
+          toUri: sharedUri,
+        },
+      ],
+      entryPoints: [appUri],
+      cycles: [],
+    });
+    expect(messages.find((message) => message.id === 6)?.result).toMatchObject({
+      indexedFileCount: 2,
+      entryPointCount: 1,
+      cycleCount: 0,
+      hotspots: [
+        {
+          uri: sharedUri,
+          workspaceRelativePath: 'src/shared.ts',
+          importerCount: 1,
+          importeeCount: 0,
+        },
+        {
+          uri: appUri,
+          workspaceRelativePath: 'src/app.ts',
+          importerCount: 0,
+          importeeCount: 1,
+        },
+      ],
+    });
+  });
+
+  it('polls index status into work-done progress and reopens progress after invalidation', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');
+    createdDirs.push(workspaceRoot);
+    fs.writeFileSync(path.join(workspaceRoot, 'codepol.toml'), noInterfaceConfigContentCreate(), 'utf8');
+
+    const timers = manualTimerQueueCreate();
+    const messages: any[] = [];
+    let queryIndexStatusCalls = 0;
+    const statusResults = [
+      {
+        workspaceId: 'workspace-1',
+        workspaceInstanceId: 'workspace-instance-1',
+        status: 'cold',
+        replayState: 'applied',
+        replayEpoch: 1,
+        workspaceReady: false,
+        indexedFileCount: 0,
+        openDocumentCount: 0,
+        overlayCount: 0,
+        analysisGeneration: 0,
+      },
+      {
+        workspaceId: 'workspace-1',
+        workspaceInstanceId: 'workspace-instance-1',
+        status: 'warming',
+        replayState: 'applied',
+        replayEpoch: 1,
+        workspaceReady: false,
+        indexedFileCount: 3,
+        openDocumentCount: 0,
+        overlayCount: 0,
+        analysisGeneration: 0,
+      },
+      {
+        workspaceId: 'workspace-1',
+        workspaceInstanceId: 'workspace-instance-1',
+        status: 'ready',
+        replayState: 'applied',
+        replayEpoch: 1,
+        workspaceReady: true,
+        indexedFileCount: 3,
+        openDocumentCount: 0,
+        overlayCount: 0,
+        analysisGeneration: 1,
+      },
+      {
+        workspaceId: 'workspace-1',
+        workspaceInstanceId: 'workspace-instance-1',
+        status: 'warming',
+        replayState: 'applied',
+        replayEpoch: 1,
+        workspaceReady: false,
+        indexedFileCount: 3,
+        openDocumentCount: 0,
+        overlayCount: 0,
+        analysisGeneration: 1,
+      },
+      {
+        workspaceId: 'workspace-1',
+        workspaceInstanceId: 'workspace-instance-1',
+        status: 'error',
+        replayState: 'applied',
+        replayEpoch: 1,
+        workspaceReady: false,
+        indexedFileCount: 3,
+        openDocumentCount: 0,
+        overlayCount: 0,
+        analysisGeneration: 1,
+        lastError: 'Index build failed',
+      },
+    ] as const;
+
+    const service: WorkspaceService = {
+      ...workspaceReadQueriesStubCreate(),
+      async registerClientSession() {
+        return {
+          clientSessionId: 'client-1',
+          daemonSessionId: 'daemon-1',
+        };
+      },
+      async closeClientSession() {},
+      async attachWorkspace() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+        };
+      },
+      async subscribeDiagnostics() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          scope: 'workspace',
+          subscriptionState: 'active',
+        };
+      },
+      async completeReplay() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          replayEpoch: 1,
+          replayState: 'applied',
+        };
+      },
+      async openOverlay() {},
+      async updateOverlay() {},
+      async closeOverlay() {},
+      async queryDiagnostics() {
+        return [];
+      },
+      async queryCodeActions() {
+        return [];
+      },
+      async applyEditPlan() {
+        return { applied: false, failureReason: 'plan_not_found' };
+      },
+      async queryIndexStatus() {
+        const result =
+          statusResults[Math.min(queryIndexStatusCalls, statusResults.length - 1)]!;
+        queryIndexStatusCalls += 1;
+        return result;
+      },
+    };
+
+    const server = new CodepolLspServer({
+      service,
+      sendMessage: (message) => {
+        messages.push(message);
+      },
+      timers: timers.timers,
+      statusPollIntervalsMs: {
+        active: 0,
+        idle: 0,
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        rootUri: pathToFileURL(workspaceRoot).href,
+        capabilities: {
+          window: {
+            workDoneProgress: true,
+          },
+        },
+      },
+    });
+
+    expect(timers.pendingCountGet()).toBe(1);
+    await timers.runNext();
+    await timers.runNext();
+    await timers.runNext();
+    await timers.runNext();
+    await timers.runNext();
+
+    const progressCreates = messages.filter(
+      (message) => message.method === 'window/workDoneProgress/create',
+    );
+    const progressUpdates = messages.filter((message) => message.method === '$/progress');
+    expect(queryIndexStatusCalls).toBe(5);
+    expect(progressCreates).toHaveLength(2);
+    expect(progressUpdates.map((message) => message.params.value.kind)).toEqual([
+      'begin',
+      'report',
+      'end',
+      'begin',
+      'end',
+    ]);
+    expect(progressUpdates[0]?.params.value.message).toBe('Preparing workspace index');
+    expect(progressUpdates[1]?.params.value.message).toBe(
+      'Warming workspace index (3 indexed files)',
+    );
+    expect(progressUpdates[2]?.params.value.message).toBe(
+      'Workspace ready (3 indexed files)',
+    );
+    expect(progressUpdates[4]?.params.value.message).toBe('Index build failed');
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 9,
+      method: 'shutdown',
+    });
+    expect(timers.pendingCountGet()).toBe(0);
   });
 
   it('supports an async daemon-backed service factory during initialize and publish flow', async () => {
@@ -379,6 +830,7 @@ describe('CodepolLspServer', () => {
       failQueryDiagnostics?: boolean;
     }): WorkspaceService {
       return {
+        ...workspaceReadQueriesStubCreate(),
         async registerClientSession(input) {
           options.calls.push(`register:${input.clientSessionId ?? 'generated'}`);
           return {
@@ -544,6 +996,7 @@ describe('CodepolLspServer', () => {
       diagnosticsByDocumentVersion: Record<number, WorkspaceDiagnostic[]>;
     }): WorkspaceService {
       return {
+        ...workspaceReadQueriesStubCreate(),
         async registerClientSession(input) {
           options.calls.push(`register:${input.clientSessionId ?? 'generated'}`);
           return {
@@ -1015,6 +1468,7 @@ describe('CodepolLspServer', () => {
     const seenDocumentVersions: Array<number | undefined> = [];
 
     const service: WorkspaceService = {
+      ...workspaceReadQueriesStubCreate(),
       async registerClientSession() {
         return {
           clientSessionId: 'client-1',
@@ -1127,6 +1581,7 @@ describe('CodepolLspServer', () => {
     const diagnosticsResolvers: Array<(value: any[]) => void> = [];
 
     const service: WorkspaceService = {
+      ...workspaceReadQueriesStubCreate(),
       async registerClientSession() {
         return {
           clientSessionId: 'client-1',
@@ -1268,6 +1723,7 @@ describe('CodepolLspServer', () => {
     const messages: any[] = [];
 
     const service: WorkspaceService = {
+      ...workspaceReadQueriesStubCreate(),
       async registerClientSession() {
         return {
           clientSessionId: 'client-1',
@@ -1368,6 +1824,7 @@ describe('CodepolLspServer', () => {
     let resolveCodeActions: ((value: WorkspaceCodeAction[]) => void) | undefined;
 
     const service: WorkspaceService = {
+      ...workspaceReadQueriesStubCreate(),
       async registerClientSession() {
         return {
           clientSessionId: 'client-1',
@@ -1489,6 +1946,7 @@ describe('CodepolLspServer', () => {
 
     const seenDiagnosticIds: string[][] = [];
     const service: WorkspaceService = {
+      ...workspaceReadQueriesStubCreate(),
       async registerClientSession() {
         return {
           clientSessionId: 'client-1',
@@ -1635,6 +2093,7 @@ describe('CodepolLspServer', () => {
     const uri = pathToFileURL(filePath).href;
 
     const service: WorkspaceService = {
+      ...workspaceReadQueriesStubCreate(),
       async registerClientSession() {
         return {
           clientSessionId: 'client-1',

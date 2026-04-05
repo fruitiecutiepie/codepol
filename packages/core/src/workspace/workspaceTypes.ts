@@ -18,6 +18,11 @@ export type WorkspaceRange = {
   end: WorkspacePosition;
 };
 
+export type WorkspaceLocation = {
+  uri: string;
+  range: WorkspaceRange;
+};
+
 export type DaemonSessionId = string;
 
 export type ClientSessionId = string;
@@ -67,6 +72,64 @@ export type WorkspaceDiagnostic = {
   relatedLocations?: WorkspaceDiagnosticRelatedLocation[];
 };
 
+export type WorkspaceSymbolKind = 'file' | 'module';
+
+export type WorkspaceSymbolResult = {
+  name: string;
+  kind: WorkspaceSymbolKind;
+  location: WorkspaceLocation;
+  containerName?: string;
+  detail?: string;
+  source: 'codepol';
+  semanticClass: 'workspace_file' | 'workspace_module';
+  score?: number;
+};
+
+export type WorkspaceSearchResult = {
+  name: string;
+  kind: 'module' | 'exported_symbol';
+  location: WorkspaceLocation;
+  detail?: string;
+  source: 'codepol';
+  semanticClass: 'workspace_module' | 'exported_symbol';
+  score: number;
+};
+
+export type WorkspaceDependencyGraphNode = {
+  uri: string;
+  workspaceRelativePath: string;
+};
+
+export type WorkspaceDependencyGraphEdge = {
+  fromUri: string;
+  toUri: string;
+};
+
+export type WorkspaceDependencyGraphResult = {
+  nodes: WorkspaceDependencyGraphNode[];
+  edges: WorkspaceDependencyGraphEdge[];
+  entryPoints: string[];
+  cycles: string[][];
+};
+
+export type WorkspaceArchitectureSummaryHotspot = {
+  uri: string;
+  workspaceRelativePath: string;
+  importerCount: number;
+  importeeCount: number;
+};
+
+export type WorkspaceArchitectureSummaryResult = {
+  summary: string;
+  indexedFileCount: number;
+  symbolCount: number;
+  scopeCount: number;
+  relationCount: number;
+  entryPointCount: number;
+  cycleCount: number;
+  hotspots: WorkspaceArchitectureSummaryHotspot[];
+};
+
 export type WorkspaceApplyFailureReason =
   | 'plan_not_found'
   | 'stale_document_version'
@@ -95,6 +158,10 @@ export type IndexStatusFeatureStatus = {
   codeActions: WorkspaceFeatureStatus;
   editPlans: WorkspaceFeatureStatus;
   workspaceIndex: WorkspaceFeatureStatus;
+  workspaceSymbols: WorkspaceFeatureStatus;
+  semanticSearch: WorkspaceFeatureStatus;
+  dependencyGraph: WorkspaceFeatureStatus;
+  architectureSummary: WorkspaceFeatureStatus;
 };
 
 export type IndexStatusResult = {

@@ -1,17 +1,26 @@
 import { randomUUID } from 'node:crypto';
 import {
   workspaceUriToPath,
+  type IndexStatusResult,
+  type WorkspaceArchitectureSummaryResult,
   type WorkspaceCodeAction,
+  type WorkspaceDependencyGraphResult,
   type WorkspaceDiagnostic,
   type WorkspaceEditPlan,
+  type WorkspaceSearchResult,
+  type WorkspaceSymbolResult,
 } from '@codepol/core';
 import {
   configDiscover,
+  WorkspaceServiceEngine,
   workspaceServiceCreate,
   type WorkspaceService,
 } from '@codepol/workspace-service';
 
 const APPLY_EDIT_PLAN_COMMAND = 'codepol.applyEditPlan';
+const STATUS_PROGRESS_TOKEN = 'codepol/index-status';
+const STATUS_POLL_INTERVAL_ACTIVE_MS = 25;
+const STATUS_POLL_INTERVAL_IDLE_MS = 250;
 
 type JsonRpcId = number | string | null;
 
@@ -56,6 +65,7 @@ type LspRange = {
 
 type SendMessage = (message: JsonRpcRequest | JsonRpcNotification | JsonRpcResponse) => void;
 type WorkspaceServiceFactory = () => WorkspaceService | Promise<WorkspaceService>;
+type TimeoutHandle = ReturnType<typeof setTimeout>;
 
 function promiseLikeIs<T>(value: T | Promise<T>): value is Promise<T> {
   return (
@@ -86,6 +96,45 @@ function severityToLsp(severity: WorkspaceDiagnostic['severity']): number {
     return 3;
   }
   return 1;
+}
+
+function workspaceSymbolKindToLsp(
+  kind: WorkspaceSymbolResult['kind'],
+): number {
+  if (kind === 'file') {
+    return 1;
+  }
+  return 2;
+}
+
+function indexStatusProgressMessageCreate(
+  indexStatus: IndexStatusResult,
+): string {
+  if (indexStatus.status === 'error') {
+    return indexStatus.lastError ?? 'Workspace indexing failed';
+  }
+  if (indexStatus.status === 'ready') {
+    return `Workspace ready (${indexStatus.indexedFileCount} indexed files)`;
+  }
+  if (indexStatus.status === 'warming') {
+    return `Warming workspace index (${indexStatus.indexedFileCount} indexed files)`;
+  }
+  return 'Preparing workspace index';
+}
+
+function indexStatusProgressPercentageResolve(
+  indexStatus: IndexStatusResult,
+): number | undefined {
+  if (indexStatus.status === 'ready') {
+    return 100;
+  }
+  if (indexStatus.status === 'warming') {
+    return 50;
+  }
+  if (indexStatus.status === 'cold') {
+    return 0;
+  }
+  return undefined;
 }
 
 function positionCompare(a: LspPosition, b: LspPosition): number {
@@ -257,6 +306,19 @@ export class CodepolLspServer {
   private workspaceConfigPath: string | undefined;
   private workspaceEpoch = 0;
   private nextRequestId = 1;
+  private readonly timers: {
+    setTimeout: (callback: () => void, delayMs: number) => TimeoutHandle;
+    clearTimeout: (handle: TimeoutHandle | undefined) => void;
+  };
+  private readonly statusPollIntervalsMs: {
+    active: number;
+    idle: number;
+  };
+  private supportsWorkDoneProgress = false;
+  private statusPollGeneration = 0;
+  private statusPollTimer: TimeoutHandle | undefined;
+  private statusProgressActive = false;
+  private shutdownRequested = false;
 
   constructor(options: {
     service?: WorkspaceService;
@@ -264,12 +326,36 @@ export class CodepolLspServer {
     sendMessage: SendMessage;
     clientInstanceId?: string;
     clientSessionId?: string;
+    timers?: {
+      setTimeout?: (callback: () => void, delayMs: number) => TimeoutHandle;
+      clearTimeout?: (handle: TimeoutHandle | undefined) => void;
+    };
+    statusPollIntervalsMs?: {
+      active?: number;
+      idle?: number;
+    };
   }) {
     this.service = options.service;
-    this.serviceFactory = options.serviceFactory ?? (() => workspaceServiceCreate());
+    this.serviceFactory =
+      options.serviceFactory ??
+      (() =>
+        workspaceServiceCreate({
+          engine: new WorkspaceServiceEngine({
+            backgroundWarmup: true,
+          }),
+        }));
     this.sendMessage = options.sendMessage;
     this.clientInstanceId = options.clientInstanceId ?? `codepol-lsp-${process.pid}`;
     this.stableClientSessionId = options.clientSessionId ?? `client-${randomUUID()}`;
+    this.timers = {
+      setTimeout: options.timers?.setTimeout ?? setTimeout,
+      clearTimeout: options.timers?.clearTimeout ?? clearTimeout,
+    };
+    this.statusPollIntervalsMs = {
+      active:
+        options.statusPollIntervalsMs?.active ?? STATUS_POLL_INTERVAL_ACTIVE_MS,
+      idle: options.statusPollIntervalsMs?.idle ?? STATUS_POLL_INTERVAL_IDLE_MS,
+    };
   }
 
   private async serviceGet(): Promise<WorkspaceService> {
@@ -417,6 +503,7 @@ export class CodepolLspServer {
       });
       this.workspaceId = attached.workspaceId;
       this.workspaceEpochBump();
+      this.statusPollingStart();
       return service;
     })().finally(() => {
       this.reconnectPromise = undefined;
@@ -450,6 +537,177 @@ export class CodepolLspServer {
       }
       return operation(reconnected);
     }
+  }
+
+  private async serviceSessionClose(): Promise<void> {
+    this.statusPollingStop({ endProgress: true });
+    const activeService =
+      this.service ??
+      (this.servicePromise ? await this.servicePromise.catch(() => undefined) : undefined);
+
+    if (activeService && this.registeredClientSessionId) {
+      try {
+        await activeService.closeClientSession({
+          clientSessionId: this.registeredClientSessionId,
+        });
+      } catch {
+        // ignore close failures during shutdown/exit
+      }
+    }
+
+    if (
+      activeService &&
+      'close' in activeService &&
+      typeof (activeService as { close?: () => Promise<void> }).close === 'function'
+    ) {
+      try {
+        await (activeService as { close: () => Promise<void> }).close();
+      } catch {
+        // ignore transport close failures during shutdown/exit
+      }
+    }
+
+    this.registeredClientSessionId = undefined;
+    this.workspaceId = undefined;
+    this.serviceReset();
+  }
+
+  private statusPollingStart(): void {
+    if (
+      !this.supportsWorkDoneProgress ||
+      this.shutdownRequested ||
+      !this.registeredClientSessionId ||
+      !this.workspaceId
+    ) {
+      return;
+    }
+    this.statusPollGeneration += 1;
+    this.timers.clearTimeout(this.statusPollTimer);
+    this.statusPollTimer = undefined;
+    this.statusPollSchedule(0, this.statusPollGeneration);
+  }
+
+  private statusPollingStop(
+    options: {
+      endProgress: boolean;
+    },
+  ): void {
+    this.statusPollGeneration += 1;
+    this.timers.clearTimeout(this.statusPollTimer);
+    this.statusPollTimer = undefined;
+    if (options.endProgress) {
+      this.statusProgressEnd('Workspace status polling stopped');
+    }
+  }
+
+  private statusPollSchedule(delayMs: number, generation: number): void {
+    this.statusPollTimer = this.timers.setTimeout(() => {
+      void this.statusPollRun(generation);
+    }, delayMs);
+  }
+
+  private async statusPollRun(generation: number): Promise<void> {
+    if (
+      generation !== this.statusPollGeneration ||
+      this.shutdownRequested ||
+      !this.registeredClientSessionId ||
+      !this.workspaceId
+    ) {
+      return;
+    }
+
+    try {
+      const indexStatus = await this.serviceCall((service) =>
+        service.queryIndexStatus({
+          clientSessionId: this.registeredClientSessionId!,
+          workspaceId: this.workspaceId!,
+          requestId: `lsp-status-poll:${generation}:${this.workspaceEpoch}`,
+        }),
+      );
+      if (generation !== this.statusPollGeneration) {
+        return;
+      }
+
+      const message = indexStatusProgressMessageCreate(indexStatus);
+      const percentage = indexStatusProgressPercentageResolve(indexStatus);
+      if (indexStatus.status === 'cold' || indexStatus.status === 'warming') {
+        this.statusProgressBeginOrReport(message, percentage);
+      } else if (this.statusProgressActive) {
+        this.statusProgressEnd(message);
+      }
+
+      const nextDelay =
+        indexStatus.status === 'cold' || indexStatus.status === 'warming'
+          ? this.statusPollIntervalsMs.active
+          : this.statusPollIntervalsMs.idle;
+      this.statusPollSchedule(nextDelay, generation);
+    } catch (error) {
+      if (generation !== this.statusPollGeneration) {
+        return;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      if (this.statusProgressActive) {
+        this.statusProgressEnd(message);
+      }
+      this.statusPollSchedule(this.statusPollIntervalsMs.idle, generation);
+    }
+  }
+
+  private statusProgressBeginOrReport(
+    message: string,
+    percentage?: number,
+  ): void {
+    if (!this.statusProgressActive) {
+      this.clientRequestSendNoWait('window/workDoneProgress/create', {
+        token: STATUS_PROGRESS_TOKEN,
+      });
+      this.statusProgressActive = true;
+      this.sendMessage({
+        jsonrpc: '2.0',
+        method: '$/progress',
+        params: {
+          token: STATUS_PROGRESS_TOKEN,
+          value: {
+            kind: 'begin',
+            title: 'Codepol workspace index',
+            message,
+            percentage,
+          },
+        },
+      });
+      return;
+    }
+
+    this.sendMessage({
+      jsonrpc: '2.0',
+      method: '$/progress',
+      params: {
+        token: STATUS_PROGRESS_TOKEN,
+        value: {
+          kind: 'report',
+          message,
+          percentage,
+        },
+      },
+    });
+  }
+
+  private statusProgressEnd(message: string): void {
+    if (!this.statusProgressActive) {
+      return;
+    }
+    this.statusProgressActive = false;
+    this.sendMessage({
+      jsonrpc: '2.0',
+      method: '$/progress',
+      params: {
+        token: STATUS_PROGRESS_TOKEN,
+        value: {
+          kind: 'end',
+          message,
+        },
+      },
+    });
   }
 
   async handleMessage(message: JsonRpcRequest | JsonRpcNotification | JsonRpcResponse): Promise<void> {
@@ -556,8 +814,19 @@ export class CodepolLspServer {
           rootUri?: string | null;
           rootPath?: string | null;
           workspaceFolders?: Array<{ uri: string }>;
+          capabilities?: {
+            window?: {
+              workDoneProgress?: boolean;
+            };
+          };
         });
       case 'initialized':
+        return null;
+      case 'shutdown':
+        await this.shutdownHandle();
+        return null;
+      case 'exit':
+        await this.exitHandle();
         return null;
       case 'textDocument/didOpen':
         await this.didOpenHandle(params as {
@@ -592,6 +861,21 @@ export class CodepolLspServer {
           command: string;
           arguments?: Array<{ planId?: string }>;
         }, context);
+      case 'workspace/symbol':
+        return this.workspaceSymbolHandle(params as {
+          query?: string;
+        }, context);
+      case 'codepol/indexStatus':
+        return this.indexStatusHandle(context);
+      case 'codepol/dependencyGraph':
+        return this.dependencyGraphHandle(context);
+      case 'codepol/semanticSearch':
+        return this.semanticSearchHandle(params as {
+          query?: string;
+          limit?: number;
+        }, context);
+      case 'codepol/architectureSummary':
+        return this.architectureSummaryHandle(context);
       default:
         return null;
     }
@@ -601,7 +885,14 @@ export class CodepolLspServer {
     rootUri?: string | null;
     rootPath?: string | null;
     workspaceFolders?: Array<{ uri: string }>;
+    capabilities?: {
+      window?: {
+        workDoneProgress?: boolean;
+      };
+    };
   }): Promise<unknown> {
+    this.supportsWorkDoneProgress = params.capabilities?.window?.workDoneProgress === true;
+    this.shutdownRequested = false;
     const service = await this.serviceGet();
     const registered = await service.registerClientSession({
       clientKind: 'lsp',
@@ -633,6 +924,7 @@ export class CodepolLspServer {
         });
         this.workspaceId = attached.workspaceId;
         this.workspaceEpochBump();
+        this.statusPollingStart();
       } catch {
         this.workspaceId = undefined;
       }
@@ -642,6 +934,7 @@ export class CodepolLspServer {
       capabilities: {
         textDocumentSync: 2,
         codeActionProvider: true,
+        workspaceSymbolProvider: true,
         executeCommandProvider: {
           commands: [APPLY_EDIT_PLAN_COMMAND],
         },
@@ -683,6 +976,16 @@ export class CodepolLspServer {
       workspaceId: input.workspaceId,
       workspaceInstanceId: input.workspaceInstanceId,
     });
+  }
+
+  private async shutdownHandle(): Promise<void> {
+    this.shutdownRequested = true;
+    await this.serviceSessionClose();
+  }
+
+  private async exitHandle(): Promise<void> {
+    this.shutdownRequested = true;
+    await this.serviceSessionClose();
   }
 
   private async didOpenHandle(params: {
@@ -905,6 +1208,140 @@ export class CodepolLspServer {
     });
   }
 
+  private async workspaceSymbolHandle(
+    params: {
+      query?: string;
+    },
+    context: { requestId?: JsonRpcId; signal?: AbortSignal } = {},
+  ): Promise<unknown> {
+    if (!this.registeredClientSessionId || !this.workspaceId) {
+      return [];
+    }
+
+    return this.serviceCall(async (service) => {
+      const symbols = await service.queryWorkspaceSymbols({
+        clientSessionId: this.registeredClientSessionId!,
+        workspaceId: this.workspaceId!,
+        query: params.query ?? '',
+        requestId:
+          context.requestId === undefined || context.requestId === null
+            ? undefined
+            : `lsp-workspace-symbol:${String(context.requestId)}`,
+        signal: context.signal,
+      });
+      return symbols.map((symbol) => this.workspaceSymbolToLsp(symbol));
+    }, {
+      signal: context.signal,
+    });
+  }
+
+  private workspaceSymbolToLsp(
+    symbol: WorkspaceSymbolResult,
+  ): unknown {
+    return {
+      name: symbol.name,
+      kind: workspaceSymbolKindToLsp(symbol.kind),
+      location: symbol.location,
+      containerName: symbol.containerName ?? 'Codepol',
+      data: {
+        source: symbol.source,
+        semanticClass: symbol.semanticClass,
+        detail: symbol.detail,
+        score: symbol.score,
+      },
+    };
+  }
+
+  private async indexStatusHandle(
+    context: { requestId?: JsonRpcId; signal?: AbortSignal } = {},
+  ): Promise<IndexStatusResult | null> {
+    if (!this.registeredClientSessionId || !this.workspaceId) {
+      return null;
+    }
+
+    return this.serviceCall((service) =>
+      service.queryIndexStatus({
+        clientSessionId: this.registeredClientSessionId!,
+        workspaceId: this.workspaceId!,
+        requestId:
+          context.requestId === undefined || context.requestId === null
+            ? undefined
+            : `lsp-codepol-index-status:${String(context.requestId)}`,
+        signal: context.signal,
+      }), {
+      signal: context.signal,
+    });
+  }
+
+  private async dependencyGraphHandle(
+    context: { requestId?: JsonRpcId; signal?: AbortSignal } = {},
+  ): Promise<WorkspaceDependencyGraphResult | null> {
+    if (!this.registeredClientSessionId || !this.workspaceId) {
+      return null;
+    }
+
+    return this.serviceCall((service) =>
+      service.queryDependencyGraph({
+        clientSessionId: this.registeredClientSessionId!,
+        workspaceId: this.workspaceId!,
+        requestId:
+          context.requestId === undefined || context.requestId === null
+            ? undefined
+            : `lsp-codepol-dependency-graph:${String(context.requestId)}`,
+        signal: context.signal,
+      }), {
+      signal: context.signal,
+    });
+  }
+
+  private async semanticSearchHandle(
+    params: {
+      query?: string;
+      limit?: number;
+    },
+    context: { requestId?: JsonRpcId; signal?: AbortSignal } = {},
+  ): Promise<WorkspaceSearchResult[] | null> {
+    if (!this.registeredClientSessionId || !this.workspaceId) {
+      return null;
+    }
+
+    return this.serviceCall((service) =>
+      service.querySemanticSearch({
+        clientSessionId: this.registeredClientSessionId!,
+        workspaceId: this.workspaceId!,
+        query: params.query ?? '',
+        limit: params.limit,
+        requestId:
+          context.requestId === undefined || context.requestId === null
+            ? undefined
+            : `lsp-codepol-semantic-search:${String(context.requestId)}`,
+        signal: context.signal,
+      }), {
+      signal: context.signal,
+    });
+  }
+
+  private async architectureSummaryHandle(
+    context: { requestId?: JsonRpcId; signal?: AbortSignal } = {},
+  ): Promise<WorkspaceArchitectureSummaryResult | null> {
+    if (!this.registeredClientSessionId || !this.workspaceId) {
+      return null;
+    }
+
+    return this.serviceCall((service) =>
+      service.queryArchitectureSummary({
+        clientSessionId: this.registeredClientSessionId!,
+        workspaceId: this.workspaceId!,
+        requestId:
+          context.requestId === undefined || context.requestId === null
+            ? undefined
+            : `lsp-codepol-architecture-summary:${String(context.requestId)}`,
+        signal: context.signal,
+      }), {
+      signal: context.signal,
+    });
+  }
+
   private async publishDiagnostics(
     uri: string,
     options: {
@@ -972,6 +1409,17 @@ export class CodepolLspServer {
         this.pendingClientRequests.delete(id);
         reject(error instanceof Error ? error : new Error(String(error)));
       }
+    });
+  }
+
+  private clientRequestSendNoWait(method: string, params: unknown): void {
+    const id = this.nextRequestId;
+    this.nextRequestId += 1;
+    this.sendMessage({
+      jsonrpc: '2.0',
+      id,
+      method,
+      params,
     });
   }
 }
