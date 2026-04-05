@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   pluginModuleRegister,
   pluginRuleNew,
+  treeCheckProviderNew,
   workspacePathToUri,
 } from '@codepol/core';
 import {
@@ -142,6 +143,121 @@ process.exit(0);
   );
   fs.chmodSync(biomeBin, 0o755);
   return biomeBin;
+}
+
+function mockBiomeDiagnosticScriptCreate(
+  projectDir: string,
+  options: {
+    diagnostic: {
+      code: string;
+      filePath: string;
+      message: string;
+      startLine?: number;
+      startColumn?: number;
+      endLine?: number;
+      endColumn?: number;
+    };
+    fileName?: string;
+  },
+): string {
+  const biomeBin = path.join(
+    projectDir,
+    options.fileName ?? 'mock-biome-diagnostic.cjs',
+  );
+  const diagnostic = {
+    code: {
+      value: options.diagnostic.code,
+    },
+    location: {
+      path: options.diagnostic.filePath,
+      range: {
+        start: {
+          line: options.diagnostic.startLine ?? 0,
+          column: options.diagnostic.startColumn ?? 0,
+        },
+        end: {
+          line: options.diagnostic.endLine ?? 0,
+          column: options.diagnostic.endColumn ?? 5,
+        },
+      },
+    },
+    message: options.diagnostic.message,
+  };
+  fs.writeFileSync(
+    biomeBin,
+    `#!/usr/bin/env node
+process.stdout.write(${JSON.stringify(JSON.stringify({ diagnostics: [diagnostic] }))});
+process.exit(0);
+`,
+    'utf8',
+  );
+  fs.chmodSync(biomeBin, 0o755);
+  return biomeBin;
+}
+
+function pluginRuleConfigContentCreate(input: {
+  pluginId: string;
+  ruleId: string;
+  language?: string;
+}): string {
+  return `[[plugins]]
+id = "${input.pluginId}"
+source = { kind = "builtin" }
+
+[targets.src]
+language = "${input.language ?? 'typescript'}"
+files = ["src/**/*.ts"]
+
+[[rules]]
+ruleId = "${input.pluginId}/${input.ruleId}"
+targets = ["src"]
+`;
+}
+
+function analyzerScorecardGet(
+  engine: WorkspaceServiceEngine,
+  input: {
+    clientSessionId: string;
+    workspaceId: string;
+  },
+): Array<{
+  analyzerId: string;
+  platform: string;
+  status: string;
+  ownedRuleIds: string[];
+  skippedRuleIds: string[];
+  skippedReason?: string;
+  issues: string[];
+}> {
+  const debugEngine = engine as unknown as {
+    clientSessions: Map<
+      string,
+      {
+        workspaces: Map<
+          string,
+          {
+            lastAnalysis?: {
+              analyzerScorecard?: Array<{
+                analyzerId: string;
+                platform: string;
+                status: string;
+                ownedRuleIds: string[];
+                skippedRuleIds: string[];
+                skippedReason?: string;
+                issues: string[];
+              }>;
+            };
+          }
+        >;
+      }
+    >;
+  };
+  return (
+    debugEngine.clientSessions
+      .get(input.clientSessionId)
+      ?.workspaces.get(input.workspaceId)
+      ?.lastAnalysis?.analyzerScorecard ?? []
+  );
 }
 
 function mockProcessPluginScriptCreate(
@@ -604,6 +720,298 @@ describe('workspace service integration', () => {
       },
       analysisGeneration: 1,
     });
+  });
+
+  it('prefers a native JS/TS rule over a wrapped analyzer for the same rule id', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = workspacePathToUri(filePath);
+    fs.writeFileSync(filePath, 'export const value = 1;\n', 'utf8');
+
+    const pluginId = `test-dual-native-${randomUUID()}`;
+    const ruleId = 'dual-capability';
+    const resolvedRuleId = `${pluginId}/${ruleId}`;
+    const biomeBin = mockBiomeDiagnosticScriptCreate(workspaceRoot, {
+      fileName: 'mock-biome-dual.cjs',
+      diagnostic: {
+        code: 'lint/mock/wrapped',
+        filePath,
+        message: 'wrapped diagnostic',
+      },
+    });
+    pluginModuleRegister(pluginId, {
+      default: [
+        pluginRuleNew({
+          id: ruleId,
+          capabilities: {
+            lintProviders: [
+              {
+                platform: 'biome',
+                languages: ['typescript'],
+                config: {
+                  biomeBin,
+                },
+              },
+            ],
+            treeCheckProvider: treeCheckProviderNew({
+              languages: ['typescript'],
+              check: () => [
+                {
+                  ruleId: resolvedRuleId,
+                  filePath,
+                  message: 'native diagnostic',
+                  line: 1,
+                  column: 1,
+                },
+              ],
+            }),
+          },
+        }),
+      ],
+    });
+
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(
+      configPath,
+      pluginRuleConfigContentCreate({ pluginId, ruleId }),
+      'utf8',
+    );
+
+    const engine = new WorkspaceServiceEngine();
+    const service = workspaceServiceCreate({ engine });
+    const attached = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'dual-native-client',
+    });
+
+    const diagnostics = await service.queryDiagnostics({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      uri,
+    });
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        source: 'codepol',
+        code: resolvedRuleId,
+        message: 'native diagnostic',
+      }),
+    ]);
+
+    const scorecard = analyzerScorecardGet(engine, {
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+    });
+    expect(scorecard).toContainEqual(
+      expect.objectContaining({
+        analyzerId: 'codepol/tree',
+        platform: 'codepol_tree',
+        status: 'ran',
+        ownedRuleIds: [resolvedRuleId],
+      }),
+    );
+    expect(scorecard).toContainEqual(
+      expect.objectContaining({
+        analyzerId: 'biome',
+        platform: 'biome',
+        status: 'skipped',
+        ownedRuleIds: [],
+        skippedRuleIds: [resolvedRuleId],
+        skippedReason: 'native_preferred',
+      }),
+    );
+  });
+
+  it('keeps wrapped-only JS/TS analyzers active when no native owner exists', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = workspacePathToUri(filePath);
+    fs.writeFileSync(filePath, 'export const value = 1;\n', 'utf8');
+
+    const pluginId = `test-wrapped-only-${randomUUID()}`;
+    const ruleId = 'wrapped-only';
+    const resolvedRuleId = 'lint/mock/wrapped-only';
+    const biomeBin = mockBiomeDiagnosticScriptCreate(workspaceRoot, {
+      fileName: 'mock-biome-wrapped-only.cjs',
+      diagnostic: {
+        code: resolvedRuleId,
+        filePath,
+        message: 'wrapped-only diagnostic',
+      },
+    });
+    pluginModuleRegister(pluginId, {
+      default: [
+        pluginRuleNew({
+          id: ruleId,
+          capabilities: {
+            lintProviders: [
+              {
+                platform: 'biome',
+                languages: ['typescript'],
+                config: {
+                  biomeBin,
+                },
+              },
+            ],
+          },
+        }),
+      ],
+    });
+
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(
+      configPath,
+      pluginRuleConfigContentCreate({ pluginId, ruleId }),
+      'utf8',
+    );
+
+    const engine = new WorkspaceServiceEngine();
+    const service = workspaceServiceCreate({ engine });
+    const attached = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'wrapped-only-client',
+    });
+
+    const diagnostics = await service.queryDiagnostics({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      uri,
+    });
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        source: 'biome',
+        code: resolvedRuleId,
+        message: 'wrapped-only diagnostic',
+      }),
+    ]);
+
+    const scorecard = analyzerScorecardGet(engine, {
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+    });
+    expect(scorecard).toContainEqual(
+      expect.objectContaining({
+        analyzerId: 'biome',
+        platform: 'biome',
+        status: 'ran',
+        ownedRuleIds: [`${pluginId}/${ruleId}`],
+        skippedRuleIds: [],
+      }),
+    );
+  });
+
+  it('degrades diagnostics when a native-owned JS/TS rule fails without falling back to wrapped output', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = workspacePathToUri(filePath);
+    fs.writeFileSync(filePath, 'export const value = 1;\n', 'utf8');
+
+    const pluginId = `test-dual-native-failure-${randomUUID()}`;
+    const ruleId = 'dual-capability-failure';
+    const resolvedRuleId = `${pluginId}/${ruleId}`;
+    const biomeBin = mockBiomeDiagnosticScriptCreate(workspaceRoot, {
+      fileName: 'mock-biome-dual-failure.cjs',
+      diagnostic: {
+        code: 'lint/mock/fallback',
+        filePath,
+        message: 'wrapped fallback diagnostic',
+      },
+    });
+    pluginModuleRegister(pluginId, {
+      default: [
+        pluginRuleNew({
+          id: ruleId,
+          capabilities: {
+            lintProviders: [
+              {
+                platform: 'biome',
+                languages: ['typescript'],
+                config: {
+                  biomeBin,
+                },
+              },
+            ],
+            treeCheckProvider: treeCheckProviderNew({
+              languages: ['typescript'],
+              check: () => {
+                throw new Error('native tree exploded');
+              },
+            }),
+          },
+        }),
+      ],
+    });
+
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(
+      configPath,
+      pluginRuleConfigContentCreate({ pluginId, ruleId }),
+      'utf8',
+    );
+
+    const engine = new WorkspaceServiceEngine();
+    const service = workspaceServiceCreate({ engine });
+    const attached = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'dual-native-failure-client',
+    });
+
+    expect(
+      await service.queryDiagnostics({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        uri,
+      }),
+    ).toEqual([]);
+    expect(
+      await service.queryIndexStatus({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+      }),
+    ).toMatchObject({
+      status: 'ready',
+      featureStatus: {
+        diagnostics: {
+          readiness: 'degraded',
+          detail: expect.stringContaining('native tree exploded'),
+        },
+      },
+    });
+
+    const scorecard = analyzerScorecardGet(engine, {
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+    });
+    expect(scorecard).toContainEqual(
+      expect.objectContaining({
+        analyzerId: 'codepol/tree',
+        platform: 'codepol_tree',
+        status: 'failed',
+        ownedRuleIds: [resolvedRuleId],
+        issues: [expect.stringContaining('native tree exploded')],
+      }),
+    );
+    expect(scorecard).toContainEqual(
+      expect.objectContaining({
+        analyzerId: 'biome',
+        platform: 'biome',
+        status: 'skipped',
+        ownedRuleIds: [],
+        skippedRuleIds: [resolvedRuleId],
+        skippedReason: 'native_preferred',
+      }),
+    );
   });
 
   it('refreshes cross-file diagnostics from overlay text using the project index', async () => {
@@ -1339,6 +1747,152 @@ describe('workspace service integration', () => {
         uri,
       }),
     ).toEqual([]);
+  });
+
+  it('persists analyzer ownership scorecards across warm restore for native-owned JS/TS rules', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    const runtimeDir = tempWorkspaceCreate('codepol-workspace-cache-');
+    createdDirs.push(workspaceRoot, runtimeDir);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = workspacePathToUri(filePath);
+    fs.writeFileSync(filePath, 'export const value = 1;\n', 'utf8');
+
+    const pluginId = `test-warm-scorecard-${randomUUID()}`;
+    const ruleId = 'warm-dual';
+    const resolvedRuleId = `${pluginId}/${ruleId}`;
+    const biomeBin = mockBiomeDiagnosticScriptCreate(workspaceRoot, {
+      fileName: 'mock-biome-warm-scorecard.cjs',
+      diagnostic: {
+        code: 'lint/mock/warm-fallback',
+        filePath,
+        message: 'wrapped warm diagnostic',
+      },
+    });
+    pluginModuleRegister(pluginId, {
+      default: [
+        pluginRuleNew({
+          id: ruleId,
+          capabilities: {
+            lintProviders: [
+              {
+                platform: 'biome',
+                languages: ['typescript'],
+                config: {
+                  biomeBin,
+                },
+              },
+            ],
+            treeCheckProvider: treeCheckProviderNew({
+              languages: ['typescript'],
+              check: () => [
+                {
+                  ruleId: resolvedRuleId,
+                  filePath,
+                  message: 'warm native diagnostic',
+                  line: 1,
+                  column: 1,
+                },
+              ],
+            }),
+          },
+        }),
+      ],
+    });
+
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(
+      configPath,
+      pluginRuleConfigContentCreate({ pluginId, ruleId }),
+      'utf8',
+    );
+
+    const warmCache = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const writerEngine = new WorkspaceServiceEngine({
+      warmCache,
+    });
+    const writerService = workspaceServiceCreate({
+      engine: writerEngine,
+    });
+    const written = await clientWorkspaceAttach(writerService, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'warm-scorecard-writer',
+    });
+
+    expect(
+      await writerService.queryDiagnostics({
+        clientSessionId: written.clientSessionId,
+        workspaceId: written.workspaceId,
+        uri,
+      }),
+    ).toHaveLength(1);
+    expect(
+      analyzerScorecardGet(writerEngine, {
+        clientSessionId: written.clientSessionId,
+        workspaceId: written.workspaceId,
+      }),
+    ).toContainEqual(
+      expect.objectContaining({
+        analyzerId: 'biome',
+        status: 'skipped',
+        skippedRuleIds: [resolvedRuleId],
+        skippedReason: 'native_preferred',
+      }),
+    );
+    await writerService.closeClientSession({
+      clientSessionId: written.clientSessionId,
+    });
+
+    const readerEngine = new WorkspaceServiceEngine({
+      warmCache,
+    });
+    const readerService = workspaceServiceCreate({
+      engine: readerEngine,
+    });
+    const restored = await clientWorkspaceAttach(readerService, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'warm-scorecard-reader',
+    });
+
+    expect(
+      await readerService.queryIndexStatus({
+        clientSessionId: restored.clientSessionId,
+        workspaceId: restored.workspaceId,
+      }),
+    ).toMatchObject({
+      status: 'ready',
+      replayState: 'pending',
+      analysisGeneration: 1,
+    });
+    expect(
+      analyzerScorecardGet(readerEngine, {
+        clientSessionId: restored.clientSessionId,
+        workspaceId: restored.workspaceId,
+      }),
+    ).toContainEqual(
+      expect.objectContaining({
+        analyzerId: 'biome',
+        status: 'skipped',
+        skippedRuleIds: [resolvedRuleId],
+        skippedReason: 'native_preferred',
+      }),
+    );
+    expect(
+      await readerService.queryDiagnostics({
+        clientSessionId: restored.clientSessionId,
+        workspaceId: restored.workspaceId,
+        uri,
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        source: 'codepol',
+        code: resolvedRuleId,
+        message: 'warm native diagnostic',
+      }),
+    ]);
   });
 
   it('does not persist open overlays or session-scoped edit plans across warm restore', async () => {

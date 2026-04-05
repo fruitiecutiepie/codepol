@@ -14,6 +14,7 @@ import {
   lintDiagnosticToWorkspaceDiagnostic,
   pluginGetForRule,
   policyPluginsGet,
+  policyViolationsGetForFile,
   policyRuleTargetsResolve,
   policyViolationToWorkspaceDiagnostic,
   policyViolationsGetFromDir,
@@ -24,6 +25,7 @@ import {
   projectIndexUpdateFileFromSource,
   projectIndexUpdateFileSync,
   ruleMatchesGet,
+  treeCheckProviderSupportsLanguage,
   workspaceIdCreate,
   workspacePathToUri,
   workspaceRangeFromByteRange,
@@ -92,12 +94,50 @@ const PYTHON_FILE_EXTENSIONS = ['.py', '.pyw'];
 const WORKSPACE_WATCH_IGNORED = ['**/node_modules/**', '**/.git/**'];
 const WORKSPACE_SYMBOL_LIMIT_DEFAULT = 50;
 const WORKSPACE_SEARCH_LIMIT_DEFAULT = 20;
+const WORKSPACE_NATIVE_OWNERSHIP_LANGUAGES = ['javascript', 'jsx', 'typescript', 'tsx'];
 
 type LintProviderEntry = {
   provider: LintProvider;
   ruleId: string;
   ruleArgs?: unknown;
   severity?: LintSeverity;
+};
+
+type WorkspaceAnalyzerFixMode = 'none' | 'inline' | 'external';
+
+type WorkspaceAnalyzerStatus = 'ran' | 'skipped' | 'failed';
+
+type WorkspaceAnalyzerSkippedReason =
+  | 'native_preferred'
+  | 'no_matching_rules'
+  | 'no_matching_files';
+
+type WorkspaceAnalyzerScorecardEntry = {
+  analyzerId: string;
+  platform: 'codepol_tree' | 'eslint' | 'biome' | 'ruff';
+  languages: string[];
+  ownedRuleIds: string[];
+  skippedRuleIds: string[];
+  skippedReason?: WorkspaceAnalyzerSkippedReason;
+  diagnosticCount: number;
+  violationCount: number;
+  issueCount: number;
+  fileCount: number;
+  fixMode: WorkspaceAnalyzerFixMode;
+  status: WorkspaceAnalyzerStatus;
+  latencyMs: number;
+  issues: string[];
+};
+
+type WorkspaceAnalyzerRunResult = {
+  diagnostics: WorkspaceDiagnostic[];
+  fixableTreeViolationsByDiagnosticId: Map<string, PolicyViolation>;
+  hasErrors: boolean;
+  issues: string[];
+  output: string;
+  scorecard: WorkspaceAnalyzerScorecardEntry;
+  treeViolations: PolicyViolation[];
+  violations: PolicyViolation[];
 };
 
 type WorkspaceDocument = {
@@ -123,6 +163,7 @@ type WorkspaceIndexState = {
 };
 
 type WorkspaceAnalysis = {
+  analyzerScorecard: WorkspaceAnalyzerScorecardEntry[];
   policy: PolicyFile;
   files: string[];
   violations: PolicyViolation[];
@@ -209,20 +250,6 @@ type ClientSessionState = {
 type PolicyCheckWorkspaceState = WorkspaceContextState &
   WorkspaceDocumentsState &
   WorkspaceAnalysisCacheState;
-
-type EslintRunResult = {
-  violations: PolicyViolation[];
-  diagnostics: WorkspaceDiagnostic[];
-  output: string;
-  hasErrors: boolean;
-  issues: string[];
-};
-
-type ProviderRunResult = {
-  violations: PolicyViolation[];
-  diagnostics: WorkspaceDiagnostic[];
-  issues: string[];
-};
 
 export type WorkspaceService = {
   registerClientSession: (input: {
@@ -834,6 +861,127 @@ function policyRuleMatches(policyRuleId: string, candidateRuleId: string): boole
 
 function policyRuleGet(policy: PolicyFile, ruleId: string): PolicyRule | undefined {
   return policy.rules.find((rule) => policyRuleMatches(rule.ruleId, ruleId));
+}
+
+function workspaceLanguageIsNativeOwnershipCandidate(language: string): boolean {
+  return WORKSPACE_NATIVE_OWNERSHIP_LANGUAGES.includes(language);
+}
+
+function workspaceAnalyzerRuleIdsNormalize(ruleIds: Iterable<string>): string[] {
+  return [...new Set(ruleIds)].sort();
+}
+
+function workspaceAnalyzerScorecardCreate(input: {
+  analyzerId: string;
+  platform: WorkspaceAnalyzerScorecardEntry['platform'];
+  languages: string[];
+  ownedRuleIds: Iterable<string>;
+  skippedRuleIds?: Iterable<string>;
+  skippedReason?: WorkspaceAnalyzerSkippedReason;
+  diagnosticCount?: number;
+  violationCount?: number;
+  fileCount?: number;
+  fixMode: WorkspaceAnalyzerFixMode;
+  status: WorkspaceAnalyzerStatus;
+  latencyMs?: number;
+  issues?: string[];
+}): WorkspaceAnalyzerScorecardEntry {
+  const issues = [...(input.issues ?? [])];
+  return {
+    analyzerId: input.analyzerId,
+    platform: input.platform,
+    languages: [...input.languages],
+    ownedRuleIds: workspaceAnalyzerRuleIdsNormalize(input.ownedRuleIds),
+    skippedRuleIds: workspaceAnalyzerRuleIdsNormalize(input.skippedRuleIds ?? []),
+    skippedReason: input.skippedReason,
+    diagnosticCount: input.diagnosticCount ?? 0,
+    violationCount: input.violationCount ?? 0,
+    issueCount: issues.length,
+    fileCount: input.fileCount ?? 0,
+    fixMode: input.fixMode,
+    status: input.status,
+    latencyMs: input.latencyMs ?? 0,
+    issues,
+  };
+}
+
+function workspaceAnalyzerRunResultCreate(
+  scorecard: WorkspaceAnalyzerScorecardEntry,
+  input: {
+    diagnostics?: WorkspaceDiagnostic[];
+    fixableTreeViolationsByDiagnosticId?: Map<string, PolicyViolation>;
+    hasErrors?: boolean;
+    output?: string;
+    treeViolations?: PolicyViolation[];
+    violations?: PolicyViolation[];
+  } = {},
+): WorkspaceAnalyzerRunResult {
+  return {
+    diagnostics: [...(input.diagnostics ?? [])],
+    fixableTreeViolationsByDiagnosticId:
+      input.fixableTreeViolationsByDiagnosticId ?? new Map<string, PolicyViolation>(),
+    hasErrors: input.hasErrors ?? false,
+    issues: [...scorecard.issues],
+    output: input.output ?? '',
+    scorecard,
+    treeViolations: [...(input.treeViolations ?? [])],
+    violations: [...(input.violations ?? [])],
+  };
+}
+
+function workspaceNativeOwnedWrappedRuleIdsResolve(input: {
+  policy: PolicyFile;
+  ruleTargets: PolicyRuleTargetContext[];
+  pluginRulesMap: Awaited<ReturnType<typeof policyPluginsGet>> extends Result<infer T, string>
+    ? T
+    : never;
+}): Set<string> {
+  const ruleIds = new Set<string>();
+
+  for (const rule of input.policy.rules) {
+    const lookup = pluginGetForRule(input.pluginRulesMap, rule.ruleId);
+    if (!lookup) {
+      continue;
+    }
+
+    const treeCheckProvider = lookup.plugin.pluginRule.capabilities.treeCheckProvider;
+    const lintProviders = lookup.plugin.pluginRule.capabilities.lintProviders ?? [];
+    if (!treeCheckProvider || lintProviders.length === 0) {
+      continue;
+    }
+
+    const hasNativeJsTsTarget = input.ruleTargets.some((targetContext) => {
+      if (!policyRuleMatches(targetContext.ruleId, lookup.resolvedId)) {
+        return false;
+      }
+      return (
+        workspaceLanguageIsNativeOwnershipCandidate(targetContext.target.language) &&
+        treeCheckProviderSupportsLanguage(treeCheckProvider, targetContext.target.language)
+      );
+    });
+    if (!hasNativeJsTsTarget) {
+      continue;
+    }
+
+    const hasWrappedJsTsProvider = lintProviders.some((provider) =>
+      provider.languages.some(workspaceLanguageIsNativeOwnershipCandidate),
+    );
+    if (hasWrappedJsTsProvider) {
+      ruleIds.add(lookup.resolvedId);
+    }
+  }
+
+  return ruleIds;
+}
+
+function workspaceLintProviderEntryIsNativePreferred(
+  entry: LintProviderEntry,
+  nativeOwnedWrappedRuleIds: ReadonlySet<string>,
+): boolean {
+  return (
+    nativeOwnedWrappedRuleIds.has(entry.ruleId) &&
+    entry.provider.languages.some(workspaceLanguageIsNativeOwnershipCandidate)
+  );
 }
 
 function lintProviderEntriesCollect(
@@ -1721,6 +1869,7 @@ function workspaceWarmCacheAnalysisRestore(
   }
 
   return {
+    analyzerScorecard: snapshot.analyzerScorecard ?? [],
     policy,
     files: [...snapshot.files],
     violations: [...snapshot.treeViolations],
@@ -1951,6 +2100,7 @@ async function workspaceWarmCacheSnapshotPersist(input: {
     files: [...input.workspaceSession.lastAnalysis.files],
     diagnostics: [...input.workspaceSession.lastAnalysis.diagnostics],
     treeViolations: [...input.workspaceSession.lastAnalysis.treeViolations],
+    analyzerScorecard: [...input.workspaceSession.lastAnalysis.analyzerScorecard],
     featureStatus: input.workspaceSession.lastAnalysis.featureStatus,
     baseIndexState: workspaceWarmCacheBaseIndexSnapshotCreate(input.workspace.baseIndexState),
     projectIndexStoreSnapshot: input.workspaceSession.indexState
@@ -1992,7 +2142,149 @@ async function workspaceIndexRequirementResolve(
   }
 }
 
-async function eslintRun(
+function providerViolationsToDiagnostics(
+  violations: PolicyViolation[],
+  source: string,
+): WorkspaceDiagnostic[] {
+  return violations.map((violation) =>
+    policyViolationToWorkspaceDiagnostic(violation, {
+      source,
+    }),
+  );
+}
+
+function workspaceTreeAnalyzerRun(
+  input: {
+    configPath: string;
+    matches: RuleMatch[];
+    pluginRulesMap: Awaited<ReturnType<typeof policyPluginsGet>> extends Result<infer T, string>
+      ? T
+      : never;
+    policy: PolicyFile;
+    projectIndex?: ProjectIndex;
+    rootPath: string;
+    sourceByFilePath: Map<string, string>;
+    strictErrors: boolean;
+  },
+): WorkspaceAnalyzerRunResult {
+  const treeMatches = input.matches.filter((match) => {
+    if (match.rule.providers && match.rule.providers.length > 0) {
+      return match.rule.providers.includes('tree-sitter');
+    }
+    const lookup = pluginGetForRule(input.pluginRulesMap, match.rule.ruleId);
+    return Boolean(lookup?.plugin.pluginRule.capabilities.treeCheckProvider);
+  });
+  const ownedRuleIds = workspaceAnalyzerRuleIdsNormalize(
+    treeMatches.map((match) => {
+      const lookup = pluginGetForRule(input.pluginRulesMap, match.rule.ruleId);
+      return lookup?.resolvedId ?? match.rule.ruleId;
+    }),
+  );
+
+  if (ownedRuleIds.length === 0) {
+    return workspaceAnalyzerRunResultCreate(
+      workspaceAnalyzerScorecardCreate({
+        analyzerId: 'codepol/tree',
+        platform: 'codepol_tree',
+        languages: [...WORKSPACE_NATIVE_OWNERSHIP_LANGUAGES, 'python'],
+        ownedRuleIds,
+        fixMode: 'inline',
+        status: 'skipped',
+        skippedReason: 'no_matching_rules',
+      }),
+    );
+  }
+
+  const files = new Set<string>();
+  for (const match of treeMatches) {
+    for (const filePath of match.files) {
+      files.add(filePath);
+    }
+  }
+  if (files.size === 0) {
+    return workspaceAnalyzerRunResultCreate(
+      workspaceAnalyzerScorecardCreate({
+        analyzerId: 'codepol/tree',
+        platform: 'codepol_tree',
+        languages: [...WORKSPACE_NATIVE_OWNERSHIP_LANGUAGES, 'python'],
+        ownedRuleIds,
+        fixMode: 'inline',
+        status: 'skipped',
+        skippedReason: 'no_matching_files',
+      }),
+    );
+  }
+
+  const violations: PolicyViolation[] = [];
+  const issues: string[] = [];
+  const startedAt = Date.now();
+
+  for (const match of treeMatches) {
+    for (const filePath of match.files) {
+      const result = policyViolationsGetForFile(
+        filePath,
+        match.rule,
+        match.target,
+        input.policy,
+        input.pluginRulesMap,
+        input.rootPath,
+        input.configPath,
+        input.projectIndex,
+        input.sourceByFilePath.get(filePath),
+      );
+      if (isErr(result)) {
+        if (input.strictErrors) {
+          throw new Error(result.Err);
+        }
+        const issue =
+          `Tree check failed for ${match.rule.ruleId} in ` +
+          `${workspaceRelativePathCreate(input.rootPath, filePath)}: ${result.Err}`;
+        console.warn(issue);
+        issues.push(issue);
+        continue;
+      }
+      violations.push(...result.Ok);
+    }
+  }
+
+  const diagnostics: WorkspaceDiagnostic[] = [];
+  const fixableTreeViolationsByDiagnosticId = new Map<string, PolicyViolation>();
+  for (const violation of violations) {
+    const severity = severityFromLintSeverity(policyRuleGet(input.policy, violation.ruleId)?.severity);
+    const diagnostic = policyViolationToWorkspaceDiagnostic(violation, {
+      severity,
+      source: 'codepol',
+    });
+    diagnostics.push(diagnostic);
+    if (violation.fix || (violation.suggestions && violation.suggestions.length > 0)) {
+      fixableTreeViolationsByDiagnosticId.set(diagnostic.id, violation);
+    }
+  }
+
+  return workspaceAnalyzerRunResultCreate(
+    workspaceAnalyzerScorecardCreate({
+      analyzerId: 'codepol/tree',
+      platform: 'codepol_tree',
+      languages: [...WORKSPACE_NATIVE_OWNERSHIP_LANGUAGES, 'python'],
+      ownedRuleIds,
+      diagnosticCount: diagnostics.length,
+      violationCount: violations.length,
+      fileCount: files.size,
+      fixMode: 'inline',
+      status: issues.length > 0 ? 'failed' : 'ran',
+      latencyMs: Date.now() - startedAt,
+      issues,
+    }),
+    {
+      diagnostics,
+      fixableTreeViolationsByDiagnosticId,
+      treeViolations: violations,
+      violations,
+    },
+  );
+}
+
+async function eslintAnalyzerRun(
   input: {
     files: string[];
     sourceByFilePath: Map<string, string>;
@@ -2001,6 +2293,7 @@ async function eslintRun(
     eslintConfigPath: string;
     cwd: string;
     lintProviderEntries: LintProviderEntry[];
+    nativeOwnedWrappedRuleIds: ReadonlySet<string>;
     ruleTargets: PolicyRuleTargetContext[];
     pluginRules: Awaited<ReturnType<typeof policyPluginsGet>> extends Result<infer T, string>
       ? T
@@ -2008,12 +2301,59 @@ async function eslintRun(
     fix: boolean;
     collectOutput: boolean;
   },
-): Promise<EslintRunResult> {
-  const eslintProviders = input.lintProviderEntries.filter(
+): Promise<WorkspaceAnalyzerRunResult> {
+  const eligibleEntries = input.lintProviderEntries.filter(
     (entry) => entry.provider.platform === 'eslint',
   );
-  if (eslintProviders.length === 0) {
-    return { violations: [], diagnostics: [], output: '', hasErrors: false, issues: [] };
+  if (eligibleEntries.length === 0) {
+    return workspaceAnalyzerRunResultCreate(
+      workspaceAnalyzerScorecardCreate({
+        analyzerId: 'eslint',
+        platform: 'eslint',
+        languages: [...WORKSPACE_NATIVE_OWNERSHIP_LANGUAGES],
+        ownedRuleIds: [],
+        fixMode: 'external',
+        status: 'skipped',
+        skippedReason: 'no_matching_rules',
+      }),
+    );
+  }
+
+  const executableEntries = eligibleEntries.filter(
+    (entry) => !workspaceLintProviderEntryIsNativePreferred(entry, input.nativeOwnedWrappedRuleIds),
+  );
+  const skippedRuleIds = eligibleEntries
+    .filter((entry) => workspaceLintProviderEntryIsNativePreferred(entry, input.nativeOwnedWrappedRuleIds))
+    .map((entry) => entry.ruleId);
+  const ownedRuleIds = executableEntries.map((entry) => entry.ruleId);
+
+  if (ownedRuleIds.length === 0) {
+    return workspaceAnalyzerRunResultCreate(
+      workspaceAnalyzerScorecardCreate({
+        analyzerId: 'eslint',
+        platform: 'eslint',
+        languages: [...WORKSPACE_NATIVE_OWNERSHIP_LANGUAGES],
+        ownedRuleIds: [],
+        skippedRuleIds,
+        skippedReason: 'native_preferred',
+        fixMode: 'external',
+        status: 'skipped',
+      }),
+    );
+  }
+  if (input.files.length === 0) {
+    return workspaceAnalyzerRunResultCreate(
+      workspaceAnalyzerScorecardCreate({
+        analyzerId: 'eslint',
+        platform: 'eslint',
+        languages: [...WORKSPACE_NATIVE_OWNERSHIP_LANGUAGES],
+        ownedRuleIds,
+        skippedRuleIds,
+        skippedReason: 'no_matching_files',
+        fixMode: 'external',
+        status: 'skipped',
+      }),
+    );
   }
 
   let ESLintClass: typeof import('eslint').ESLint | undefined;
@@ -2023,17 +2363,26 @@ async function eslintRun(
   } catch {
     const issue =
       'ESLint is not installed. Skipping ESLint-based rules.\n' +
-        'Install eslint to enable: npm install -D eslint';
+      'Install eslint to enable: npm install -D eslint';
     console.warn(issue);
-    return {
-      violations: [],
-      diagnostics: [],
-      output: '',
-      hasErrors: false,
-      issues: [issue.replace('\n', ' ')],
-    };
+    return workspaceAnalyzerRunResultCreate(
+      workspaceAnalyzerScorecardCreate({
+        analyzerId: 'eslint',
+        platform: 'eslint',
+        languages: [...WORKSPACE_NATIVE_OWNERSHIP_LANGUAGES],
+        ownedRuleIds,
+        skippedRuleIds,
+        diagnosticCount: 0,
+        violationCount: 0,
+        fileCount: input.files.length,
+        fixMode: 'external',
+        status: 'failed',
+        issues: [issue.replace('\n', ' ')],
+      }),
+    );
   }
 
+  const startedAt = Date.now();
   const eslint = new ESLintClass({
     overrideConfigFile: input.eslintConfigPath,
     plugins: {
@@ -2041,7 +2390,7 @@ async function eslintRun(
         Array.from(input.pluginRules.values()).map((entry) => entry.pluginRule),
       ) as unknown as import('eslint').ESLint.Plugin,
     },
-    overrideConfig: eslintConfigGet(eslintProviders, {
+    overrideConfig: eslintConfigGet(executableEntries, {
       policy: input.policy,
       configPath: input.configPath,
       cwd: input.cwd,
@@ -2057,13 +2406,6 @@ async function eslintRun(
       : input.files.filter((filePath) => input.sourceByFilePath.has(filePath));
   const closedFiles = input.files.filter((filePath) => !input.sourceByFilePath.has(filePath));
 
-  if (overlayFiles.length > 0) {
-    for (const filePath of overlayFiles) {
-      const source = input.sourceByFilePath.get(filePath)!;
-      await eslint.lintText(source, { filePath });
-    }
-  }
-
   const overlayResults: Array<{
     filePath: string;
     messages: Array<{
@@ -2077,7 +2419,6 @@ async function eslintRun(
     }>;
     errorCount: number;
   }> = [];
-
   for (const filePath of overlayFiles) {
     const source = input.sourceByFilePath.get(filePath)!;
     const lintTextResults = await eslint.lintText(source, { filePath });
@@ -2141,39 +2482,102 @@ async function eslintRun(
     }
   }
 
-  return {
-    violations,
-    diagnostics,
-    output,
-    hasErrors: lintResults.some((result) => result.errorCount > 0),
-    issues: [],
-  };
-}
-
-function providerViolationsToDiagnostics(
-  violations: PolicyViolation[],
-  source: string,
-): WorkspaceDiagnostic[] {
-  return violations.map((violation) =>
-    policyViolationToWorkspaceDiagnostic(violation, {
-      source,
+  return workspaceAnalyzerRunResultCreate(
+    workspaceAnalyzerScorecardCreate({
+      analyzerId: 'eslint',
+      platform: 'eslint',
+      languages: [...WORKSPACE_NATIVE_OWNERSHIP_LANGUAGES],
+      ownedRuleIds,
+      skippedRuleIds,
+      skippedReason: skippedRuleIds.length > 0 ? 'native_preferred' : undefined,
+      diagnosticCount: diagnostics.length,
+      violationCount: violations.length,
+      fileCount: input.files.length,
+      fixMode: 'external',
+      status: 'ran',
+      latencyMs: Date.now() - startedAt,
     }),
+    {
+      diagnostics,
+      hasErrors: lintResults.some((result) => result.errorCount > 0),
+      output,
+      violations,
+    },
   );
 }
 
-function biomeRun(
+function biomeAnalyzerRun(
   input: {
     matches: RuleMatch[];
     lintProviderEntries: LintProviderEntry[];
+    nativeOwnedWrappedRuleIds: ReadonlySet<string>;
     fix: boolean;
   },
-): ProviderRunResult {
-  const biomeRuleIdToConfig = biomeRuleIdToConfigMapBuild(input.lintProviderEntries);
+): WorkspaceAnalyzerRunResult {
+  const eligibleEntries = input.lintProviderEntries.filter(
+    (entry) => entry.provider.platform === 'biome',
+  );
+  if (eligibleEntries.length === 0) {
+    return workspaceAnalyzerRunResultCreate(
+      workspaceAnalyzerScorecardCreate({
+        analyzerId: 'biome',
+        platform: 'biome',
+        languages: [...WORKSPACE_NATIVE_OWNERSHIP_LANGUAGES],
+        ownedRuleIds: [],
+        fixMode: 'external',
+        status: 'skipped',
+        skippedReason: 'no_matching_rules',
+      }),
+    );
+  }
+
+  const executableEntries = eligibleEntries.filter(
+    (entry) => !workspaceLintProviderEntryIsNativePreferred(entry, input.nativeOwnedWrappedRuleIds),
+  );
+  const skippedRuleIds = eligibleEntries
+    .filter((entry) => workspaceLintProviderEntryIsNativePreferred(entry, input.nativeOwnedWrappedRuleIds))
+    .map((entry) => entry.ruleId);
+  const ownedRuleIds = executableEntries.map((entry) => entry.ruleId);
+
+  if (ownedRuleIds.length === 0) {
+    return workspaceAnalyzerRunResultCreate(
+      workspaceAnalyzerScorecardCreate({
+        analyzerId: 'biome',
+        platform: 'biome',
+        languages: [...WORKSPACE_NATIVE_OWNERSHIP_LANGUAGES],
+        ownedRuleIds: [],
+        skippedRuleIds,
+        skippedReason: 'native_preferred',
+        fixMode: 'external',
+        status: 'skipped',
+      }),
+    );
+  }
+
+  const biomeRuleIdToConfig = biomeRuleIdToConfigMapBuild(executableEntries);
   const biomeFilesByConfigKey = biomeFilesByConfigKeyCollect(
     input.matches,
     biomeRuleIdToConfig,
   );
+  const fileCount = new Set(
+    [...biomeFilesByConfigKey.values()].flatMap((filesSet) => [...filesSet]),
+  ).size;
+  if (fileCount === 0) {
+    return workspaceAnalyzerRunResultCreate(
+      workspaceAnalyzerScorecardCreate({
+        analyzerId: 'biome',
+        platform: 'biome',
+        languages: [...WORKSPACE_NATIVE_OWNERSHIP_LANGUAGES],
+        ownedRuleIds,
+        skippedRuleIds,
+        skippedReason: 'no_matching_files',
+        fixMode: 'external',
+        status: 'skipped',
+      }),
+    );
+  }
 
+  const startedAt = Date.now();
   const violations: PolicyViolation[] = [];
   const issues: string[] = [];
   for (const [configKey, filesSet] of biomeFilesByConfigKey) {
@@ -2202,40 +2606,106 @@ function biomeRun(
     violations.push(...biomeResult.Ok);
   }
 
-  return {
-    violations,
-    diagnostics: providerViolationsToDiagnostics(violations, 'biome'),
-    issues,
-  };
+  const diagnostics = providerViolationsToDiagnostics(violations, 'biome');
+  return workspaceAnalyzerRunResultCreate(
+    workspaceAnalyzerScorecardCreate({
+      analyzerId: 'biome',
+      platform: 'biome',
+      languages: [...WORKSPACE_NATIVE_OWNERSHIP_LANGUAGES],
+      ownedRuleIds,
+      skippedRuleIds,
+      skippedReason: skippedRuleIds.length > 0 ? 'native_preferred' : undefined,
+      diagnosticCount: diagnostics.length,
+      violationCount: violations.length,
+      fileCount,
+      fixMode: 'external',
+      status: issues.length > 0 ? 'failed' : 'ran',
+      latencyMs: Date.now() - startedAt,
+      issues,
+    }),
+    {
+      diagnostics,
+      violations,
+    },
+  );
 }
 
-function ruffRun(
+function ruffAnalyzerRun(
   input: {
     files: string[];
     lintProviderEntries: LintProviderEntry[];
+    nativeOwnedWrappedRuleIds: ReadonlySet<string>;
     fix: boolean;
   },
-): ProviderRunResult {
-  const ruffProviders = input.lintProviderEntries.filter(
+): WorkspaceAnalyzerRunResult {
+  const eligibleEntries = input.lintProviderEntries.filter(
     (entry) => entry.provider.platform === 'ruff',
   );
-  if (ruffProviders.length === 0) {
-    return { violations: [], diagnostics: [], issues: [] };
+  if (eligibleEntries.length === 0) {
+    return workspaceAnalyzerRunResultCreate(
+      workspaceAnalyzerScorecardCreate({
+        analyzerId: 'ruff',
+        platform: 'ruff',
+        languages: ['python'],
+        ownedRuleIds: [],
+        fixMode: 'external',
+        status: 'skipped',
+        skippedReason: 'no_matching_rules',
+      }),
+    );
+  }
+
+  const executableEntries = eligibleEntries.filter(
+    (entry) => !workspaceLintProviderEntryIsNativePreferred(entry, input.nativeOwnedWrappedRuleIds),
+  );
+  const skippedRuleIds = eligibleEntries
+    .filter((entry) => workspaceLintProviderEntryIsNativePreferred(entry, input.nativeOwnedWrappedRuleIds))
+    .map((entry) => entry.ruleId);
+  const ownedRuleIds = executableEntries.map((entry) => entry.ruleId);
+
+  if (ownedRuleIds.length === 0) {
+    return workspaceAnalyzerRunResultCreate(
+      workspaceAnalyzerScorecardCreate({
+        analyzerId: 'ruff',
+        platform: 'ruff',
+        languages: ['python'],
+        ownedRuleIds: [],
+        skippedRuleIds,
+        skippedReason: 'native_preferred',
+        fixMode: 'external',
+        status: 'skipped',
+      }),
+    );
   }
 
   const pythonFiles = input.files.filter((filePath) =>
     fileHasExtension(filePath, PYTHON_FILE_EXTENSIONS),
   );
   if (pythonFiles.length === 0) {
-    return { violations: [], diagnostics: [], issues: [] };
+    return workspaceAnalyzerRunResultCreate(
+      workspaceAnalyzerScorecardCreate({
+        analyzerId: 'ruff',
+        platform: 'ruff',
+        languages: ['python'],
+        ownedRuleIds,
+        skippedRuleIds,
+        skippedReason: 'no_matching_files',
+        fixMode: 'external',
+        status: 'skipped',
+      }),
+    );
   }
 
-  const config = ruffProviders[0]?.provider.config as RuffProviderConfig | undefined;
+  const config = executableEntries[0]?.provider.config as RuffProviderConfig | undefined;
+  const startedAt = Date.now();
+  const issues: string[] = [];
 
   if (input.fix) {
     const ruffFixResult = ruffFix(pythonFiles, config);
     if (isErr(ruffFixResult)) {
-      console.warn(`Ruff fix failed: ${ruffFixResult.Err}`);
+      const issue = `Ruff fix failed: ${ruffFixResult.Err}`;
+      console.warn(issue);
+      issues.push(issue);
     }
   }
 
@@ -2243,14 +2713,46 @@ function ruffRun(
   if (isErr(ruffResult)) {
     const issue = `Ruff check failed: ${ruffResult.Err}`;
     console.warn(issue);
-    return { violations: [], diagnostics: [], issues: [issue] };
+    issues.push(issue);
+    return workspaceAnalyzerRunResultCreate(
+      workspaceAnalyzerScorecardCreate({
+        analyzerId: 'ruff',
+        platform: 'ruff',
+        languages: ['python'],
+        ownedRuleIds,
+        skippedRuleIds,
+        skippedReason: skippedRuleIds.length > 0 ? 'native_preferred' : undefined,
+        fileCount: pythonFiles.length,
+        fixMode: 'external',
+        status: 'failed',
+        latencyMs: Date.now() - startedAt,
+        issues,
+      }),
+    );
   }
 
-  return {
-    violations: ruffResult.Ok,
-    diagnostics: providerViolationsToDiagnostics(ruffResult.Ok, 'ruff'),
-    issues: [],
-  };
+  const diagnostics = providerViolationsToDiagnostics(ruffResult.Ok, 'ruff');
+  return workspaceAnalyzerRunResultCreate(
+    workspaceAnalyzerScorecardCreate({
+      analyzerId: 'ruff',
+      platform: 'ruff',
+      languages: ['python'],
+      ownedRuleIds,
+      skippedRuleIds,
+      skippedReason: skippedRuleIds.length > 0 ? 'native_preferred' : undefined,
+      diagnosticCount: diagnostics.length,
+      violationCount: ruffResult.Ok.length,
+      fileCount: pythonFiles.length,
+      fixMode: 'external',
+      status: issues.length > 0 ? 'failed' : 'ran',
+      latencyMs: Date.now() - startedAt,
+      issues,
+    }),
+    {
+      diagnostics,
+      violations: ruffResult.Ok,
+    },
+  );
 }
 
 async function workspaceAnalysisRun(
@@ -2290,6 +2792,11 @@ async function workspaceAnalysisRun(
     (state.workspaceIndexRequired ?? false) || policyWorkspaceIndexRequired;
   state.workspaceIndexRequired = workspaceIndexRequired;
   state.toolFingerprints = workspaceToolFingerprintsRead(workspace, lintProviderEntries);
+  const nativeOwnedWrappedRuleIds = workspaceNativeOwnedWrappedRuleIdsResolve({
+    policy,
+    ruleTargets,
+    pluginRulesMap,
+  });
 
   if (options.fix && fixProviders.length > 0) {
     await fixProvidersApply(fixProviders, {
@@ -2320,7 +2827,18 @@ async function workspaceAnalysisRun(
     projectIndex = undefined;
   }
 
-  const eslintResult = await eslintRun({
+  const treeResult = workspaceTreeAnalyzerRun({
+    configPath: workspace.configPath,
+    matches,
+    pluginRulesMap,
+    policy,
+    projectIndex,
+    rootPath: workspace.rootPath,
+    sourceByFilePath,
+    strictErrors: options.fix,
+  });
+
+  const eslintResult = await eslintAnalyzerRun({
     files,
     sourceByFilePath,
     policy,
@@ -2328,72 +2846,41 @@ async function workspaceAnalysisRun(
     eslintConfigPath: workspace.eslintConfigPath,
     cwd: workspace.rootPath,
     lintProviderEntries,
+    nativeOwnedWrappedRuleIds,
     ruleTargets,
     pluginRules: pluginRulesMap,
     fix: options.fix,
     collectOutput: options.collectEslintOutput,
   });
 
-  const biomeResult = biomeRun({
+  const biomeResult = biomeAnalyzerRun({
     matches,
     lintProviderEntries,
+    nativeOwnedWrappedRuleIds,
     fix: options.fix,
   });
-  const ruffResult = ruffRun({
+  const ruffResult = ruffAnalyzerRun({
     files,
     lintProviderEntries,
+    nativeOwnedWrappedRuleIds,
     fix: options.fix,
   });
 
   if (workspaceIndexRequired) {
     projectIndex = workspaceIndexGetOrBuild(workspace, state, files);
   }
-
-  const treeViolationsResult = await policyViolationsGetFromDir(policy, workspace.rootPath, {
-    configPath: workspace.configPath,
-    sourceByFilePath,
-    projectIndex,
-  });
-  if (isErr(treeViolationsResult)) {
-    throw new Error(treeViolationsResult.Err);
-  }
-
-  const treeDiagnostics: WorkspaceDiagnostic[] = [];
-  const fixableTreeViolationsByDiagnosticId = new Map<string, PolicyViolation>();
-  for (const violation of treeViolationsResult.Ok) {
-    const severity = severityFromLintSeverity(policyRuleGet(policy, violation.ruleId)?.severity);
-    const diagnostic = policyViolationToWorkspaceDiagnostic(violation, {
-      severity,
-      source: 'codepol',
-    });
-    treeDiagnostics.push(diagnostic);
-    if (violation.fix || (violation.suggestions && violation.suggestions.length > 0)) {
-      fixableTreeViolationsByDiagnosticId.set(diagnostic.id, violation);
-    }
-  }
+  const analyzerResults = [treeResult, eslintResult, biomeResult, ruffResult];
+  const analyzerIssues = analyzerResults.flatMap((result) => result.issues);
 
   const analysis: WorkspaceAnalysis = {
+    analyzerScorecard: analyzerResults.map((result) => result.scorecard),
     policy,
     files,
-    violations: [
-      ...eslintResult.violations,
-      ...biomeResult.violations,
-      ...ruffResult.violations,
-      ...treeViolationsResult.Ok,
-    ],
-    treeViolations: treeViolationsResult.Ok,
-    diagnostics: [
-      ...eslintResult.diagnostics,
-      ...biomeResult.diagnostics,
-      ...ruffResult.diagnostics,
-      ...treeDiagnostics,
-    ],
+    violations: analyzerResults.flatMap((result) => result.violations),
+    treeViolations: [...treeResult.treeViolations],
+    diagnostics: analyzerResults.flatMap((result) => result.diagnostics),
     featureStatus: {
-      diagnostics: workspaceFeatureStatusReadyOrDegraded([
-        ...eslintResult.issues,
-        ...biomeResult.issues,
-        ...ruffResult.issues,
-      ]),
+      diagnostics: workspaceFeatureStatusReadyOrDegraded(analyzerIssues),
       codeActions: workspaceFeatureStatusCreate({
         readiness: 'ready',
       }),
@@ -2428,7 +2915,7 @@ async function workspaceAnalysisRun(
         indexRequired: workspaceIndexRequired,
       }),
     },
-    fixableTreeViolationsByDiagnosticId,
+    fixableTreeViolationsByDiagnosticId: treeResult.fixableTreeViolationsByDiagnosticId,
     eslintOutput: eslintResult.output,
     eslintHasErrors: eslintResult.hasErrors,
   };

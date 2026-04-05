@@ -402,9 +402,28 @@
 - Add a separate extension RPC transport only if later UI workflows outgrow the current LSP JSON-RPC carrier.
 
 ## Tranche 4: Replacement Roadmap
-- Inventory wrapped analyzers by latency, diagnostic quality, and fix quality.
-- Replace analyzers only where a Codepol-native implementation preserves or improves current behavior.
-- Keep the workspace-service contracts stable while analyzers are swapped behind them.
+- Scope this tranche to a JS/TS-first replacement program behind the existing workspace-service boundary.
+- Keep adapters and public interfaces stable:
+  - no `WorkspaceService` surface changes
+  - no daemon RPC changes
+  - no new LSP methods
+  - no widening of generic `hover`/`definition`/`references`/`rename` ownership
+- Land tranche 4 in two phases:
+  - `4A foundation`: analyzer ownership matrix, internal analyzer-runner contract, per-analysis scorecards, and parity/inventory coverage
+  - `4B migration`: switch one real JS/TS wrapped analyzer path to Codepol-native ownership only after parity passes
+- Current repo status after 4A:
+  - native tree checks and wrapped analyzers now run through one internal scorecarded contract in `packages/workspace-service`
+  - JS/TS rules that expose both a tree check and a wrapped lint provider now prefer the native Codepol path before execution instead of deduping after the fact
+  - wrapped-only JS/TS rules still run unchanged
+  - native-owned rule failures now degrade diagnostics instead of silently falling back to wrapped output in the same analysis run
+  - analyzer scorecards persist through warm-cache restore for service and daemon tests
+- `4B` is still blocked in this repo:
+  - there is still no real non-test builtin JS/TS rule shipping both native and wrapped implementations
+  - do not replace generic third-party ESLint or Biome ecosystems; keep them wrapped unless Codepol owns the semantics end-to-end
+- Migration gate for any future `4B` candidate:
+  - diagnostic code, range, severity, and source behavior must stay stable or improve
+  - existing fix behavior on current CLI/LSP surfaces must be preserved or improved
+  - no runtime fallback from failed native execution to wrapped output inside the same analysis pass
 
 ## Test Plan
 - Service integration must cover two client sessions attached to the same workspace opening the same URI with different overlays and receiving isolated diagnostics.
@@ -417,10 +436,15 @@
 - LSP adapter tests must cover `workspace/executeCommand` applying only plans owned by the active client session.
 - CLI/e2e tests must continue to cover one-shot check/fix behavior and the existing cross-file fix flow.
 - Daemon-phase tests must cover reconnect as full re-registration plus replay, stale daemon-session output discard, and deterministic warm-start status transitions.
+- Tranche-4 service tests must cover:
+  - a synthetic dual-capability JS/TS rule preferring native output without double-reporting
+  - a wrapped-only JS/TS rule continuing to emit wrapped diagnostics
+  - native-owned rule failure degrading diagnostics without wrapped fallback
+  - analyzer scorecards surviving warm restore
+- Tranche-4 daemon tests must cover analyzer scorecard restore for a native-owned JS/TS rule across daemon incarnations
 
 ## Assumptions and Defaults
-- The first implementation slice is a big-bang API replacement.
-- The next milestone is the sessionized in-process core, not daemon transport.
+- Tranche 4 executes `4A foundation` first and may stop there until a real JS/TS dual-path candidate exists in-tree.
 - Phase 4 remains Codepol-only in scope until a later explicit decision changes the ownership matrix.
 - Fix payloads stay separate from diagnostics.
 - Session-local derived indexes are an acceptable tranche-1 tradeoff; shared-index optimization is deferred.

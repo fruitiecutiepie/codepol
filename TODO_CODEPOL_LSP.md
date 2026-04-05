@@ -1052,9 +1052,12 @@ Current status: in-process integration coverage now includes multi-client overla
 
 ### Phase 7: replacement roadmap
 
+- [x] Add tranche-4A analyzer ownership and scorecard foundations inside the workspace service.
+- [x] Keep the service contracts stable so adapters do not change during the replacement effort.
 - [ ] Inventory which wrapped analyzers are worth replacing with native Codepol analysis.
 - [ ] Replace analyzers only where Codepol can preserve or improve diagnostic quality and fix support.
-- [ ] Keep the service contracts stable so adapters do not change during the replacement effort.
+
+Current status: the workspace service now resolves JS/TS native-vs-wrapped ownership before execution, runs tree/native and wrapped analyzers through one internal scorecarded contract, preserves wrapped-only behavior, and degrades diagnostics when a native-owned rule fails instead of silently falling back to wrapped output. The current repo still does not ship a real non-test JS/TS builtin rule with both native and wrapped implementations, so tranche 4B remains blocked on a future candidate rather than being forced by placeholder scope.
 
 ## Acceptance Criteria For An MVP
 

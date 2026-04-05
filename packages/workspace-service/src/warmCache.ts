@@ -49,6 +49,22 @@ export type WorkspaceWarmCacheSnapshot = {
   files: string[];
   diagnostics: WorkspaceDiagnostic[];
   treeViolations: PolicyViolation[];
+  analyzerScorecard?: Array<{
+    analyzerId: string;
+    platform: 'codepol_tree' | 'eslint' | 'biome' | 'ruff';
+    languages: string[];
+    ownedRuleIds: string[];
+    skippedRuleIds: string[];
+    skippedReason?: 'native_preferred' | 'no_matching_rules' | 'no_matching_files';
+    diagnosticCount: number;
+    violationCount: number;
+    issueCount: number;
+    fileCount: number;
+    fixMode: 'none' | 'inline' | 'external';
+    status: 'ran' | 'skipped' | 'failed';
+    latencyMs: number;
+    issues: string[];
+  }>;
   featureStatus: IndexStatusFeatureStatus;
   baseIndexState?: WorkspaceWarmCacheBaseIndexStateSnapshot;
   projectIndexStoreSnapshot?: ProjectIndexStoreSnapshot;

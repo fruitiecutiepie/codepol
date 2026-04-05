@@ -2,8 +2,14 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { workspacePathToUri } from '@codepol/core';
+import {
+  pluginModuleRegister,
+  pluginRuleNew,
+  treeCheckProviderNew,
+  workspacePathToUri,
+} from '@codepol/core';
 import type {
   WorkspaceDaemonConnectFn,
   WorkspaceDaemonDescriptor,
@@ -75,6 +81,108 @@ files = ["src/**/*.ts"]
 ruleId = "@codepol/plugin/no-unused-exports"
 targets = ["src"]
 `;
+}
+
+function pluginRuleConfigContentCreate(input: {
+  pluginId: string;
+  ruleId: string;
+}): string {
+  return `[[plugins]]
+id = "${input.pluginId}"
+source = { kind = "builtin" }
+
+[targets.src]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[[rules]]
+ruleId = "${input.pluginId}/${input.ruleId}"
+targets = ["src"]
+`;
+}
+
+function mockBiomeDiagnosticScriptCreate(
+  projectDir: string,
+  options: {
+    diagnostic: {
+      code: string;
+      filePath: string;
+      message: string;
+    };
+    fileName?: string;
+  },
+): string {
+  const biomeBin = path.join(
+    projectDir,
+    options.fileName ?? 'mock-biome-diagnostic.cjs',
+  );
+  const diagnostic = {
+    code: {
+      value: options.diagnostic.code,
+    },
+    location: {
+      path: options.diagnostic.filePath,
+      range: {
+        start: { line: 0, column: 0 },
+        end: { line: 0, column: 5 },
+      },
+    },
+    message: options.diagnostic.message,
+  };
+  fs.writeFileSync(
+    biomeBin,
+    `#!/usr/bin/env node
+process.stdout.write(${JSON.stringify(JSON.stringify({ diagnostics: [diagnostic] }))});
+process.exit(0);
+`,
+    'utf8',
+  );
+  fs.chmodSync(biomeBin, 0o755);
+  return biomeBin;
+}
+
+function analyzerScorecardGet(
+  engine: WorkspaceServiceEngine,
+  input: {
+    clientSessionId: string;
+    workspaceId: string;
+  },
+): Array<{
+  analyzerId: string;
+  platform: string;
+  status: string;
+  ownedRuleIds: string[];
+  skippedRuleIds: string[];
+  skippedReason?: string;
+}> {
+  const debugEngine = engine as unknown as {
+    clientSessions: Map<
+      string,
+      {
+        workspaces: Map<
+          string,
+          {
+            lastAnalysis?: {
+              analyzerScorecard?: Array<{
+                analyzerId: string;
+                platform: string;
+                status: string;
+                ownedRuleIds: string[];
+                skippedRuleIds: string[];
+                skippedReason?: string;
+              }>;
+            };
+          }
+        >;
+      }
+    >;
+  };
+  return (
+    debugEngine.clientSessions
+      .get(input.clientSessionId)
+      ?.workspaces.get(input.workspaceId)
+      ?.lastAnalysis?.analyzerScorecard ?? []
+  );
 }
 
 function workspaceWatcherStubCreate(): {
@@ -986,6 +1094,202 @@ describe('workspace daemon control plane', () => {
       }),
     );
 
+    await secondService.close();
+  });
+
+  it('restores native ownership analyzer scorecards across daemon warm restore', async () => {
+    const runtimeDir = tempRuntimeDirCreate();
+    tempDirs.push(runtimeDir);
+
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-daemon-workspace-'));
+    tempDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = workspacePathToUri(filePath);
+    fs.writeFileSync(filePath, 'export const value = 1;\n', 'utf8');
+
+    const pluginId = `daemon-dual-native-${randomUUID()}`;
+    const ruleId = 'dual-capability';
+    const resolvedRuleId = `${pluginId}/${ruleId}`;
+    const biomeBin = mockBiomeDiagnosticScriptCreate(workspaceRoot, {
+      fileName: 'mock-daemon-biome-diagnostic.cjs',
+      diagnostic: {
+        code: 'lint/mock/daemon-wrapped',
+        filePath,
+        message: 'wrapped daemon diagnostic',
+      },
+    });
+    pluginModuleRegister(pluginId, {
+      default: [
+        pluginRuleNew({
+          id: ruleId,
+          capabilities: {
+            lintProviders: [
+              {
+                platform: 'biome',
+                languages: ['typescript'],
+                config: {
+                  biomeBin,
+                },
+              },
+            ],
+            treeCheckProvider: treeCheckProviderNew({
+              languages: ['typescript'],
+              check: () => [
+                {
+                  ruleId: resolvedRuleId,
+                  filePath,
+                  message: 'daemon native diagnostic',
+                  line: 1,
+                  column: 1,
+                },
+              ],
+            }),
+          },
+        }),
+      ],
+    });
+
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(
+      configPath,
+      pluginRuleConfigContentCreate({ pluginId, ruleId }),
+      'utf8',
+    );
+
+    const warmCache = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const firstDescriptor = workspaceDaemonDescriptorCreate({ runtimeDir }).descriptor;
+    const firstEngine = new WorkspaceServiceEngine({ warmCache });
+    liveDaemons.set(firstDescriptor.transport.path, {
+      descriptor: firstDescriptor,
+      service: firstEngine,
+    });
+
+    const firstService = await daemonServiceClientCreate({
+      descriptor: firstDescriptor,
+      clientInstanceId: 'daemon-scorecard-writer',
+    });
+    const firstRegistered = await firstService.registerClientSession({
+      clientKind: 'test',
+      clientInstanceId: 'daemon-scorecard-writer',
+      clientSessionId: 'daemon-scorecard-writer-session',
+    });
+    const firstAttached = await firstService.attachWorkspace({
+      clientSessionId: firstRegistered.clientSessionId,
+      rootPath: workspaceRoot,
+      configPath,
+    });
+    await firstService.subscribeDiagnostics({
+      clientSessionId: firstRegistered.clientSessionId,
+      workspaceId: firstAttached.workspaceId,
+      workspaceInstanceId: firstAttached.workspaceInstanceId,
+      scope: 'workspace',
+    });
+    await firstService.completeReplay({
+      clientSessionId: firstRegistered.clientSessionId,
+      workspaceId: firstAttached.workspaceId,
+      workspaceInstanceId: firstAttached.workspaceInstanceId,
+    });
+
+    expect(
+      await firstService.queryDiagnostics({
+        clientSessionId: firstRegistered.clientSessionId,
+        workspaceId: firstAttached.workspaceId,
+        uri,
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        source: 'codepol',
+        code: resolvedRuleId,
+        message: 'daemon native diagnostic',
+      }),
+    ]);
+    expect(
+      analyzerScorecardGet(firstEngine, {
+        clientSessionId: firstRegistered.clientSessionId,
+        workspaceId: firstAttached.workspaceId,
+      }),
+    ).toContainEqual(
+      expect.objectContaining({
+        analyzerId: 'biome',
+        status: 'skipped',
+        skippedRuleIds: [resolvedRuleId],
+        skippedReason: 'native_preferred',
+      }),
+    );
+    await firstService.close();
+
+    const secondDescriptor = workspaceDaemonDescriptorCreate({ runtimeDir }).descriptor;
+    const secondEngine = new WorkspaceServiceEngine({ warmCache });
+    liveDaemons.set(secondDescriptor.transport.path, {
+      descriptor: secondDescriptor,
+      service: secondEngine,
+    });
+
+    const secondService = await daemonServiceClientCreate({
+      descriptor: secondDescriptor,
+      clientInstanceId: 'daemon-scorecard-reader',
+    });
+    const secondRegistered = await secondService.registerClientSession({
+      clientKind: 'test',
+      clientInstanceId: 'daemon-scorecard-reader',
+      clientSessionId: 'daemon-scorecard-reader-session',
+    });
+    const secondAttached = await secondService.attachWorkspace({
+      clientSessionId: secondRegistered.clientSessionId,
+      rootPath: workspaceRoot,
+      configPath,
+    });
+    await secondService.subscribeDiagnostics({
+      clientSessionId: secondRegistered.clientSessionId,
+      workspaceId: secondAttached.workspaceId,
+      workspaceInstanceId: secondAttached.workspaceInstanceId,
+      scope: 'workspace',
+    });
+
+    expect(
+      await secondService.queryIndexStatus({
+        clientSessionId: secondRegistered.clientSessionId,
+        workspaceId: secondAttached.workspaceId,
+      }),
+    ).toMatchObject({
+      status: 'ready',
+      replayState: 'pending',
+      analysisGeneration: 1,
+    });
+    expect(
+      analyzerScorecardGet(secondEngine, {
+        clientSessionId: secondRegistered.clientSessionId,
+        workspaceId: secondAttached.workspaceId,
+      }),
+    ).toContainEqual(
+      expect.objectContaining({
+        analyzerId: 'biome',
+        status: 'skipped',
+        skippedRuleIds: [resolvedRuleId],
+        skippedReason: 'native_preferred',
+      }),
+    );
+
+    await secondService.completeReplay({
+      clientSessionId: secondRegistered.clientSessionId,
+      workspaceId: secondAttached.workspaceId,
+      workspaceInstanceId: secondAttached.workspaceInstanceId,
+    });
+    expect(
+      await secondService.queryDiagnostics({
+        clientSessionId: secondRegistered.clientSessionId,
+        workspaceId: secondAttached.workspaceId,
+        uri,
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        source: 'codepol',
+        code: resolvedRuleId,
+        message: 'daemon native diagnostic',
+      }),
+    ]);
     await secondService.close();
   });
 
