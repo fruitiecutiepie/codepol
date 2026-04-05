@@ -86,6 +86,22 @@ export type WorkspaceDaemonHelloAck = {
   capabilities: Record<string, boolean>;
 };
 
+type WorkspaceDaemonHelloIncompatibleAck = WorkspaceDaemonHelloAck & {
+  compatibility: 'unsupported_protocol' | 'unexpected_install_id';
+};
+
+export class WorkspaceDaemonHelloError extends Error {
+  readonly compatibility: WorkspaceDaemonHelloIncompatibleAck['compatibility'];
+  readonly hello: WorkspaceDaemonHelloIncompatibleAck;
+
+  constructor(hello: WorkspaceDaemonHelloIncompatibleAck) {
+    super(`Daemon handshake failed: ${hello.compatibility}`);
+    this.name = 'WorkspaceDaemonHelloError';
+    this.compatibility = hello.compatibility;
+    this.hello = hello;
+  }
+}
+
 export type WorkspaceDaemonErrorResponse = {
   type: 'error';
   code: string;
@@ -670,7 +686,9 @@ export async function workspaceDaemonHello(
     throw new Error(`Unexpected daemon hello response: ${String(response.type)}`);
   }
   if (response.compatibility !== 'ok') {
-    throw new Error(`Daemon handshake failed: ${response.compatibility}`);
+    throw new WorkspaceDaemonHelloError(
+      response as WorkspaceDaemonHelloIncompatibleAck,
+    );
   }
   return response;
 }
@@ -2035,7 +2053,10 @@ async function workspaceDaemonConnectHealthy(
       descriptor,
       hello,
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof WorkspaceDaemonHelloError) {
+      throw error;
+    }
     if (connection) {
       await connection.close().catch(() => {});
     }

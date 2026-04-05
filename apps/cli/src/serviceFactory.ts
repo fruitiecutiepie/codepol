@@ -79,6 +79,7 @@ export async function cliPolicyCheckerResolve(options: {
         supportsFallbackModes: ['in_process'],
       },
       runtimeDir: env.CODEPOL_DAEMON_RUNTIME_DIR,
+      expectedInstallId: env.CODEPOL_INSTALL_ID,
       connect: options.connect,
       startDaemon: options.startDaemon ?? (() => daemonProcessStart(env)),
     });

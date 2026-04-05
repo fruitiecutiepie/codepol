@@ -194,4 +194,71 @@ describe('CLI daemon policy checks', () => {
     expect(result.violations).toHaveLength(1);
     expect(result.violations[0]?.ruleId).toBe('@codepol/plugin/no-interface');
   });
+
+  it('falls back to in-process policy checks when daemon install ids differ', async () => {
+    const runtimeDir = tempWorkspaceCreate('codepol-cli-daemon-runtime-');
+    createdDirs.push(runtimeDir);
+
+    const { descriptor } = workspaceDaemonDescriptorCreate({
+      runtimeDir,
+      installId: 'stable',
+    });
+    workspaceDaemonDescriptorWrite(runtimeDir, descriptor);
+
+    const workspaceRoot = tempWorkspaceCreate('codepol-cli-daemon-workspace-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'codepol.toml'),
+      noInterfaceConfigContentCreate(),
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'eslint.config.mjs'),
+      `export default [{ files: ['**/*.ts'], rules: {} }];\n`,
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'src', 'app.ts'),
+      'export interface User {\n  name: string;\n}\n',
+      'utf8',
+    );
+
+    let startDaemonCalls = 0;
+    const resolved: Array<{ mode: string; error?: string }> = [];
+    const result = await policyCheck({
+      configPath: path.join(workspaceRoot, 'codepol.toml'),
+      eslintConfigPath: path.join(workspaceRoot, 'eslint.config.mjs'),
+      fix: false,
+      cwd: workspaceRoot,
+      env: {
+        ...process.env,
+        CODEPOL_WORKSPACE_SERVICE_MODE: 'daemon',
+        CODEPOL_DAEMON_RUNTIME_DIR: runtimeDir,
+        CODEPOL_INSTALL_ID: 'insiders',
+      },
+      connect: daemonConnectCreate({
+        descriptor,
+      }),
+      startDaemon: async () => {
+        startDaemonCalls += 1;
+      },
+      onResolved: (info) => {
+        resolved.push({
+          mode: info.mode,
+          error: 'error' in info ? info.error.message : undefined,
+        });
+      },
+    });
+
+    expect(startDaemonCalls).toBe(0);
+    expect(resolved).toEqual([
+      {
+        mode: 'in_process_fallback',
+        error: 'Daemon handshake failed: unexpected_install_id',
+      },
+    ]);
+    expect(result.violations).toHaveLength(1);
+    expect(result.violations[0]?.ruleId).toBe('@codepol/plugin/no-interface');
+  });
 });

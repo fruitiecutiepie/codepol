@@ -250,6 +250,7 @@
   - `apps/lsp` currently preserves an in-process fallback path when daemon bootstrap fails during rollout
   - `apps/cli/src/serviceFactory.ts` now resolves an opt-in daemon-backed one-shot policy-check client for `CODEPOL_WORKSPACE_SERVICE_MODE=daemon`
   - `apps/cli` currently preserves an in-process fallback path when daemon bootstrap fails during rollout
+  - daemon handshake compatibility failures now short-circuit as explicit errors instead of being treated as generic unhealthy-daemon retries, and the CLI/LSP factories now pass `CODEPOL_INSTALL_ID` through the `hello` expectation so mismatched runtime dirs fall back deterministically without relaunching
 - Keep the adapter boundary narrow:
   - adapters own transport/bootstrap/reconnect logic
   - the shared engine still owns workspace/session semantics

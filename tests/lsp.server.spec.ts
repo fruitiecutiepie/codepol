@@ -552,6 +552,76 @@ describe('CodepolLspServer', () => {
     expect(diagnostics).toHaveLength(1);
   });
 
+  it('falls back to an in-process workspace service when daemon install ids differ', async () => {
+    const runtimeDir = tempWorkspaceCreate('codepol-lsp-daemon-runtime-');
+    createdDirs.push(runtimeDir);
+
+    const { descriptor } = workspaceDaemonDescriptorCreate({
+      runtimeDir,
+      installId: 'stable',
+    });
+    workspaceDaemonDescriptorWrite(runtimeDir, descriptor);
+
+    const workspaceRoot = tempWorkspaceCreate('codepol-lsp-daemon-workspace-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(workspaceRoot, 'codepol.toml'), noInterfaceConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = pathToFileURL(filePath).href;
+    fs.writeFileSync(filePath, 'export interface User {\n  name: string;\n}\n', 'utf8');
+
+    let startDaemonCalls = 0;
+    const resolved: Array<{ mode: string; error?: string }> = [];
+    const service = await lspWorkspaceServiceResolve({
+      env: {
+        ...process.env,
+        CODEPOL_WORKSPACE_SERVICE_MODE: 'daemon',
+        CODEPOL_DAEMON_RUNTIME_DIR: runtimeDir,
+        CODEPOL_INSTALL_ID: 'insiders',
+      },
+      clientInstanceId: 'lsp-install-mismatch-test',
+      connect: daemonConnectCreate({
+        descriptor,
+        service: new WorkspaceServiceEngine(),
+      }),
+      startDaemon: async () => {
+        startDaemonCalls += 1;
+      },
+      onResolved: (info) => {
+        resolved.push({
+          mode: info.mode,
+          error: 'error' in info ? info.error.message : undefined,
+        });
+      },
+    });
+
+    const registered = await service.registerClientSession({
+      clientKind: 'lsp',
+      clientInstanceId: 'resolved-install-mismatch-client',
+    });
+    const attached = await service.attachWorkspace({
+      clientSessionId: registered.clientSessionId,
+      rootPath: workspaceRoot,
+      configPath: path.join(workspaceRoot, 'codepol.toml'),
+    });
+    const diagnostics = await service.queryDiagnostics({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      uri,
+    });
+
+    expect(startDaemonCalls).toBe(0);
+    expect(resolved).toEqual([
+      {
+        mode: 'in_process_fallback',
+        error: 'Daemon handshake failed: unexpected_install_id',
+      },
+    ]);
+    expect(registered.daemonSessionId).toBeDefined();
+    expect(diagnostics).toHaveLength(1);
+  });
+
   it('publishes diagnostics across open, change, and close', async () => {
     const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');
     createdDirs.push(workspaceRoot);

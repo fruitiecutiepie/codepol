@@ -28,12 +28,17 @@ function tempRuntimeDirCreate(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-daemon-'));
 }
 
-function clientIdentityCreate(instanceId: string) {
+function clientIdentityCreate(
+  instanceId: string,
+  options: {
+    supportedProtocols?: string[];
+  } = {},
+) {
   return {
     kind: 'test',
     clientVersion: '1.0.0',
     instanceId,
-    supportedProtocols: [WORKSPACE_DAEMON_PROTOCOL_VERSION],
+    supportedProtocols: options.supportedProtocols ?? [WORKSPACE_DAEMON_PROTOCOL_VERSION],
     supportsFallbackModes: ['in_process'],
   };
 }
@@ -140,6 +145,56 @@ describe('workspace daemon control plane', () => {
     expect(launched.hello.compatibility).toBe('ok');
     expect(launched.hello.daemon.sessionNonce).toBe(descriptor.sessionNonce);
     await launched.connection.close();
+  });
+
+  it('fails fast on unsupported protocol without attempting relaunch', async () => {
+    const runtimeDir = tempRuntimeDirCreate();
+    tempDirs.push(runtimeDir);
+
+    const { descriptor } = workspaceDaemonDescriptorCreate({ runtimeDir });
+    workspaceDaemonDescriptorWrite(runtimeDir, descriptor);
+    liveDaemons.set(descriptor.transport.path, { descriptor });
+
+    let startDaemonCalls = 0;
+    await expect(
+      workspaceDaemonLaunchOrConnect({
+        runtimeDir,
+        client: clientIdentityCreate('unsupported-protocol-client', {
+          supportedProtocols: ['0.0'],
+        }),
+        connect,
+        startDaemon: async () => {
+          startDaemonCalls += 1;
+        },
+      }),
+    ).rejects.toThrow('Daemon handshake failed: unsupported_protocol');
+    expect(startDaemonCalls).toBe(0);
+  });
+
+  it('fails fast on install mismatch without attempting relaunch', async () => {
+    const runtimeDir = tempRuntimeDirCreate();
+    tempDirs.push(runtimeDir);
+
+    const { descriptor } = workspaceDaemonDescriptorCreate({
+      runtimeDir,
+      installId: 'stable',
+    });
+    workspaceDaemonDescriptorWrite(runtimeDir, descriptor);
+    liveDaemons.set(descriptor.transport.path, { descriptor });
+
+    let startDaemonCalls = 0;
+    await expect(
+      workspaceDaemonLaunchOrConnect({
+        runtimeDir,
+        client: clientIdentityCreate('unexpected-install-client'),
+        expectedInstallId: 'insiders',
+        connect,
+        startDaemon: async () => {
+          startDaemonCalls += 1;
+        },
+      }),
+    ).rejects.toThrow('Daemon handshake failed: unexpected_install_id');
+    expect(startDaemonCalls).toBe(0);
   });
 
   it('requires hello before service RPC and serves the current workspace-service surface after handshake', async () => {
