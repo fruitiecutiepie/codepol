@@ -20,6 +20,12 @@ targets = ["codepol-src"]
 args.ignorePackageEntryPoints = true
 
 [[rules]]
+id = "no-unused-vars"
+ruleId = "@codepol/plugin/no-unused-vars"
+description = "Detect unused variables"
+targets = ["codepol-src"]
+
+[[rules]]
 ruleId = "@codepol/plugin/forbidden-words"
 severity = "error"
 targets = ["codepol-src", "python-src"]
@@ -122,6 +128,13 @@ targets = ["codepol-src"]
 args.preferredStyle = "named"
 
 [[rules]]
+ruleId = "@codepol/plugin/forbidden-declarations"
+severity = "error"
+targets = ["codepol-src"]
+args.symbols = ["class", "interface"]
+args.syntax = ["var"]
+
+[[rules]]
 id = "enforce-casing"
 ruleId = "@codepol/plugin/enforce-casing"
 description = "Enforce naming conventions for symbols and file/directory paths"
@@ -130,16 +143,16 @@ targets = ["codepol-src", "python-src"]
 
 [rules.args.symbols]
 function = ["snake_case"]
-method = ["camelCase", "snake_case"]
+method = ["snake_case"]
 class = ["PascalCase"]
 interface = ["PascalCase"]
 type = ["PascalCase"]
 variable = ["snake_case"]
-const = ["camelCase", "SCREAMING_SNAKE_CASE", "snake_case"]
-field = ["camelCase", "snake_case"]
-parameter = ["camelCase", "snake_case"]
+const = ["snake_case", "SCREAMING_SNAKE_CASE"]
+field = ["snake_case"]
+parameter = ["snake_case"]
 enum = ["PascalCase"]
-enumMember = ["PascalCase", "SCREAMING_SNAKE_CASE"]
+enumMember = ["PascalCase"]
 
 [rules.args.paths]
 file = ["kebab-case", "snake_case"]
