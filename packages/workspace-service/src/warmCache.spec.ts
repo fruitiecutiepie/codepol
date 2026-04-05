@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   WORKSPACE_WARM_CACHE_COMPAT_VERSION,
+  workspaceWarmCacheEnvironmentIdCreate,
   workspaceWarmCacheFsStoreCreate,
   type WorkspaceWarmCacheSnapshotInput,
 } from './warmCache';
@@ -126,5 +127,30 @@ describe('workspace warm cache store', () => {
 
     await expect(Promise.resolve(currentStore.read(key))).resolves.toBeUndefined();
     expect(fs.readdirSync(cacheDir)).toEqual([]);
+  });
+
+  it('derives environment identity from tool-resolution environment variables', () => {
+    const base = workspaceWarmCacheEnvironmentIdCreate({
+      PATH: '/usr/bin:/bin',
+      NODE_PATH: '',
+      VIRTUAL_ENV: '',
+      CONDA_PREFIX: '',
+    });
+    const changedPath = workspaceWarmCacheEnvironmentIdCreate({
+      PATH: '/opt/tools/bin:/usr/bin:/bin',
+      NODE_PATH: '',
+      VIRTUAL_ENV: '',
+      CONDA_PREFIX: '',
+    });
+    const changedVirtualEnv = workspaceWarmCacheEnvironmentIdCreate({
+      PATH: '/usr/bin:/bin',
+      NODE_PATH: '',
+      VIRTUAL_ENV: '/tmp/venv',
+      CONDA_PREFIX: '',
+    });
+
+    expect(base).toMatch(/^node:.*:env:[0-9a-f]{16}$/);
+    expect(changedPath).not.toBe(base);
+    expect(changedVirtualEnv).not.toBe(base);
   });
 });

@@ -8,6 +8,7 @@ import {
   workspaceDaemonServerStart,
   workspaceDaemonRuntimePathsResolve,
   workspaceWatcherCreate,
+  workspaceWarmCacheEnvironmentIdCreate,
   workspaceWarmCacheFsStoreCreate,
 } from '@codepol/workspace-service';
 
@@ -23,6 +24,7 @@ async function main(): Promise<void> {
         runtimeDir,
         engineVersion: WORKSPACE_DAEMON_ENGINE_VERSION,
         buildId: WORKSPACE_DAEMON_BUILD_ID,
+        environmentId: workspaceWarmCacheEnvironmentIdCreate(process.env),
       }),
     }),
     policyCheck: workspacePolicyCheck,

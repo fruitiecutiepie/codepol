@@ -222,6 +222,7 @@
   - warm-cache validity now also fingerprints configured external tool binaries and config files such as Biome or Ruff inputs when they are referenced by explicit paths, and the filesystem store prunes stale build/environment cache variants for the same logical workspace
   - warm-cache validity now also fingerprints plugin compatibility, including builtin package build artifacts, process-plugin script paths, and resolved plugin capability signatures, so daemon warm restore drops stale snapshots after plugin rebuilds or registry changes
   - index-required warm restore now also validates discovered workspace package metadata, so monorepo package-name or entry-point changes in `package.json` invalidate the cached project index before it can be reused
+  - daemon-owned warm caches now derive environment identity from tool-resolution environment variables such as `PATH`, `NODE_PATH`, and active virtual-env prefixes instead of only the Node version, so non-explicit binary resolution changes invalidate cached state
 - Persist only daemon-owned workspace state:
   - base disk-derived index/cache metadata
   - workspace config/environment identity

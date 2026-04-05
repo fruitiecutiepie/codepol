@@ -10,6 +10,13 @@ import type {
 
 export const WORKSPACE_WARM_CACHE_COMPAT_VERSION = 1;
 
+const WORKSPACE_WARM_CACHE_ENVIRONMENT_KEYS = [
+  'PATH',
+  'NODE_PATH',
+  'VIRTUAL_ENV',
+  'CONDA_PREFIX',
+] as const;
+
 export type WorkspaceWarmCacheKey = {
   workspaceId: string;
   rootPath: string;
@@ -99,6 +106,20 @@ function workspaceWarmCacheDirResolve(runtimeDir: string): string {
   return path.join(path.resolve(runtimeDir), 'warm-cache');
 }
 
+export function workspaceWarmCacheEnvironmentIdCreate(
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const hash = createHash('sha1');
+  hash.update(process.version);
+  for (const key of WORKSPACE_WARM_CACHE_ENVIRONMENT_KEYS) {
+    hash.update('\0');
+    hash.update(key);
+    hash.update('=');
+    hash.update(env[key] ?? '');
+  }
+  return `node:${process.version}:env:${hash.digest('hex').slice(0, 16)}`;
+}
+
 function workspaceWarmCacheFilePathResolve(
   runtimeDir: string,
   key: WorkspaceWarmCacheKey,
@@ -133,7 +154,8 @@ export function workspaceWarmCacheFsStoreCreate(options: {
   const runtimeDir = path.resolve(options.runtimeDir);
   const engineVersion = options.engineVersion ?? 'workspace-service';
   const buildId = options.buildId ?? 'dev';
-  const environmentId = options.environmentId ?? `node:${process.version}`;
+  const environmentId =
+    options.environmentId ?? workspaceWarmCacheEnvironmentIdCreate();
   const now = options.now ?? (() => Date.now());
 
   const filePathResolve = (key: WorkspaceWarmCacheKey): string =>
