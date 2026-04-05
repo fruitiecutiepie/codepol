@@ -9,7 +9,13 @@
 
 export { ruffAdapter } from './ruffAdapter';
 
-export { ruffCheck, ruffFix, ruffDiagnosticToViolation } from './ruffRunner';
+export {
+  ruffCheck,
+  ruffCheckAsync,
+  ruffFix,
+  ruffFixAsync,
+  ruffDiagnosticToViolation,
+} from './ruffRunner';
 
 export type {
   RuffDiagnostic,

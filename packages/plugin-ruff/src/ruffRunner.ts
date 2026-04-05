@@ -6,13 +6,79 @@
  * codepol PolicyViolation[], and supports --fix mode.
  */
 
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync, type ExecFileException } from 'node:child_process';
 import type { PolicyViolation } from '@codepol/core';
 import { Ok, Err, type Result } from '@codepol/core';
 import type { RuffDiagnostic, RuffProviderConfig } from './ruffTypes';
 
 function ruffBinGet(config?: RuffProviderConfig): string {
   return config?.ruffBin ?? 'ruff';
+}
+
+type ExecFileError = {
+  status?: number;
+  stdout?: string | Buffer;
+  stderr?: string | Buffer;
+  message?: string;
+  name?: string;
+  code?: string;
+};
+
+function outputToString(output: string | Buffer | undefined): string {
+  if (typeof output === 'string') {
+    return output;
+  }
+  if (output == null) {
+    return '';
+  }
+  return output.toString('utf8');
+}
+
+function execFileAbortedIs(error: unknown): boolean {
+  return error instanceof Error &&
+    ((error as ExecFileError).name === 'AbortError' ||
+      (error as ExecFileError).code === 'ABORT_ERR');
+}
+
+function execFileTextRun(
+  file: string,
+  args: string[],
+  options: {
+    signal?: AbortSignal;
+  } = {},
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    try {
+      execFile(
+        file,
+        args,
+        {
+          encoding: 'utf8' as const,
+          maxBuffer: 50 * 1024 * 1024,
+          signal: options.signal,
+        },
+        (
+          error: ExecFileException | null,
+          stdout: string,
+          stderr: string,
+        ) => {
+          if (error) {
+            const execErr = error as ExecFileError;
+            execErr.stdout = stdout;
+            execErr.stderr = stderr;
+            reject(execErr);
+            return;
+          }
+          resolve({
+            stdout: outputToString(stdout),
+            stderr: outputToString(stderr),
+          });
+        },
+      );
+    } catch (error) {
+      reject(error);
+    }
+  });
 }
 
 function ruffArgsGet(
@@ -115,6 +181,53 @@ export function ruffCheck(
   return Ok(diagnostics.map(ruffDiagnosticToViolation));
 }
 
+export async function ruffCheckAsync(
+  files: string[],
+  config?: RuffProviderConfig,
+  options: {
+    signal?: AbortSignal;
+  } = {},
+): Promise<Result<PolicyViolation[], string>> {
+  if (files.length === 0) {
+    return Ok([]);
+  }
+
+  const bin = ruffBinGet(config);
+  const args = ruffArgsGet(files, config);
+
+  let stdout: string;
+  try {
+    const result = await execFileTextRun(bin, args, options);
+    stdout = result.stdout;
+  } catch (err: unknown) {
+    if (execFileAbortedIs(err)) {
+      throw err;
+    }
+    const execErr = err as ExecFileError;
+    if (execErr.status === 1 && execErr.stdout) {
+      stdout = outputToString(execErr.stdout);
+    } else if (execErr.status === 2) {
+      return Err(`ruff configuration or usage error: ${outputToString(execErr.stderr) || execErr.message}`);
+    } else {
+      return Err(`Failed to execute ruff: ${execErr.message ?? String(err)}`);
+    }
+  }
+
+  const trimmed = stdout.trim();
+  if (!trimmed || trimmed === '[]') {
+    return Ok([]);
+  }
+
+  let diagnostics: RuffDiagnostic[];
+  try {
+    diagnostics = JSON.parse(trimmed) as RuffDiagnostic[];
+  } catch {
+    return Err(`Failed to parse ruff JSON output: ${trimmed.slice(0, 200)}`);
+  }
+
+  return Ok(diagnostics.map(ruffDiagnosticToViolation));
+}
+
 /**
  * Runs `ruff check --fix` on the given files.
  * Returns Ok(true) if fixes were applied, Ok(false) if no fixes were needed,
@@ -151,6 +264,42 @@ export function ruffFix(
     }
     if (execErr.status === 2) {
       return Err(`ruff configuration or usage error: ${execErr.stderr ?? execErr.message}`);
+    }
+    return Err(`Failed to execute ruff --fix: ${execErr.message ?? String(err)}`);
+  }
+}
+
+export async function ruffFixAsync(
+  files: string[],
+  config?: RuffProviderConfig,
+  options: {
+    signal?: AbortSignal;
+  } = {},
+): Promise<Result<boolean, string>> {
+  if (files.length === 0) {
+    return Ok(false);
+  }
+
+  const bin = ruffBinGet(config);
+  const args = ruffArgsGet(files, config, ['--fix']);
+  const jsonIdx = args.indexOf('--output-format=json');
+  if (jsonIdx !== -1) {
+    args.splice(jsonIdx, 1);
+  }
+
+  try {
+    await execFileTextRun(bin, args, options);
+    return Ok(false);
+  } catch (err: unknown) {
+    if (execFileAbortedIs(err)) {
+      throw err;
+    }
+    const execErr = err as ExecFileError;
+    if (execErr.status === 1) {
+      return Ok(true);
+    }
+    if (execErr.status === 2) {
+      return Err(`ruff configuration or usage error: ${outputToString(execErr.stderr) || execErr.message}`);
     }
     return Err(`Failed to execute ruff --fix: ${execErr.message ?? String(err)}`);
   }

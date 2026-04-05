@@ -141,6 +141,74 @@ process.exit(0);
   return biomeBin;
 }
 
+function mockBiomeBlockingScriptCreate(
+  projectDir: string,
+  options: {
+    markerPath: string;
+    fileName?: string;
+  },
+): string {
+  const biomeBin = path.join(
+    projectDir,
+    options.fileName ?? 'mock-biome-blocking.cjs',
+  );
+  fs.writeFileSync(
+    biomeBin,
+    `#!/usr/bin/env node
+const fs = require('node:fs');
+const markerPath = ${JSON.stringify(options.markerPath)};
+let settled = false;
+fs.writeFileSync(markerPath, 'started', 'utf8');
+function finish(state) {
+  if (settled) {
+    return;
+  }
+  settled = true;
+  fs.writeFileSync(markerPath, state, 'utf8');
+  process.exit(state === 'aborted' ? 143 : 0);
+}
+process.on('SIGTERM', () => finish('aborted'));
+setTimeout(() => {
+  process.stdout.write(JSON.stringify({ diagnostics: [] }));
+  finish('completed');
+}, 5000);
+`,
+    'utf8',
+  );
+  fs.chmodSync(biomeBin, 0o755);
+  return biomeBin;
+}
+
+async function fileContentsWaitFor(
+  filePath: string,
+  options: {
+    attempts?: number;
+    delayMs?: number;
+    expected?: string;
+  } = {},
+): Promise<string | undefined> {
+  const attempts = options.attempts ?? 40;
+  const delayMs = options.delayMs ?? 25;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const contents = fs.readFileSync(filePath, 'utf8');
+      if (options.expected === undefined || contents === options.expected) {
+        return contents;
+      }
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  try {
+    const contents = fs.readFileSync(filePath, 'utf8');
+    if (options.expected === undefined || contents === options.expected) {
+      return contents;
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function analyzerScorecardGet(
   engine: WorkspaceServiceEngine,
   input: {
@@ -3125,6 +3193,155 @@ describe('workspace daemon control plane', () => {
       code: 'request_cancelled',
       message: 'Request cancelled',
     });
+  });
+
+  it('cancels a long-running external biome analyzer through daemon request signals', async () => {
+    const runtimeDir = tempRuntimeDirCreate();
+    tempDirs.push(runtimeDir);
+
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-daemon-workspace-'));
+    tempDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = workspacePathToUri(filePath);
+    fs.writeFileSync(filePath, 'export const value = 1;\n', 'utf8');
+
+    const markerPath = path.join(workspaceRoot, 'biome-abort-marker.txt');
+    const biomeBin = mockBiomeBlockingScriptCreate(workspaceRoot, {
+      markerPath,
+    });
+
+    const pluginId = `daemon-cancel-biome-${randomUUID()}`;
+    const ruleId = 'blocking-biome';
+    pluginModuleRegister(pluginId, {
+      default: [
+        pluginRuleNew({
+          id: ruleId,
+          capabilities: {
+            lintProviders: [
+              {
+                platform: 'biome',
+                languages: ['typescript'],
+                config: {
+                  biomeBin,
+                },
+              },
+            ],
+          },
+        }),
+      ],
+    });
+
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(
+      configPath,
+      pluginRuleConfigContentCreate({ pluginId, ruleId }),
+      'utf8',
+    );
+
+    const { descriptor } = workspaceDaemonDescriptorCreate({ runtimeDir });
+    const session = new WorkspaceDaemonSession({
+      descriptor,
+      service: new WorkspaceServiceEngine(),
+    });
+
+    await expect(
+      session.handleEnvelope({
+        id: 1,
+        type: 'hello',
+        protocolVersion: WORKSPACE_DAEMON_PROTOCOL_VERSION,
+        client: clientIdentityCreate('cancel-biome-client'),
+      }),
+    ).resolves.toMatchObject({
+      type: 'hello_ack',
+      compatibility: 'ok',
+    });
+
+    const registerResponse = await session.handleEnvelope({
+      id: 2,
+      type: 'register_client_session',
+      clientKind: 'test',
+      clientInstanceId: 'cancel-biome-client',
+      clientSessionId: 'cancel-biome-session',
+    });
+    expect(registerResponse.type).toBe('register_client_session_ack');
+    if (registerResponse.type !== 'register_client_session_ack') {
+      return;
+    }
+
+    const attachResponse = await session.handleEnvelope({
+      id: 3,
+      type: 'attach_workspace',
+      clientSessionId: 'cancel-biome-session',
+      daemonSessionId: registerResponse.daemonSessionId,
+      rootPath: workspaceRoot,
+      configPath,
+    });
+    expect(attachResponse.type).toBe('attach_workspace_ack');
+    if (attachResponse.type !== 'attach_workspace_ack') {
+      return;
+    }
+
+    await expect(
+      session.handleEnvelope({
+        id: 4,
+        type: 'complete_replay',
+        clientSessionId: 'cancel-biome-session',
+        daemonSessionId: registerResponse.daemonSessionId,
+        workspaceId: attachResponse.workspaceId,
+        workspaceInstanceId: attachResponse.workspaceInstanceId,
+      }),
+    ).resolves.toEqual({
+      type: 'complete_replay_ack',
+      result: {
+        workspaceId: attachResponse.workspaceId,
+        workspaceInstanceId: attachResponse.workspaceInstanceId,
+        replayEpoch: 1,
+        replayState: 'applied',
+      },
+    });
+
+    const diagnosticsPromise = session.handleEnvelope({
+      id: 5,
+      type: 'query_diagnostics',
+      clientSessionId: 'cancel-biome-session',
+      daemonSessionId: registerResponse.daemonSessionId,
+      workspaceId: attachResponse.workspaceId,
+      workspaceInstanceId: attachResponse.workspaceInstanceId,
+      replayEpoch: 1,
+      uri,
+      requestId: 'cancel-biome-diagnostics',
+    });
+
+    await expect(
+      fileContentsWaitFor(markerPath, {
+        expected: 'started',
+      }),
+    ).resolves.toBe('started');
+
+    await expect(
+      session.handleEnvelope({
+        id: 6,
+        type: 'cancel_request',
+        targetId: 5,
+      }),
+    ).resolves.toEqual({
+      type: 'cancel_request_ack',
+      targetId: 5,
+      cancellationState: 'cancel_requested',
+    });
+
+    await expect(diagnosticsPromise).resolves.toEqual({
+      type: 'error',
+      code: 'request_cancelled',
+      message: 'Request cancelled',
+    });
+    await expect(
+      fileContentsWaitFor(markerPath, {
+        expected: 'aborted',
+      }),
+    ).resolves.toBe('aborted');
   });
 
   it('launches once through the shared launcher and then reuses the healthy daemon', async () => {

@@ -1002,7 +1002,7 @@ Status on 2026-04-05:
 - [x] Extract aggregated diagnostics logic from `apps/cli/src/index.ts` into reusable service code.
 - [x] Preserve current provider filtering semantics from `PolicyRule.providers`.
 - [x] Preserve current fix ordering semantics while moving the orchestration boundary.
-- [ ] Add async execution and cancellation support for external linter runners.
+- [x] Add async execution and cancellation support for external linter runners.
 - [x] Ensure the CLI calls the shared service rather than owning the orchestration logic.
 
 ### Phase 2: overlay-aware tree checks and index updates

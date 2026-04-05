@@ -65,9 +65,9 @@ import {
   type WorkspaceSymbolResult,
   type BiomeProviderConfig,
 } from '@codepol/core';
-import { biomeCheck, biomeFix } from '@codepol/plugin-biome';
+import { biomeCheckAsync, biomeFixAsync } from '@codepol/plugin-biome';
 import { eslintPluginCreate } from '@codepol/plugin-eslint';
-import { ruffCheck, ruffFix } from '@codepol/plugin-ruff';
+import { ruffCheckAsync, ruffFixAsync } from '@codepol/plugin-ruff';
 import {
   treeCheckFixesApply,
   workspaceEditPlanCreateFromFix,
@@ -95,6 +95,16 @@ const WORKSPACE_WATCH_IGNORED = ['**/node_modules/**', '**/.git/**'];
 const WORKSPACE_SYMBOL_LIMIT_DEFAULT = 50;
 const WORKSPACE_SEARCH_LIMIT_DEFAULT = 20;
 const WORKSPACE_NATIVE_OWNERSHIP_LANGUAGES = ['javascript', 'jsx', 'typescript', 'tsx'];
+
+function workspaceRequestCancelledErrorCreate(): Error {
+  return new Error('Request cancelled');
+}
+
+function workspaceAbortSignalThrowIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw workspaceRequestCancelledErrorCreate();
+  }
+}
 
 type LintProviderEntry = {
   provider: LintProvider;
@@ -2644,14 +2654,16 @@ async function eslintAnalyzerRun(
   );
 }
 
-function biomeAnalyzerRun(
+async function biomeAnalyzerRun(
   input: {
     matches: RuleMatch[];
     lintProviderEntries: LintProviderEntry[];
     nativeOwnedWrappedRuleIds: ReadonlySet<string>;
     fix: boolean;
+    signal?: AbortSignal;
   },
-): WorkspaceAnalyzerRunResult {
+): Promise<WorkspaceAnalyzerRunResult> {
+  workspaceAbortSignalThrowIfAborted(input.signal);
   const eligibleEntries = input.lintProviderEntries.filter(
     (entry) => entry.provider.platform === 'biome',
   );
@@ -2719,6 +2731,7 @@ function biomeAnalyzerRun(
   const violations: PolicyViolation[] = [];
   const issues: string[] = [];
   for (const [configKey, filesSet] of biomeFilesByConfigKey) {
+    workspaceAbortSignalThrowIfAborted(input.signal);
     const files = [...filesSet];
     if (files.length === 0) {
       continue;
@@ -2726,7 +2739,9 @@ function biomeAnalyzerRun(
     const config = biomeProviderConfigFromKey(configKey);
 
     if (input.fix) {
-      const biomeFixResult = biomeFix(files, config);
+      const biomeFixResult = await biomeFixAsync(files, config, {
+        signal: input.signal,
+      });
       if (isErr(biomeFixResult)) {
         const issue = `Biome fix failed: ${biomeFixResult.Err}`;
         console.warn(issue);
@@ -2734,7 +2749,9 @@ function biomeAnalyzerRun(
       }
     }
 
-    const biomeResult = biomeCheck(files, config);
+    const biomeResult = await biomeCheckAsync(files, config, {
+      signal: input.signal,
+    });
     if (isErr(biomeResult)) {
       const issue = `Biome lint failed: ${biomeResult.Err}`;
       console.warn(issue);
@@ -2768,14 +2785,16 @@ function biomeAnalyzerRun(
   );
 }
 
-function ruffAnalyzerRun(
+async function ruffAnalyzerRun(
   input: {
     files: string[];
     lintProviderEntries: LintProviderEntry[];
     nativeOwnedWrappedRuleIds: ReadonlySet<string>;
     fix: boolean;
+    signal?: AbortSignal;
   },
-): WorkspaceAnalyzerRunResult {
+): Promise<WorkspaceAnalyzerRunResult> {
+  workspaceAbortSignalThrowIfAborted(input.signal);
   const eligibleEntries = input.lintProviderEntries.filter(
     (entry) => entry.provider.platform === 'ruff',
   );
@@ -2839,7 +2858,9 @@ function ruffAnalyzerRun(
   const issues: string[] = [];
 
   if (input.fix) {
-    const ruffFixResult = ruffFix(pythonFiles, config);
+    const ruffFixResult = await ruffFixAsync(pythonFiles, config, {
+      signal: input.signal,
+    });
     if (isErr(ruffFixResult)) {
       const issue = `Ruff fix failed: ${ruffFixResult.Err}`;
       console.warn(issue);
@@ -2847,7 +2868,10 @@ function ruffAnalyzerRun(
     }
   }
 
-  const ruffResult = ruffCheck(pythonFiles, config);
+  workspaceAbortSignalThrowIfAborted(input.signal);
+  const ruffResult = await ruffCheckAsync(pythonFiles, config, {
+    signal: input.signal,
+  });
   if (isErr(ruffResult)) {
     const issue = `Ruff check failed: ${ruffResult.Err}`;
     console.warn(issue);
@@ -2899,12 +2923,14 @@ async function workspaceAnalysisRun(
   options: {
     fix: boolean;
     collectEslintOutput: boolean;
+    signal?: AbortSignal;
   },
 ): Promise<WorkspaceAnalysis> {
   if (!options.fix && !options.collectEslintOutput && state.lastAnalysis) {
     return state.lastAnalysis;
   }
 
+  workspaceAbortSignalThrowIfAborted(options.signal);
   await ensureWorkspaceRuntimeReady();
   builtinPluginsRefresh();
 
@@ -2936,6 +2962,7 @@ async function workspaceAnalysisRun(
     pluginRulesMap,
   });
 
+  workspaceAbortSignalThrowIfAborted(options.signal);
   if (options.fix && fixProviders.length > 0) {
     await fixProvidersApply(fixProviders, {
       policy,
@@ -2948,10 +2975,12 @@ async function workspaceAnalysisRun(
 
   let projectIndex: ProjectIndex | undefined;
   if (workspaceIndexRequired) {
+    workspaceAbortSignalThrowIfAborted(options.signal);
     projectIndex = workspaceIndexGetOrBuild(workspace, state, files);
   }
 
   if (options.fix) {
+    workspaceAbortSignalThrowIfAborted(options.signal);
     const treeFixViolationsResult = await policyViolationsGetFromDir(policy, workspace.rootPath, {
       configPath: workspace.configPath,
       sourceByFilePath,
@@ -2965,6 +2994,7 @@ async function workspaceAnalysisRun(
     projectIndex = undefined;
   }
 
+  workspaceAbortSignalThrowIfAborted(options.signal);
   const treeResult = workspaceTreeAnalyzerRun({
     configPath: workspace.configPath,
     matches,
@@ -2991,20 +3021,25 @@ async function workspaceAnalysisRun(
     collectOutput: options.collectEslintOutput,
   });
 
-  const biomeResult = biomeAnalyzerRun({
+  workspaceAbortSignalThrowIfAborted(options.signal);
+  const biomeResult = await biomeAnalyzerRun({
     matches,
     lintProviderEntries,
     nativeOwnedWrappedRuleIds,
     fix: options.fix,
+    signal: options.signal,
   });
-  const ruffResult = ruffAnalyzerRun({
+  workspaceAbortSignalThrowIfAborted(options.signal);
+  const ruffResult = await ruffAnalyzerRun({
     files,
     lintProviderEntries,
     nativeOwnedWrappedRuleIds,
     fix: options.fix,
+    signal: options.signal,
   });
 
   if (workspaceIndexRequired) {
+    workspaceAbortSignalThrowIfAborted(options.signal);
     projectIndex = workspaceIndexGetOrBuild(workspace, state, files);
   }
   const analyzerResults = [treeResult, eslintResult, biomeResult, ruffResult];
@@ -3073,6 +3108,9 @@ async function workspaceAnalysisRun(
 async function workspaceSessionAnalysisGet(
   workspace: WorkspaceState,
   state: WorkspaceSessionState,
+  options: {
+    signal?: AbortSignal;
+  } = {},
 ): Promise<WorkspaceAnalysis> {
   if (!state.lastAnalysis) {
     state.status = 'warming';
@@ -3083,6 +3121,7 @@ async function workspaceSessionAnalysisGet(
     const analysis = await workspaceAnalysisRun(workspace, state, {
       fix: false,
       collectEslintOutput: false,
+      signal: options.signal,
     });
     state.status = 'ready';
     state.lastError = undefined;
@@ -3122,8 +3161,11 @@ export class WorkspaceServiceEngine implements WorkspaceService {
   private async workspaceSessionAnalysisEnsure(
     workspace: WorkspaceState,
     workspaceSession: WorkspaceSessionState,
+    options: {
+      signal?: AbortSignal;
+    } = {},
   ): Promise<WorkspaceAnalysis> {
-    const analysis = await workspaceSessionAnalysisGet(workspace, workspaceSession);
+    const analysis = await workspaceSessionAnalysisGet(workspace, workspaceSession, options);
     await workspaceWarmCacheSnapshotPersist({
       warmCache: this.warmCache,
       workspace,
@@ -3135,11 +3177,14 @@ export class WorkspaceServiceEngine implements WorkspaceService {
   private async workspaceSessionIndexEnsure(
     workspace: WorkspaceState,
     workspaceSession: WorkspaceSessionState,
+    options: {
+      signal?: AbortSignal;
+    } = {},
   ): Promise<ProjectIndex> {
     if (!workspaceSession.indexState || workspaceSession.workspaceIndexRequired !== true) {
       workspaceSessionIndexEnable(workspaceSession);
     }
-    await this.workspaceSessionAnalysisEnsure(workspace, workspaceSession);
+    await this.workspaceSessionAnalysisEnsure(workspace, workspaceSession, options);
     if (!workspaceSession.indexState) {
       throw new Error('Workspace index unavailable');
     }
@@ -3528,7 +3573,9 @@ export class WorkspaceServiceEngine implements WorkspaceService {
         documentVersion: input.documentVersion,
       });
     }
-    const analysis = await this.workspaceSessionAnalysisEnsure(workspace, workspaceSession);
+    const analysis = await this.workspaceSessionAnalysisEnsure(workspace, workspaceSession, {
+      signal: input.signal,
+    });
     if (!input.uri) {
       return analysis.diagnostics;
     }
@@ -3555,7 +3602,9 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       documentVersion: input.version,
     });
     workspaceSession.codeActionPlans.clear();
-    const analysis = await workspaceSessionAnalysisGet(workspace, workspaceSession);
+    const analysis = await workspaceSessionAnalysisGet(workspace, workspaceSession, {
+      signal: input.signal,
+    });
 
     const selectedDiagnosticIds = new Set(
       input.diagnosticIds ??
@@ -3722,7 +3771,9 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       input.clientSessionId,
       input.workspaceId,
     );
-    const index = await this.workspaceSessionIndexEnsure(workspace, workspaceSession);
+    const index = await this.workspaceSessionIndexEnsure(workspace, workspaceSession, {
+      signal: input.signal,
+    });
     workspaceAnalysisGenerationValidate(workspaceSession, input);
     return workspaceModuleSymbolResultsGet(workspace, index, input);
   }
@@ -3740,7 +3791,9 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       input.clientSessionId,
       input.workspaceId,
     );
-    const index = await this.workspaceSessionIndexEnsure(workspace, workspaceSession);
+    const index = await this.workspaceSessionIndexEnsure(workspace, workspaceSession, {
+      signal: input.signal,
+    });
     workspaceAnalysisGenerationValidate(workspaceSession, input);
     return workspaceDependencyGraphResultCreate(workspace, index);
   }
@@ -3760,7 +3813,9 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       input.clientSessionId,
       input.workspaceId,
     );
-    const index = await this.workspaceSessionIndexEnsure(workspace, workspaceSession);
+    const index = await this.workspaceSessionIndexEnsure(workspace, workspaceSession, {
+      signal: input.signal,
+    });
     workspaceAnalysisGenerationValidate(workspaceSession, input);
     return workspaceSemanticSearchResultsGet(workspace, workspaceSession, index, input);
   }
@@ -3778,7 +3833,9 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       input.clientSessionId,
       input.workspaceId,
     );
-    const index = await this.workspaceSessionIndexEnsure(workspace, workspaceSession);
+    const index = await this.workspaceSessionIndexEnsure(workspace, workspaceSession, {
+      signal: input.signal,
+    });
     workspaceAnalysisGenerationValidate(workspaceSession, input);
     return workspaceArchitectureSummaryResultCreate(workspace, index);
   }

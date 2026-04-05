@@ -149,6 +149,7 @@
   - `apps/lsp` now treats `$/cancelRequest` as best-effort request cancellation and returns `Request cancelled` for in-flight LSP requests canceled before response publication
   - diagnostics publication in `apps/lsp` is now freshness-gated by workspace replay epoch plus per-document state version so older diagnostic queries cannot overwrite newer open/change/close state
   - the daemon transport now supports `cancel_request` against in-flight transport request ids, and daemon-backed workspace-service reads/apply calls now accept abort signals so canceled interactive requests can stop before response publication
+  - Biome and Ruff subprocess execution now also runs through abortable async runner paths, so daemon cancellation no longer waits for those external analyzers to finish before the request can settle as canceled
   - the daemon protocol now carries and validates `workspaceInstanceId` on overlay/read requests plus `replayEpoch` on post-replay reads/status calls, so stale sessions are rejected at the service boundary instead of only at the LSP adapter
   - the daemon-backed workspace-service client now carries `daemonSessionId` on all client-session-bound RPCs, and the daemon rejects stale or missing daemon ids before workspace attach/replay/overlay/read work starts
   - the daemon session now has a workspace-keyed priority queue, with `attach`/`replay`/`status` ahead of diagnostics and diagnostics ahead of code actions or edit-plan work when requests backlog on the same workspace lane
@@ -179,7 +180,7 @@
   - re-check replay epoch
   - re-check cancel/supersede state
   - only then publish diagnostics or status as current
-- Fold Phase 1 external-runner cancellation into this workstream so queueing does not stop at the daemon boundary.
+- Phase 1 external-runner cancellation is now folded into this workstream so queueing does not stop at the daemon boundary.
 - Exit criteria:
   - superseded diagnostics never overwrite newer results
   - canceled work may finish internally but cannot publish as current

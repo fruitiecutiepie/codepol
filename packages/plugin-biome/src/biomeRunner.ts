@@ -6,7 +6,7 @@
  * codepol PolicyViolation[], and supports --write mode.
  */
 
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync, type ExecFileException } from 'node:child_process';
 import path from 'node:path';
 import type { PolicyViolation } from '@codepol/core';
 import { Ok, Err, type Result } from '@codepol/core';
@@ -21,6 +21,8 @@ type ExecFileError = {
   stdout?: string | Buffer;
   stderr?: string | Buffer;
   message?: string;
+  name?: string;
+  code?: string;
 };
 
 function outputToString(output: string | Buffer | undefined): string {
@@ -35,6 +37,53 @@ function outputToString(output: string | Buffer | undefined): string {
 
 function biomeBinGet(config?: BiomeProviderConfig): string {
   return config?.biomeBin ?? 'biome';
+}
+
+function execFileAbortedIs(error: unknown): boolean {
+  return error instanceof Error &&
+    ((error as ExecFileError).name === 'AbortError' ||
+      (error as ExecFileError).code === 'ABORT_ERR');
+}
+
+function execFileTextRun(
+  file: string,
+  args: string[],
+  options: {
+    signal?: AbortSignal;
+  } = {},
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    try {
+      execFile(
+        file,
+        args,
+        {
+          encoding: 'utf8' as const,
+          maxBuffer: 50 * 1024 * 1024,
+          signal: options.signal,
+        },
+        (
+          error: ExecFileException | null,
+          stdout: string,
+          stderr: string,
+        ) => {
+          if (error) {
+            const execErr = error as ExecFileError;
+            execErr.stdout = stdout;
+            execErr.stderr = stderr;
+            reject(execErr);
+            return;
+          }
+          resolve({
+            stdout: outputToString(stdout),
+            stderr: outputToString(stderr),
+          });
+        },
+      );
+    } catch (error) {
+      reject(error);
+    }
+  });
 }
 
 function biomeArgsGet(
@@ -147,6 +196,58 @@ export function biomeCheck(
   return Ok(violations);
 }
 
+export async function biomeCheckAsync(
+  files: string[],
+  config?: BiomeProviderConfig,
+  options: {
+    signal?: AbortSignal;
+  } = {},
+): Promise<Result<PolicyViolation[], string>> {
+  if (files.length === 0) {
+    return Ok([]);
+  }
+
+  const bin = biomeBinGet(config);
+  const args = biomeArgsGet(files, config);
+
+  let stdout: string;
+  try {
+    const result = await execFileTextRun(bin, args, options);
+    stdout = result.stdout;
+  } catch (err: unknown) {
+    if (execFileAbortedIs(err)) {
+      throw err;
+    }
+    const execErr = err as ExecFileError;
+    const recoveredStdout = outputToString(execErr.stdout).trim();
+    if (recoveredStdout) {
+      stdout = recoveredStdout;
+    } else {
+      const stderr = outputToString(execErr.stderr).trim();
+      return Err(`Failed to execute biome: ${stderr || execErr.message || String(err)}`);
+    }
+  }
+
+  const trimmed = stdout.trim();
+  if (!trimmed) {
+    return Ok([]);
+  }
+
+  let report: BiomeReport;
+  try {
+    report = JSON.parse(trimmed) as BiomeReport;
+  } catch {
+    return Err(`Failed to parse biome RDJSON output: ${trimmed.slice(0, 200)}`);
+  }
+
+  const diagnostics = Array.isArray(report.diagnostics) ? report.diagnostics : [];
+  const violations = diagnostics
+    .map((diagnostic) => biomeDiagnosticToViolation(diagnostic))
+    .filter((violation): violation is PolicyViolation => violation !== null);
+
+  return Ok(violations);
+}
+
 /**
  * Runs `biome lint --write` on the given files.
  * Returns Ok(true) if Biome reported remaining diagnostics after writing,
@@ -171,6 +272,36 @@ export function biomeFix(
     });
     return Ok(false);
   } catch (err: unknown) {
+    const execErr = err as ExecFileError;
+    if (execErr.status === 1) {
+      return Ok(true);
+    }
+    const stderr = outputToString(execErr.stderr).trim();
+    return Err(`Failed to execute biome --write: ${stderr || execErr.message || String(err)}`);
+  }
+}
+
+export async function biomeFixAsync(
+  files: string[],
+  config?: BiomeProviderConfig,
+  options: {
+    signal?: AbortSignal;
+  } = {},
+): Promise<Result<boolean, string>> {
+  if (files.length === 0) {
+    return Ok(false);
+  }
+
+  const bin = biomeBinGet(config);
+  const args = biomeArgsGet(files, config, ['--write']);
+
+  try {
+    await execFileTextRun(bin, args, options);
+    return Ok(false);
+  } catch (err: unknown) {
+    if (execFileAbortedIs(err)) {
+      throw err;
+    }
     const execErr = err as ExecFileError;
     if (execErr.status === 1) {
       return Ok(true);

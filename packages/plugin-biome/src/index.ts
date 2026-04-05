@@ -12,7 +12,13 @@
 
 export { biomeAdapter } from './biomeAdapter';
 
-export { biomeCheck, biomeFix, biomeDiagnosticToViolation } from './biomeRunner';
+export {
+  biomeCheck,
+  biomeCheckAsync,
+  biomeFix,
+  biomeFixAsync,
+  biomeDiagnosticToViolation,
+} from './biomeRunner';
 
 export type {
   BiomeDiagnostic,

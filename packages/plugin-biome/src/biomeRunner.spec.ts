@@ -2,17 +2,21 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { isErr, isOk } from '@codepol/core';
 
 vi.mock('node:child_process', () => ({
+  execFile: vi.fn(),
   execFileSync: vi.fn(),
 }));
 
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import {
   biomeCheck,
+  biomeCheckAsync,
   biomeFix,
+  biomeFixAsync,
   biomeDiagnosticToViolation,
 } from './biomeRunner';
 import type { BiomeDiagnostic } from './biomeTypes';
 
+const mockExecFile = vi.mocked(execFile);
 const mockExecFileSync = vi.mocked(execFileSync);
 
 describe('biomeDiagnosticToViolation', () => {
@@ -56,6 +60,7 @@ describe('biomeDiagnosticToViolation', () => {
 
 describe('biomeCheck', () => {
   beforeEach(() => {
+    mockExecFile.mockReset();
     mockExecFileSync.mockReset();
   });
 
@@ -139,10 +144,36 @@ describe('biomeCheck', () => {
       expect(result.Err).toContain('Failed to parse biome RDJSON output');
     }
   });
+
+  it('supports aborting async biome checks', async () => {
+    const controller = new AbortController();
+    mockExecFile.mockImplementationOnce((_file, _args, options, callback) => {
+      const signal = (options as { signal?: AbortSignal }).signal;
+      signal?.addEventListener('abort', () => {
+        const error = Object.assign(new Error('The operation was aborted'), {
+          name: 'AbortError',
+          code: 'ABORT_ERR',
+        });
+        callback?.(error, '', '');
+      }, { once: true });
+      return {} as never;
+    });
+
+    const resultPromise = biomeCheckAsync(['/workspace/src/app.ts'], undefined, {
+      signal: controller.signal,
+    });
+    controller.abort();
+
+    await expect(resultPromise).rejects.toMatchObject({
+      name: 'AbortError',
+      code: 'ABORT_ERR',
+    });
+  });
 });
 
 describe('biomeFix', () => {
   beforeEach(() => {
+    mockExecFile.mockReset();
     mockExecFileSync.mockReset();
   });
 
@@ -198,5 +229,30 @@ describe('biomeFix', () => {
     if (isErr(result)) {
       expect(result.Err).toContain('Failed to execute biome --write');
     }
+  });
+
+  it('supports aborting async biome fixes', async () => {
+    const controller = new AbortController();
+    mockExecFile.mockImplementationOnce((_file, _args, options, callback) => {
+      const signal = (options as { signal?: AbortSignal }).signal;
+      signal?.addEventListener('abort', () => {
+        const error = Object.assign(new Error('The operation was aborted'), {
+          name: 'AbortError',
+          code: 'ABORT_ERR',
+        });
+        callback?.(error, '', '');
+      }, { once: true });
+      return {} as never;
+    });
+
+    const resultPromise = biomeFixAsync(['/workspace/src/app.ts'], undefined, {
+      signal: controller.signal,
+    });
+    controller.abort();
+
+    await expect(resultPromise).rejects.toMatchObject({
+      name: 'AbortError',
+      code: 'ABORT_ERR',
+    });
   });
 });
