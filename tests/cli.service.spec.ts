@@ -36,6 +36,21 @@ targets = ["src"]
 `;
 }
 
+function noUnusedVarsConfigContentCreate(): string {
+  return `[[plugins]]
+id = "@codepol/plugin"
+source = { kind = "builtin" }
+
+[targets.src]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[[rules]]
+ruleId = "@codepol/plugin/no-unused-vars"
+targets = ["src"]
+`;
+}
+
 function daemonConnectCreate(options: {
   descriptor: WorkspaceDaemonDescriptor;
   policyCheck?: (
@@ -191,6 +206,132 @@ describe('CLI daemon policy checks', () => {
     expect(fs.readFileSync(appPath, 'utf8')).not.toContain('interface User');
     expect(result.violations).toHaveLength(0);
     expect(result.workspaceDiagnostics).toHaveLength(0);
+  });
+
+  it('reports migrated no-unused-vars diagnostics through the in-process CLI policy check', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-cli-in-process-workspace-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'codepol.toml'),
+      noUnusedVarsConfigContentCreate(),
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'eslint.config.mjs'),
+      `export default [{ files: ['**/*.ts'], rules: {} }];\n`,
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'src', 'app.ts'),
+      `function demo() {
+  const unused = 1;
+  return 1;
+}
+
+demo();
+`,
+      'utf8',
+    );
+
+    const resolved: Array<{ mode: string }> = [];
+    const result = await policyCheck({
+      configPath: path.join(workspaceRoot, 'codepol.toml'),
+      eslintConfigPath: path.join(workspaceRoot, 'eslint.config.mjs'),
+      fix: false,
+      cwd: workspaceRoot,
+      env: {
+        ...process.env,
+        CODEPOL_WORKSPACE_SERVICE_MODE: 'in_process',
+      },
+      onResolved: (info) => {
+        resolved.push({
+          mode: info.mode,
+        });
+      },
+    });
+
+    expect(resolved).toEqual([{ mode: 'in_process' }]);
+    expect(result.violations).toEqual([
+      expect.objectContaining({
+        ruleId: '@codepol/plugin/no-unused-vars',
+        message: "'unused' is assigned a value but never used.",
+      }),
+    ]);
+    expect(result.workspaceDiagnostics).toEqual([
+      expect.objectContaining({
+        source: 'codepol',
+        code: '@codepol/plugin/no-unused-vars',
+        message: "'unused' is assigned a value but never used.",
+      }),
+    ]);
+    expect(result.eslintOutput).toBe('');
+    expect(result.eslintHasErrors).toBe(false);
+  });
+
+  it('preserves migrated no-unused-vars fixes through the daemon-backed policy check', async () => {
+    const runtimeDir = tempWorkspaceCreate('codepol-cli-daemon-runtime-');
+    createdDirs.push(runtimeDir);
+
+    const workspaceRoot = tempWorkspaceCreate('codepol-cli-daemon-workspace-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'codepol.toml'),
+      noUnusedVarsConfigContentCreate(),
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'eslint.config.mjs'),
+      `export default [{ files: ['**/*.ts'], rules: {} }];\n`,
+      'utf8',
+    );
+
+    const appPath = path.join(workspaceRoot, 'src', 'app.ts');
+    fs.writeFileSync(
+      appPath,
+      `function demo() {
+  const unused = 1;
+  return 1;
+}
+
+demo();
+`,
+      'utf8',
+    );
+
+    const { descriptor } = workspaceDaemonDescriptorCreate({ runtimeDir });
+    workspaceDaemonDescriptorWrite(runtimeDir, descriptor);
+    const connect = daemonConnectCreate({
+      descriptor,
+      policyCheck: workspacePolicyCheck,
+    });
+
+    const result = await policyCheck({
+      configPath: path.join(workspaceRoot, 'codepol.toml'),
+      eslintConfigPath: path.join(workspaceRoot, 'eslint.config.mjs'),
+      fix: true,
+      cwd: workspaceRoot,
+      env: {
+        ...process.env,
+        CODEPOL_DAEMON_RUNTIME_DIR: runtimeDir,
+      },
+      connect,
+      startDaemon: async () => {
+        throw new Error('startDaemon should not run for a healthy daemon descriptor');
+      },
+    });
+
+    expect(fs.readFileSync(appPath, 'utf8')).toBe(`function demo() {
+  return 1;
+}
+
+demo();
+`);
+    expect(result.violations).toHaveLength(0);
+    expect(result.workspaceDiagnostics).toHaveLength(0);
+    expect(result.eslintOutput).toBe('');
+    expect(result.eslintHasErrors).toBe(false);
   });
 
   it('uses an in-process policy check when explicitly requested', async () => {

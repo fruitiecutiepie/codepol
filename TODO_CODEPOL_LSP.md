@@ -1054,10 +1054,10 @@ Current status: in-process integration coverage now includes multi-client overla
 
 - [x] Add tranche-4A analyzer ownership and scorecard foundations inside the workspace service.
 - [x] Keep the service contracts stable so adapters do not change during the replacement effort.
-- [ ] Inventory which wrapped analyzers are worth replacing with native Codepol analysis.
-- [ ] Replace analyzers only where Codepol can preserve or improve diagnostic quality and fix support.
+- [x] Inventory which wrapped analyzers are worth replacing with native Codepol analysis.
+- [x] Replace analyzers only where Codepol can preserve or improve diagnostic quality and fix support.
 
-Current status: the workspace service now resolves JS/TS native-vs-wrapped ownership before execution, runs tree/native and wrapped analyzers through one internal scorecarded contract, records a per-analysis internal wrapped-candidate inventory for latency and parity tracking, preserves wrapped-only behavior, and degrades diagnostics when a native-owned rule fails instead of silently falling back to wrapped output. The repo now ships `@codepol/plugin/no-unused-vars` as a real non-test JS/TS builtin with both native and wrapped ESLint implementations, so tranche 4B is unblocked for parity validation rather than waiting on a future candidate.
+Current status: the workspace service now resolves JS/TS native-vs-wrapped ownership before execution, runs tree/native and wrapped analyzers through one internal scorecarded contract, records a per-analysis internal wrapped-candidate inventory for latency and parity tracking, preserves wrapped-only behavior, and degrades diagnostics when a native-owned rule fails instead of silently falling back to wrapped output. Tranche 4B has now landed for `@codepol/plugin/no-unused-vars`: service and daemon ownership reporting stay native-preferred, CLI one-shot check/fix behavior stays stable, and the LSP still publishes the same diagnostic identity while serving tree-backed code actions through `workspace/applyEdit`. Generic third-party ESLint and Biome ecosystems remain wrapped unless Codepol owns the semantics end-to-end.
 
 ## Acceptance Criteria For An MVP
 

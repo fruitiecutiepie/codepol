@@ -42,6 +42,21 @@ targets = ["src"]
 `;
 }
 
+function noUnusedVarsConfigContentCreate(): string {
+  return `[[plugins]]
+id = "@codepol/plugin"
+source = { kind = "builtin" }
+
+[targets.src]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[[rules]]
+ruleId = "@codepol/plugin/no-unused-vars"
+targets = ["src"]
+`;
+}
+
 function daemonClientIdentityCreate(instanceId: string) {
   return {
     kind: 'test',
@@ -2576,6 +2591,116 @@ describe('CodepolLspServer', () => {
       (message) => message.method === 'workspace/applyEdit',
     );
     expect(applyEditRequest?.params.edit.changes[uri]).toHaveLength(1);
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: applyEditRequest.id,
+      result: { applied: true },
+    });
+    await executePromise;
+
+    const executeResponse = messages.find((message) => message.id === 3);
+    expect(executeResponse?.result).toBeNull();
+  });
+
+  it('preserves migrated no-unused-vars diagnostics and fixes through LSP code actions', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'codepol.toml'),
+      noUnusedVarsConfigContentCreate(),
+      'utf8',
+    );
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = pathToFileURL(filePath).href;
+    const source = `function demo() {
+  const unused = 1;
+  return 1;
+}
+
+demo();
+`;
+    fs.writeFileSync(filePath, source, 'utf8');
+
+    const messages: any[] = [];
+    const server = new CodepolLspServer({
+      sendMessage: (message) => {
+        messages.push(message);
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        rootUri: pathToFileURL(workspaceRoot).href,
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      method: 'textDocument/didOpen',
+      params: {
+        textDocument: {
+          uri,
+          version: 1,
+          text: source,
+        },
+      },
+    });
+
+    const publish = messages.find((message) => message.method === 'textDocument/publishDiagnostics');
+    expect(publish?.params.diagnostics).toHaveLength(1);
+    expect(publish?.params.diagnostics[0]).toEqual(
+      expect.objectContaining({
+        source: 'codepol',
+        code: '@codepol/plugin/no-unused-vars',
+        message: "'unused' is assigned a value but never used.",
+      }),
+    );
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'textDocument/codeAction',
+      params: {
+        textDocument: { uri },
+        context: {
+          diagnostics: [publish.params.diagnostics[0]],
+        },
+      },
+    });
+
+    const codeActionResponse = messages.find((message) => message.id === 2);
+    expect(codeActionResponse?.result).toHaveLength(1);
+    expect(codeActionResponse?.result[0]).toEqual(
+      expect.objectContaining({
+        title: 'Fix @codepol/plugin/no-unused-vars',
+        kind: 'quickfix',
+      }),
+    );
+
+    const executePromise = server.handleMessage({
+      jsonrpc: '2.0',
+      id: 3,
+      method: 'workspace/executeCommand',
+      params: codeActionResponse.result[0].command,
+    });
+
+    const applyEditRequest = await messageWaitFor(
+      messages,
+      (message) => message.method === 'workspace/applyEdit',
+    );
+    expect(applyEditRequest?.params.label).toBe('Fix @codepol/plugin/no-unused-vars');
+    expect(applyEditRequest?.params.edit.changes[uri]).toHaveLength(1);
+    expect(applyEditRequest?.params.edit.changes[uri][0]).toEqual(
+      expect.objectContaining({
+        newText: '',
+      }),
+    );
 
     await server.handleMessage({
       jsonrpc: '2.0',

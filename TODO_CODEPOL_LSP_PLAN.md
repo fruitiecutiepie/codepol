@@ -420,9 +420,9 @@
   - native-owned rule failures now degrade diagnostics instead of silently falling back to wrapped output in the same analysis run
   - each analysis generation now also records an internal JS/TS wrapped-candidate inventory with ownership, wrapped platforms, recent diagnostic counts, latency buckets, and fix-surface notes for test verification
   - analyzer scorecards persist through warm-cache restore for service and daemon tests
-- `4B` is now unblocked in this repo:
-  - `@codepol/plugin/no-unused-vars` now ships as a real non-test builtin JS/TS rule with both native and wrapped ESLint implementations
-  - keep `4B` open until parity validation passes for diagnostic behavior, fix behavior, and ownership reporting on current CLI/LSP surfaces
+- `4B` has now landed for the first real in-tree dual-path rule:
+  - `@codepol/plugin/no-unused-vars` now ships as a real non-test builtin JS/TS rule with both native and wrapped ESLint implementations, and the workspace service selects the native path before execution
+  - parity is now covered for ownership reporting plus diagnostic and fix behavior on the current service, daemon, CLI, and LSP surfaces
   - do not replace generic third-party ESLint or Biome ecosystems; keep them wrapped unless Codepol owns the semantics end-to-end
 - Migration gate for any future `4B` candidate:
   - diagnostic code, range, severity, and source behavior must stay stable or improve
@@ -448,7 +448,7 @@
 - Tranche-4 daemon tests must cover analyzer scorecard restore for a native-owned JS/TS rule across daemon incarnations
 
 ## Assumptions and Defaults
-- Tranche 4 executes `4A foundation` first and may stop there until a real JS/TS dual-path candidate exists in-tree.
+- Tranche 4 executed `4A foundation` first and now includes a completed first `4B` migration for `@codepol/plugin/no-unused-vars`; future candidates stay opt-in behind the same parity gate.
 - Phase 4 remains Codepol-only in scope until a later explicit decision changes the ownership matrix.
 - Fix payloads stay separate from diagnostics.
 - Session-local derived indexes are an acceptable tranche-1 tradeoff; shared-index optimization is deferred.
