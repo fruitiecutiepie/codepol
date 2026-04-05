@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { WorkspaceCodeAction } from '@codepol/core';
+import type { WorkspaceCodeAction, WorkspaceDiagnostic } from '@codepol/core';
 import type {
   WorkspaceDaemonConnectFn,
   WorkspaceDaemonDescriptor,
@@ -94,6 +94,8 @@ async function messageWaitFor<T>(
   return messages.find(predicate);
 }
 
+type ManualTimeoutHandle = ReturnType<typeof setTimeout>;
+
 function workspaceReadQueriesStubCreate(): Pick<
   WorkspaceService,
   | 'queryWorkspaceSymbols'
@@ -133,8 +135,8 @@ function workspaceReadQueriesStubCreate(): Pick<
 
 function manualTimerQueueCreate(): {
   timers: {
-    setTimeout: (callback: () => void, delayMs: number) => number;
-    clearTimeout: (handle: number | undefined) => void;
+    setTimeout: (callback: () => void, delayMs: number) => ManualTimeoutHandle;
+    clearTimeout: (handle: ManualTimeoutHandle | undefined) => void;
   };
   pendingCountGet: () => number;
   runNext: () => Promise<void>;
@@ -143,21 +145,30 @@ function manualTimerQueueCreate(): {
   const callbacks = new Map<number, () => void>();
   const queue: number[] = [];
 
+  function timeoutHandleCreate(value: number): ManualTimeoutHandle {
+    return value as unknown as ManualTimeoutHandle;
+  }
+
+  function timeoutHandleRead(handle: ManualTimeoutHandle): number {
+    return handle as unknown as number;
+  }
+
   return {
     timers: {
-      setTimeout(callback) {
+      setTimeout(callback, _delayMs) {
         const handle = nextHandle;
         nextHandle += 1;
         callbacks.set(handle, callback);
         queue.push(handle);
-        return handle;
+        return timeoutHandleCreate(handle);
       },
       clearTimeout(handle) {
         if (handle === undefined) {
           return;
         }
-        callbacks.delete(handle);
-        const index = queue.indexOf(handle);
+        const internalHandle = timeoutHandleRead(handle);
+        callbacks.delete(internalHandle);
+        const index = queue.indexOf(internalHandle);
         if (index !== -1) {
           queue.splice(index, 1);
         }

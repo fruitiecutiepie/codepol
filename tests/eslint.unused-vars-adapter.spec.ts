@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ESLint, RuleTester } from 'eslint';
+import type { Linter } from 'eslint';
 import tseslint from 'typescript-eslint';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
@@ -172,13 +173,13 @@ describe('eslint adapter with native no-unused-vars', () => {
     const shippedRule = (plugin as any).rules['no-unused-vars'];
     expect(shippedRule).toBeDefined();
 
-    const providerRules = await providerRulesConfigGet('eslint', configPath) as Record<
-      string,
-      [string, Record<string, unknown>]
-    >;
+    const providerRules = await providerRulesConfigGet(
+      'eslint',
+      configPath,
+    ) as Linter.RulesRecord;
     expect(providerRules['codepol/no-unused-vars']).toBeDefined();
 
-    const baseConfig = [
+    const baseConfig: Linter.Config[] = [
       {
         files: ['**/*.ts'],
         languageOptions: {
