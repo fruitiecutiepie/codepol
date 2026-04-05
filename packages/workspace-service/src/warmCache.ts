@@ -49,6 +49,18 @@ export type WorkspaceWarmCacheSnapshot = {
   files: string[];
   diagnostics: WorkspaceDiagnostic[];
   treeViolations: PolicyViolation[];
+  analyzerInventory?: Array<{
+    ruleId: string;
+    languages: string[];
+    wrappedPlatforms: string[];
+    hasNativeOwner: boolean;
+    ownership: 'native_preferred' | 'keep_wrapped';
+    recentNativeDiagnosticCount: number;
+    recentWrappedDiagnosticCount: number;
+    recentNativeLatencyMs: number;
+    recentWrappedLatencyMs: number;
+    fixSurfaceNotes: string[];
+  }>;
   analyzerScorecard?: Array<{
     analyzerId: string;
     platform: 'codepol_tree' | 'eslint' | 'biome' | 'ruff';

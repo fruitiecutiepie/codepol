@@ -416,6 +416,7 @@
   - JS/TS rules that expose both a tree check and a wrapped lint provider now prefer the native Codepol path before execution instead of deduping after the fact
   - wrapped-only JS/TS rules still run unchanged
   - native-owned rule failures now degrade diagnostics instead of silently falling back to wrapped output in the same analysis run
+  - each analysis generation now also records an internal JS/TS wrapped-candidate inventory with ownership, wrapped platforms, recent diagnostic counts, latency buckets, and fix-surface notes for test verification
   - analyzer scorecards persist through warm-cache restore for service and daemon tests
 - `4B` is still blocked in this repo:
   - there is still no real non-test builtin JS/TS rule shipping both native and wrapped implementations

@@ -260,6 +260,58 @@ function analyzerScorecardGet(
   );
 }
 
+function analyzerInventoryGet(
+  engine: WorkspaceServiceEngine,
+  input: {
+    clientSessionId: string;
+    workspaceId: string;
+  },
+): Array<{
+  ruleId: string;
+  languages: string[];
+  wrappedPlatforms: string[];
+  hasNativeOwner: boolean;
+  ownership: string;
+  recentNativeDiagnosticCount: number;
+  recentWrappedDiagnosticCount: number;
+  recentNativeLatencyMs: number;
+  recentWrappedLatencyMs: number;
+  fixSurfaceNotes: string[];
+}> {
+  const debugEngine = engine as unknown as {
+    clientSessions: Map<
+      string,
+      {
+        workspaces: Map<
+          string,
+          {
+            lastAnalysis?: {
+              analyzerInventory?: Array<{
+                ruleId: string;
+                languages: string[];
+                wrappedPlatforms: string[];
+                hasNativeOwner: boolean;
+                ownership: string;
+                recentNativeDiagnosticCount: number;
+                recentWrappedDiagnosticCount: number;
+                recentNativeLatencyMs: number;
+                recentWrappedLatencyMs: number;
+                fixSurfaceNotes: string[];
+              }>;
+            };
+          }
+        >;
+      }
+    >;
+  };
+  return (
+    debugEngine.clientSessions
+      .get(input.clientSessionId)
+      ?.workspaces.get(input.workspaceId)
+      ?.lastAnalysis?.analyzerInventory ?? []
+  );
+}
+
 function mockProcessPluginScriptCreate(
   projectDir: string,
   options: {
@@ -823,6 +875,27 @@ describe('workspace service integration', () => {
         skippedReason: 'native_preferred',
       }),
     );
+    expect(
+      analyzerInventoryGet(engine, {
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+      }),
+    ).toContainEqual(
+      expect.objectContaining({
+        ruleId: resolvedRuleId,
+        languages: ['typescript'],
+        wrappedPlatforms: ['biome'],
+        hasNativeOwner: true,
+        ownership: 'native_preferred',
+        recentNativeDiagnosticCount: 1,
+        recentWrappedDiagnosticCount: 0,
+        fixSurfaceNotes: expect.arrayContaining([
+          'tree_check',
+          'tree_only_code_actions',
+          'wrapped_external_fix:biome',
+        ]),
+      }),
+    );
   });
 
   it('keeps wrapped-only JS/TS analyzers active when no native owner exists', async () => {
@@ -903,6 +976,23 @@ describe('workspace service integration', () => {
         status: 'ran',
         ownedRuleIds: [`${pluginId}/${ruleId}`],
         skippedRuleIds: [],
+      }),
+    );
+    expect(
+      analyzerInventoryGet(engine, {
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+      }),
+    ).toContainEqual(
+      expect.objectContaining({
+        ruleId: `${pluginId}/${ruleId}`,
+        languages: ['typescript'],
+        wrappedPlatforms: ['biome'],
+        hasNativeOwner: false,
+        ownership: 'keep_wrapped',
+        recentNativeDiagnosticCount: 0,
+        recentWrappedDiagnosticCount: 1,
+        fixSurfaceNotes: ['wrapped_external_fix:biome'],
       }),
     );
   });
@@ -1010,6 +1100,20 @@ describe('workspace service integration', () => {
         ownedRuleIds: [],
         skippedRuleIds: [resolvedRuleId],
         skippedReason: 'native_preferred',
+      }),
+    );
+    expect(
+      analyzerInventoryGet(engine, {
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+      }),
+    ).toContainEqual(
+      expect.objectContaining({
+        ruleId: resolvedRuleId,
+        ownership: 'native_preferred',
+        recentNativeDiagnosticCount: 0,
+        recentWrappedDiagnosticCount: 0,
+        wrappedPlatforms: ['biome'],
       }),
     );
   });
@@ -1878,6 +1982,19 @@ describe('workspace service integration', () => {
         status: 'skipped',
         skippedRuleIds: [resolvedRuleId],
         skippedReason: 'native_preferred',
+      }),
+    );
+    expect(
+      analyzerInventoryGet(readerEngine, {
+        clientSessionId: restored.clientSessionId,
+        workspaceId: restored.workspaceId,
+      }),
+    ).toContainEqual(
+      expect.objectContaining({
+        ruleId: resolvedRuleId,
+        ownership: 'native_preferred',
+        wrappedPlatforms: ['biome'],
+        hasNativeOwner: true,
       }),
     );
     expect(

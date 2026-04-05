@@ -140,6 +140,21 @@ type WorkspaceAnalyzerRunResult = {
   violations: PolicyViolation[];
 };
 
+type WorkspaceAnalyzerInventoryOwnership = 'native_preferred' | 'keep_wrapped';
+
+type WorkspaceAnalyzerInventoryEntry = {
+  ruleId: string;
+  languages: string[];
+  wrappedPlatforms: string[];
+  hasNativeOwner: boolean;
+  ownership: WorkspaceAnalyzerInventoryOwnership;
+  recentNativeDiagnosticCount: number;
+  recentWrappedDiagnosticCount: number;
+  recentNativeLatencyMs: number;
+  recentWrappedLatencyMs: number;
+  fixSurfaceNotes: string[];
+};
+
 type WorkspaceDocument = {
   uri: string;
   filePath: string;
@@ -163,6 +178,7 @@ type WorkspaceIndexState = {
 };
 
 type WorkspaceAnalysis = {
+  analyzerInventory: WorkspaceAnalyzerInventoryEntry[];
   analyzerScorecard: WorkspaceAnalyzerScorecardEntry[];
   policy: PolicyFile;
   files: string[];
@@ -982,6 +998,126 @@ function workspaceLintProviderEntryIsNativePreferred(
     nativeOwnedWrappedRuleIds.has(entry.ruleId) &&
     entry.provider.languages.some(workspaceLanguageIsNativeOwnershipCandidate)
   );
+}
+
+function workspaceAnalyzerInventoryFixSurfaceNotesResolve(input: {
+  hasNativeOwner: boolean;
+  pluginRule: {
+    capabilities: {
+      fixProvider?: FixProvider;
+    };
+  };
+  wrappedPlatforms: string[];
+}): string[] {
+  const notes: string[] = [];
+  if (input.hasNativeOwner) {
+    notes.push('tree_check');
+    notes.push('tree_only_code_actions');
+  }
+  if (input.pluginRule.capabilities.fixProvider) {
+    notes.push('fix_provider');
+  }
+  for (const platform of input.wrappedPlatforms) {
+    notes.push(`wrapped_external_fix:${platform}`);
+  }
+  return notes.sort();
+}
+
+function workspaceAnalyzerInventoryBuild(input: {
+  analyzerResults: WorkspaceAnalyzerRunResult[];
+  lintProviderEntries: LintProviderEntry[];
+  pluginRulesMap: Awaited<ReturnType<typeof policyPluginsGet>> extends Result<infer T, string>
+    ? T
+    : never;
+  policy: PolicyFile;
+  ruleTargets: PolicyRuleTargetContext[];
+}): WorkspaceAnalyzerInventoryEntry[] {
+  const inventory: WorkspaceAnalyzerInventoryEntry[] = [];
+  const treeResult = input.analyzerResults.find(
+    (result) => result.scorecard.platform === 'codepol_tree',
+  );
+  const wrappedResults = input.analyzerResults.filter(
+    (result) => result.scorecard.platform !== 'codepol_tree',
+  );
+
+  for (const rule of input.policy.rules) {
+    const lookup = pluginGetForRule(input.pluginRulesMap, rule.ruleId);
+    if (!lookup) {
+      continue;
+    }
+    const wrappedPlatforms = workspaceAnalyzerRuleIdsNormalize(
+      input.lintProviderEntries
+        .filter(
+          (entry) =>
+            entry.ruleId === lookup.resolvedId &&
+            entry.provider.languages.some(workspaceLanguageIsNativeOwnershipCandidate),
+        )
+        .map((entry) => entry.provider.platform),
+    );
+    if (wrappedPlatforms.length === 0) {
+      continue;
+    }
+
+    const matchingLanguages = workspaceAnalyzerRuleIdsNormalize(
+      input.ruleTargets
+        .filter(
+          (targetContext) =>
+            policyRuleMatches(targetContext.ruleId, lookup.resolvedId) &&
+            workspaceLanguageIsNativeOwnershipCandidate(targetContext.target.language),
+        )
+        .map((targetContext) => targetContext.target.language),
+    );
+    const treeCheckProvider = lookup.plugin.pluginRule.capabilities.treeCheckProvider;
+    const hasNativeOwner =
+      Boolean(treeCheckProvider) &&
+      matchingLanguages.some((language) =>
+        treeCheckProviderSupportsLanguage(treeCheckProvider!, language),
+      );
+    const ownership: WorkspaceAnalyzerInventoryOwnership = hasNativeOwner
+      ? 'native_preferred'
+      : 'keep_wrapped';
+
+    const recentNativeDiagnosticCount =
+      hasNativeOwner && treeResult
+        ? treeResult.violations.filter((violation) =>
+            policyRuleMatches(violation.ruleId, lookup.resolvedId),
+          ).length
+        : 0;
+    const recentWrappedDiagnosticCount = wrappedResults
+      .filter((result) =>
+        result.scorecard.ownedRuleIds.includes(lookup.resolvedId),
+      )
+      .reduce((sum, result) => sum + result.scorecard.diagnosticCount, 0);
+    const recentNativeLatencyMs =
+      hasNativeOwner && treeResult && treeResult.scorecard.ownedRuleIds.includes(lookup.resolvedId)
+        ? treeResult.scorecard.latencyMs
+        : 0;
+    const recentWrappedLatencyMs = wrappedResults
+      .filter((result) =>
+        result.scorecard.ownedRuleIds.includes(lookup.resolvedId) ||
+        result.scorecard.skippedRuleIds.includes(lookup.resolvedId),
+      )
+      .reduce((sum, result) => sum + result.scorecard.latencyMs, 0);
+
+    inventory.push({
+      ruleId: lookup.resolvedId,
+      languages: matchingLanguages,
+      wrappedPlatforms,
+      hasNativeOwner,
+      ownership,
+      recentNativeDiagnosticCount,
+      recentWrappedDiagnosticCount,
+      recentNativeLatencyMs,
+      recentWrappedLatencyMs,
+      fixSurfaceNotes: workspaceAnalyzerInventoryFixSurfaceNotesResolve({
+        hasNativeOwner,
+        pluginRule: lookup.plugin.pluginRule,
+        wrappedPlatforms,
+      }),
+    });
+  }
+
+  return inventory.sort((left, right) => left.ruleId.localeCompare(right.ruleId));
 }
 
 function lintProviderEntriesCollect(
@@ -1869,6 +2005,7 @@ function workspaceWarmCacheAnalysisRestore(
   }
 
   return {
+    analyzerInventory: snapshot.analyzerInventory ?? [],
     analyzerScorecard: snapshot.analyzerScorecard ?? [],
     policy,
     files: [...snapshot.files],
@@ -2100,6 +2237,7 @@ async function workspaceWarmCacheSnapshotPersist(input: {
     files: [...input.workspaceSession.lastAnalysis.files],
     diagnostics: [...input.workspaceSession.lastAnalysis.diagnostics],
     treeViolations: [...input.workspaceSession.lastAnalysis.treeViolations],
+    analyzerInventory: [...input.workspaceSession.lastAnalysis.analyzerInventory],
     analyzerScorecard: [...input.workspaceSession.lastAnalysis.analyzerScorecard],
     featureStatus: input.workspaceSession.lastAnalysis.featureStatus,
     baseIndexState: workspaceWarmCacheBaseIndexSnapshotCreate(input.workspace.baseIndexState),
@@ -2873,6 +3011,13 @@ async function workspaceAnalysisRun(
   const analyzerIssues = analyzerResults.flatMap((result) => result.issues);
 
   const analysis: WorkspaceAnalysis = {
+    analyzerInventory: workspaceAnalyzerInventoryBuild({
+      analyzerResults,
+      lintProviderEntries,
+      pluginRulesMap,
+      policy,
+      ruleTargets,
+    }),
     analyzerScorecard: analyzerResults.map((result) => result.scorecard),
     policy,
     files,

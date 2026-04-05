@@ -185,6 +185,46 @@ function analyzerScorecardGet(
   );
 }
 
+function analyzerInventoryGet(
+  engine: WorkspaceServiceEngine,
+  input: {
+    clientSessionId: string;
+    workspaceId: string;
+  },
+): Array<{
+  ruleId: string;
+  wrappedPlatforms: string[];
+  hasNativeOwner: boolean;
+  ownership: string;
+}> {
+  const debugEngine = engine as unknown as {
+    clientSessions: Map<
+      string,
+      {
+        workspaces: Map<
+          string,
+          {
+            lastAnalysis?: {
+              analyzerInventory?: Array<{
+                ruleId: string;
+                wrappedPlatforms: string[];
+                hasNativeOwner: boolean;
+                ownership: string;
+              }>;
+            };
+          }
+        >;
+      }
+    >;
+  };
+  return (
+    debugEngine.clientSessions
+      .get(input.clientSessionId)
+      ?.workspaces.get(input.workspaceId)
+      ?.lastAnalysis?.analyzerInventory ?? []
+  );
+}
+
 function workspaceWatcherStubCreate(): {
   watcherCreate: WorkspaceWatcherCreate;
   trigger: (eventName: string, filePath: string) => void;
@@ -1269,6 +1309,19 @@ describe('workspace daemon control plane', () => {
         status: 'skipped',
         skippedRuleIds: [resolvedRuleId],
         skippedReason: 'native_preferred',
+      }),
+    );
+    expect(
+      analyzerInventoryGet(secondEngine, {
+        clientSessionId: secondRegistered.clientSessionId,
+        workspaceId: secondAttached.workspaceId,
+      }),
+    ).toContainEqual(
+      expect.objectContaining({
+        ruleId: resolvedRuleId,
+        wrappedPlatforms: ['biome'],
+        hasNativeOwner: true,
+        ownership: 'native_preferred',
       }),
     );
 
