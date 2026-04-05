@@ -1,15 +1,28 @@
 import path from 'node:path';
 import { defineConfig } from 'vitest/config';
 
+const workspaceSourceEntries = {
+  '@codepol/core': 'packages/core/src/index.ts',
+  '@codepol/plugin': 'packages/plugin/src/index.ts',
+  '@codepol/plugin-biome': 'packages/plugin-biome/src/index.ts',
+  '@codepol/plugin-eslint': 'packages/plugin-eslint/src/index.ts',
+  '@codepol/plugin-esbuild': 'packages/plugin-esbuild/src/index.ts',
+  '@codepol/plugin-ruff': 'packages/plugin-ruff/src/index.ts',
+  '@codepol/plugin-vulture': 'packages/plugin-vulture/src/index.ts',
+  '@codepol/workspace-service': 'packages/workspace-service/src/index.ts',
+};
+
+const workspaceAliases = Object.fromEntries(
+  Object.entries(workspaceSourceEntries).map(([packageName, relativePath]) => [
+    packageName,
+    path.resolve(__dirname, relativePath),
+  ]),
+);
+
 export default defineConfig({
   resolve: {
-    alias: {
-      '@codepol/plugin-biome': path.resolve(__dirname, 'packages/plugin-biome/src/index.ts'),
-      '@codepol/workspace-service': path.resolve(
-        __dirname,
-        'packages/workspace-service/src/index.ts',
-      ),
-    },
+    // Keep tests independent from built package artifacts in workspace installs.
+    alias: workspaceAliases,
   },
   test: {
     environment: 'node',

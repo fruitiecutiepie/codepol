@@ -12,7 +12,7 @@
     "dev:lsp": "node --watch --enable-source-maps apps/lsp/dist/index.js",
     "test": "pnpm build && vitest run --exclude '**/e2e.*.spec.ts'",
     "test:unit": "vitest run packages/",
-    "test:integration": "vitest run tests/ --exclude '**/e2e.*.spec.ts'",
+    "test:integration": "pnpm build && vitest run tests/ --exclude '**/e2e.*.spec.ts'",
     "test:e2e": "vitest run tests/e2e.",
     "test:watch": "vitest",
     "bench": "vitest bench",

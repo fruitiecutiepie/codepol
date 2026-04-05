@@ -8,6 +8,7 @@
  */
 
 import { bench, describe, beforeAll, afterAll } from 'vitest';
+// Benchmarks run from source in CI, so avoid relying on built workspace package entries.
 import {
   langAdd,
   parserInit,
@@ -15,7 +16,7 @@ import {
   SymbolFlags,
   type ProjectIndex,
   type SymbolId,
-} from '@codepol/core';
+} from '../index';
 import {
   benchProjectGenerate,
   benchProjectCleanup,

@@ -8,6 +8,7 @@
  */
 
 import { bench, describe, beforeAll, afterAll } from 'vitest';
+// Benchmarks run from source in CI, so avoid relying on built workspace package entries.
 import {
   langAdd,
   parserInit,
@@ -15,7 +16,7 @@ import {
   type PolicyRule,
   type PolicyCheckContext,
   type ProjectIndex,
-} from '@codepol/core';
+} from '../../core/src/index';
 import { unusedExportsCheck } from './unusedExportsCheck';
 import fs from 'node:fs';
 import {

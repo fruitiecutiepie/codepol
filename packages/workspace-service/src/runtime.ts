@@ -26,6 +26,37 @@ const BUILTIN_PLUGIN_PACKAGES = ['@codepol/plugin', '@codepol/plugin-vulture'] a
 
 let runtimeInitPromise: Promise<void> | undefined;
 
+type CoreRuntimeApi = {
+  langAdd: typeof langAdd;
+  parserInit: typeof parserInit;
+};
+
+function runtimeCoreModulesGet(): CoreRuntimeApi[] {
+  const runtimes: CoreRuntimeApi[] = [{ langAdd, parserInit }];
+  try {
+    const packagedCore = nodeRequire('@codepol/core') as Partial<CoreRuntimeApi>;
+    if (
+      typeof packagedCore.langAdd === 'function' &&
+      typeof packagedCore.parserInit === 'function'
+    ) {
+      runtimes.push(packagedCore as CoreRuntimeApi);
+    }
+  } catch {
+    // Source-loaded tests may not have built package artifacts yet.
+  }
+  return runtimes;
+}
+
+async function runtimeLanguageSupportEnsure(): Promise<void> {
+  const runtimes = runtimeCoreModulesGet();
+  for (const runtime of runtimes) {
+    runtime.langAdd({ langId: 'typescript', fileExtensions: ['.ts', '.mts', '.cts', '.js', '.mjs', '.cjs'] });
+    runtime.langAdd({ langId: 'tsx', fileExtensions: ['.tsx', '.jsx'] });
+    runtime.langAdd({ langId: 'python', fileExtensions: ['.py', '.pyw'] });
+  }
+  await Promise.all(runtimes.map((runtime) => runtime.parserInit()));
+}
+
 /**
  * Finds the package root directory for a workspace dependency. We cannot use
  * `require.resolve(pkgName + '/package.json')` because `package.json` is often not listed
@@ -154,10 +185,7 @@ export function builtinPluginArtifactPathsResolve(moduleSpecifier: string): stri
 
 export function ensureWorkspaceRuntimeReady(): Promise<void> {
   if (!runtimeInitPromise) {
-    langAdd({ langId: 'typescript', fileExtensions: ['.ts', '.mts', '.cts', '.js', '.mjs', '.cjs'] });
-    langAdd({ langId: 'tsx', fileExtensions: ['.tsx', '.jsx'] });
-    langAdd({ langId: 'python', fileExtensions: ['.py', '.pyw'] });
-    runtimeInitPromise = parserInit();
+    runtimeInitPromise = runtimeLanguageSupportEnsure();
   }
 
   return runtimeInitPromise;
