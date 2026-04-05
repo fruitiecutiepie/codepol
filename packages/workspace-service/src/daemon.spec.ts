@@ -14,6 +14,7 @@ import {
   workspaceDaemonDescriptorWrite,
   workspaceDaemonHello,
   workspaceDaemonLaunchOrConnect,
+  workspaceDaemonRuntimePathsResolve,
   WorkspaceDaemonServiceClient,
   WorkspaceDaemonSession,
   WORKSPACE_DAEMON_PROTOCOL_VERSION,
@@ -1312,6 +1313,98 @@ describe('workspace daemon control plane', () => {
     expect(startCalls).toBe(1);
     expect(second.descriptor.sessionNonce).toBe(first.descriptor.sessionNonce);
     await second.connection.close();
+  });
+
+  it('serializes parallel launcher callers behind a single daemon start', async () => {
+    const runtimeDir = tempRuntimeDirCreate();
+    tempDirs.push(runtimeDir);
+
+    let descriptor: WorkspaceDaemonDescriptor | undefined;
+    let startCalls = 0;
+    let releaseStart: (() => void) | undefined;
+    const startEntered = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    let startHasEntered = false;
+
+    const startDaemon = async () => {
+      startCalls += 1;
+      startHasEntered = true;
+      await startEntered;
+      if (!descriptor) {
+        const created = workspaceDaemonDescriptorCreate({ runtimeDir });
+        descriptor = created.descriptor;
+        workspaceDaemonDescriptorWrite(runtimeDir, descriptor);
+        liveDaemons.set(descriptor.transport.path, { descriptor });
+      }
+    };
+
+    const first = workspaceDaemonLaunchOrConnect({
+      runtimeDir,
+      client: clientIdentityCreate('client-parallel-a'),
+      connect,
+      startDaemon,
+    });
+
+    while (!startHasEntered) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    const second = workspaceDaemonLaunchOrConnect({
+      runtimeDir,
+      client: clientIdentityCreate('client-parallel-b'),
+      connect,
+      startDaemon,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(startCalls).toBe(1);
+
+    releaseStart?.();
+
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+    expect(firstResult.launched).toBe(true);
+    expect(secondResult.launched).toBe(false);
+    expect(startCalls).toBe(1);
+    expect(secondResult.descriptor.sessionNonce).toBe(firstResult.descriptor.sessionNonce);
+    await firstResult.connection.close();
+    await secondResult.connection.close();
+  });
+
+  it('recovers from a stale daemon launch lock by clearing it before start', async () => {
+    const runtimeDir = tempRuntimeDirCreate();
+    tempDirs.push(runtimeDir);
+
+    const paths = workspaceDaemonRuntimePathsResolve(runtimeDir);
+    fs.mkdirSync(paths.runtimeDir, { recursive: true });
+    fs.writeFileSync(paths.lockPath, 'stale lock', 'utf8');
+    const staleAt = new Date(Date.now() - 10_000);
+    fs.utimesSync(paths.lockPath, staleAt, staleAt);
+
+    let startedDescriptor: WorkspaceDaemonDescriptor | undefined;
+    let startCalls = 0;
+    const launched = await workspaceDaemonLaunchOrConnect({
+      runtimeDir,
+      client: clientIdentityCreate('client-stale-lock'),
+      connect,
+      lockTimeoutMs: 100,
+      startDaemon: async () => {
+        startCalls += 1;
+        const created = workspaceDaemonDescriptorCreate({ runtimeDir });
+        startedDescriptor = created.descriptor;
+        workspaceDaemonDescriptorWrite(runtimeDir, created.descriptor);
+        liveDaemons.set(created.descriptor.transport.path, {
+          descriptor: created.descriptor,
+        });
+      },
+    });
+
+    expect(startCalls).toBe(1);
+    expect(launched.launched).toBe(true);
+    expect(startedDescriptor).toBeDefined();
+    expect(launched.descriptor.sessionNonce).toBe(startedDescriptor?.sessionNonce);
+    expect(fs.existsSync(paths.lockPath)).toBe(false);
+    await launched.connection.close();
   });
 
   it('recovers from a stale descriptor by launching a fresh daemon descriptor', async () => {
