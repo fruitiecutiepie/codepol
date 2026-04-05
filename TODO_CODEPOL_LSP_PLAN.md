@@ -213,7 +213,7 @@
   - warm-up status transitions are deterministic and queryable
 
 ### Workstream 5: Persistence And Warm Start
-- Started in the repo:
+- Completed in the repo:
   - the workspace engine can now restore a validated warm-analysis snapshot on attach, rehydrate per-session ready state from daemon-owned disk-backed data, and skip replay-time warm-up when the restored snapshot is already current
   - warm-cache persistence is now filesystem-backed in the daemon runtime directory, keyed by workspace identity plus engine/build/environment identity, and it automatically discards corrupt cache files on read
   - persisted state is limited to daemon-owned disk-derived analysis/base-index metadata; overlay-derived analysis is never written, and replayed overlays still invalidate restored snapshots before foreground reads
@@ -223,6 +223,7 @@
   - warm-cache validity now also fingerprints plugin compatibility, including builtin package build artifacts, process-plugin script paths, and resolved plugin capability signatures, so daemon warm restore drops stale snapshots after plugin rebuilds or registry changes
   - index-required warm restore now also validates discovered workspace package metadata, so monorepo package-name or entry-point changes in `package.json` invalidate the cached project index before it can be reused
   - daemon-owned warm caches now derive environment identity from tool-resolution environment variables such as `PATH`, `NODE_PATH`, and active virtual-env prefixes instead of only the Node version, so non-explicit binary resolution changes invalidate cached state
+  - warm restore now has direct regression coverage that client-owned open overlays and session-scoped edit plans are not resurrected from daemon-owned cache state
 - Persist only daemon-owned workspace state:
   - base disk-derived index/cache metadata
   - workspace config/environment identity

@@ -1124,6 +1124,120 @@ describe('workspace service integration', () => {
     ).toEqual([]);
   });
 
+  it('does not persist open overlays or session-scoped edit plans across warm restore', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    const runtimeDir = tempWorkspaceCreate('codepol-workspace-cache-');
+    createdDirs.push(workspaceRoot, runtimeDir);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = workspacePathToUri(filePath);
+    const diskText = 'export interface User {\n  name: string;\n}\n';
+    const overlayText = 'export type User = {\n  name: string;\n};\n';
+    fs.writeFileSync(filePath, diskText, 'utf8');
+
+    const warmCache = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const writerService = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine({
+        warmCache,
+      }),
+    });
+    const written = await clientWorkspaceAttach(writerService, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'warm-cache-overlay-plan-writer',
+    });
+
+    const diskDiagnostics = await writerService.queryDiagnostics({
+      clientSessionId: written.clientSessionId,
+      workspaceId: written.workspaceId,
+      uri,
+    });
+    expect(diskDiagnostics).toHaveLength(1);
+
+    await writerService.openOverlay({
+      clientSessionId: written.clientSessionId,
+      workspaceId: written.workspaceId,
+      uri,
+      version: 1,
+      text: diskText,
+    });
+    const overlayActions = await writerService.queryCodeActions({
+      clientSessionId: written.clientSessionId,
+      workspaceId: written.workspaceId,
+      uri,
+      version: 1,
+      diagnosticIds: [diskDiagnostics[0]!.id],
+    });
+    expect(overlayActions).toHaveLength(1);
+
+    await writerService.updateOverlay({
+      clientSessionId: written.clientSessionId,
+      workspaceId: written.workspaceId,
+      uri,
+      version: 2,
+      text: overlayText,
+    });
+    expect(
+      await writerService.queryDiagnostics({
+        clientSessionId: written.clientSessionId,
+        workspaceId: written.workspaceId,
+        uri,
+      }),
+    ).toEqual([]);
+
+    await writerService.closeClientSession({
+      clientSessionId: written.clientSessionId,
+    });
+
+    const readerService = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine({
+        warmCache,
+      }),
+    });
+    const restored = await clientWorkspaceAttach(readerService, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'warm-cache-overlay-plan-reader',
+    });
+
+    expect(
+      await readerService.queryIndexStatus({
+        clientSessionId: restored.clientSessionId,
+        workspaceId: restored.workspaceId,
+      }),
+    ).toMatchObject({
+      workspaceId: restored.workspaceId,
+      workspaceInstanceId: restored.workspaceInstanceId,
+      status: 'ready',
+      replayState: 'pending',
+      workspaceReady: false,
+      analysisGeneration: 1,
+    });
+    expect(
+      await readerService.queryDiagnostics({
+        clientSessionId: restored.clientSessionId,
+        workspaceId: restored.workspaceId,
+        uri,
+      }),
+    ).toHaveLength(1);
+    expect(
+      await readerService.applyEditPlan({
+        clientSessionId: restored.clientSessionId,
+        workspaceId: restored.workspaceId,
+        planId: overlayActions[0]!.plan.id,
+        documentVersions: {
+          [uri]: 1,
+        },
+      }),
+    ).toEqual({
+      applied: false,
+      failureReason: 'plan_not_found',
+    });
+  });
+
   it('restores an index-required warm cache and reapplies overlay updates through the restored index', async () => {
     const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
     const runtimeDir = tempWorkspaceCreate('codepol-workspace-cache-');
