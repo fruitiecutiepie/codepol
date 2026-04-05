@@ -49,6 +49,21 @@ targets = ["src"]
 `;
 }
 
+function unusedExportsWorkspacePackagesConfigContentCreate(): string {
+  return `[[plugins]]
+id = "@codepol/plugin"
+source = { kind = "builtin" }
+
+[targets.workspace]
+language = "typescript"
+files = ["packages/*/src/**/*.ts", "apps/*/src/**/*.ts"]
+
+[[rules]]
+ruleId = "@codepol/plugin/no-unused-exports"
+targets = ["workspace"]
+`;
+}
+
 function noMixedExportsConfigContentCreate(): string {
   return `[[plugins]]
 id = "@codepol/plugin"
@@ -1219,6 +1234,110 @@ describe('workspace service integration', () => {
     expect(diagnostics[0]?.code).toBe('@codepol/plugin/no-unused-exports');
   });
 
+  it('discards an index-required warm cache when workspace package metadata changes', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    const runtimeDir = tempWorkspaceCreate('codepol-workspace-cache-');
+    createdDirs.push(workspaceRoot, runtimeDir);
+    fs.mkdirSync(path.join(workspaceRoot, 'packages/lib/src'), { recursive: true });
+    fs.mkdirSync(path.join(workspaceRoot, 'apps/web/src'), { recursive: true });
+
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'package.json'),
+      JSON.stringify({ workspaces: ['packages/*', 'apps/*'] }, null, 2),
+      'utf8',
+    );
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(
+      configPath,
+      unusedExportsWorkspacePackagesConfigContentCreate(),
+      'utf8',
+    );
+
+    const exporterPath = path.join(workspaceRoot, 'packages/lib/src/index.ts');
+    const importerPath = path.join(workspaceRoot, 'apps/web/src/app.ts');
+    const exporterUri = workspacePathToUri(exporterPath);
+
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'packages/lib/package.json'),
+      JSON.stringify(
+        {
+          name: '@acme/lib',
+          main: './dist/index.js',
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    );
+    fs.writeFileSync(exporterPath, 'export const sharedValue = 1;\n', 'utf8');
+    fs.writeFileSync(
+      importerPath,
+      "import { sharedValue } from '@acme/lib';\nexport const value = sharedValue;\n",
+      'utf8',
+    );
+
+    const warmCache = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const writerService = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine({
+        warmCache,
+      }),
+    });
+    const written = await clientWorkspaceAttach(writerService, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'warm-workspace-packages-writer',
+    });
+
+    expect(
+      await writerService.queryDiagnostics({
+        clientSessionId: written.clientSessionId,
+        workspaceId: written.workspaceId,
+        uri: exporterUri,
+      }),
+    ).toEqual([]);
+    await writerService.closeClientSession({
+      clientSessionId: written.clientSessionId,
+    });
+
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'packages/lib/package.json'),
+      JSON.stringify(
+        {
+          name: '@acme/lib-renamed',
+          main: './dist/index.js',
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    );
+
+    const readerService = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine({
+        warmCache,
+      }),
+    });
+    const restored = await clientWorkspaceAttach(readerService, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'warm-workspace-packages-reader',
+    });
+
+    expect(
+      await readerService.queryIndexStatus({
+        clientSessionId: restored.clientSessionId,
+        workspaceId: restored.workspaceId,
+      }),
+    ).toMatchObject({
+      workspaceId: restored.workspaceId,
+      workspaceInstanceId: restored.workspaceInstanceId,
+      status: 'cold',
+      replayState: 'pending',
+      workspaceReady: false,
+      analysisGeneration: 0,
+    });
+  });
+
   it('discards a stale warm cache when the disk-backed workspace state changes', async () => {
     const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
     const runtimeDir = tempWorkspaceCreate('codepol-workspace-cache-');
@@ -1363,6 +1482,94 @@ process.exit(0);
       rootPath: workspaceRoot,
       configPath,
       clientInstanceId: 'warm-cache-tool-reader',
+    });
+
+    expect(
+      await readerService.queryIndexStatus({
+        clientSessionId: restored.clientSessionId,
+        workspaceId: restored.workspaceId,
+      }),
+    ).toMatchObject({
+      workspaceId: restored.workspaceId,
+      workspaceInstanceId: restored.workspaceInstanceId,
+      status: 'cold',
+      replayState: 'pending',
+      workspaceReady: false,
+      analysisGeneration: 0,
+    });
+  });
+
+  it('discards a warm cache when a configured external tool config file changes', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    const runtimeDir = tempWorkspaceCreate('codepol-workspace-cache-');
+    createdDirs.push(workspaceRoot, runtimeDir);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+
+    const pluginId = `test-biome-config-cache-${randomUUID()}`;
+    const biomeBin = mockBiomeSuccessScriptCreate(workspaceRoot, 'mock-biome-config-cache.cjs');
+    const biomeConfigPath = path.join(workspaceRoot, 'biome.json');
+    fs.writeFileSync(biomeConfigPath, '{ "formatter": { "enabled": true } }\n', 'utf8');
+    pluginModuleRegister(pluginId, {
+      default: [
+        pluginRuleNew({
+          id: 'mock-biome',
+          capabilities: {
+            lintProviders: [
+              {
+                platform: 'biome',
+                languages: ['typescript'],
+                config: {
+                  biomeBin,
+                  configPath: './biome.json',
+                },
+              },
+            ],
+          },
+        }),
+      ],
+    });
+
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(configPath, biomeFailureConfigContentCreate(pluginId), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = workspacePathToUri(filePath);
+    fs.writeFileSync(filePath, 'export const value = 1;\n', 'utf8');
+
+    const warmCache = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const writerService = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine({
+        warmCache,
+      }),
+    });
+    const written = await clientWorkspaceAttach(writerService, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'warm-cache-tool-config-writer',
+    });
+    expect(
+      await writerService.queryDiagnostics({
+        clientSessionId: written.clientSessionId,
+        workspaceId: written.workspaceId,
+        uri,
+      }),
+    ).toEqual([]);
+
+    fs.writeFileSync(
+      biomeConfigPath,
+      '{ "formatter": { "enabled": false }, "linter": { "enabled": true } }\n',
+      'utf8',
+    );
+
+    const readerService = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine({
+        warmCache,
+      }),
+    });
+    const restored = await clientWorkspaceAttach(readerService, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'warm-cache-tool-config-reader',
     });
 
     expect(

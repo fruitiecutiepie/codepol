@@ -1067,6 +1067,21 @@ function workspaceWarmCacheFingerprintListEquals(
   );
 }
 
+function workspacePackageMapEquals(
+  left: Map<string, string>,
+  right: Map<string, string>,
+): boolean {
+  if (left.size !== right.size) {
+    return false;
+  }
+  for (const [packageName, entryPoint] of left) {
+    if (right.get(packageName) !== entryPoint) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function workspaceExternalToolPathResolve(
   workspace: WorkspaceContextState,
   candidate: string | undefined,
@@ -1108,17 +1123,21 @@ function workspaceToolFingerprintsRead(
   for (const entry of lintProviderEntries) {
     if (entry.provider.platform === 'biome') {
       const config = entry.provider.config as BiomeProviderConfig | undefined;
-      const resolved = workspaceExternalToolPathResolve(workspace, config?.biomeBin);
-      if (resolved) {
-        resolvedPaths.add(resolved);
+      for (const candidate of [config?.biomeBin, config?.configPath]) {
+        const resolved = workspaceExternalToolPathResolve(workspace, candidate);
+        if (resolved) {
+          resolvedPaths.add(resolved);
+        }
       }
       continue;
     }
     if (entry.provider.platform === 'ruff') {
       const config = entry.provider.config as RuffProviderConfig | undefined;
-      const resolved = workspaceExternalToolPathResolve(workspace, config?.ruffBin);
-      if (resolved) {
-        resolvedPaths.add(resolved);
+      for (const candidate of [config?.ruffBin, config?.configPath]) {
+        const resolved = workspaceExternalToolPathResolve(workspace, candidate);
+        if (resolved) {
+          resolvedPaths.add(resolved);
+        }
       }
     }
   }
@@ -1325,6 +1344,7 @@ async function workspaceWarmCacheSnapshotRestore(input: {
 
   try {
     const policy = input.workspace.config as PolicyFile;
+    const currentWorkspacePackages = workspacePackageMapDiscover(input.workspace.rootPath);
     const pluginRulesResult = await policyPluginsGet(policy, input.workspace.rootPath, {
       configPath: input.workspace.configPath,
     });
@@ -1419,12 +1439,27 @@ async function workspaceWarmCacheSnapshotRestore(input: {
       await input.warmCache.delete(cacheKey);
       return undefined;
     }
+    if (
+      snapshot.baseIndexState &&
+      !workspacePackageMapEquals(
+        currentWorkspacePackages,
+        new Map(snapshot.baseIndexState.workspacePackages),
+      )
+    ) {
+      await input.warmCache.delete(cacheKey);
+      return undefined;
+    }
 
     return {
       analysisGeneration: snapshot.analysisGeneration,
       workspaceIndexRequired: snapshot.workspaceIndexRequired,
       lastAnalysis: workspaceWarmCacheAnalysisRestore(input.workspace, snapshot),
-      baseIndexState: workspaceWarmCacheBaseIndexRestore(snapshot.baseIndexState),
+      baseIndexState: snapshot.baseIndexState
+        ? {
+            ...workspaceWarmCacheBaseIndexRestore(snapshot.baseIndexState)!,
+            workspacePackages: currentWorkspacePackages,
+          }
+        : undefined,
       toolFingerprints: currentToolFingerprints,
       indexState:
         snapshot.projectIndexStoreSnapshot && snapshot.baseIndexState
@@ -1436,7 +1471,7 @@ async function workspaceWarmCacheSnapshotRestore(input: {
                 capabilities: restored.index.capabilities,
                 files: [...snapshot.baseIndexState.files],
                 fileKey: snapshot.baseIndexState.fileKey,
-                workspacePackages: new Map(snapshot.baseIndexState.workspacePackages),
+                workspacePackages: currentWorkspacePackages,
               };
             })()
           : undefined,

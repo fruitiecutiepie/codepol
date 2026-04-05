@@ -219,8 +219,9 @@
   - persisted state is limited to daemon-owned disk-derived analysis/base-index metadata; overlay-derived analysis is never written, and replayed overlays still invalidate restored snapshots before foreground reads
   - index-required workspaces now persist and restore a live project-index store snapshot rather than only a cached analysis result, so restored sessions can continue incremental overlay updates without a cold index rebuild
   - daemon control-plane coverage now includes warm-start reuse across daemon incarnations, including restored `workspaceIndex` readiness and overlay updates against the restored index
-  - warm-cache validity now also fingerprints configured external tool binaries such as Biome or Ruff when they are referenced by explicit paths, and the filesystem store prunes stale build/environment cache variants for the same logical workspace
+  - warm-cache validity now also fingerprints configured external tool binaries and config files such as Biome or Ruff inputs when they are referenced by explicit paths, and the filesystem store prunes stale build/environment cache variants for the same logical workspace
   - warm-cache validity now also fingerprints plugin compatibility, including builtin package build artifacts, process-plugin script paths, and resolved plugin capability signatures, so daemon warm restore drops stale snapshots after plugin rebuilds or registry changes
+  - index-required warm restore now also validates discovered workspace package metadata, so monorepo package-name or entry-point changes in `package.json` invalidate the cached project index before it can be reused
 - Persist only daemon-owned workspace state:
   - base disk-derived index/cache metadata
   - workspace config/environment identity
