@@ -2,7 +2,7 @@
 
 ## Current Repo State
 - Tranche 1 is complete in the repo: the shared service is now a **sessionized in-process engine** with per-client overlay isolation, session-scoped edit plans, and adapter migration in `apps/lsp` and `apps/cli`.
-- Tranche 2 is the next milestone: add a **daemon control plane and long-lived host** over the same engine without widening the semantic feature surface yet.
+- Tranche 2 is complete in the repo: the **daemon control plane and long-lived host** now sit over the same engine, with reconnect, replay, invalidation, persistence, queueing/cancellation, and rollout coverage in place without widening the semantic feature surface yet.
 - Keep Phase 4 scoped to **Codepol-owned semantics only**. Do not add generic hover or generic rename that compete with `tsserver`, `Pylance`, or `Pyright`.
 - Keep `WorkspaceDiagnostic` narrow. Fixes remain surfaced through `WorkspaceCodeAction` and `WorkspaceEditPlan`, not embedded into diagnostics.
 - Keep `queryIndexStatus` as the status source of truth and expand it for daemon/readiness reporting rather than inventing a parallel status API.
@@ -37,7 +37,7 @@
   - CLI one-shot flows create an ephemeral client session, attach the workspace, run queries, then close the session.
   - Existing tests switch to the new service API directly. No compatibility shim remains.
 
-## Tranche 2: Daemon Host, Replay, and Status
+## Tranche 2: Daemon Host, Replay, and Status (Completed)
 
 ### Scope
 - Deliver a reconnect-safe daemon host over the existing sessionized engine.
@@ -248,7 +248,7 @@
 
 ### Workstream 6: Adapter Migration And Rollout
 - Add a daemon-backed client transport for `apps/lsp` and `apps/cli`.
-- Started in the repo:
+- Completed in the repo:
   - `apps/lsp/src/serviceFactory.ts` now resolves a daemon-backed `WorkspaceService` client by default, with `CODEPOL_WORKSPACE_SERVICE_MODE=in_process` as the rollout escape hatch
   - `apps/lsp` currently preserves an in-process fallback path when daemon bootstrap fails during rollout
   - `apps/cli/src/serviceFactory.ts` now resolves a daemon-backed one-shot policy-check client by default, with `CODEPOL_WORKSPACE_SERVICE_MODE=in_process` as the rollout escape hatch
@@ -256,7 +256,8 @@
   - daemon handshake compatibility failures now short-circuit as explicit errors instead of being treated as generic unhealthy-daemon retries, and the CLI/LSP factories now pass `CODEPOL_INSTALL_ID` through the `hello` expectation so mismatched runtime dirs fall back deterministically without relaunching
   - adapter coverage now proves both the default daemon path and the explicit `in_process` override for CLI and LSP, CLI daemon-mode tests now cover both one-shot check and one-shot fix behavior, and LSP daemon-backed tests now cover initialize/open/change/close diagnostics parity plus reconnect-driven diagnostics refresh after daemon restart
   - launcher coverage now proves parallel clients serialize behind one daemon start, that a stale `daemon.lock` is cleared during recovery, and that daemon startup removes a stale `daemon.sock` path before binding
-  - daemon-backed workspace integration coverage now proves two client sessions can attach to the same daemon workspace, share one base workspace identity, and still keep overlay diagnostics isolated
+  - daemon-backed workspace integration coverage now proves two client sessions can attach to the same daemon workspace, share one base workspace identity, keep overlay diagnostics isolated, rebuild shared disk-backed state after watched invalidation without leaking overlays, restore warm-cache state while still letting replayed overlays win, and expose `cold -> warming -> ready` status transitions from `queryIndexStatus` during daemon-owned background warm-up
+  - broad tranche-2 verification now runs the daemon protocol, workspace integration, LSP adapter, and CLI adapter suites together
 - Keep the adapter boundary narrow:
   - adapters own transport/bootstrap/reconnect logic
   - the shared engine still owns workspace/session semantics
@@ -293,6 +294,7 @@
   - daemon restart causes re-registration, replay, and diagnostics refresh instead of silent stale continuity
 
 ### Tranche 2 Is Done When
+- Status: completed in the repo.
 - A single shared daemon can be discovered, launched, locked, and handshaken by multiple clients.
 - LSP and CLI can reconnect by re-registering, re-attaching, replaying overlays, and waiting for replay completion.
 - Watcher-driven invalidation and background warm-up operate inside the daemon workspace lifecycle.

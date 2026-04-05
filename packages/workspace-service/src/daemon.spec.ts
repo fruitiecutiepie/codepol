@@ -24,6 +24,7 @@ import {
   WorkspaceServiceEngine,
   workspaceWarmCacheFsStoreCreate,
   type WorkspaceService,
+  type WorkspaceWatcherCreate,
 } from './index.js';
 
 function tempRuntimeDirCreate(): string {
@@ -73,6 +74,49 @@ files = ["src/**/*.ts"]
 ruleId = "@codepol/plugin/no-unused-exports"
 targets = ["src"]
 `;
+}
+
+function workspaceWatcherStubCreate(): {
+  watcherCreate: WorkspaceWatcherCreate;
+  trigger: (eventName: string, filePath: string) => void;
+} {
+  let listener: ((eventName: string, filePath: string) => void) | undefined;
+  const watcher = {
+    on(_event: 'all', nextListener: (eventName: string, filePath: string) => void) {
+      listener = nextListener;
+      return watcher;
+    },
+    async close() {},
+  };
+  return {
+    watcherCreate: () => watcher,
+    trigger(eventName: string, filePath: string) {
+      listener?.(eventName, filePath);
+    },
+  };
+}
+
+function backgroundTaskQueueCreate(): {
+  schedule: (task: () => Promise<void>) => void;
+  pendingCountGet: () => number;
+  runNext: () => Promise<void>;
+} {
+  const tasks: Array<() => Promise<void>> = [];
+  return {
+    schedule(task) {
+      tasks.push(task);
+    },
+    pendingCountGet() {
+      return tasks.length;
+    },
+    async runNext() {
+      const next = tasks.shift();
+      if (!next) {
+        throw new Error('No background task queued');
+      }
+      await next();
+    },
+  };
 }
 
 describe('workspace daemon control plane', () => {
@@ -472,6 +516,424 @@ describe('workspace daemon control plane', () => {
 
     await writer.close();
     await reader.close();
+  });
+
+  it('rebuilds shared daemon base state after a watched disk invalidation without leaking overlays', async () => {
+    const runtimeDir = tempRuntimeDirCreate();
+    tempDirs.push(runtimeDir);
+
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-daemon-workspace-'));
+    tempDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = workspacePathToUri(filePath);
+    fs.writeFileSync(
+      filePath,
+      'export interface User {\n  name: string;\n}\n',
+      'utf8',
+    );
+
+    const watcher = workspaceWatcherStubCreate();
+    const engine = new WorkspaceServiceEngine({
+      watcherCreate: watcher.watcherCreate,
+    });
+    const { descriptor } = workspaceDaemonDescriptorCreate({ runtimeDir });
+    workspaceDaemonDescriptorWrite(runtimeDir, descriptor);
+    liveDaemons.set(descriptor.transport.path, { descriptor, service: engine });
+
+    const writer = await daemonServiceClientCreate({
+      descriptor,
+      clientInstanceId: 'daemon-watch-writer',
+    });
+    const reader = await daemonServiceClientCreate({
+      descriptor,
+      clientInstanceId: 'daemon-watch-reader',
+    });
+
+    const writerRegistered = await writer.registerClientSession({
+      clientKind: 'test',
+      clientInstanceId: 'daemon-watch-writer',
+      clientSessionId: 'daemon-watch-writer-session',
+    });
+    const readerRegistered = await reader.registerClientSession({
+      clientKind: 'test',
+      clientInstanceId: 'daemon-watch-reader',
+      clientSessionId: 'daemon-watch-reader-session',
+    });
+
+    const writerAttached = await writer.attachWorkspace({
+      clientSessionId: writerRegistered.clientSessionId,
+      rootPath: workspaceRoot,
+      configPath,
+    });
+    const readerAttached = await reader.attachWorkspace({
+      clientSessionId: readerRegistered.clientSessionId,
+      rootPath: workspaceRoot,
+      configPath,
+    });
+
+    expect(readerAttached.workspaceId).toBe(writerAttached.workspaceId);
+    expect(readerAttached.workspaceInstanceId).toBe(writerAttached.workspaceInstanceId);
+
+    await writer.completeReplay({
+      clientSessionId: writerRegistered.clientSessionId,
+      workspaceId: writerAttached.workspaceId,
+      workspaceInstanceId: writerAttached.workspaceInstanceId,
+    });
+    await reader.completeReplay({
+      clientSessionId: readerRegistered.clientSessionId,
+      workspaceId: readerAttached.workspaceId,
+      workspaceInstanceId: readerAttached.workspaceInstanceId,
+    });
+
+    expect(
+      await reader.queryDiagnostics({
+        clientSessionId: readerRegistered.clientSessionId,
+        workspaceId: readerAttached.workspaceId,
+        uri,
+      }),
+    ).toHaveLength(1);
+    expect(
+      await reader.queryIndexStatus({
+        clientSessionId: readerRegistered.clientSessionId,
+        workspaceId: readerAttached.workspaceId,
+      }),
+    ).toMatchObject({
+      workspaceId: readerAttached.workspaceId,
+      workspaceInstanceId: readerAttached.workspaceInstanceId,
+      status: 'ready',
+      replayState: 'applied',
+      analysisGeneration: 1,
+    });
+
+    await writer.openOverlay({
+      clientSessionId: writerRegistered.clientSessionId,
+      workspaceId: writerAttached.workspaceId,
+      uri,
+      version: 1,
+      text: 'export interface User {\n  name: string;\n  age: number;\n}\n',
+    });
+
+    fs.writeFileSync(
+      filePath,
+      'export type User = {\n  name: string;\n};\n',
+      'utf8',
+    );
+    watcher.trigger('change', filePath);
+
+    expect(
+      await reader.queryIndexStatus({
+        clientSessionId: readerRegistered.clientSessionId,
+        workspaceId: readerAttached.workspaceId,
+      }),
+    ).toMatchObject({
+      workspaceId: readerAttached.workspaceId,
+      workspaceInstanceId: readerAttached.workspaceInstanceId,
+      status: 'cold',
+      replayState: 'applied',
+      analysisGeneration: 1,
+    });
+
+    expect(
+      await reader.queryDiagnostics({
+        clientSessionId: readerRegistered.clientSessionId,
+        workspaceId: readerAttached.workspaceId,
+        uri,
+      }),
+    ).toEqual([]);
+    expect(
+      await reader.queryIndexStatus({
+        clientSessionId: readerRegistered.clientSessionId,
+        workspaceId: readerAttached.workspaceId,
+      }),
+    ).toMatchObject({
+      workspaceId: readerAttached.workspaceId,
+      workspaceInstanceId: readerAttached.workspaceInstanceId,
+      status: 'ready',
+      replayState: 'applied',
+      analysisGeneration: 2,
+    });
+
+    const writerDiagnostics = await writer.queryDiagnostics({
+      clientSessionId: writerRegistered.clientSessionId,
+      workspaceId: writerAttached.workspaceId,
+      uri,
+    });
+    expect(writerDiagnostics).toHaveLength(1);
+    expect(writerDiagnostics[0]?.code).toBe('@codepol/plugin/no-interface');
+
+    await writer.close();
+    await reader.close();
+  });
+
+  it('reports replay pending and background warm-up status through the daemon workspace lifecycle', async () => {
+    const runtimeDir = tempRuntimeDirCreate();
+    tempDirs.push(runtimeDir);
+
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-daemon-workspace-'));
+    tempDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = workspacePathToUri(filePath);
+    fs.writeFileSync(
+      filePath,
+      'export interface User {\n  name: string;\n}\n',
+      'utf8',
+    );
+
+    const backgroundTasks = backgroundTaskQueueCreate();
+    const engine = new WorkspaceServiceEngine({
+      backgroundWarmup: true,
+      backgroundTaskSchedule: backgroundTasks.schedule,
+    });
+    const { descriptor } = workspaceDaemonDescriptorCreate({ runtimeDir });
+    workspaceDaemonDescriptorWrite(runtimeDir, descriptor);
+    liveDaemons.set(descriptor.transport.path, { descriptor, service: engine });
+
+    const service = await daemonServiceClientCreate({
+      descriptor,
+      clientInstanceId: 'daemon-background-warmup-client',
+    });
+    const registered = await service.registerClientSession({
+      clientKind: 'test',
+      clientInstanceId: 'daemon-background-warmup-client',
+      clientSessionId: 'daemon-background-warmup-session',
+    });
+    const attached = await service.attachWorkspace({
+      clientSessionId: registered.clientSessionId,
+      rootPath: workspaceRoot,
+      configPath,
+    });
+
+    expect(
+      await service.queryIndexStatus({
+        clientSessionId: registered.clientSessionId,
+        workspaceId: attached.workspaceId,
+      }),
+    ).toMatchObject({
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+      status: 'cold',
+      replayState: 'pending',
+      replayEpoch: 0,
+      workspaceReady: false,
+      analysisGeneration: 0,
+      featureStatus: {
+        diagnostics: { readiness: 'cold' },
+        codeActions: { readiness: 'cold' },
+        editPlans: { readiness: 'cold' },
+        workspaceIndex: {
+          readiness: 'ready',
+          detail: 'Not required by current policy',
+        },
+      },
+    });
+
+    await service.completeReplay({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+    });
+
+    expect(backgroundTasks.pendingCountGet()).toBe(1);
+    expect(
+      await service.queryIndexStatus({
+        clientSessionId: registered.clientSessionId,
+        workspaceId: attached.workspaceId,
+      }),
+    ).toMatchObject({
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+      status: 'warming',
+      replayState: 'applied',
+      replayEpoch: 1,
+      workspaceReady: false,
+      analysisGeneration: 0,
+      featureStatus: {
+        diagnostics: { readiness: 'warming' },
+        codeActions: { readiness: 'warming' },
+        editPlans: { readiness: 'warming' },
+        workspaceIndex: {
+          readiness: 'ready',
+          detail: 'Not required by current policy',
+        },
+      },
+    });
+
+    await backgroundTasks.runNext();
+
+    expect(
+      await service.queryIndexStatus({
+        clientSessionId: registered.clientSessionId,
+        workspaceId: attached.workspaceId,
+      }),
+    ).toMatchObject({
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+      status: 'ready',
+      replayState: 'applied',
+      replayEpoch: 1,
+      workspaceReady: true,
+      analysisGeneration: 1,
+      featureStatus: {
+        diagnostics: { readiness: 'ready' },
+        codeActions: { readiness: 'ready' },
+        editPlans: { readiness: 'ready' },
+        workspaceIndex: {
+          readiness: 'ready',
+          detail: 'Not required by current policy',
+        },
+      },
+    });
+    expect(
+      await service.queryDiagnostics({
+        clientSessionId: registered.clientSessionId,
+        workspaceId: attached.workspaceId,
+        uri,
+      }),
+    ).toHaveLength(1);
+
+    await service.close();
+  });
+
+  it('restores a warm cache across daemon incarnations and lets replayed overlays win over it', async () => {
+    const runtimeDir = tempRuntimeDirCreate();
+    tempDirs.push(runtimeDir);
+
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-daemon-workspace-'));
+    tempDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = workspacePathToUri(filePath);
+    fs.writeFileSync(
+      filePath,
+      'export interface User {\n  name: string;\n}\n',
+      'utf8',
+    );
+
+    const warmCache = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const firstDescriptor = workspaceDaemonDescriptorCreate({ runtimeDir }).descriptor;
+    liveDaemons.set(firstDescriptor.transport.path, {
+      descriptor: firstDescriptor,
+      service: new WorkspaceServiceEngine({ warmCache }),
+    });
+
+    const firstService = await daemonServiceClientCreate({
+      descriptor: firstDescriptor,
+      clientInstanceId: 'daemon-warm-cache-writer',
+    });
+    const firstRegistered = await firstService.registerClientSession({
+      clientKind: 'test',
+      clientInstanceId: 'daemon-warm-cache-writer',
+      clientSessionId: 'daemon-warm-cache-writer-session',
+    });
+    const firstAttached = await firstService.attachWorkspace({
+      clientSessionId: firstRegistered.clientSessionId,
+      rootPath: workspaceRoot,
+      configPath,
+    });
+    await firstService.subscribeDiagnostics({
+      clientSessionId: firstRegistered.clientSessionId,
+      workspaceId: firstAttached.workspaceId,
+      workspaceInstanceId: firstAttached.workspaceInstanceId,
+      scope: 'workspace',
+    });
+    await firstService.completeReplay({
+      clientSessionId: firstRegistered.clientSessionId,
+      workspaceId: firstAttached.workspaceId,
+      workspaceInstanceId: firstAttached.workspaceInstanceId,
+    });
+
+    expect(
+      await firstService.queryDiagnostics({
+        clientSessionId: firstRegistered.clientSessionId,
+        workspaceId: firstAttached.workspaceId,
+        uri,
+      }),
+    ).toHaveLength(1);
+    await firstService.close();
+
+    const secondDescriptor = workspaceDaemonDescriptorCreate({ runtimeDir }).descriptor;
+    liveDaemons.set(secondDescriptor.transport.path, {
+      descriptor: secondDescriptor,
+      service: new WorkspaceServiceEngine({ warmCache }),
+    });
+
+    const secondService = await daemonServiceClientCreate({
+      descriptor: secondDescriptor,
+      clientInstanceId: 'daemon-warm-cache-reader',
+    });
+    const secondRegistered = await secondService.registerClientSession({
+      clientKind: 'test',
+      clientInstanceId: 'daemon-warm-cache-reader',
+      clientSessionId: 'daemon-warm-cache-reader-session',
+    });
+    const secondAttached = await secondService.attachWorkspace({
+      clientSessionId: secondRegistered.clientSessionId,
+      rootPath: workspaceRoot,
+      configPath,
+    });
+    await secondService.subscribeDiagnostics({
+      clientSessionId: secondRegistered.clientSessionId,
+      workspaceId: secondAttached.workspaceId,
+      workspaceInstanceId: secondAttached.workspaceInstanceId,
+      scope: 'workspace',
+    });
+
+    expect(
+      await secondService.queryIndexStatus({
+        clientSessionId: secondRegistered.clientSessionId,
+        workspaceId: secondAttached.workspaceId,
+      }),
+    ).toMatchObject({
+      workspaceId: secondAttached.workspaceId,
+      workspaceInstanceId: secondAttached.workspaceInstanceId,
+      status: 'ready',
+      replayState: 'pending',
+      workspaceReady: false,
+      analysisGeneration: 1,
+      featureStatus: {
+        diagnostics: { readiness: 'ready' },
+        codeActions: { readiness: 'ready' },
+        editPlans: { readiness: 'ready' },
+        workspaceIndex: {
+          readiness: 'ready',
+          detail: 'Not required by current policy',
+        },
+      },
+    });
+
+    await secondService.openOverlay({
+      clientSessionId: secondRegistered.clientSessionId,
+      workspaceId: secondAttached.workspaceId,
+      uri,
+      version: 1,
+      text: 'export type User = {\n  name: string;\n};\n',
+    });
+    await secondService.completeReplay({
+      clientSessionId: secondRegistered.clientSessionId,
+      workspaceId: secondAttached.workspaceId,
+      workspaceInstanceId: secondAttached.workspaceInstanceId,
+    });
+
+    expect(
+      await secondService.queryDiagnostics({
+        clientSessionId: secondRegistered.clientSessionId,
+        workspaceId: secondAttached.workspaceId,
+        uri,
+      }),
+    ).toEqual([]);
+
+    await secondService.close();
   });
 
   it('restores a warm index-backed workspace across daemon incarnations', async () => {
