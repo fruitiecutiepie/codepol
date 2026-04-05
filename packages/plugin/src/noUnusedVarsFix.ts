@@ -45,7 +45,10 @@ function removeWholeStatement(
   sourceFile: ts.SourceFile,
   source: string,
 ): PolicyViolationFix {
-  const start = statement.getStart(sourceFile);
+  const statementStart = statement.getStart(sourceFile);
+  const lineStart = source.lastIndexOf('\n', statementStart - 1) + 1;
+  const prefix = source.slice(lineStart, statementStart);
+  const start = /^[ \t]*$/u.test(prefix) ? lineStart : statementStart;
   const end = statementTrailingNewlineExtend(source, statement.getEnd());
   return { byteRange: { start, end }, text: '' };
 }

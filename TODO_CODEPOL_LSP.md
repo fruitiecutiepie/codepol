@@ -1057,7 +1057,7 @@ Current status: in-process integration coverage now includes multi-client overla
 - [ ] Inventory which wrapped analyzers are worth replacing with native Codepol analysis.
 - [ ] Replace analyzers only where Codepol can preserve or improve diagnostic quality and fix support.
 
-Current status: the workspace service now resolves JS/TS native-vs-wrapped ownership before execution, runs tree/native and wrapped analyzers through one internal scorecarded contract, records a per-analysis internal wrapped-candidate inventory for latency and parity tracking, preserves wrapped-only behavior, and degrades diagnostics when a native-owned rule fails instead of silently falling back to wrapped output. The current repo still does not ship a real non-test JS/TS builtin rule with both native and wrapped implementations, so tranche 4B remains blocked on a future candidate rather than being forced by placeholder scope.
+Current status: the workspace service now resolves JS/TS native-vs-wrapped ownership before execution, runs tree/native and wrapped analyzers through one internal scorecarded contract, records a per-analysis internal wrapped-candidate inventory for latency and parity tracking, preserves wrapped-only behavior, and degrades diagnostics when a native-owned rule fails instead of silently falling back to wrapped output. The repo now ships `@codepol/plugin/no-unused-vars` as a real non-test JS/TS builtin with both native and wrapped ESLint implementations, so tranche 4B is unblocked for parity validation rather than waiting on a future candidate.
 
 ## Acceptance Criteria For An MVP
 

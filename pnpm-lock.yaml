@@ -195,6 +195,9 @@ importers:
 
   packages/plugin:
     dependencies:
+      '@codepol/plugin-eslint':
+        specifier: workspace:^
+        version: link:../plugin-eslint
       '@codepol/plugin-vulture':
         specifier: workspace:^
         version: link:../plugin-vulture

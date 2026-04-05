@@ -65,6 +65,21 @@ targets = ["workspace"]
 `;
 }
 
+function noUnusedVarsConfigContentCreate(): string {
+  return `[[plugins]]
+id = "@codepol/plugin"
+source = { kind = "builtin" }
+
+[targets.src]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[[rules]]
+ruleId = "@codepol/plugin/no-unused-vars"
+targets = ["src"]
+`;
+}
+
 function noMixedExportsConfigContentCreate(): string {
   return `[[plugins]]
 id = "@codepol/plugin"
@@ -893,6 +908,93 @@ describe('workspace service integration', () => {
           'tree_check',
           'tree_only_code_actions',
           'wrapped_external_fix:biome',
+        ]),
+      }),
+    );
+  });
+
+  it('treats the shipped no-unused-vars builtin as native-preferred over eslint', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = workspacePathToUri(filePath);
+    fs.writeFileSync(
+      filePath,
+      `function demo() {
+  const unused = 1;
+  return 1;
+}
+
+demo();
+`,
+      'utf8',
+    );
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(configPath, noUnusedVarsConfigContentCreate(), 'utf8');
+
+    const engine = new WorkspaceServiceEngine();
+    const service = workspaceServiceCreate({ engine });
+    const attached = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'builtin-no-unused-vars-client',
+    });
+
+    const diagnostics = await service.queryDiagnostics({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      uri,
+    });
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        source: 'codepol',
+        code: '@codepol/plugin/no-unused-vars',
+        message: "'unused' is assigned a value but never used.",
+      }),
+    ]);
+
+    const scorecard = analyzerScorecardGet(engine, {
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+    });
+    expect(scorecard).toContainEqual(
+      expect.objectContaining({
+        analyzerId: 'codepol/tree',
+        platform: 'codepol_tree',
+        status: 'ran',
+        ownedRuleIds: ['@codepol/plugin/no-unused-vars'],
+      }),
+    );
+    expect(scorecard).toContainEqual(
+      expect.objectContaining({
+        analyzerId: 'eslint',
+        platform: 'eslint',
+        status: 'skipped',
+        ownedRuleIds: [],
+        skippedRuleIds: ['@codepol/plugin/no-unused-vars'],
+        skippedReason: 'native_preferred',
+      }),
+    );
+    expect(
+      analyzerInventoryGet(engine, {
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+      }),
+    ).toContainEqual(
+      expect.objectContaining({
+        ruleId: '@codepol/plugin/no-unused-vars',
+        languages: ['typescript'],
+        wrappedPlatforms: ['eslint'],
+        hasNativeOwner: true,
+        ownership: 'native_preferred',
+        recentNativeDiagnosticCount: 1,
+        recentWrappedDiagnosticCount: 0,
+        fixSurfaceNotes: expect.arrayContaining([
+          'tree_check',
+          'tree_only_code_actions',
+          'wrapped_external_fix:eslint',
         ]),
       }),
     );

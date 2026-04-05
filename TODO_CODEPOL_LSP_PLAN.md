@@ -420,8 +420,9 @@
   - native-owned rule failures now degrade diagnostics instead of silently falling back to wrapped output in the same analysis run
   - each analysis generation now also records an internal JS/TS wrapped-candidate inventory with ownership, wrapped platforms, recent diagnostic counts, latency buckets, and fix-surface notes for test verification
   - analyzer scorecards persist through warm-cache restore for service and daemon tests
-- `4B` is still blocked in this repo:
-  - there is still no real non-test builtin JS/TS rule shipping both native and wrapped implementations
+- `4B` is now unblocked in this repo:
+  - `@codepol/plugin/no-unused-vars` now ships as a real non-test builtin JS/TS rule with both native and wrapped ESLint implementations
+  - keep `4B` open until parity validation passes for diagnostic behavior, fix behavior, and ownership reporting on current CLI/LSP surfaces
   - do not replace generic third-party ESLint or Biome ecosystems; keep them wrapped unless Codepol owns the semantics end-to-end
 - Migration gate for any future `4B` candidate:
   - diagnostic code, range, severity, and source behavior must stay stable or improve

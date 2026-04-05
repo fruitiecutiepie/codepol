@@ -37,6 +37,23 @@ describe('noUnusedVarsViolationFixGet', () => {
     expect(out).toBe(`const keep = 2;\n`);
   });
 
+  it('removes an indented unused const statement without leaving doubled indentation', () => {
+    const source = `function demo() {\n  const unused = 1;\n  const used = 2;\n  return used;\n}\n`;
+    const filePath = '/tmp/unused.ts';
+    const pos = source.indexOf('unused');
+    const fix = noUnusedVarsViolationFixGet(
+      source,
+      filePath,
+      symbolStub('unused', pos, pos + 'unused'.length),
+    );
+    expect(fix).toBeDefined();
+    const out =
+      source.slice(0, fix!.byteRange.start) +
+      fix!.text +
+      source.slice(fix!.byteRange.end);
+    expect(out).toBe(`function demo() {\n  const used = 2;\n  return used;\n}\n`);
+  });
+
   it('prefixes an unused parameter with underscore', () => {
     const source = `function f(unused: number) { return 1; }\n`;
     const filePath = '/tmp/unused.ts';

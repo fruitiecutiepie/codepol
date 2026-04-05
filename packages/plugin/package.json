@@ -20,6 +20,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@codepol/plugin-eslint": "workspace:^",
     "@codepol/plugin-vulture": "workspace:^",
     "minimatch": "^10.1.1"
   },
