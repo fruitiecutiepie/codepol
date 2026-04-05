@@ -24,9 +24,9 @@ export type LspWorkspaceServiceResolvedInfo =
 export function lspWorkspaceServiceModeGet(
   env: NodeJS.ProcessEnv = process.env,
 ): LspWorkspaceServiceMode {
-  return env.CODEPOL_WORKSPACE_SERVICE_MODE === 'daemon'
-    ? 'daemon'
-    : 'in_process';
+  return env.CODEPOL_WORKSPACE_SERVICE_MODE === 'in_process'
+    ? 'in_process'
+    : 'daemon';
 }
 
 function daemonEntryPathResolve(): string {

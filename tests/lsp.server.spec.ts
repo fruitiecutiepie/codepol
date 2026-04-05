@@ -438,7 +438,7 @@ describe('CodepolLspServer', () => {
     expect(publish?.params.diagnostics).toHaveLength(1);
   });
 
-  it('resolves a daemon-backed workspace service when daemon mode is enabled', async () => {
+  it('resolves a daemon-backed workspace service by default', async () => {
     const runtimeDir = tempWorkspaceCreate('codepol-lsp-daemon-runtime-');
     createdDirs.push(runtimeDir);
 
@@ -461,7 +461,6 @@ describe('CodepolLspServer', () => {
     const service = await lspWorkspaceServiceResolve({
       env: {
         ...process.env,
-        CODEPOL_WORKSPACE_SERVICE_MODE: 'daemon',
         CODEPOL_DAEMON_RUNTIME_DIR: runtimeDir,
       },
       clientInstanceId: 'lsp-resolve-test',
@@ -495,7 +494,56 @@ describe('CodepolLspServer', () => {
     expect(diagnostics).toHaveLength(1);
   });
 
-  it('falls back to an in-process workspace service when daemon mode startup fails', async () => {
+  it('uses an in-process workspace service when explicitly requested', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-lsp-in-process-workspace-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(workspaceRoot, 'codepol.toml'), noInterfaceConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = pathToFileURL(filePath).href;
+    fs.writeFileSync(filePath, 'export interface User {\n  name: string;\n}\n', 'utf8');
+
+    let startDaemonCalls = 0;
+    const resolved: Array<{ mode: string }> = [];
+    const service = await lspWorkspaceServiceResolve({
+      env: {
+        ...process.env,
+        CODEPOL_WORKSPACE_SERVICE_MODE: 'in_process',
+      },
+      clientInstanceId: 'lsp-in-process-test',
+      startDaemon: async () => {
+        startDaemonCalls += 1;
+      },
+      onResolved: (info) => {
+        resolved.push({
+          mode: info.mode,
+        });
+      },
+    });
+
+    const registered = await service.registerClientSession({
+      clientKind: 'lsp',
+      clientInstanceId: 'resolved-service-client',
+    });
+    const attached = await service.attachWorkspace({
+      clientSessionId: registered.clientSessionId,
+      rootPath: workspaceRoot,
+      configPath: path.join(workspaceRoot, 'codepol.toml'),
+    });
+    const diagnostics = await service.queryDiagnostics({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      uri,
+    });
+
+    expect(startDaemonCalls).toBe(0);
+    expect(resolved).toEqual([{ mode: 'in_process' }]);
+    expect(registered.daemonSessionId).toBeDefined();
+    expect(diagnostics).toHaveLength(1);
+  });
+
+  it('falls back to an in-process workspace service when daemon startup fails', async () => {
     const runtimeDir = tempWorkspaceCreate('codepol-lsp-daemon-runtime-');
     createdDirs.push(runtimeDir);
 
@@ -512,7 +560,6 @@ describe('CodepolLspServer', () => {
     const service = await lspWorkspaceServiceResolve({
       env: {
         ...process.env,
-        CODEPOL_WORKSPACE_SERVICE_MODE: 'daemon',
         CODEPOL_DAEMON_RUNTIME_DIR: runtimeDir,
       },
       clientInstanceId: 'lsp-fallback-test',
@@ -576,7 +623,6 @@ describe('CodepolLspServer', () => {
     const service = await lspWorkspaceServiceResolve({
       env: {
         ...process.env,
-        CODEPOL_WORKSPACE_SERVICE_MODE: 'daemon',
         CODEPOL_DAEMON_RUNTIME_DIR: runtimeDir,
         CODEPOL_INSTALL_ID: 'insiders',
       },

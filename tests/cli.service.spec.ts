@@ -73,7 +73,7 @@ describe('CLI daemon policy checks', () => {
     }
   });
 
-  it('uses a daemon-backed policy check when daemon mode is enabled', async () => {
+  it('uses a daemon-backed policy check by default', async () => {
     const runtimeDir = tempWorkspaceCreate('codepol-cli-daemon-runtime-');
     createdDirs.push(runtimeDir);
 
@@ -121,7 +121,6 @@ describe('CLI daemon policy checks', () => {
       cwd: workspaceRoot,
       env: {
         ...process.env,
-        CODEPOL_WORKSPACE_SERVICE_MODE: 'daemon',
         CODEPOL_DAEMON_RUNTIME_DIR: runtimeDir,
       },
       connect,
@@ -138,6 +137,53 @@ describe('CLI daemon policy checks', () => {
 
     expect(result).toEqual(expectedResult);
     expect(resolved).toEqual([{ mode: 'daemon', launched: false }]);
+  });
+
+  it('uses an in-process policy check when explicitly requested', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-cli-in-process-workspace-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'codepol.toml'),
+      noInterfaceConfigContentCreate(),
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'eslint.config.mjs'),
+      `export default [{ files: ['**/*.ts'], rules: {} }];\n`,
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'src', 'app.ts'),
+      'export interface User {\n  name: string;\n}\n',
+      'utf8',
+    );
+
+    let startDaemonCalls = 0;
+    const resolved: Array<{ mode: string }> = [];
+    const result = await policyCheck({
+      configPath: path.join(workspaceRoot, 'codepol.toml'),
+      eslintConfigPath: path.join(workspaceRoot, 'eslint.config.mjs'),
+      fix: false,
+      cwd: workspaceRoot,
+      env: {
+        ...process.env,
+        CODEPOL_WORKSPACE_SERVICE_MODE: 'in_process',
+      },
+      startDaemon: async () => {
+        startDaemonCalls += 1;
+      },
+      onResolved: (info) => {
+        resolved.push({
+          mode: info.mode,
+        });
+      },
+    });
+
+    expect(startDaemonCalls).toBe(0);
+    expect(resolved).toEqual([{ mode: 'in_process' }]);
+    expect(result.violations).toHaveLength(1);
+    expect(result.violations[0]?.ruleId).toBe('@codepol/plugin/no-interface');
   });
 
   it('falls back to in-process policy checks when daemon startup fails', async () => {
@@ -171,7 +217,6 @@ describe('CLI daemon policy checks', () => {
       cwd: workspaceRoot,
       env: {
         ...process.env,
-        CODEPOL_WORKSPACE_SERVICE_MODE: 'daemon',
         CODEPOL_DAEMON_RUNTIME_DIR: runtimeDir,
       },
       startDaemon: async () => {
@@ -233,7 +278,6 @@ describe('CLI daemon policy checks', () => {
       cwd: workspaceRoot,
       env: {
         ...process.env,
-        CODEPOL_WORKSPACE_SERVICE_MODE: 'daemon',
         CODEPOL_DAEMON_RUNTIME_DIR: runtimeDir,
         CODEPOL_INSTALL_ID: 'insiders',
       },

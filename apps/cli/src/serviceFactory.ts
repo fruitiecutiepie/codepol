@@ -28,9 +28,9 @@ export type CliPolicyChecker = {
 export function cliWorkspaceServiceModeGet(
   env: NodeJS.ProcessEnv = process.env,
 ): CliWorkspaceServiceMode {
-  return env.CODEPOL_WORKSPACE_SERVICE_MODE === 'daemon'
-    ? 'daemon'
-    : 'in_process';
+  return env.CODEPOL_WORKSPACE_SERVICE_MODE === 'in_process'
+    ? 'in_process'
+    : 'daemon';
 }
 
 function daemonEntryPathResolve(): string {
