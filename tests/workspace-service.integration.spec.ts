@@ -81,6 +81,26 @@ providers = ["biome"]
 `;
 }
 
+function processPluginConfigContentCreate(pluginScriptPath: string): string {
+  return `[[plugins]]
+id = "fixture/process-plugin"
+
+[plugins.source]
+kind = "process"
+command = ${JSON.stringify(process.execPath)}
+args = [${JSON.stringify(pluginScriptPath)}]
+timeoutMs = 5000
+
+[targets.src]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[[rules]]
+ruleId = "fixture/process-plugin/no-todo-comment"
+targets = ["src"]
+`;
+}
+
 function mockBiomeFailureScriptCreate(projectDir: string): string {
   const biomeBin = path.join(projectDir, 'mock-biome-fail.cjs');
   fs.writeFileSync(
@@ -93,6 +113,80 @@ process.exit(2);
   );
   fs.chmodSync(biomeBin, 0o755);
   return biomeBin;
+}
+
+function mockBiomeSuccessScriptCreate(projectDir: string, fileName = 'mock-biome-ok.cjs'): string {
+  const biomeBin = path.join(projectDir, fileName);
+  fs.writeFileSync(
+    biomeBin,
+    `#!/usr/bin/env node
+process.stdout.write(JSON.stringify({ diagnostics: [] }));
+process.exit(0);
+`,
+    'utf8',
+  );
+  fs.chmodSync(biomeBin, 0o755);
+  return biomeBin;
+}
+
+function mockProcessPluginScriptCreate(
+  projectDir: string,
+  options: {
+    fileName?: string;
+    violationMessage?: string;
+  } = {},
+): string {
+  const pluginPath = path.join(
+    projectDir,
+    options.fileName ?? 'mock-process-plugin.cjs',
+  );
+  fs.writeFileSync(
+    pluginPath,
+    `#!/usr/bin/env node
+const fs = require('node:fs');
+
+const request = JSON.parse(fs.readFileSync(0, 'utf8'));
+if (request.method === 'describe') {
+  process.stdout.write(JSON.stringify({
+    protocolVersion: 1,
+    ok: true,
+    result: {
+      pluginId: request.pluginId,
+      rules: [{ id: 'no-todo-comment', languages: ['typescript'] }],
+    },
+  }));
+  process.exit(0);
+}
+
+if (request.method === 'check') {
+  const source = request.context.source;
+  const violations = source.includes('TODO')
+    ? [{
+        ruleId: request.ruleId,
+        filePath: request.context.filePath,
+        message: ${JSON.stringify(options.violationMessage ?? 'TODO comment detected')},
+        line: 1,
+        column: 1,
+      }]
+    : [];
+  process.stdout.write(JSON.stringify({
+    protocolVersion: 1,
+    ok: true,
+    result: { violations },
+  }));
+  process.exit(0);
+}
+
+process.stdout.write(JSON.stringify({
+  protocolVersion: 1,
+  ok: true,
+  result: {},
+}));
+`,
+    'utf8',
+  );
+  fs.chmodSync(pluginPath, 0o755);
+  return pluginPath;
 }
 
 function workspaceWatcherStubCreate(): {
@@ -1015,6 +1109,116 @@ describe('workspace service integration', () => {
     ).toEqual([]);
   });
 
+  it('restores an index-required warm cache and reapplies overlay updates through the restored index', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    const runtimeDir = tempWorkspaceCreate('codepol-workspace-cache-');
+    createdDirs.push(workspaceRoot, runtimeDir);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(configPath, unusedExportsConfigContentCreate(), 'utf8');
+
+    const exporterPath = path.join(workspaceRoot, 'src', 'exporter.ts');
+    const importerPath = path.join(workspaceRoot, 'src', 'importer.ts');
+    const exporterUri = workspacePathToUri(exporterPath);
+    const importerUri = workspacePathToUri(importerPath);
+
+    fs.writeFileSync(exporterPath, 'export const sharedValue = 1;\n', 'utf8');
+    fs.writeFileSync(
+      importerPath,
+      "import { sharedValue } from './exporter';\nexport const value = sharedValue;\n",
+      'utf8',
+    );
+
+    const warmCache = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const writerService = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine({
+        warmCache,
+      }),
+    });
+    const written = await clientWorkspaceAttach(writerService, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'warm-index-writer',
+    });
+
+    expect(
+      await writerService.queryDiagnostics({
+        clientSessionId: written.clientSessionId,
+        workspaceId: written.workspaceId,
+        uri: exporterUri,
+      }),
+    ).toEqual([]);
+    await writerService.closeClientSession({
+      clientSessionId: written.clientSessionId,
+    });
+
+    const backgroundTasks = backgroundTaskQueueCreate();
+    const readerService = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine({
+        backgroundWarmup: true,
+        backgroundTaskSchedule: backgroundTasks.schedule,
+        warmCache,
+      }),
+    });
+    const restored = await clientWorkspaceAttach(readerService, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'warm-index-reader',
+    });
+
+    expect(
+      await readerService.queryIndexStatus({
+        clientSessionId: restored.clientSessionId,
+        workspaceId: restored.workspaceId,
+      }),
+    ).toMatchObject({
+      workspaceId: restored.workspaceId,
+      workspaceInstanceId: restored.workspaceInstanceId,
+      status: 'ready',
+      replayState: 'pending',
+      workspaceReady: false,
+      featureStatus: {
+        workspaceIndex: {
+          readiness: 'ready',
+          detail: 'Session-derived index ready',
+        },
+      },
+      indexedFileCount: 2,
+      analysisGeneration: 1,
+    });
+
+    await readerService.completeReplay({
+      clientSessionId: restored.clientSessionId,
+      workspaceId: restored.workspaceId,
+      workspaceInstanceId: restored.workspaceInstanceId,
+    });
+
+    expect(backgroundTasks.pendingCountGet()).toBe(0);
+    expect(
+      await readerService.queryDiagnostics({
+        clientSessionId: restored.clientSessionId,
+        workspaceId: restored.workspaceId,
+        uri: exporterUri,
+      }),
+    ).toEqual([]);
+
+    await readerService.openOverlay({
+      clientSessionId: restored.clientSessionId,
+      workspaceId: restored.workspaceId,
+      uri: importerUri,
+      version: 1,
+      text: 'export const value = 1;\n',
+    });
+
+    const diagnostics = await readerService.queryDiagnostics({
+      clientSessionId: restored.clientSessionId,
+      workspaceId: restored.workspaceId,
+      uri: exporterUri,
+    });
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.code).toBe('@codepol/plugin/no-unused-exports');
+  });
+
   it('discards a stale warm cache when the disk-backed workspace state changes', async () => {
     const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
     const runtimeDir = tempWorkspaceCreate('codepol-workspace-cache-');
@@ -1085,6 +1289,261 @@ describe('workspace service integration', () => {
         uri,
       }),
     ).toEqual([]);
+  });
+
+  it('discards a warm cache when a configured external tool binary changes', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    const runtimeDir = tempWorkspaceCreate('codepol-workspace-cache-');
+    createdDirs.push(workspaceRoot, runtimeDir);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+
+    const pluginId = `test-biome-cache-${randomUUID()}`;
+    const biomeBin = mockBiomeSuccessScriptCreate(workspaceRoot, 'mock-biome-cache.cjs');
+    pluginModuleRegister(pluginId, {
+      default: [
+        pluginRuleNew({
+          id: 'mock-biome',
+          capabilities: {
+            lintProviders: [
+              {
+                platform: 'biome',
+                languages: ['typescript'],
+                config: {
+                  biomeBin,
+                },
+              },
+            ],
+          },
+        }),
+      ],
+    });
+
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(configPath, biomeFailureConfigContentCreate(pluginId), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = workspacePathToUri(filePath);
+    fs.writeFileSync(filePath, 'export const value = 1;\n', 'utf8');
+
+    const warmCache = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const writerService = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine({
+        warmCache,
+      }),
+    });
+    const written = await clientWorkspaceAttach(writerService, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'warm-cache-tool-writer',
+    });
+    expect(
+      await writerService.queryDiagnostics({
+        clientSessionId: written.clientSessionId,
+        workspaceId: written.workspaceId,
+        uri,
+      }),
+    ).toEqual([]);
+
+    fs.writeFileSync(
+      biomeBin,
+      `#!/usr/bin/env node
+process.stdout.write(JSON.stringify({ diagnostics: [{ severity: "error", category: "lint", description: "changed", location: { path: ${JSON.stringify(filePath)}, span: [0, 1], sourceCode: "export const value = 1;\\n" } }] }));
+process.exit(0);
+`,
+      'utf8',
+    );
+    fs.chmodSync(biomeBin, 0o755);
+
+    const readerService = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine({
+        warmCache,
+      }),
+    });
+    const restored = await clientWorkspaceAttach(readerService, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'warm-cache-tool-reader',
+    });
+
+    expect(
+      await readerService.queryIndexStatus({
+        clientSessionId: restored.clientSessionId,
+        workspaceId: restored.workspaceId,
+      }),
+    ).toMatchObject({
+      workspaceId: restored.workspaceId,
+      workspaceInstanceId: restored.workspaceInstanceId,
+      status: 'cold',
+      replayState: 'pending',
+      workspaceReady: false,
+      analysisGeneration: 0,
+    });
+  });
+
+  it('discards a warm cache when a process plugin script changes', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    const runtimeDir = tempWorkspaceCreate('codepol-workspace-cache-');
+    createdDirs.push(workspaceRoot, runtimeDir);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+
+    const pluginPath = mockProcessPluginScriptCreate(workspaceRoot);
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(configPath, processPluginConfigContentCreate(pluginPath), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = workspacePathToUri(filePath);
+    fs.writeFileSync(filePath, '// TODO fix\nexport const value = 1;\n', 'utf8');
+
+    const warmCache = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const writerService = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine({
+        warmCache,
+      }),
+    });
+    const written = await clientWorkspaceAttach(writerService, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'warm-cache-process-plugin-writer',
+    });
+    expect(
+      await writerService.queryDiagnostics({
+        clientSessionId: written.clientSessionId,
+        workspaceId: written.workspaceId,
+        uri,
+      }),
+    ).toHaveLength(1);
+
+    mockProcessPluginScriptCreate(workspaceRoot, {
+      fileName: path.basename(pluginPath),
+      violationMessage: 'changed process plugin logic',
+    });
+
+    const readerService = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine({
+        warmCache,
+      }),
+    });
+    const restored = await clientWorkspaceAttach(readerService, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'warm-cache-process-plugin-reader',
+    });
+
+    expect(
+      await readerService.queryIndexStatus({
+        clientSessionId: restored.clientSessionId,
+        workspaceId: restored.workspaceId,
+      }),
+    ).toMatchObject({
+      workspaceId: restored.workspaceId,
+      workspaceInstanceId: restored.workspaceInstanceId,
+      status: 'cold',
+      replayState: 'pending',
+      workspaceReady: false,
+      analysisGeneration: 0,
+    });
+  });
+
+  it('discards a warm cache when a registered builtin plugin definition changes', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    const runtimeDir = tempWorkspaceCreate('codepol-workspace-cache-');
+    createdDirs.push(workspaceRoot, runtimeDir);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+
+    const pluginId = `test-plugin-signature-${randomUUID()}`;
+    pluginModuleRegister(pluginId, {
+      default: [
+        pluginRuleNew({
+          id: 'mock-rule',
+          capabilities: {},
+        }),
+      ],
+    });
+
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(
+      configPath,
+      `[[plugins]]
+id = "${pluginId}"
+source = { kind = "builtin" }
+
+[targets.src]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[[rules]]
+ruleId = "${pluginId}/mock-rule"
+targets = ["src"]
+`,
+      'utf8',
+    );
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = workspacePathToUri(filePath);
+    fs.writeFileSync(filePath, 'export const value = 1;\n', 'utf8');
+
+    const warmCache = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const writerService = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine({
+        warmCache,
+      }),
+    });
+    const written = await clientWorkspaceAttach(writerService, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'warm-cache-plugin-signature-writer',
+    });
+    expect(
+      await writerService.queryDiagnostics({
+        clientSessionId: written.clientSessionId,
+        workspaceId: written.workspaceId,
+        uri,
+      }),
+    ).toEqual([]);
+
+    pluginModuleRegister(pluginId, {
+      default: [
+        pluginRuleNew({
+          id: 'mock-rule',
+          capabilities: {
+            lintProviders: [
+              {
+                platform: 'mock',
+                languages: ['typescript'],
+                config: {
+                  mode: 'updated',
+                },
+              },
+            ],
+          },
+        }),
+      ],
+    });
+
+    const readerService = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine({
+        warmCache,
+      }),
+    });
+    const restored = await clientWorkspaceAttach(readerService, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'warm-cache-plugin-signature-reader',
+    });
+
+    expect(
+      await readerService.queryIndexStatus({
+        clientSessionId: restored.clientSessionId,
+        workspaceId: restored.workspaceId,
+      }),
+    ).toMatchObject({
+      workspaceId: restored.workspaceId,
+      workspaceInstanceId: restored.workspaceInstanceId,
+      status: 'cold',
+      replayState: 'pending',
+      workspaceReady: false,
+      analysisGeneration: 0,
+    });
   });
 
   it('reports replay pending and warms in the background after replay completes', async () => {

@@ -68,6 +68,22 @@ function packageCacheInvalidateUnderRoot(rootAbs: string): void {
   }
 }
 
+function packageFilesCollect(rootAbs: string): string[] {
+  const entries = fs.readdirSync(rootAbs, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    const entryPath = path.join(rootAbs, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...packageFilesCollect(entryPath));
+      continue;
+    }
+    if (entry.isFile()) {
+      files.push(entryPath);
+    }
+  }
+  return files;
+}
+
 function pluginRuleExportsNormalize(moduleExports: unknown): unknown {
   if (Array.isArray(moduleExports)) {
     return moduleExports;
@@ -110,6 +126,29 @@ export function builtinPluginsRefresh(): void {
     const mod = nodeRequire(pkgName) as { default?: unknown };
     const exported = pluginRuleExportsNormalize(mod.default ?? mod);
     pluginModuleRegister(pkgName, exported);
+  }
+}
+
+export function builtinPluginArtifactPathsResolve(moduleSpecifier: string): string[] {
+  try {
+    const entry = nodeRequire.resolve(moduleSpecifier);
+    const root = packageRootFindFromEntry(entry, moduleSpecifier);
+    const distDir = path.join(root, 'dist');
+    const candidates = [
+      path.join(root, 'package.json'),
+      ...(fs.existsSync(distDir) ? packageFilesCollect(distDir) : [entry]),
+    ];
+    return [...new Set(candidates.map((candidate) => path.resolve(candidate)))]
+      .filter((candidate) => {
+        try {
+          return fs.statSync(candidate).isFile();
+        } catch {
+          return false;
+        }
+      })
+      .sort();
+  } catch {
+    return [];
   }
 }
 

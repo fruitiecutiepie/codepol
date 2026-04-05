@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   WORKSPACE_WARM_CACHE_COMPAT_VERSION,
   workspaceWarmCacheFsStoreCreate,
+  type WorkspaceWarmCacheSnapshotInput,
 } from './warmCache';
 
 function tempDirCreate(prefix: string): string {
@@ -53,6 +54,9 @@ describe('workspace warm cache store', () => {
         mtimeMs: 1,
       },
       fileFingerprints: [],
+      toolFingerprints: [],
+      pluginSignature: 'plugin-signature',
+      pluginFingerprints: [],
       createdAtUnixMs: 1,
     });
 
@@ -62,6 +66,65 @@ describe('workspace warm cache store', () => {
     fs.writeFileSync(path.join(cacheDir, cacheFile!), '{not valid json', 'utf8');
 
     await expect(Promise.resolve(store.read(key))).resolves.toBeUndefined();
+    expect(fs.readdirSync(cacheDir)).toEqual([]);
+  });
+
+  it('prunes stale workspace variants when build or environment identity changes', async () => {
+    const runtimeDir = tempDirCreate('codepol-warm-cache-');
+    createdDirs.push(runtimeDir);
+    const key = {
+      workspaceId: 'workspace:test',
+      rootPath: '/tmp/workspace',
+      configPath: '/tmp/workspace/codepol.toml',
+    };
+    const baseSnapshot: WorkspaceWarmCacheSnapshotInput = {
+      compatVersion: WORKSPACE_WARM_CACHE_COMPAT_VERSION,
+      workspaceId: key.workspaceId,
+      rootPath: key.rootPath,
+      configPath: key.configPath,
+      eslintConfigPath: '/tmp/workspace/eslint.config.js',
+      analysisGeneration: 1,
+      workspaceIndexRequired: false,
+      files: [],
+      diagnostics: [],
+      treeViolations: [],
+      featureStatus: {
+        diagnostics: { readiness: 'ready' },
+        codeActions: { readiness: 'ready' },
+        editPlans: { readiness: 'ready' },
+        workspaceIndex: { readiness: 'ready' },
+      },
+      configFingerprint: {
+        path: key.configPath,
+        size: 1,
+        mtimeMs: 1,
+      },
+      fileFingerprints: [],
+      toolFingerprints: [],
+      pluginSignature: 'plugin-signature',
+      pluginFingerprints: [],
+      createdAtUnixMs: 1,
+    };
+
+    const oldStore = workspaceWarmCacheFsStoreCreate({
+      runtimeDir,
+      buildId: 'old-build',
+      environmentId: 'node:old',
+    });
+    oldStore.write(key, {
+      ...baseSnapshot,
+    });
+
+    const cacheDir = path.join(runtimeDir, 'warm-cache');
+    expect(fs.readdirSync(cacheDir)).toHaveLength(1);
+
+    const currentStore = workspaceWarmCacheFsStoreCreate({
+      runtimeDir,
+      buildId: 'new-build',
+      environmentId: 'node:new',
+    });
+
+    await expect(Promise.resolve(currentStore.read(key))).resolves.toBeUndefined();
     expect(fs.readdirSync(cacheDir)).toEqual([]);
   });
 });

@@ -462,9 +462,6 @@ export type {
 } from './index/indexTypes';
 
 export { ReferenceUsage, SymbolFlags } from './index/indexTypes';
-export type { ProjectIndexSnapshot } from './index/indexSnapshot';
-export { projectIndexSnapshotCreate } from './index/indexSnapshot';
-
 // Module resolution
 export type { ModuleResolveOptions } from './index/moduleResolver';
 export {
@@ -477,6 +474,12 @@ export {
 // Query API
 export type { ProjectIndex } from './index/indexQuery';
 export { projectIndexCreate } from './index/indexQuery';
+export type { ProjectIndexSnapshot, ProjectIndexStoreSnapshot } from './index/indexSnapshot';
+export {
+  projectIndexSnapshotCreate,
+  projectIndexStoreSnapshotCreate,
+  projectIndexStoreRestore,
+} from './index/indexSnapshot';
 
 // Module Graph
 export type { ModuleGraph } from './index/moduleGraph';

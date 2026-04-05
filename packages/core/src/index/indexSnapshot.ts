@@ -1,10 +1,15 @@
 import type { ProjectIndex } from './indexQuery';
+import { projectIndexCreate } from './indexQuery';
+import type { IndexStore, FileIndexDelta } from './indexStore';
+import { indexStoreNew } from './indexStore';
 import type {
+  CallsRelation,
   ExportsRelation,
   FlowGraph,
   ImportBindingRelation,
   ImportsRelation,
   IndexCapabilities,
+  RelationRecord,
   ReferencesRelation,
   ScopeRecord,
   SymbolRecord,
@@ -32,6 +37,23 @@ export type ProjectIndexSnapshot = {
   moduleDependencyOrder: string[];
   moduleCycles: string[][];
   moduleEntryPoints: string[];
+};
+
+/**
+ * JSON-serializable snapshot of the underlying index-store facts.
+ * This preserves enough data to reconstruct the in-process `ProjectIndex`
+ * and continue incremental updates after restore.
+ */
+export type ProjectIndexStoreSnapshot = {
+  capabilities: IndexCapabilities;
+  files: Array<{
+    file: string;
+    revision: string;
+    symbols: SymbolRecord[];
+    scopes: ScopeRecord[];
+    relations: RelationRecord[];
+    cfgs?: FlowGraph[];
+  }>;
 };
 
 /**
@@ -71,5 +93,63 @@ export function projectIndexSnapshotCreate(index: ProjectIndex): ProjectIndexSna
     moduleDependencyOrder: index.moduleDependencyOrderGet(),
     moduleCycles: index.moduleCyclesGet(),
     moduleEntryPoints: index.moduleEntryPointsGet(),
+  };
+}
+
+/**
+ * Materialize the underlying store facts into per-file deltas that can be restored later.
+ */
+export function projectIndexStoreSnapshotCreate(
+  store: IndexStore,
+  capabilities: IndexCapabilities,
+): ProjectIndexStoreSnapshot {
+  return {
+    capabilities,
+    files: store.filesGet().map((file) => {
+      const scopes = store.scopesInFileGet(file);
+      const calls: CallsRelation[] = scopes.flatMap((scope) => store.callsInScopeGet(scope.id));
+      return {
+        file,
+        revision: store.fileRevisionGet(file) ?? 'snapshot',
+        symbols: store.symbolsGet({ file }),
+        scopes,
+        relations: [
+          ...store.referencesInFileGet(file),
+          ...calls,
+          ...store.importsInFileGet(file),
+          ...store.importBindingsInFileGet(file),
+          ...store.exportsInFileGet(file),
+          ...store.typeRelationsInFileGet(file),
+        ],
+        cfgs: store.cfgsInFileGet(file),
+      };
+    }),
+  };
+}
+
+/**
+ * Rebuild an `IndexStore` from a previously captured store snapshot.
+ */
+export function projectIndexStoreRestore(
+  snapshot: ProjectIndexStoreSnapshot,
+): {
+  store: IndexStore;
+  index: ProjectIndex;
+} {
+  const store = indexStoreNew();
+  for (const file of snapshot.files) {
+    const delta: FileIndexDelta = {
+      file: file.file,
+      revision: file.revision,
+      symbols: file.symbols,
+      scopes: file.scopes,
+      relations: file.relations,
+      cfgs: file.cfgs,
+    };
+    store.filePut(delta);
+  }
+  return {
+    store,
+    index: projectIndexCreate(store, snapshot.capabilities),
   };
 }

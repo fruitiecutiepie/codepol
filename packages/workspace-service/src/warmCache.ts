@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import type {
   IndexStatusFeatureStatus,
   PolicyViolation,
+  ProjectIndexStoreSnapshot,
   WorkspaceDiagnostic,
 } from '@codepol/core';
 
@@ -29,6 +30,9 @@ export type WorkspaceWarmCacheBaseIndexStateSnapshot = {
 
 export type WorkspaceWarmCacheSnapshot = {
   compatVersion: number;
+  engineVersion: string;
+  buildId: string;
+  environmentId: string;
   workspaceId: string;
   rootPath: string;
   configPath: string;
@@ -40,11 +44,20 @@ export type WorkspaceWarmCacheSnapshot = {
   treeViolations: PolicyViolation[];
   featureStatus: IndexStatusFeatureStatus;
   baseIndexState?: WorkspaceWarmCacheBaseIndexStateSnapshot;
+  projectIndexStoreSnapshot?: ProjectIndexStoreSnapshot;
   configFingerprint: WorkspaceWarmCacheFileFingerprint;
   eslintConfigFingerprint?: WorkspaceWarmCacheFileFingerprint;
   fileFingerprints: WorkspaceWarmCacheFileFingerprint[];
+  toolFingerprints: WorkspaceWarmCacheFileFingerprint[];
+  pluginSignature: string;
+  pluginFingerprints: WorkspaceWarmCacheFileFingerprint[];
   createdAtUnixMs: number;
 };
+
+export type WorkspaceWarmCacheSnapshotInput = Omit<
+  WorkspaceWarmCacheSnapshot,
+  'engineVersion' | 'buildId' | 'environmentId'
+>;
 
 export type WorkspaceWarmCacheStore = {
   read: (
@@ -52,7 +65,7 @@ export type WorkspaceWarmCacheStore = {
   ) => Promise<WorkspaceWarmCacheSnapshot | undefined> | WorkspaceWarmCacheSnapshot | undefined;
   write: (
     key: WorkspaceWarmCacheKey,
-    snapshot: WorkspaceWarmCacheSnapshot,
+    snapshot: WorkspaceWarmCacheSnapshotInput,
   ) => Promise<void> | void;
   delete: (key: WorkspaceWarmCacheKey) => Promise<void> | void;
 };
@@ -99,6 +112,17 @@ function workspaceWarmCacheFilePathResolve(
   return path.join(workspaceWarmCacheDirResolve(runtimeDir), `${cacheId}.json`);
 }
 
+function workspaceWarmCacheSnapshotMatchesKey(
+  snapshot: Pick<WorkspaceWarmCacheSnapshot, 'workspaceId' | 'rootPath' | 'configPath'>,
+  key: WorkspaceWarmCacheKey,
+): boolean {
+  return (
+    snapshot.workspaceId === key.workspaceId &&
+    path.resolve(snapshot.rootPath) === path.resolve(key.rootPath) &&
+    path.resolve(snapshot.configPath) === path.resolve(key.configPath)
+  );
+}
+
 export function workspaceWarmCacheFsStoreCreate(options: {
   runtimeDir: string;
   engineVersion?: string;
@@ -119,19 +143,64 @@ export function workspaceWarmCacheFsStoreCreate(options: {
       environmentId,
     });
 
+  const workspaceVariantsPrune = (
+    key: WorkspaceWarmCacheKey,
+    keepFilePath?: string,
+  ): void => {
+    const cacheDir = workspaceWarmCacheDirResolve(runtimeDir);
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(cacheDir);
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (!entry.endsWith('.json')) {
+        continue;
+      }
+      const entryPath = path.join(cacheDir, entry);
+      if (keepFilePath && path.resolve(entryPath) === path.resolve(keepFilePath)) {
+        continue;
+      }
+      try {
+        const raw = fs.readFileSync(entryPath, 'utf8');
+        const parsed = JSON.parse(raw) as WorkspaceWarmCacheSnapshot;
+        if (workspaceWarmCacheSnapshotMatchesKey(parsed, key)) {
+          fs.unlinkSync(entryPath);
+        }
+      } catch {
+        try {
+          fs.unlinkSync(entryPath);
+        } catch {
+          // ignore stale cache cleanup races
+        }
+      }
+    }
+  };
+
   return {
     read(key) {
       const filePath = filePathResolve(key);
       if (!fs.existsSync(filePath)) {
+        workspaceVariantsPrune(key);
         return undefined;
       }
       try {
         const raw = fs.readFileSync(filePath, 'utf8');
         const parsed = JSON.parse(raw) as WorkspaceWarmCacheSnapshot;
-        if (parsed.compatVersion !== WORKSPACE_WARM_CACHE_COMPAT_VERSION) {
+        if (
+          parsed.compatVersion !== WORKSPACE_WARM_CACHE_COMPAT_VERSION ||
+          parsed.engineVersion !== engineVersion ||
+          parsed.buildId !== buildId ||
+          parsed.environmentId !== environmentId ||
+          !workspaceWarmCacheSnapshotMatchesKey(parsed, key)
+        ) {
           fs.unlinkSync(filePath);
+          workspaceVariantsPrune(key);
           return undefined;
         }
+        workspaceVariantsPrune(key, filePath);
         return parsed;
       } catch {
         try {
@@ -139,6 +208,7 @@ export function workspaceWarmCacheFsStoreCreate(options: {
         } catch {
           // ignore stale cache cleanup races
         }
+        workspaceVariantsPrune(key);
         return undefined;
       }
     },
@@ -147,9 +217,13 @@ export function workspaceWarmCacheFsStoreCreate(options: {
       fs.mkdirSync(path.dirname(filePath), { recursive: true });
       const payload: WorkspaceWarmCacheSnapshot = {
         ...snapshot,
+        engineVersion,
+        buildId,
+        environmentId,
         createdAtUnixMs: snapshot.createdAtUnixMs ?? now(),
       };
       fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), 'utf8');
+      workspaceVariantsPrune(key, filePath);
     },
     delete(key) {
       const filePath = filePathResolve(key);
@@ -158,6 +232,7 @@ export function workspaceWarmCacheFsStoreCreate(options: {
       } catch {
         // ignore stale cache cleanup races
       }
+      workspaceVariantsPrune(key);
     },
   };
 }

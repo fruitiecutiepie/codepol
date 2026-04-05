@@ -18,7 +18,11 @@ import {
   WorkspaceDaemonSession,
   WORKSPACE_DAEMON_PROTOCOL_VERSION,
 } from './daemon.js';
-import { WorkspaceServiceEngine, type WorkspaceService } from './index.js';
+import {
+  WorkspaceServiceEngine,
+  workspaceWarmCacheFsStoreCreate,
+  type WorkspaceService,
+} from './index.js';
 
 function tempRuntimeDirCreate(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-daemon-'));
@@ -45,6 +49,21 @@ files = ["src/**/*.ts"]
 
 [[rules]]
 ruleId = "@codepol/plugin/no-interface"
+targets = ["src"]
+`;
+}
+
+function unusedExportsConfigContentCreate(): string {
+  return `[[plugins]]
+id = "@codepol/plugin"
+source = { kind = "builtin" }
+
+[targets.src]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[[rules]]
+ruleId = "@codepol/plugin/no-unused-exports"
 targets = ["src"]
 `;
 }
@@ -251,6 +270,154 @@ describe('workspace daemon control plane', () => {
     expect(diagnostics).toHaveLength(1);
 
     await service.close();
+  });
+
+  it('restores a warm index-backed workspace across daemon incarnations', async () => {
+    const runtimeDir = tempRuntimeDirCreate();
+    tempDirs.push(runtimeDir);
+
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-daemon-workspace-'));
+    tempDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'codepol.toml'),
+      unusedExportsConfigContentCreate(),
+      'utf8',
+    );
+
+    const exporterPath = path.join(workspaceRoot, 'src', 'exporter.ts');
+    const importerPath = path.join(workspaceRoot, 'src', 'importer.ts');
+    const exporterUri = workspacePathToUri(exporterPath);
+    const importerUri = workspacePathToUri(importerPath);
+    fs.writeFileSync(exporterPath, 'export const sharedValue = 1;\n', 'utf8');
+    fs.writeFileSync(
+      importerPath,
+      "import { sharedValue } from './exporter';\nexport const value = sharedValue;\n",
+      'utf8',
+    );
+
+    const warmCache = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const firstDescriptor = workspaceDaemonDescriptorCreate({ runtimeDir }).descriptor;
+    liveDaemons.set(firstDescriptor.transport.path, {
+      descriptor: firstDescriptor,
+      service: new WorkspaceServiceEngine({ warmCache }),
+    });
+
+    const firstConnection = await connect(firstDescriptor);
+    await workspaceDaemonHello({
+      connection: firstConnection,
+      client: clientIdentityCreate('warm-daemon-writer'),
+    });
+    const firstService = new WorkspaceDaemonServiceClient(firstConnection);
+    const firstRegistered = await firstService.registerClientSession({
+      clientKind: 'test',
+      clientInstanceId: 'warm-daemon-writer',
+      clientSessionId: 'warm-daemon-writer-session',
+    });
+    const firstAttached = await firstService.attachWorkspace({
+      clientSessionId: firstRegistered.clientSessionId,
+      rootPath: workspaceRoot,
+      configPath: path.join(workspaceRoot, 'codepol.toml'),
+    });
+    await firstService.subscribeDiagnostics({
+      clientSessionId: firstRegistered.clientSessionId,
+      workspaceId: firstAttached.workspaceId,
+      workspaceInstanceId: firstAttached.workspaceInstanceId,
+      scope: 'workspace',
+    });
+    await firstService.completeReplay({
+      clientSessionId: firstRegistered.clientSessionId,
+      workspaceId: firstAttached.workspaceId,
+      workspaceInstanceId: firstAttached.workspaceInstanceId,
+    });
+    expect(
+      await firstService.queryDiagnostics({
+        clientSessionId: firstRegistered.clientSessionId,
+        workspaceId: firstAttached.workspaceId,
+        uri: exporterUri,
+      }),
+    ).toEqual([]);
+    await firstService.close();
+
+    const secondDescriptor = workspaceDaemonDescriptorCreate({ runtimeDir }).descriptor;
+    liveDaemons.set(secondDescriptor.transport.path, {
+      descriptor: secondDescriptor,
+      service: new WorkspaceServiceEngine({ warmCache }),
+    });
+
+    const secondConnection = await connect(secondDescriptor);
+    await workspaceDaemonHello({
+      connection: secondConnection,
+      client: clientIdentityCreate('warm-daemon-reader'),
+    });
+    const secondService = new WorkspaceDaemonServiceClient(secondConnection);
+    const secondRegistered = await secondService.registerClientSession({
+      clientKind: 'test',
+      clientInstanceId: 'warm-daemon-reader',
+      clientSessionId: 'warm-daemon-reader-session',
+    });
+    const secondAttached = await secondService.attachWorkspace({
+      clientSessionId: secondRegistered.clientSessionId,
+      rootPath: workspaceRoot,
+      configPath: path.join(workspaceRoot, 'codepol.toml'),
+    });
+    await secondService.subscribeDiagnostics({
+      clientSessionId: secondRegistered.clientSessionId,
+      workspaceId: secondAttached.workspaceId,
+      workspaceInstanceId: secondAttached.workspaceInstanceId,
+      scope: 'workspace',
+    });
+    await secondService.completeReplay({
+      clientSessionId: secondRegistered.clientSessionId,
+      workspaceId: secondAttached.workspaceId,
+      workspaceInstanceId: secondAttached.workspaceInstanceId,
+    });
+
+    expect(
+      await secondService.queryIndexStatus({
+        clientSessionId: secondRegistered.clientSessionId,
+        workspaceId: secondAttached.workspaceId,
+      }),
+    ).toMatchObject({
+      workspaceId: secondAttached.workspaceId,
+      workspaceInstanceId: secondAttached.workspaceInstanceId,
+      status: 'ready',
+      replayState: 'applied',
+      workspaceReady: true,
+      indexedFileCount: 2,
+      analysisGeneration: 1,
+      featureStatus: {
+        workspaceIndex: {
+          readiness: 'ready',
+          detail: 'Session-derived index ready',
+        },
+      },
+    });
+    expect(
+      await secondService.queryDiagnostics({
+        clientSessionId: secondRegistered.clientSessionId,
+        workspaceId: secondAttached.workspaceId,
+        uri: exporterUri,
+      }),
+    ).toEqual([]);
+
+    await secondService.openOverlay({
+      clientSessionId: secondRegistered.clientSessionId,
+      workspaceId: secondAttached.workspaceId,
+      uri: importerUri,
+      version: 1,
+      text: 'export const value = 1;\n',
+    });
+
+    const diagnostics = await secondService.queryDiagnostics({
+      clientSessionId: secondRegistered.clientSessionId,
+      workspaceId: secondAttached.workspaceId,
+      uri: exporterUri,
+    });
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.code).toBe('@codepol/plugin/no-unused-exports');
+
+    await secondService.close();
   });
 
   it('rejects overlay writes for a stale workspace instance id', async () => {

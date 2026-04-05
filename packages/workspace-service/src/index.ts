@@ -19,6 +19,8 @@ import {
   policyViolationsGetFromDir,
   projectIndexBuildSync,
   projectIndexCreate,
+  projectIndexStoreRestore,
+  projectIndexStoreSnapshotCreate,
   projectIndexUpdateFileFromSource,
   projectIndexUpdateFileSync,
   ruleMatchesGet,
@@ -37,6 +39,8 @@ import {
   type LintProvider,
   type LintSeverity,
   type PolicyFile,
+  type PolicyPluginDeclaration,
+  type PolicyPluginsMap,
   type PolicyRule,
   type PolicyRuleTargetContext,
   type PolicyViolation,
@@ -60,7 +64,11 @@ import {
   treeCheckFixesApply,
   workspaceEditPlanCreateFromFix,
 } from './edits';
-import { builtinPluginsRefresh, ensureWorkspaceRuntimeReady } from './runtime';
+import {
+  builtinPluginArtifactPathsResolve,
+  builtinPluginsRefresh,
+  ensureWorkspaceRuntimeReady,
+} from './runtime';
 import {
   WORKSPACE_WARM_CACHE_COMPAT_VERSION,
   type WorkspaceWarmCacheFileFingerprint,
@@ -135,6 +143,7 @@ type WorkspaceAnalysisCacheState = {
   lastAnalysis?: WorkspaceAnalysis;
   indexState?: WorkspaceIndexState;
   workspaceIndexRequired?: boolean;
+  toolFingerprints?: WorkspaceWarmCacheFileFingerprint[];
 };
 
 export type WorkspaceClientKind = 'lsp' | 'cli' | 'test';
@@ -336,6 +345,7 @@ function severityFromLintSeverity(
 
 function workspaceStateAnalysisInvalidate(state: WorkspaceAnalysisCacheState): void {
   state.lastAnalysis = undefined;
+  state.toolFingerprints = undefined;
 }
 
 function workspaceFeatureStatusCreate(
@@ -1045,6 +1055,182 @@ function workspaceWarmCacheFingerprintEquals(
   return left.path === right.path && left.size === right.size && left.mtimeMs === right.mtimeMs;
 }
 
+function workspaceWarmCacheFingerprintListEquals(
+  left: WorkspaceWarmCacheFileFingerprint[],
+  right: WorkspaceWarmCacheFileFingerprint[],
+): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  return left.every((fingerprint, index) =>
+    workspaceWarmCacheFingerprintEquals(fingerprint, right[index]),
+  );
+}
+
+function workspaceExternalToolPathResolve(
+  workspace: WorkspaceContextState,
+  candidate: string | undefined,
+): string | undefined {
+  if (!candidate) {
+    return undefined;
+  }
+  const hasPathSyntax =
+    path.isAbsolute(candidate) ||
+    candidate.startsWith('.') ||
+    candidate.includes('/') ||
+    candidate.includes('\\');
+  if (!hasPathSyntax) {
+    return undefined;
+  }
+  return path.resolve(path.dirname(workspace.configPath), candidate);
+}
+
+function workspacePathLikeResolve(baseDir: string, candidate: string | undefined): string | undefined {
+  if (!candidate) {
+    return undefined;
+  }
+  const hasPathSyntax =
+    path.isAbsolute(candidate) ||
+    candidate.startsWith('.') ||
+    candidate.includes('/') ||
+    candidate.includes('\\');
+  if (!hasPathSyntax) {
+    return undefined;
+  }
+  return path.resolve(baseDir, candidate);
+}
+
+function workspaceToolFingerprintsRead(
+  workspace: WorkspaceContextState,
+  lintProviderEntries: LintProviderEntry[],
+): WorkspaceWarmCacheFileFingerprint[] {
+  const resolvedPaths = new Set<string>();
+  for (const entry of lintProviderEntries) {
+    if (entry.provider.platform === 'biome') {
+      const config = entry.provider.config as BiomeProviderConfig | undefined;
+      const resolved = workspaceExternalToolPathResolve(workspace, config?.biomeBin);
+      if (resolved) {
+        resolvedPaths.add(resolved);
+      }
+      continue;
+    }
+    if (entry.provider.platform === 'ruff') {
+      const config = entry.provider.config as RuffProviderConfig | undefined;
+      const resolved = workspaceExternalToolPathResolve(workspace, config?.ruffBin);
+      if (resolved) {
+        resolvedPaths.add(resolved);
+      }
+    }
+  }
+  return [...resolvedPaths]
+    .sort()
+    .flatMap((filePath) => {
+      const fingerprint = workspaceWarmCacheFileFingerprintRead(filePath);
+      return fingerprint ? [fingerprint] : [];
+    });
+}
+
+function workspacePluginSignatureNormalize(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => workspacePluginSignatureNormalize(entry));
+  }
+  if (typeof value === 'function') {
+    return '[function]';
+  }
+  if (value && typeof value === 'object') {
+    const normalized: Record<string, unknown> = {};
+    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+      normalized[key] = workspacePluginSignatureNormalize(
+        (value as Record<string, unknown>)[key],
+      );
+    }
+    return normalized;
+  }
+  if (value === undefined) {
+    return '[undefined]';
+  }
+  return value;
+}
+
+function workspacePluginSignatureCreate(
+  policy: PolicyFile,
+  pluginRulesMap: PolicyPluginsMap,
+): string {
+  const declarations = [...(policy.plugins ?? [])]
+    .sort((left, right) => left.id.localeCompare(right.id))
+    .map((declaration) => ({
+      id: declaration.id,
+      source: workspacePluginSignatureNormalize(declaration.source),
+    }));
+  const rules = [...pluginRulesMap.entries()]
+    .sort(([leftId], [rightId]) => leftId.localeCompare(rightId))
+    .map(([resolvedRuleId, plugin]) => ({
+      resolvedRuleId,
+      capabilities: workspacePluginSignatureNormalize(plugin.pluginRule.capabilities),
+    }));
+  return JSON.stringify({
+    declarations,
+    rules,
+  });
+}
+
+function workspacePluginFingerprintsRead(
+  workspace: WorkspaceContextState,
+  declarations: PolicyPluginDeclaration[],
+): WorkspaceWarmCacheFileFingerprint[] {
+  const resolvedPaths = new Set<string>();
+  const configDir = path.dirname(workspace.configPath);
+
+  for (const declaration of declarations) {
+    if (declaration.source.kind === 'builtin') {
+      for (const candidate of builtinPluginArtifactPathsResolve(declaration.id)) {
+        resolvedPaths.add(candidate);
+      }
+      continue;
+    }
+
+    if (declaration.source.kind === 'process') {
+      const processCwd = declaration.source.cwd
+        ? path.resolve(configDir, declaration.source.cwd)
+        : configDir;
+      const commandPath = workspacePathLikeResolve(processCwd, declaration.source.command);
+      if (commandPath) {
+        resolvedPaths.add(commandPath);
+      }
+      for (const arg of declaration.source.args ?? []) {
+        const argPath = workspacePathLikeResolve(processCwd, arg);
+        if (argPath) {
+          resolvedPaths.add(argPath);
+        }
+      }
+    }
+  }
+
+  return [...resolvedPaths]
+    .sort()
+    .flatMap((filePath) => {
+      const fingerprint = workspaceWarmCacheFileFingerprintRead(filePath);
+      return fingerprint ? [fingerprint] : [];
+    });
+}
+
+function workspacePluginCompatibilityRead(
+  workspace: WorkspaceContextState,
+  policy: PolicyFile,
+  pluginRulesMap: PolicyPluginsMap,
+): {
+  pluginSignature: string;
+  pluginFingerprints: WorkspaceWarmCacheFileFingerprint[];
+} {
+  return {
+    pluginSignature: workspacePluginSignatureCreate(policy, pluginRulesMap),
+    pluginFingerprints: workspacePluginFingerprintsRead(
+      workspace,
+      policy.plugins ?? [],
+    ),
+  };
+}
+
 function workspaceWarmCacheBaseIndexSnapshotCreate(
   baseIndexState: WorkspaceBaseIndexState | undefined,
 ) {
@@ -1113,6 +1299,8 @@ async function workspaceWarmCacheSnapshotRestore(input: {
       workspaceIndexRequired: boolean;
       lastAnalysis: WorkspaceAnalysis;
       baseIndexState?: WorkspaceBaseIndexState;
+      toolFingerprints: WorkspaceWarmCacheFileFingerprint[];
+      indexState?: WorkspaceIndexState;
     }
   | undefined
 > {
@@ -1137,6 +1325,22 @@ async function workspaceWarmCacheSnapshotRestore(input: {
 
   try {
     const policy = input.workspace.config as PolicyFile;
+    const pluginRulesResult = await policyPluginsGet(policy, input.workspace.rootPath, {
+      configPath: input.workspace.configPath,
+    });
+    if (isErr(pluginRulesResult)) {
+      await input.warmCache.delete(cacheKey);
+      return undefined;
+    }
+    const currentPluginCompatibility = workspacePluginCompatibilityRead(
+      input.workspace,
+      policy,
+      pluginRulesResult.Ok,
+    );
+    const currentToolFingerprints = workspaceToolFingerprintsRead(
+      input.workspace,
+      lintProviderEntriesCollect(policy, pluginRulesResult.Ok),
+    );
     const matches = await ruleMatchesGet(policy, input.workspace.rootPath);
     const currentFiles = workspaceFilesNormalize(matches.flatMap((match) => match.files));
     const snapshotFiles = workspaceFilesNormalize(snapshot.files);
@@ -1188,6 +1392,25 @@ async function workspaceWarmCacheSnapshotRestore(input: {
       await input.warmCache.delete(cacheKey);
       return undefined;
     }
+    if (
+      !workspaceWarmCacheFingerprintListEquals(
+        currentToolFingerprints,
+        snapshot.toolFingerprints ?? [],
+      )
+    ) {
+      await input.warmCache.delete(cacheKey);
+      return undefined;
+    }
+    if (
+      snapshot.pluginSignature !== currentPluginCompatibility.pluginSignature ||
+      !workspaceWarmCacheFingerprintListEquals(
+        currentPluginCompatibility.pluginFingerprints,
+        snapshot.pluginFingerprints ?? [],
+      )
+    ) {
+      await input.warmCache.delete(cacheKey);
+      return undefined;
+    }
 
     if (
       input.workspaceIndexRequired !== undefined &&
@@ -1202,6 +1425,21 @@ async function workspaceWarmCacheSnapshotRestore(input: {
       workspaceIndexRequired: snapshot.workspaceIndexRequired,
       lastAnalysis: workspaceWarmCacheAnalysisRestore(input.workspace, snapshot),
       baseIndexState: workspaceWarmCacheBaseIndexRestore(snapshot.baseIndexState),
+      toolFingerprints: currentToolFingerprints,
+      indexState:
+        snapshot.projectIndexStoreSnapshot && snapshot.baseIndexState
+          ? (() => {
+              const restored = projectIndexStoreRestore(snapshot.projectIndexStoreSnapshot);
+              return {
+                store: restored.store,
+                index: restored.index,
+                capabilities: restored.index.capabilities,
+                files: [...snapshot.baseIndexState.files],
+                fileKey: snapshot.baseIndexState.fileKey,
+                workspacePackages: new Map(snapshot.baseIndexState.workspacePackages),
+              };
+            })()
+          : undefined,
     };
   } catch {
     return undefined;
@@ -1229,6 +1467,19 @@ async function workspaceWarmCacheSnapshotPersist(input: {
     return;
   }
 
+  const policy = input.workspace.config as PolicyFile;
+  const pluginRulesResult = await policyPluginsGet(policy, input.workspace.rootPath, {
+    configPath: input.workspace.configPath,
+  });
+  if (isErr(pluginRulesResult)) {
+    return;
+  }
+  const pluginCompatibility = workspacePluginCompatibilityRead(
+    input.workspace,
+    policy,
+    pluginRulesResult.Ok,
+  );
+
   await input.warmCache.write(workspaceWarmCacheKeyCreate(input.workspace), {
     compatVersion: WORKSPACE_WARM_CACHE_COMPAT_VERSION,
     workspaceId: input.workspace.workspaceId,
@@ -1242,9 +1493,18 @@ async function workspaceWarmCacheSnapshotPersist(input: {
     treeViolations: [...input.workspaceSession.lastAnalysis.treeViolations],
     featureStatus: input.workspaceSession.lastAnalysis.featureStatus,
     baseIndexState: workspaceWarmCacheBaseIndexSnapshotCreate(input.workspace.baseIndexState),
+    projectIndexStoreSnapshot: input.workspaceSession.indexState
+      ? projectIndexStoreSnapshotCreate(
+          input.workspaceSession.indexState.store,
+          input.workspaceSession.indexState.capabilities,
+        )
+      : undefined,
     configFingerprint: fingerprints.configFingerprint,
     eslintConfigFingerprint: fingerprints.eslintConfigFingerprint,
     fileFingerprints: fingerprints.fileFingerprints,
+    toolFingerprints: input.workspaceSession.toolFingerprints ?? [],
+    pluginSignature: pluginCompatibility.pluginSignature,
+    pluginFingerprints: pluginCompatibility.pluginFingerprints,
     createdAtUnixMs: Date.now(),
   });
 }
@@ -1564,6 +1824,7 @@ async function workspaceAnalysisRun(
   const sourceByFilePath = workspaceSourceOverridesGet(state);
   const workspaceIndexRequired = matchedRulesRequireProjectIndex(matches, pluginRulesMap);
   state.workspaceIndexRequired = workspaceIndexRequired;
+  state.toolFingerprints = workspaceToolFingerprintsRead(workspace, lintProviderEntries);
 
   if (options.fix && fixProviders.length > 0) {
     await fixProvidersApply(fixProviders, {
@@ -1970,6 +2231,8 @@ export class WorkspaceServiceEngine implements WorkspaceService {
         workspaceIndexRequired:
           restoredWarmCache?.workspaceIndexRequired ?? workspaceIndexRequired,
         lastAnalysis: restoredWarmCache?.lastAnalysis,
+        toolFingerprints: restoredWarmCache?.toolFingerprints,
+        indexState: restoredWarmCache?.indexState,
       });
     } else {
       existingWorkspaceSession.workspaceIndexRequired = workspaceIndexRequired;
