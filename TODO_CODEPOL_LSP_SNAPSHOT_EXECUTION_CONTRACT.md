@@ -280,29 +280,44 @@ RequestBinding = {
 
 The daemon resolves that into an executable snapshot before starting work.
 
-### Consistency Modes
+### Consistency Levels
 
-Each request can declare one of these consistency modes:
+Each request declares one of the three official levels.
 
-#### 1. `pinned_latest_safe`
+#### 1. `document_consistent`
 
-Use the latest snapshot that is internally coherent and satisfies readiness rules at dispatch time.
+Use when the answer can be derived from the replayed current document overlay plus file-local semantics and only explicitly allowed degraded project state.
 
-Best default.
+This binds to:
 
-#### 2. `pinned_exact`
+- one daemon session
+- one workspace instance
+- one replay epoch
+- the required document overlay version or versions
+- local semantic state for that document when needed
 
-Use exactly the requested generation or version set, or fail.
+#### 2. `workspace_consistent`
 
-Use for precise operations such as rename or refactor.
+Use when the answer depends on one published analysis generation plus daemon session, workspace instance, replay epoch, and any required overlay visibility rules.
 
-#### 3. `latest_best_effort`
+This binds to:
 
-Allowed only for explicitly degraded or read-mostly features.
+- one daemon session
+- one workspace instance
+- one replay epoch
+- any required document overlay visibility rules
+- one pinned published `analysis_generation`
 
-Responses must say they are degraded or best-effort.
+#### 3. `exact_preconditioned`
 
-Do not use `latest_best_effort` for correctness-sensitive refactors or cross-file semantic operations.
+Use when the operation is correctness-sensitive. It declares the exact snapshot preconditions it was validated against and rejects on mismatch rather than silently rebinding.
+
+This binds to:
+
+- the same state as the relevant document- or workspace-consistent validation path
+- exact declared preconditions for generation, versions, identity, or other required snapshot inputs
+
+Degraded behavior is not a fourth consistency level. It is an explicit response mode allowed only where the surface contract opts into it, and it must be labeled.
 
 ## Replay Ordering Rules
 
@@ -543,7 +558,7 @@ That means:
 
 ### Stronger Rule For Commands
 
-Correctness-sensitive commands such as rename should use `pinned_exact` or `validate_then_execute`.
+Correctness-sensitive commands such as rename should use `exact_preconditioned` validation rather than silently rebinding to a newer snapshot.
 
 Flow:
 
@@ -695,8 +710,8 @@ Guarantees:
 
 - observes one daemon session, workspace instance, and replay epoch
 - observes the specified or current document overlay version
-- may use the latest safe local semantic state
-- may use an older project analysis generation if the feature permits and the response says so
+- may use local semantic state for the target document
+- may use only explicitly allowed degraded project state, and that degradation must be labeled by the surface contract
 
 ### Level 2: `workspace_consistent`
 
@@ -712,6 +727,7 @@ Guarantees:
 - observes one pinned published analysis generation
 - no mixed-generation answers
 - coherent with one replay epoch and workspace instance
+- respects any required overlay visibility rules for the surface
 
 ### Level 3: `exact_preconditioned`
 
@@ -724,9 +740,85 @@ For:
 Guarantees:
 
 - validated against exact declared generation or version preconditions
-- rejects instead of silently applying on changed state
+- rejects instead of silently rebinding or silently applying on changed state
 
 These levels make the contract understandable.
+
+## Surface-To-Contract Matrix
+
+Freeze request class and consistency by exact semantic path, not by LSP method name alone. If one public method can execute through materially different local and cross-file paths, treat those as separate surfaces.
+
+Use the three official levels consistently:
+
+- `document_consistent`: pinned to one daemon session, workspace instance, replay epoch, and the required document overlay version or versions; may use local semantic state and only explicitly allowed degraded project state
+- `workspace_consistent`: pinned to one published `analysis_generation` plus daemon session, workspace instance, replay epoch, and any required overlay visibility rules
+- `exact_preconditioned`: same as above, but the operation also declares exact snapshot preconditions and rejects on mismatch rather than silently rebinding
+
+Important rules:
+
+- local versus cross-file `definition`, `declaration`, `typeDefinition`, and `implementation` are separate surfaces when their state dependencies differ
+- default `textDocument/references` means full workspace references; any same-file-only mode must be explicit and separately labeled
+- hover, completion, semantic tokens, inlay hints, and similar document-scoped UX surfaces may be composite: a `document_consistent` base plus optional `workspace_consistent` enrichments from one pinned generation
+- degraded behavior is never a silent fallback for authoritative cross-file surfaces unless the client explicitly opted into a labeled degraded mode
+
+| Surface | Request class | Consistency level |
+| --- | --- | --- |
+| local `definition` | document-local interactive read | `document_consistent` |
+| cross-file `definition` | cross-file semantic read | `workspace_consistent` |
+| local `declaration` | document-local interactive read | `document_consistent` |
+| cross-file `declaration` | cross-file semantic read | `workspace_consistent` |
+| local `typeDefinition` | document-local interactive read | `document_consistent` |
+| cross-file `typeDefinition` | cross-file semantic read | `workspace_consistent` |
+| local `implementation` | document-local interactive read | `document_consistent` |
+| cross-file `implementation` | cross-file semantic read | `workspace_consistent` |
+| local refs mode | document-local interactive read | `document_consistent` |
+| full `references` | cross-file semantic read | `workspace_consistent` |
+| base local `hover` | document-local interactive read | `document_consistent` |
+| hover enrichments | cross-file semantic read | `workspace_consistent` |
+| local completion core | document-local interactive read | `document_consistent` |
+| auto-import or workspace completion enrichments | document-local read plus workspace enrichment | base `document_consistent`, enrichment `workspace_consistent` |
+| `documentSymbol` | document-local read | `document_consistent` |
+| `workspace/symbol` | workspace semantic read | `workspace_consistent` |
+| local `prepareRename` | document-local interactive read | `document_consistent` |
+| project-aware `prepareRename` | cross-file semantic read | `workspace_consistent` |
+| `rename` execute | semantic write | `exact_preconditioned` |
+| local quick-fix preview | document-local read or preview | `document_consistent` |
+| project-aware code action preview | cross-file semantic read | `workspace_consistent` |
+| code action apply | semantic write | `exact_preconditioned` |
+| local diagnostics | document-local publication | `document_consistent` |
+| semantic or project diagnostics | cross-file publication | `workspace_consistent` |
+| semantic tokens base | document-local publication | `document_consistent` |
+| semantic tokens with project semantics | document-scoped publication with pinned generation | `document_consistent` plus one pinned workspace generation |
+| local inlay hints | document-local publication | `document_consistent` |
+| cross-file or type-driven inlay hints | document-scoped publication with pinned generation | `document_consistent` plus one pinned workspace generation |
+| local code lens | document-local read | `document_consistent` |
+| ref-count or test-count code lens | cross-file semantic read | `workspace_consistent` |
+| formatting, file-local | document-scoped transform | `document_consistent` |
+| organize imports or semantic formatting preview | semantic transform preview | `workspace_consistent` when project semantics materially matter |
+| organize imports or semantic formatting apply | semantic transform | `exact_preconditioned` when project semantics materially matter |
+| `details_view` base | document or local entity read | `document_consistent` |
+| `details_view` enrichments | cross-file or workspace read | `workspace_consistent` |
+| `graph_focus` | workspace or project read | `workspace_consistent` |
+| semantic search | workspace or project read | `workspace_consistent` |
+| impacted tests | workspace or project read | `workspace_consistent` |
+
+Important surface notes:
+
+- `textDocument/definition`: a local definition may run before full workspace-ready once the target document overlay is applied and file-local semantics are ready; any local-only fallback must be explicitly labeled such as `local_only` or `cross_file_unavailable`
+- `textDocument/typeDefinition` and `textDocument/implementation`: default to cross-file unless the target is honestly derivable from one file overlay without project graph dependency
+- `textDocument/hover`: keep the base hover `document_consistent`; enrichments such as imported-symbol metadata, graph counts, or index-backed status are optional `workspace_consistent` fields that may be omitted when unavailable
+- `textDocument/completion`: keep local keywords, locals, and same-file members `document_consistent`; workspace-backed auto-import and ranking enrichments must come from one pinned published generation and must not mix generations
+- `textDocument/references`: do not silently degrade the default full references command to local-only results; return not-ready or an explicitly opted-in degraded result instead
+- `textDocument/rename` and project-aware refactors: preview may be `workspace_consistent`, but apply is always `exact_preconditioned` and must reject on snapshot mismatch
+- `textDocument/codeAction`: classify by action family, not method name alone; local quick fixes can stay document-local, while project-aware refactors and cross-file fixes need workspace-consistent preview and exact-preconditioned apply
+
+## Decision Rule For Future Surfaces
+
+When a surface is still ambiguous, classify it by the actual semantic path:
+
+- use `document_consistent` if the answer can be derived from the replayed current document overlay plus file-local semantics and no committed workspace analysis generation is required for correctness
+- use `workspace_consistent` if the answer depends on import or export resolution, cross-file symbol graph, project index, ownership graph, reference counts, impacted tests, or workspace-wide search
+- use `exact_preconditioned` if the surface mutates code or workspace state, or if a preview must match apply-time semantics instead of silently rebinding
 
 ## Recommended Policy Summary
 

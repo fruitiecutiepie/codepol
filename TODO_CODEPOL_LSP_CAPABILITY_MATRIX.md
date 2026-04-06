@@ -42,8 +42,10 @@ Read this note when you are:
 | definition (domain, graph, generated, config-backed)      | partial or none             | supplemental provider |
 | references (standard code symbols)                        | `tsserver`                  | not implemented yet   |
 | references (project, domain, graph, generated relations)  | partial or none             | supplemental provider |
-| hover                                                     | `tsserver`                  | not implemented yet   |
-| rename                                                    | `tsserver`                  | not implemented yet   |
+| hover (standard code symbols)                             | `tsserver`                  | not implemented yet   |
+| hover (Codepol-owned semantic summary)                    | partial or none             | supplemental provider |
+| rename (standard code symbols)                            | `tsserver`                  | not implemented yet   |
+| rename (Codepol-owned entity namespaces)                  | partial or none             | supplemental provider |
 | workspace symbols (standard code symbols)                 | `tsserver` / editor default | not implemented yet   |
 | workspace symbols (domain, project, architecture symbols) | partial or none             | supplemental provider |
 
@@ -57,8 +59,10 @@ Read this note when you are:
 | definition (domain, graph, generated, config-backed)      | partial or none                          | supplemental provider |
 | references (standard code symbols)                        | `Pylance` / `Pyright`                    | not implemented yet   |
 | references (project, domain, graph, generated relations)  | partial or none                          | supplemental provider |
-| hover                                                     | `Pylance` / `Pyright`                    | not implemented yet   |
-| rename                                                    | `Pylance` / `Pyright`                    | not implemented yet   |
+| hover (standard code symbols)                             | `Pylance` / `Pyright`                    | not implemented yet   |
+| hover (Codepol-owned semantic summary)                    | partial or none                          | supplemental provider |
+| rename (standard code symbols)                            | `Pylance` / `Pyright`                    | not implemented yet   |
+| rename (Codepol-owned entity namespaces)                  | partial or none                          | supplemental provider |
 | workspace symbols (standard code symbols)                 | `Pylance` / `Pyright` or editor default  | not implemented yet   |
 | workspace symbols (domain, project, architecture symbols) | partial or none                          | supplemental provider |
 
@@ -66,6 +70,9 @@ Read this note when you are:
 
 - do not implement competing phase-1 handlers for standard hover, standard rename, or standard language correctness diagnostics
 - definition and references may only return Codepol-owned semantics; they must not compete on normal function, class, module, import, type, or member navigation
+- hover may only return compact Codepol-owned summary payloads for explicitly identified targets; there is no fallback or merged hover in the ordinary editor flow
+- rename may only operate on `domain_entity` and `config_component` namespaces with successful prepare, mandatory preview, closed-world reference coverage, and no cross-owner edits
 - workspace symbols are the safest shared surface in phase 1; Codepol contributions must be visibly labeled as Codepol-specific results
 - if definition or references are ambiguous in the default editor flow, expose them through explicit commands such as `Go to Codepol relation` or `Find Codepol relations`
+- if rename is ambiguous or would spill into ordinary language-symbol ownership, fail closed and defer to explicit Codepol commands rather than intercepting generic editor rename
 - every Codepol result must carry provenance and semantic-class metadata so adapters can label and filter it consistently

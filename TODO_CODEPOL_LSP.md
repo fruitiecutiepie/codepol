@@ -479,6 +479,8 @@ Key invariants:
 - `EditPlan` is the canonical internal executable edit model, not raw LSP `WorkspaceEdit`.
 - Adapters consume planned actions; they do not merge, reorder, or resolve conflicts.
 - Providers may author fixes in local formats, but executable results must resolve into normalized plans before exposure or application.
+- rename and refactor stay centered on `EditPlan`; extend it only with lightweight operation annotations, optional preview structure, and execution metadata needed for richer preview and guarded apply.
+- read-only surfaces do not reuse `EditPlan`.
 
 Read the detailed note when:
 
@@ -641,7 +643,11 @@ Decision:
   - one published `analysis_generation` when relevant
 - make pinned snapshots the default read model:
   - reads run against a coherent published snapshot chosen at dispatch time, not a moving target
-  - consistency levels are explicit: pinned latest safe, pinned exact, and labeled best-effort only for explicitly degraded features
+  - consistency levels are explicit:
+    - `document_consistent`
+    - `workspace_consistent`
+    - `exact_preconditioned`
+  - degraded behavior is opt-in per surface and must be labeled rather than treated as a fourth consistency level
 - treat replay and invalidation as ordered writes with barriers:
   - replay messages form a per-session ordered stream ending in a replay barrier
   - foreground reads must not observe half-applied replay or half-published analysis state
@@ -665,6 +671,7 @@ Key invariants:
 - every request and publish event is attributable to one daemon session, one workspace instance, and one replay epoch
 - document-sensitive reads must not claim success against an older overlay version than requested
 - cross-file and project-wide reads execute against one pinned published analysis generation
+- if a surface has materially different local and cross-file execution paths, bind them separately rather than collapsing by LSP method name alone
 - no request may observe half-applied replay or half-committed analysis state
 - canceled or superseded work may continue internally, but it must not publish user-visible results as current
 - correctness-sensitive commands must validate exact snapshot preconditions or fail and require revalidation
@@ -950,6 +957,116 @@ Key invariants:
 - LSP and custom extension RPC are thin adapters, not the place where analyzer semantics live
 - process plugins return normalized semantic data or invoke normalized capabilities; they do not serialize native ESLint rules or editor-specific objects
 
+### 11. Definition and references for Codepol-owned semantic classes
+
+Decision:
+
+- for MVP, ordinary language symbols keep default `tsserver`, `Pylance`, or `Pyright` definition and references behavior
+- Codepol participates only for Codepol-owned semantic classes:
+  - `domain_entity`
+  - `architecture_node`
+  - `config_component`
+  - `generated_artifact`
+  - `relation_anchor`
+- prefer explicit Codepol commands and Codepol-owned views over intercepting global `F12` / `Shift+F12`
+- do not ship direct LSP `textDocument/definition` or `textDocument/references` handlers from editor text in MVP; use explicit Codepol commands and Codepol-owned views instead
+- ambiguous or unknown targets defer entirely to the default language server
+- Codepol `definition` returns the canonical origin for the semantic object, not necessarily the nearest textual declaration
+- Codepol `references` returns semantic/project references, not raw lexical matches
+- when results are relation- or graph-shaped, present them in grouped Codepol panels or graph views rather than flattening them into unlabeled ordinary LSP lists
+- do not merge normal LSP symbol results with Codepol semantic results in MVP
+
+Why it matters:
+
+- this keeps Codepol aligned with existing language servers instead of competing with them on ordinary code navigation
+- project, config, generated, and relation-backed navigation often have richer semantics than plain `Location[]`, so the UX boundary must be explicit
+- without a conservative routing rule, implementation will drift into duplicate jumps, noisy generated-file targets, and mixed-provenance result lists that are hard to explain
+
+Read the detailed note when:
+
+- implementing Codepol `definition` or `references` service or adapter paths
+- defining the semantic-class enum, local classifier, or provenance labeling
+- deciding whether a result should open a source location, details view, grouped results panel, or graph focus
+- mapping generated, config-backed, or relation-backed navigation into stable service result types
+
+Detailed note:
+
+- [TODO_CODEPOL_LSP_DEFINITION_REFERENCES_MODEL.md](TODO_CODEPOL_LSP_DEFINITION_REFERENCES_MODEL.md)
+
+### 12. Hover for Codepol-owned semantic classes
+
+Decision:
+
+- ship a narrow Codepol-owned `hover` in MVP
+- Codepol `hover` may cover only these semantic classes:
+  - `domain_entity`
+  - `architecture_node`
+  - `config_component`
+  - `generated_artifact`
+- exclude `relation_anchor` from MVP hover; relation-backed semantics must use details panels, graph views, or explicit commands instead
+- ordinary TypeScript/JavaScript and Python symbols remain owned by `tsserver`, `Pylance`, or `Pyright`
+- Codepol `hover` appears only in Codepol-owned interaction contexts or for editor targets that already carry explicit Codepol identity
+- do not use Codepol `hover` as a fallback when the standard language server has no answer
+- do not merge standard language-server hover content with Codepol hover content in MVP
+- return a compact structured semantic summary payload rather than arbitrary editor-specific markdown from the core
+
+Why it matters:
+
+- hover is a high-frequency editor surface, so even small amounts of overlap with standard language hover will create immediate user confusion
+- many Codepol relation and evidence semantics are too structured for a compact hover and become noisy if forced into that shape
+- a structured payload lets adapters render a small summary card in editor hover while preserving richer presentations in Codepol-owned views
+
+Read the detailed note when:
+
+- implementing Codepol `hover` services or adapters
+- defining covered semantic classes, explicit Codepol identity, or hover precedence rules
+- mapping hover payloads into editor markdown, quick actions, or richer Codepol cards
+- deciding size limits, allowed actions, or when hover should escalate into details or graph surfaces
+
+Detailed note:
+
+- [TODO_CODEPOL_LSP_HOVER_MODEL.md](TODO_CODEPOL_LSP_HOVER_MODEL.md)
+
+### 13. Prepare rename and rename for Codepol-owned namespaces
+
+Decision:
+
+- ship Codepol `prepare rename` and `rename` only for closed-world Codepol-owned namespaces in MVP
+- the only renameable semantic classes in MVP are:
+  - `domain_entity`
+  - `config_component`
+- `architecture_node`, `generated_artifact`, `relation_anchor`, and ordinary language symbols are not renameable through Codepol in MVP
+- a target is renameable only when Codepol can prove:
+  - one stable canonical identity
+  - one known namespace
+  - a closed-world affected reference set
+  - an applicable naming and normalization policy
+  - no cross-owner edits outside Codepol-owned anchors
+- `prepare rename` is required before rename
+- rename preview is required before apply
+- collision checks run on normalized name within namespace
+- apply is snapshot-bound and all-or-nothing at the Codepol logical edit-plan level
+- stale previews, incomplete reference sets, cross-owner edits, and ambiguous targets fail closed
+- ordinary language symbol rename remains owned by `tsserver`, `Pylance`, or `Pyright`
+
+Why it matters:
+
+- rename is the highest-risk shared editor surface after code actions because users expect it to be complete, trustworthy, and auditable
+- restricting MVP rename to closed-world namespaces keeps Codepol from drifting into partial search-and-replace behavior or competing with standard language-server rename
+- mandatory prepare plus preview establishes a clear trust boundary before workspace edits are proposed
+
+Read the detailed note when:
+
+- implementing Codepol `prepare rename`, `rename` preview, or apply flows
+- defining renameable namespaces, name validation, collision policy, or failure codes
+- deciding what counts as a canonical semantic anchor versus non-canonical text that rename must ignore
+- binding snapshot checks, preview staleness, or apply atomicity into the service contract
+- coordinating rename preview and apply with the follow-up `WorkspaceEditPlan` integration work in `TODO_CODEPOL_LSP_FIX_MODEL.md`
+
+Detailed note:
+
+- [TODO_CODEPOL_LSP_RENAME_MODEL.md](TODO_CODEPOL_LSP_RENAME_MODEL.md)
+
 ## Non-Goals For The First Implementation
 
 - replacing `tsserver`, `Pylance`, or `Pyright`
@@ -986,7 +1103,36 @@ Status on 2026-04-05:
 - `apps/lsp` exists as a stdio server and now ships diagnostics, code actions, edit-plan execution, `workspace/symbol`, read-only `codepol/*` RPC, sessionized overlay sync, and cold-start index status/progress through the shared service
 - `apps/cli` is now a thin adapter over the shared service
 - per-client overlay isolation and session-scoped edit plans now exist in the shared service layer
-- generic hover, rename, definition, and references remain deferred until Codepol-owned semantics are defined for those surfaces
+- generic hover, rename, definition, and references remain deferred from implementation by default; Codepol-owned definition/references, hover, and rename semantics are now documented, while per-surface snapshot binding and edit-plan integration follow-ups remain pending
+
+Deferred-surface unblock checklist:
+
+- [x] Capability ownership and coexistence are defined at the decision-summary level.
+  - Current answer: `Open Design Decisions -> 2. Capability ownership matrix by language`
+  - Detailed note: `TODO_CODEPOL_LSP_CAPABILITY_MATRIX.md`
+  - [x] Flesh out the exact `definition` and `references` behavior for Codepol-owned semantic classes, including which cases use default LSP handlers versus explicit Codepol commands or views.
+    - Current answer: `Open Design Decisions -> 11. Definition and references for Codepol-owned semantic classes`
+    - Detailed note: `TODO_CODEPOL_LSP_DEFINITION_REFERENCES_MODEL.md`
+  - [x] Decide whether Codepol `hover` exists at all, and if so which semantic classes it covers and what payload it returns.
+    - Current answer: `Open Design Decisions -> 12. Hover for Codepol-owned semantic classes`
+    - Detailed note: `TODO_CODEPOL_LSP_HOVER_MODEL.md`
+  - [x] Define renameable entity classes plus the exact `prepare rename` and `rename` preview, collision, and failure semantics.
+    - Current answer: `Open Design Decisions -> 13. Prepare rename and rename for Codepol-owned namespaces`
+    - Detailed note: `TODO_CODEPOL_LSP_RENAME_MODEL.md`
+- [x] Snapshot, replay, and freshness rules are defined at the decision-summary level.
+  - Current answer: `Open Design Decisions -> 5. Request ordering, cancellation, and snapshot consistency`
+  - Detailed note: `TODO_CODEPOL_LSP_SNAPSHOT_EXECUTION_CONTRACT.md`
+  - [x] Bind each deferred surface to its exact request class and consistency level where the choice is still method-specific, such as local versus cross-file `definition`.
+    - Current answer: `TODO_CODEPOL_LSP_SNAPSHOT_EXECUTION_CONTRACT.md -> Surface-to-contract matrix`
+- [x] Service-owned edit planning is defined at the decision-summary level.
+  - Current answer: `Open Design Decisions -> 1. Fix and code-action model`
+  - Detailed note: `TODO_CODEPOL_LSP_FIX_MODEL.md`
+  - [x] Extend the current edit-plan model only as needed for rename or refactor previews and execution metadata.
+    - Current answer: keep `EditPlan` as the center and add only lightweight operation annotations, optional preview structure, and execution metadata for preview/apply semantics; do not introduce separate rename/refactor plan roots unless they truly need different invariants.
+    - Detailed note: `TODO_CODEPOL_LSP_FIX_MODEL.md`
+- [x] Define the concrete threshold for when a separate extension RPC adapter is warranted instead of the current LSP JSON-RPC carrier.
+  - Current answer: keep a capability on LSP while it remains a portable document/workspace semantic request-response operation; require a separate extension RPC adapter once any hard trigger applies (feature-specific server session/state, UI-view-specific protocol model, large or streaming or paginated transport needs, or a distinct trust/auth/policy boundary) or once at least two soft triggers apply (non-text domain objects are central, the method is not meaningfully editor-portable, the custom schema family is expanding quickly, command semantics are product/workflow-specific, or the response shape mirrors one extension surface more than a semantic primitive).
+- [x] Update the companion decision notes now that the remaining deferred-surface semantics are fully defined.
 
 ## Implementation Phases
 
@@ -1030,9 +1176,9 @@ Current gap: the daemon/session lifecycle is now in place, but richer observabil
 - [x] Implement diagnostics publication using the shared diagnostic service.
 - [x] Implement `workspace/symbol` as a narrow Codepol-owned module-only `workspace_module` surface.
 - [x] Add progress and status signals for cold-start indexing.
-- [ ] Keep generic `definition`, `references`, `hover`, `prepare rename`, and `rename` deferred until Codepol-owned semantics for those surfaces are defined.
+- [ ] Keep generic `definition`, `references`, `hover`, `prepare rename`, and `rename` deferred from implementation; only explicitly defined Codepol-owned semantics may later be scoped in.
 
-Current status: the LSP server registers a client session, attaches a workspace, and implements overlay sync, diagnostics, `textDocument/codeAction`, `workspace/executeCommand`, module-only `workspace/symbol`, cold-start status publication, and read-only `codepol/indexStatus`, `codepol/dependencyGraph`, `codepol/semanticSearch`, and `codepol/architectureSummary` requests against the sessionized service boundary. Generic semantic navigation and rename are still pending by design.
+Current status: the LSP server registers a client session, attaches a workspace, and implements overlay sync, diagnostics, `textDocument/codeAction`, `workspace/executeCommand`, module-only `workspace/symbol`, cold-start status publication, and read-only `codepol/indexStatus`, `codepol/dependencyGraph`, `codepol/semanticSearch`, and `codepol/architectureSummary` requests against the sessionized service boundary. Generic semantic navigation, hover, and rename are still pending by design.
 
 ### Phase 5: CLI and tests migrate fully
 

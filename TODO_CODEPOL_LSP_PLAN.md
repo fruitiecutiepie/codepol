@@ -401,9 +401,36 @@
 - Keep generic `definition`, `references`, `hover`, `prepareRename`, and `rename` deferred; tranche 3 is complete without widening into those surfaces.
 
 ### Explicit Deferrals After Tranche 3
-- Keep generic `definition`, `references`, `hover`, `prepareRename`, and `rename` out of scope until Codepol-owned semantics for those surfaces are explicitly defined.
-- Any future refactor or rename flow must continue to validate exact snapshot preconditions and return `WorkspaceEditPlan`s rather than ad hoc edits.
-- Add a separate extension RPC transport only if later UI workflows outgrow the current LSP JSON-RPC carrier.
+- Keep generic `definition`, `references`, `hover`, `prepareRename`, and `rename` out of scope for implementation. Their Codepol-owned semantics are now defined, but any rollout should happen only as scoped follow-up work that preserves the narrow ownership model.
+- Any future refactor or rename flow must use the defined snapshot and execution contract and continue to return `WorkspaceEditPlan`s rather than ad hoc edits.
+- Keep the current LSP JSON-RPC carrier unless the documented extension-RPC threshold is met.
+
+### Constraints Already Defined For Any Later Follow-Up
+- Capability ownership matrix:
+  - per language, keep ownership explicit for which semantic classes on `definition`, `references`, `hover`, `prepareRename`, and `rename` are Codepol-owned versus delegated to `tsserver`, `Pylance`, or `Pyright`
+  - keep ownership defined by semantic class, not just by LSP method name
+- Exposure model:
+  - use the defined split between Codepol-owned results that are safe for default LSP handlers versus those that should stay behind explicit Codepol commands or views
+  - require provenance plus semantic-class labels so adapters can present alternate results without competing silently with the primary language server
+- Surface-specific semantics:
+  - `definition` and `references`: allowed target classes, multiplicity, ambiguity handling, relation kinds, and grouped-vs-graph presentation are captured in `TODO_CODEPOL_LSP_DEFINITION_REFERENCES_MODEL.md`.
+  - `hover`: covered semantic classes, invocation contexts, payload shape, and `relation_anchor` exclusion from MVP are captured in `TODO_CODEPOL_LSP_HOVER_MODEL.md`.
+  - `prepareRename` / `rename`: renameable entity classes, namespace rules, prepare requirements, preview behavior, collision policy, and user-visible failure modes are captured in `TODO_CODEPOL_LSP_RENAME_MODEL.md`.
+- Snapshot and execution contract:
+  - use the defined request bindings for each surface: client overlay version, replay epoch, and whether one pinned `analysisGeneration` is required
+  - require correctness-sensitive rename or refactor flows to use validate-then-execute semantics and fail on snapshot drift rather than silently re-targeting newer state
+- Edit-plan contract:
+  - keep rename and refactor previews and execution service-owned and `WorkspaceEditPlan`-backed rather than adapter-built `WorkspaceEdit`s
+  - widen `WorkspaceEditPlan` only as needed so rename or refactor plans can carry the metadata they need without falling back to ad hoc transport-specific edits
+- Extension transport threshold:
+  - use the defined criteria for a separate extension RPC carrier, such as long-lived subscriptions, streaming or progressive UI workflows, or extension-only interactions that do not fit the current request-response LSP JSON-RPC model
+- Supporting decision docs governing implementation:
+  - `TODO_CODEPOL_LSP_CAPABILITY_MATRIX.md`
+  - `TODO_CODEPOL_LSP_DEFINITION_REFERENCES_MODEL.md`
+  - `TODO_CODEPOL_LSP_HOVER_MODEL.md`
+  - `TODO_CODEPOL_LSP_RENAME_MODEL.md`
+  - `TODO_CODEPOL_LSP_SNAPSHOT_EXECUTION_CONTRACT.md`
+  - `TODO_CODEPOL_LSP_FIX_MODEL.md` if rename or refactor planning reuses or extends the current edit-plan model
 
 ## Tranche 4: Replacement Program (Completed)
 - Scope of the shipped tranche:

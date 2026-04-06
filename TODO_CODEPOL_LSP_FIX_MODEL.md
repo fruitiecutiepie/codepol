@@ -265,16 +265,62 @@ type EditProvenance = {
   fixCandidateId?: FixCandidateId;
 };
 
+type EditOperationKind = 'replace' | 'insert' | 'delete';
+
+type EditSemanticRole =
+  | 'rename.definition'
+  | 'rename.reference'
+  | 'rename.string_literal'
+  | 'rename.comment'
+  | 'refactor.extract'
+  | 'refactor.inline'
+  | 'refactor.move'
+  | 'refactor.rewrite'
+  | 'import.add'
+  | 'import.remove'
+  | 'format.cleanup'
+  | 'other';
+
+type PreviewLabel = {
+  title?: string;
+  detail?: string;
+};
+
+type PreviewSnippet = {
+  before: string;
+  after: string;
+};
+
+type FileEditPreviewItem = {
+  opIndex: number;
+  title?: string;
+  snippet?: PreviewSnippet;
+};
+
+type FileEditPreviewGroup = {
+  id: string;
+  title: string;
+  semanticRole?: EditSemanticRole;
+  itemIndexes: number[];
+};
+
 type TextEditOp = {
   startByte: number;
   endByte: number;
   newText: string;
   provenance: EditProvenance;
+  kind?: EditOperationKind;
+  semanticRole?: EditSemanticRole;
+  previewLabel?: PreviewLabel;
 };
 
 type FileEdit = WithFile & {
   baseRevision: RevisionId | string;
   operations: TextEditOp[];
+  preview?: {
+    items?: FileEditPreviewItem[];
+    groups?: FileEditPreviewGroup[];
+  };
 };
 
 type EditPlanOrigin = {
@@ -413,6 +459,63 @@ type PlannedConflict =
   | DuplicateRuleDomainConflict
   | NonCommutativeEnginePassesConflict;
 
+type EditPlanIntent =
+  | 'quickfix'
+  | 'fix_all'
+  | 'rename'
+  | 'refactor'
+  | 'organize_imports'
+  | 'format'
+  | 'other';
+
+type EditExecutionMode =
+  | 'apply_direct'
+  | 'preview_then_apply'
+  | 'command_driven';
+
+type StalePlanPolicy = 'reject' | 'recompute' | 'best_effort_rebase';
+
+type ApplyAtomicity = 'all_or_nothing' | 'per_file' | 'best_effort';
+
+type RenameExecutionMetadata = {
+  kind: 'rename';
+  symbolId?: string;
+  oldName: string;
+  newName: string;
+};
+
+type RefactorExecutionMetadata = {
+  kind: 'refactor';
+  refactorKind:
+    | 'extract_function'
+    | 'extract_constant'
+    | 'inline_symbol'
+    | 'move_symbol'
+    | 'rewrite'
+    | string;
+};
+
+type ExecutionMetadata = {
+  intent: EditPlanIntent;
+  mode: EditExecutionMode;
+  stalePlanPolicy?: StalePlanPolicy;
+  atomicity?: ApplyAtomicity;
+  commandId?: string;
+  commandTitle?: string;
+  details?: RenameExecutionMetadata | RefactorExecutionMetadata;
+};
+
+type PreviewCountByRole = {
+  semanticRole: EditSemanticRole;
+  count: number;
+};
+
+type EditPlanPreviewSummary = {
+  fileCount: number;
+  operationCount: number;
+  countsByRole?: PreviewCountByRole[];
+};
+
 type EditPlan = WithId<EditPlanId> &
   WithTitle &
   WithApplicability & {
@@ -421,6 +524,8 @@ type EditPlan = WithId<EditPlanId> &
     origin: EditPlanOrigin[];
     conflicts?: PlannedConflict[];
     requiresConfirmation?: boolean;
+    execution?: ExecutionMetadata;
+    previewSummary?: EditPlanPreviewSummary;
   };
 ```
 
@@ -463,15 +568,38 @@ type SkippedEditSummary = {
   reason:
     | 'conflict'
     | 'stale_revision'
+    | 'locked'
     | 'not_applicable'
     | 'planner_rejected';
 };
 
+type ApplyStatus =
+  | 'applied'
+  | 'partially_applied'
+  | 'rejected'
+  | 'stale'
+  | 'recomputed_and_applied';
+
+type ExecutionEvent =
+  | {
+      type: 'preview_confirmed';
+    }
+  | {
+      type: 'plan_recomputed';
+    }
+  | {
+      type: 'file_skipped';
+      fileId: FileId | string;
+      reason: 'conflict' | 'stale_revision' | 'locked' | 'planner_rejected';
+    };
+
 type ApplyResult = {
   planId: EditPlanId | string;
+  status: ApplyStatus;
   applied: AppliedEditSummary[];
   skipped?: SkippedEditSummary[];
   conflicts?: PlannedConflict[];
+  events?: ExecutionEvent[];
 };
 ```
 
@@ -726,6 +854,48 @@ Use:
 
 - `EditPlan` as the canonical internal model
 - `WorkspaceEdit` as one serialization target for adapters
+
+## Minimal Extension For Rename And Refactor
+
+Keep `EditPlan` as the center. Rename and refactor are still planned workspace edits, not a separate parallel plan family unless they eventually prove different invariants.
+
+Use the minimal extension strategy:
+
+- add lightweight operation annotations on `TextEditOp`
+- add optional preview items and groups on `FileEdit`
+- add execution metadata plus optional preview summary on `EditPlan`
+- add richer status and event metadata on `ApplyResult`
+
+That is enough for:
+
+- rename preview
+- refactor preview
+- guarded execution
+- partial failure reporting
+- confirmation UX
+
+Important rules:
+
+- preview data is optional and derived; execution still runs from `operations`
+- rename or refactor intent belongs in plan-level execution metadata, not duplicated on every edit
+- lightweight `semanticRole` and preview labels are enough for grouped previews; do not put AST payloads or transport-specific UI state on edit operations
+- do not introduce `RenamePlan` or `RefactorPlan` root types unless a future operation truly needs different planner invariants
+
+Typical mappings:
+
+- rename: `execution.intent: 'rename'`, `mode: 'preview_then_apply'`, `atomicity: 'all_or_nothing'`, `stalePlanPolicy: 'recompute'`
+- extract or inline refactor: same `EditPlan` shape, but with refactor-specific `details` and richer preview grouping
+- simple quick fix: `execution.intent: 'quickfix'`, `mode: 'apply_direct'`, usually no preview groups beyond what adapters derive lazily
+
+Do not add yet:
+
+- separate `RenamePlan` or `RefactorPlan` root types
+- AST nodes in preview payloads
+- transport-specific preview trees
+- per-edit execution state
+- generic read-surface consistency annotations on `EditPlan`
+
+This keeps `EditPlan` as the single canonical plan type while still giving rename and refactor flows the preview and execution semantics they need.
 
 ## Suggested Contract Wording
 
