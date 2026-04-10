@@ -1097,15 +1097,15 @@ Likely direction:
 - future extension package
   - custom RPC client plus UI glue
 
-Status on 2026-04-05:
+Status on 2026-04-10:
 
 - `packages/workspace-service` now owns shared diagnostics orchestration plus a sessionized workspace service with daemon transport, replay, watcher invalidation, warm-cache restore, and queueing/freshness control
 - `apps/lsp` exists as a stdio server and now ships diagnostics, code actions, edit-plan execution, `workspace/symbol`, read-only `codepol/*` RPC, sessionized overlay sync, and cold-start index status/progress through the shared service
 - `apps/cli` is now a thin adapter over the shared service
 - per-client overlay isolation and session-scoped edit plans now exist in the shared service layer
-- generic hover, rename, definition, and references remain deferred from implementation by default; Codepol-owned definition/references, hover, and rename semantics are now documented, while per-surface snapshot binding and edit-plan integration follow-ups remain pending
+- generic hover, rename, definition, and references are no longer blocked by design; the ownership, surface-semantics, snapshot, and edit-plan prerequisites are now documented, so implementation can proceed as the next follow-up tranche
 
-Deferred-surface unblock checklist:
+Generic-surface readiness checklist:
 
 - [x] Capability ownership and coexistence are defined at the decision-summary level.
   - Current answer: `Open Design Decisions -> 2. Capability ownership matrix by language`
@@ -1158,7 +1158,7 @@ Deferred-surface unblock checklist:
 - [x] Reuse the incremental indexing pattern already demonstrated in `packages/plugin-eslint/src/eslintAdapter.ts`.
 - [x] Make cross-file analysis use overlay-aware snapshots rather than stale on-disk content where possible.
 
-Current gap: per-client overlays are now isolated in the in-process service, but daemon replay, watcher-driven invalidation, and persisted warm-state reuse are still pending.
+Current status: per-client overlays stay isolated across both the in-process and daemon-backed service paths, and daemon replay, watcher-driven invalidation, and persisted warm-state reuse are now in place.
 
 ### Phase 3: daemon/service host
 
@@ -1168,7 +1168,7 @@ Current gap: per-client overlays are now isolated in the in-process service, but
 - [x] Add telemetry and health/status reporting.
 - [x] Add request cancellation, timeouts, and queue prioritization.
 
-Current gap: the daemon/session lifecycle is now in place, but richer observability and more explicit latency budgeting are still follow-up work.
+Current follow-up: the daemon/session lifecycle is now in place, but richer observability and more explicit latency budgeting are still follow-up work.
 
 ### Phase 4: LSP adapter
 
@@ -1176,9 +1176,9 @@ Current gap: the daemon/session lifecycle is now in place, but richer observabil
 - [x] Implement diagnostics publication using the shared diagnostic service.
 - [x] Implement `workspace/symbol` as a narrow Codepol-owned module-only `workspace_module` surface.
 - [x] Add progress and status signals for cold-start indexing.
-- [ ] Keep generic `definition`, `references`, `hover`, `prepare rename`, and `rename` deferred from implementation; only explicitly defined Codepol-owned semantics may later be scoped in.
+- [ ] Implement generic `definition`, `references`, `hover`, `prepare rename`, and `rename` now that the deferred-surface prerequisites are unblocked.
 
-Current status: the LSP server registers a client session, attaches a workspace, and implements overlay sync, diagnostics, `textDocument/codeAction`, `workspace/executeCommand`, module-only `workspace/symbol`, cold-start status publication, and read-only `codepol/indexStatus`, `codepol/dependencyGraph`, `codepol/semanticSearch`, and `codepol/architectureSummary` requests against the sessionized service boundary. Generic semantic navigation, hover, and rename are still pending by design.
+Current status: the LSP server registers a client session, attaches a workspace, and implements overlay sync, diagnostics, `textDocument/codeAction`, `workspace/executeCommand`, module-only `workspace/symbol`, cold-start status publication, and read-only `codepol/indexStatus`, `codepol/dependencyGraph`, `codepol/semanticSearch`, and `codepol/architectureSummary` requests against the sessionized service boundary. Generic semantic navigation, hover, and rename are still pending implementation, but they are no longer deferred by design.
 
 ### Phase 5: CLI and tests migrate fully
 
@@ -1187,7 +1187,7 @@ Current status: the LSP server registers a client session, attaches a workspace,
 - [x] Add daemon-level tests for multi-client overlay isolation.
 - [x] Add adapter-level tests for LSP request/response mapping.
 
-Current status: in-process integration coverage now includes multi-client overlay isolation, session-scoped edit-plan ownership, and per-session index-status transitions; daemon and adapter regression coverage now also includes read-RPC freshness, read-request supersession, and reconnect-driven status-progress behavior.
+Current status: in-process integration coverage now includes multi-client overlay isolation, session-scoped edit-plan ownership, and per-session index-status transitions; daemon and adapter regression coverage now also includes read-RPC freshness, read-request supersession, reconnect-driven status-progress behavior, shared-workspace reuse, watched invalidation, and warm-start restore behavior.
 
 ### Phase 6: extension RPC and richer features
 
@@ -1211,11 +1211,11 @@ Current status: the workspace service now resolves JS/TS native-vs-wrapped owner
 - [x] per-client overlays do not leak across clients
 - [x] the CLI and the LSP use the same aggregated diagnostic service
 - [x] cross-file rules use fresh incremental index state
-- [ ] diagnostics preserve severity, source, code, ranges, and fix data
-- [ ] daemon restarts do not require architecture changes in adapters
-- [ ] cold-start indexing exposes status and does not make the extension feel hung
+- [x] diagnostics preserve severity, source, code, and ranges, while executable fix payloads are surfaced through `WorkspaceCodeAction` and `WorkspaceEditPlan`
+- [x] daemon restarts do not require architecture changes in adapters
+- [x] cold-start indexing exposes status and does not make the extension feel hung
 
-Note on diagnostics and fixes: severity, source, code, and ranges are normalized on `WorkspaceDiagnostic`, while fix data currently lives on `WorkspaceCodeAction` and `WorkspaceEditPlan` rather than being embedded directly on diagnostics.
+Note on diagnostics and fixes: `WorkspaceDiagnostic` intentionally carries normalized severity, source, code, and range data, while executable fix payloads live on `WorkspaceCodeAction` and `WorkspaceEditPlan` rather than being embedded directly on diagnostics.
 
 ## Test Coverage To Add
 
@@ -1225,10 +1225,10 @@ Note on diagnostics and fixes: severity, source, code, and ranges are normalized
 - [ ] integration tests for cross-file rename against overlays
 - [ ] integration tests for diagnostics merged from native tree checks and wrapped linters
 - [ ] integration tests for cancellation and timeout behavior
-- [ ] daemon tests for multi-client isolation
-- [ ] daemon tests for workspace reuse
-- [ ] daemon tests for cache invalidation
-- [ ] daemon tests for warm-start behavior
+- [x] daemon tests for multi-client isolation
+- [x] daemon tests for workspace reuse
+- [x] daemon tests for cache invalidation
+- [x] daemon tests for warm-start behavior
 - [x] LSP adapter tests for request translation
 - [x] LSP adapter tests for response mapping
 - [x] LSP adapter tests for diagnostics publication

@@ -5,7 +5,7 @@
 - Tranche 2 is complete in the repo: the **daemon control plane and long-lived host** now sit over the same engine, with reconnect, replay, invalidation, persistence, queueing/cancellation, and rollout coverage in place without widening the semantic feature surface yet.
 - Tranche 3 is complete in the repo for the narrowed Phase-4/Phase-6 cut: the LSP now ships **narrow `workspace/symbol`**, **cold-start status/progress**, and **read-only `codepol/*` RPC** over the existing LSP JSON-RPC stream.
 - Tranche 4 is complete in the repo for its first real replacement slice: the analyzer ownership/scorecard foundation is in place, and `@codepol/plugin/no-unused-vars` is the first shipped native-over-wrapped JS/TS migration with parity coverage on the current service, daemon, CLI, and LSP surfaces.
-- Keep Phase 4 scoped to **Codepol-owned semantics only**. Do not add generic hover or generic rename that compete with `tsserver`, `Pylance`, or `Pyright`.
+- The earlier Codepol-only restriction on generic `definition`, `references`, `hover`, `prepareRename`, and `rename` is now lifted. Those surfaces are the next scoped follow-up tranche, but ownership still must remain explicit against `tsserver`, `Pylance`, and `Pyright`.
 - Keep `WorkspaceDiagnostic` narrow. Fixes remain surfaced through `WorkspaceCodeAction` and `WorkspaceEditPlan`, not embedded into diagnostics.
 - Keep `queryIndexStatus` as the status source of truth and expand it for daemon/readiness reporting rather than inventing a parallel status API.
 
@@ -398,14 +398,14 @@
 - `workspace/symbol` wording is now tightened to the shipped module-only `workspace_module` behavior.
 - Daemon regression coverage now includes explicit `query_semantic_search` supersession plus dedicated stale-`analysisGeneration` checks for each tranche-3 read RPC.
 - LSP regression coverage now includes reconnect-plus-progress behavior so status polling after daemon reconnect is covered directly.
-- Keep generic `definition`, `references`, `hover`, `prepareRename`, and `rename` deferred; tranche 3 is complete without widening into those surfaces.
+- Tranche 3 is complete without widening into generic `definition`, `references`, `hover`, `prepareRename`, or `rename`; that deferral is now lifted for follow-up implementation.
 
-### Explicit Deferrals After Tranche 3
-- Keep generic `definition`, `references`, `hover`, `prepareRename`, and `rename` out of scope for implementation. Their Codepol-owned semantics are now defined, but any rollout should happen only as scoped follow-up work that preserves the narrow ownership model.
+### Reopened Follow-Up After Tranche 3
+- Generic `definition`, `references`, `hover`, `prepareRename`, and `rename` are now back in scope for implementation. The earlier Codepol-owned decision notes remain useful constraints, but rollout is no longer deferred by default.
 - Any future refactor or rename flow must use the defined snapshot and execution contract and continue to return `WorkspaceEditPlan`s rather than ad hoc edits.
 - Keep the current LSP JSON-RPC carrier unless the documented extension-RPC threshold is met.
 
-### Constraints Already Defined For Any Later Follow-Up
+### Constraints Already Defined For The Reopened Follow-Up
 - Capability ownership matrix:
   - per language, keep ownership explicit for which semantic classes on `definition`, `references`, `hover`, `prepareRename`, and `rename` are Codepol-owned versus delegated to `tsserver`, `Pylance`, or `Pyright`
   - keep ownership defined by semantic class, not just by LSP method name
@@ -478,6 +478,27 @@
 
 ## Assumptions and Defaults
 - Tranche 4 is complete after `4A foundation` plus the first `4B` migration for `@codepol/plugin/no-unused-vars`; future candidates stay opt-in behind the same parity gate.
-- Phase 4 remains Codepol-only in scope until a later explicit decision changes the ownership matrix.
+- Tranche 4 shipped under a Codepol-only ownership model; the newly unblocked generic semantic surfaces are tracked as follow-up tranche work under an explicit ownership matrix.
 - Fix payloads stay separate from diagnostics.
 - Session-local derived indexes are an acceptable tranche-1 tradeoff; shared-index optimization is deferred.
+
+## Tranche 5: Generic Definition, References, Hover, PrepareRename, and Rename (Unblocked)
+- Scope this tranche to implementing the previously deferred generic semantic-navigation and rename surfaces through the existing shared service, daemon transport, and LSP adapter.
+- Use the existing decision notes as prerequisites already satisfied:
+  - capability ownership/coexistence is defined
+  - surface-specific semantics are documented for `definition`/`references`, `hover`, and `prepareRename`/`rename`
+  - snapshot/replay/freshness rules are defined
+  - edit-plan constraints for rename/refactor execution are defined
+- Keep rollout explicit:
+  - preserve an ownership matrix per language and semantic class
+  - do not silently compete with `tsserver`, `Pylance`, or `Pyright`
+  - keep rename and refactor execution validate-then-apply and `WorkspaceEditPlan`-backed
+- Workstreams:
+  - service and core types: add the editor-neutral result and request shapes needed for generic `definition`, `references`, `hover`, `prepareRename`, and rename preview/apply
+  - daemon transport: add RPC coverage, freshness binding, cancellation, and queue priorities for the new methods
+  - LSP adapter: advertise the new capabilities, map requests/responses, and preserve coexistence rules with the primary language server
+  - tests: add overlay-aware definition/reference coverage, hover freshness coverage, prepare-rename gating, rename preview/apply coverage, and stale-snapshot rejection
+- Exit criteria:
+  - these surfaces are no longer described as deferred in the status docs
+  - overlay/replay/snapshot guarantees are enforced for each new surface
+  - rename preview and apply remain auditable, bounded, and fail closed on drift or ambiguity
