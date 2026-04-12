@@ -60,6 +60,13 @@ import {
   type WorkspaceDiagnosticSeverity,
   type WorkspaceFeatureStatus,
   type WorkspaceEditPlan,
+  type WorkspaceSemanticDefinitionResult,
+  type WorkspaceSemanticHoverResult,
+  type WorkspaceSemanticReferenceGroup,
+  type WorkspaceSemanticReferenceItem,
+  type WorkspaceSemanticReferencesGroup,
+  type WorkspaceSemanticReferencesResult,
+  type WorkspaceSemanticTarget,
   type WorkspaceInstanceId,
   type WorkspaceSearchResult,
   type WorkspaceSymbolResult,
@@ -94,6 +101,8 @@ const PYTHON_FILE_EXTENSIONS = ['.py', '.pyw'];
 const WORKSPACE_WATCH_IGNORED = ['**/node_modules/**', '**/.git/**'];
 const WORKSPACE_SYMBOL_LIMIT_DEFAULT = 50;
 const WORKSPACE_SEARCH_LIMIT_DEFAULT = 20;
+const WORKSPACE_SEMANTIC_REFERENCES_TOTAL_LIMIT = 200;
+const WORKSPACE_SEMANTIC_REFERENCES_GROUP_LIMIT = 50;
 const WORKSPACE_NATIVE_OWNERSHIP_LANGUAGES = ['javascript', 'jsx', 'typescript', 'tsx'];
 
 function workspaceRequestCancelledErrorCreate(): Error {
@@ -376,6 +385,30 @@ export type WorkspaceService = {
     analysisGeneration?: number;
     signal?: AbortSignal;
   }) => Promise<WorkspaceSearchResult[]>;
+  querySemanticDefinition: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceSemanticDefinitionResult | null>;
+  querySemanticReferences: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceSemanticReferencesResult | null>;
+  querySemanticHover: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceSemanticHoverResult | null>;
   queryArchitectureSummary: (input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;
@@ -1473,6 +1506,300 @@ function workspaceSemanticSearchResultsGet(
     return left.name.localeCompare(right.name);
   });
   return results.slice(0, limit);
+}
+
+type WorkspaceSemanticReferenceCandidate = WorkspaceSemanticReferenceItem & {
+  filePath: string;
+};
+
+function workspaceSemanticTargetResolve(
+  index: ProjectIndex,
+  uri: string,
+): { filePath: string; target: WorkspaceSemanticTarget } | undefined {
+  let filePath: string;
+  try {
+    filePath = workspaceUriToPath(uri);
+  } catch {
+    return undefined;
+  }
+  if (!index.filesGet().includes(filePath)) {
+    return undefined;
+  }
+  return {
+    filePath,
+    target: {
+      uri: workspacePathToUri(filePath),
+      semanticClass: 'architecture_node',
+    },
+  };
+}
+
+function workspaceLocationFileAnchorCreate(filePath: string) {
+  return {
+    uri: workspacePathToUri(filePath),
+    range: {
+      start: { line: 0, character: 0 },
+      end: { line: 0, character: 0 },
+    },
+  };
+}
+
+function workspaceSemanticDefinitionResultCreate(
+  target: WorkspaceSemanticTarget,
+): WorkspaceSemanticDefinitionResult {
+  return {
+    kind: 'single_location',
+    target,
+    location: workspaceLocationFileAnchorCreate(workspaceUriToPath(target.uri)),
+    source: 'codepol',
+    semanticClass: 'architecture_node',
+  };
+}
+
+function workspaceSemanticReferenceCandidatesGet(
+  workspace: WorkspaceContextState,
+  state: WorkspaceDocumentsState,
+  index: ProjectIndex,
+  input: {
+    fromFilePath: string;
+    targetFilePath: string;
+    relationKind: Exclude<WorkspaceSemanticReferenceGroup, 'declarations'>;
+  },
+): WorkspaceSemanticReferenceCandidate[] {
+  const candidates: WorkspaceSemanticReferenceCandidate[] = [];
+  const seen = new Set<string>();
+  const source = workspaceSourceGet(state, input.fromFilePath);
+  const workspaceRelativePath = workspaceRelativePathCreate(
+    workspace.rootPath,
+    input.fromFilePath,
+  );
+  const candidateAdd = (
+    byteRange: { start: number; end: number },
+    detail: string,
+  ) => {
+    const dedupeKey = [
+      input.fromFilePath,
+      input.targetFilePath,
+      byteRange.start,
+      byteRange.end,
+      input.relationKind,
+    ].join(':');
+    if (seen.has(dedupeKey)) {
+      return;
+    }
+    seen.add(dedupeKey);
+    candidates.push({
+      location: {
+        uri: workspacePathToUri(input.fromFilePath),
+        range: workspaceRangeFromByteRange(source, byteRange),
+      },
+      label: workspaceRelativePath,
+      detail,
+      relationKind: input.relationKind,
+      semanticClass: 'architecture_node',
+      filePath: input.fromFilePath,
+    });
+  };
+
+  for (const binding of index.importBindingsGet(input.fromFilePath)) {
+    if (binding.resolvedModulePath !== input.targetFilePath) {
+      continue;
+    }
+    const localSymbol = index.symbolGet(binding.localSymbolId);
+    const importLabel = binding.isNamespace
+      ? `namespace import from ${binding.moduleSpec}`
+      : binding.isDefault
+        ? `default import from ${binding.moduleSpec}`
+        : `import ${binding.importedName} from ${binding.moduleSpec}`;
+    candidateAdd(binding.byteRange, localSymbol ? importLabel : importLabel);
+  }
+
+  for (const imp of index.importsGet(input.fromFilePath)) {
+    if (imp.resolvedModulePath !== input.targetFilePath) {
+      continue;
+    }
+    candidateAdd(imp.byteRange, `import from ${imp.spec}`);
+  }
+
+  candidates.sort((left, right) => {
+    const fileDifference = left.filePath.localeCompare(right.filePath);
+    if (fileDifference !== 0) {
+      return fileDifference;
+    }
+    const lineDifference = left.location.range.start.line - right.location.range.start.line;
+    if (lineDifference !== 0) {
+      return lineDifference;
+    }
+    const characterDifference =
+      left.location.range.start.character - right.location.range.start.character;
+    if (characterDifference !== 0) {
+      return characterDifference;
+    }
+    const labelDifference = left.label.localeCompare(right.label);
+    if (labelDifference !== 0) {
+      return labelDifference;
+    }
+    return (left.detail ?? '').localeCompare(right.detail ?? '');
+  });
+
+  return candidates;
+}
+
+function workspaceSemanticReferencesGroupResultCreate(
+  group: WorkspaceSemanticReferenceGroup,
+  candidates: WorkspaceSemanticReferenceCandidate[],
+  remainingLimit: number,
+): {
+  groupResult: WorkspaceSemanticReferencesGroup;
+  nextRemainingLimit: number;
+} {
+  const allowedCount = Math.max(
+    0,
+    Math.min(
+      remainingLimit,
+      WORKSPACE_SEMANTIC_REFERENCES_GROUP_LIMIT,
+      candidates.length,
+    ),
+  );
+  return {
+    groupResult: {
+      group,
+      totalCount: candidates.length,
+      truncated: allowedCount < candidates.length,
+      items: candidates.slice(0, allowedCount).map(({ filePath: _filePath, ...item }) => item),
+    },
+    nextRemainingLimit: Math.max(0, remainingLimit - allowedCount),
+  };
+}
+
+function workspaceSemanticReferencesResultCreate(
+  workspace: WorkspaceContextState,
+  state: WorkspaceDocumentsState,
+  index: ProjectIndex,
+  input: {
+    target: WorkspaceSemanticTarget;
+    filePath: string;
+  },
+): WorkspaceSemanticReferencesResult {
+  const workspaceRelativePath = workspaceRelativePathCreate(
+    workspace.rootPath,
+    input.filePath,
+  );
+  const declarations: WorkspaceSemanticReferenceCandidate[] = [{
+    location: workspaceLocationFileAnchorCreate(input.filePath),
+    label: workspaceRelativePath,
+    detail: 'module declaration',
+    relationKind: 'declarations',
+    semanticClass: 'architecture_node',
+    filePath: input.filePath,
+  }];
+  const incoming = index
+    .moduleImportersGet(input.filePath)
+    .sort()
+    .flatMap((filePath) =>
+      workspaceSemanticReferenceCandidatesGet(workspace, state, index, {
+        fromFilePath: filePath,
+        targetFilePath: input.filePath,
+        relationKind: 'incoming',
+      }),
+    );
+  const outgoing = index
+    .moduleImporteesGet(input.filePath)
+    .sort()
+    .flatMap((filePath) =>
+      workspaceSemanticReferenceCandidatesGet(workspace, state, index, {
+        fromFilePath: input.filePath,
+        targetFilePath: filePath,
+        relationKind: 'outgoing',
+      }),
+    );
+
+  let remainingLimit = WORKSPACE_SEMANTIC_REFERENCES_TOTAL_LIMIT;
+  const { groupResult: declarationsGroup, nextRemainingLimit: afterDeclarations } =
+    workspaceSemanticReferencesGroupResultCreate('declarations', declarations, remainingLimit);
+  remainingLimit = afterDeclarations;
+  const { groupResult: incomingGroup, nextRemainingLimit: afterIncoming } =
+    workspaceSemanticReferencesGroupResultCreate('incoming', incoming, remainingLimit);
+  remainingLimit = afterIncoming;
+  const { groupResult: outgoingGroup, nextRemainingLimit: afterOutgoing } =
+    workspaceSemanticReferencesGroupResultCreate('outgoing', outgoing, remainingLimit);
+  remainingLimit = afterOutgoing;
+
+  const groups = [declarationsGroup, incomingGroup, outgoingGroup];
+  const totalAvailableItems = groups.reduce((count, group) => count + group.totalCount, 0);
+  const totalItems = groups.reduce((count, group) => count + group.items.length, 0);
+
+  return {
+    target: input.target,
+    presentation: 'grouped_list',
+    totalItems,
+    totalAvailableItems,
+    truncated: totalItems < totalAvailableItems,
+    groups,
+    source: 'codepol',
+    semanticClass: 'architecture_node',
+  };
+}
+
+function workspaceSemanticHoverResultCreate(
+  workspace: WorkspaceContextState,
+  index: ProjectIndex,
+  input: {
+    target: WorkspaceSemanticTarget;
+    filePath: string;
+  },
+): WorkspaceSemanticHoverResult {
+  const workspaceRelativePath = workspaceRelativePathCreate(
+    workspace.rootPath,
+    input.filePath,
+  );
+  const importerCount = index.moduleImportersGet(input.filePath).length;
+  const importeeCount = index.moduleImporteesGet(input.filePath).length;
+  const isEntryPoint = index.moduleEntryPointsGet().includes(input.filePath);
+  const isCycleMember = index
+    .moduleCyclesGet()
+    .some((cycle) => cycle.includes(input.filePath));
+  const containerName = path.dirname(workspaceRelativePath);
+  const tags: string[] = [];
+  if (isEntryPoint) {
+    tags.push('entry-point');
+  }
+  if (isCycleMember) {
+    tags.push('cycle');
+  }
+
+  return {
+    target: input.target,
+    title: path.basename(input.filePath),
+    subtitle: workspaceRelativePath,
+    summary: 'Indexed architecture node for the workspace module graph.',
+    fields: [
+      {
+        label: 'Directory',
+        value: containerName === '.' ? '(root)' : containerName,
+      },
+      {
+        label: 'Inbound edges',
+        value: String(importerCount),
+      },
+      {
+        label: 'Outbound edges',
+        value: String(importeeCount),
+      },
+      {
+        label: 'Entry point',
+        value: isEntryPoint ? 'Yes' : 'No',
+      },
+      {
+        label: 'Cycle member',
+        value: isCycleMember ? 'Yes' : 'No',
+      },
+    ],
+    tags: tags.length > 0 ? tags : undefined,
+    actions: ['go_to_definition', 'find_references', 'show_graph'],
+    source: 'codepol',
+    semanticClass: 'architecture_node',
+  };
 }
 
 function workspaceDependencyGraphResultCreate(
@@ -3820,6 +4147,87 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     return workspaceSemanticSearchResultsGet(workspace, workspaceSession, index, input);
   }
 
+  async querySemanticDefinition(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceSemanticDefinitionResult | null> {
+    const { workspace, workspaceSession } = workspaceSessionGet(
+      this.workspaces,
+      this.clientSessions,
+      input.clientSessionId,
+      input.workspaceId,
+    );
+    const index = await this.workspaceSessionIndexEnsure(workspace, workspaceSession, {
+      signal: input.signal,
+    });
+    workspaceAnalysisGenerationValidate(workspaceSession, input);
+    const resolvedTarget = workspaceSemanticTargetResolve(index, input.uri);
+    if (!resolvedTarget) {
+      return null;
+    }
+    return workspaceSemanticDefinitionResultCreate(resolvedTarget.target);
+  }
+
+  async querySemanticReferences(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceSemanticReferencesResult | null> {
+    const { workspace, workspaceSession } = workspaceSessionGet(
+      this.workspaces,
+      this.clientSessions,
+      input.clientSessionId,
+      input.workspaceId,
+    );
+    const index = await this.workspaceSessionIndexEnsure(workspace, workspaceSession, {
+      signal: input.signal,
+    });
+    workspaceAnalysisGenerationValidate(workspaceSession, input);
+    const resolvedTarget = workspaceSemanticTargetResolve(index, input.uri);
+    if (!resolvedTarget) {
+      return null;
+    }
+    return workspaceSemanticReferencesResultCreate(workspace, workspaceSession, index, {
+      target: resolvedTarget.target,
+      filePath: resolvedTarget.filePath,
+    });
+  }
+
+  async querySemanticHover(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceSemanticHoverResult | null> {
+    const { workspace, workspaceSession } = workspaceSessionGet(
+      this.workspaces,
+      this.clientSessions,
+      input.clientSessionId,
+      input.workspaceId,
+    );
+    const index = await this.workspaceSessionIndexEnsure(workspace, workspaceSession, {
+      signal: input.signal,
+    });
+    workspaceAnalysisGenerationValidate(workspaceSession, input);
+    const resolvedTarget = workspaceSemanticTargetResolve(index, input.uri);
+    if (!resolvedTarget) {
+      return null;
+    }
+    return workspaceSemanticHoverResultCreate(workspace, index, {
+      target: resolvedTarget.target,
+      filePath: resolvedTarget.filePath,
+    });
+  }
+
   async queryArchitectureSummary(input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;
@@ -3987,6 +4395,39 @@ class InProcessWorkspaceService implements WorkspaceService {
     signal?: AbortSignal;
   }): Promise<WorkspaceSearchResult[]> {
     return this.engine.querySemanticSearch(input);
+  }
+
+  querySemanticDefinition(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceSemanticDefinitionResult | null> {
+    return this.engine.querySemanticDefinition(input);
+  }
+
+  querySemanticReferences(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceSemanticReferencesResult | null> {
+    return this.engine.querySemanticReferences(input);
+  }
+
+  querySemanticHover(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceSemanticHoverResult | null> {
+    return this.engine.querySemanticHover(input);
   }
 
   queryArchitectureSummary(input: {

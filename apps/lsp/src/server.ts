@@ -8,6 +8,9 @@ import {
   type WorkspaceDiagnostic,
   type WorkspaceEditPlan,
   type WorkspaceSearchResult,
+  type WorkspaceSemanticDefinitionResult,
+  type WorkspaceSemanticHoverResult,
+  type WorkspaceSemanticReferencesResult,
   type WorkspaceSymbolResult,
 } from '@codepol/core';
 import {
@@ -18,6 +21,8 @@ import {
 } from '@codepol/workspace-service';
 
 const APPLY_EDIT_PLAN_COMMAND = 'codepol.applyEditPlan';
+const GO_TO_SEMANTIC_DEFINITION_COMMAND = 'codepol.goToSemanticDefinition';
+const SHOW_ARCHITECTURE_LINKS_COMMAND = 'codepol.showArchitectureLinks';
 const STATUS_PROGRESS_TOKEN = 'codepol/index-status';
 const STATUS_POLL_INTERVAL_ACTIVE_MS = 25;
 const STATUS_POLL_INTERVAL_IDLE_MS = 250;
@@ -874,6 +879,18 @@ export class CodepolLspServer {
           query?: string;
           limit?: number;
         }, context);
+      case 'codepol/semanticDefinition':
+        return this.semanticDefinitionHandle(params as {
+          uri?: string;
+        }, context);
+      case 'codepol/semanticReferences':
+        return this.semanticReferencesHandle(params as {
+          uri?: string;
+        }, context);
+      case 'codepol/semanticHover':
+        return this.semanticHoverHandle(params as {
+          uri?: string;
+        }, context);
       case 'codepol/architectureSummary':
         return this.architectureSummaryHandle(context);
       default:
@@ -936,7 +953,11 @@ export class CodepolLspServer {
         codeActionProvider: true,
         workspaceSymbolProvider: true,
         executeCommandProvider: {
-          commands: [APPLY_EDIT_PLAN_COMMAND],
+          commands: [
+            APPLY_EDIT_PLAN_COMMAND,
+            GO_TO_SEMANTIC_DEFINITION_COMMAND,
+            SHOW_ARCHITECTURE_LINKS_COMMAND,
+          ],
         },
       },
       serverInfo: {
@@ -1160,52 +1181,65 @@ export class CodepolLspServer {
 
   private async executeCommandHandle(params: {
     command: string;
-    arguments?: Array<{ planId?: string }>;
+    arguments?: Array<{ planId?: string; uri?: string }>;
   }, context: { requestId?: JsonRpcId; signal?: AbortSignal } = {}): Promise<unknown> {
-    if (
-      !this.registeredClientSessionId ||
-      !this.workspaceId ||
-      params.command !== APPLY_EDIT_PLAN_COMMAND
-    ) {
-      return null;
-    }
-    const planId = params.arguments?.[0]?.planId;
-    if (!planId) {
+    if (!this.registeredClientSessionId || !this.workspaceId) {
       return null;
     }
 
-    const documentVersions: Record<string, number> = {};
-    for (const document of this.documents.values()) {
-      documentVersions[document.uri] = document.version;
-    }
+    if (params.command === APPLY_EDIT_PLAN_COMMAND) {
+      const planId = params.arguments?.[0]?.planId;
+      if (!planId) {
+        return null;
+      }
 
-    return this.serviceCall(async (service) => {
-      const applyResult = await service.applyEditPlan({
-        clientSessionId: this.registeredClientSessionId!,
-        workspaceId: this.workspaceId!,
-        planId,
-        documentVersions,
-        requestId:
-          context.requestId === undefined || context.requestId === null
-            ? undefined
-            : `lsp-execute-command:${String(context.requestId)}`,
+      const documentVersions: Record<string, number> = {};
+      for (const document of this.documents.values()) {
+        documentVersions[document.uri] = document.version;
+      }
+
+      return this.serviceCall(async (service) => {
+        const applyResult = await service.applyEditPlan({
+          clientSessionId: this.registeredClientSessionId!,
+          workspaceId: this.workspaceId!,
+          planId,
+          documentVersions,
+          requestId:
+            context.requestId === undefined || context.requestId === null
+              ? undefined
+              : `lsp-execute-command:${String(context.requestId)}`,
+          signal: context.signal,
+        });
+        if (!applyResult.applied || !applyResult.plan) {
+          return null;
+        }
+        if (context.signal?.aborted) {
+          return null;
+        }
+
+        await this.clientRequest('workspace/applyEdit', {
+          label: applyResult.plan.title,
+          edit: workspaceEditToLsp(applyResult.plan),
+        });
+        return null;
+      }, {
         signal: context.signal,
       });
-      if (!applyResult.applied || !applyResult.plan) {
-        return null;
-      }
-      if (context.signal?.aborted) {
-        return null;
-      }
+    }
 
-      await this.clientRequest('workspace/applyEdit', {
-        label: applyResult.plan.title,
-        edit: workspaceEditToLsp(applyResult.plan),
-      });
+    const uri = params.arguments?.[0]?.uri;
+    if (!uri) {
       return null;
-    }, {
-      signal: context.signal,
-    });
+    }
+
+    if (params.command === GO_TO_SEMANTIC_DEFINITION_COMMAND) {
+      return this.semanticDefinitionHandle({ uri }, context);
+    }
+    if (params.command === SHOW_ARCHITECTURE_LINKS_COMMAND) {
+      return this.semanticReferencesHandle({ uri }, context);
+    }
+
+    return null;
   }
 
   private async workspaceSymbolHandle(
@@ -1315,6 +1349,84 @@ export class CodepolLspServer {
           context.requestId === undefined || context.requestId === null
             ? undefined
             : `lsp-codepol-semantic-search:${String(context.requestId)}`,
+        signal: context.signal,
+      }), {
+      signal: context.signal,
+    });
+  }
+
+  private async semanticDefinitionHandle(
+    params: {
+      uri?: string;
+    },
+    context: { requestId?: JsonRpcId; signal?: AbortSignal } = {},
+  ): Promise<WorkspaceSemanticDefinitionResult | null> {
+    if (!this.registeredClientSessionId || !this.workspaceId || !params.uri) {
+      return null;
+    }
+    const uri = params.uri;
+
+    return this.serviceCall((service) =>
+      service.querySemanticDefinition({
+        clientSessionId: this.registeredClientSessionId!,
+        workspaceId: this.workspaceId!,
+        uri,
+        requestId:
+          context.requestId === undefined || context.requestId === null
+            ? undefined
+            : `lsp-codepol-semantic-definition:${String(context.requestId)}`,
+        signal: context.signal,
+      }), {
+      signal: context.signal,
+    });
+  }
+
+  private async semanticReferencesHandle(
+    params: {
+      uri?: string;
+    },
+    context: { requestId?: JsonRpcId; signal?: AbortSignal } = {},
+  ): Promise<WorkspaceSemanticReferencesResult | null> {
+    if (!this.registeredClientSessionId || !this.workspaceId || !params.uri) {
+      return null;
+    }
+    const uri = params.uri;
+
+    return this.serviceCall((service) =>
+      service.querySemanticReferences({
+        clientSessionId: this.registeredClientSessionId!,
+        workspaceId: this.workspaceId!,
+        uri,
+        requestId:
+          context.requestId === undefined || context.requestId === null
+            ? undefined
+            : `lsp-codepol-semantic-references:${String(context.requestId)}`,
+        signal: context.signal,
+      }), {
+      signal: context.signal,
+    });
+  }
+
+  private async semanticHoverHandle(
+    params: {
+      uri?: string;
+    },
+    context: { requestId?: JsonRpcId; signal?: AbortSignal } = {},
+  ): Promise<WorkspaceSemanticHoverResult | null> {
+    if (!this.registeredClientSessionId || !this.workspaceId || !params.uri) {
+      return null;
+    }
+    const uri = params.uri;
+
+    return this.serviceCall((service) =>
+      service.querySemanticHover({
+        clientSessionId: this.registeredClientSessionId!,
+        workspaceId: this.workspaceId!,
+        uri,
+        requestId:
+          context.requestId === undefined || context.requestId === null
+            ? undefined
+            : `lsp-codepol-semantic-hover:${String(context.requestId)}`,
         signal: context.signal,
       }), {
       signal: context.signal,

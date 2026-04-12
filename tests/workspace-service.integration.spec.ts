@@ -1597,6 +1597,139 @@ demo();
       },
     ]);
 
+    const semanticDefinition = await service.querySemanticDefinition({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      uri: sharedUri,
+    });
+    expect(semanticDefinition).toEqual({
+      kind: 'single_location',
+      target: {
+        uri: sharedUri,
+        semanticClass: 'architecture_node',
+      },
+      location: {
+        uri: sharedUri,
+        range: {
+          start: { line: 0, character: 0 },
+          end: { line: 0, character: 0 },
+        },
+      },
+      source: 'codepol',
+      semanticClass: 'architecture_node',
+    });
+
+    const semanticReferences = await service.querySemanticReferences({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      uri: sharedUri,
+    });
+    expect(semanticReferences).toMatchObject({
+      target: {
+        uri: sharedUri,
+        semanticClass: 'architecture_node',
+      },
+      presentation: 'grouped_list',
+      totalItems: 3,
+      totalAvailableItems: 3,
+      truncated: false,
+      groups: [
+        {
+          group: 'declarations',
+          totalCount: 1,
+          truncated: false,
+          items: [
+            {
+              location: {
+                uri: sharedUri,
+                range: {
+                  start: { line: 0, character: 0 },
+                  end: { line: 0, character: 0 },
+                },
+              },
+              label: 'src/shared.ts',
+              detail: 'module declaration',
+              relationKind: 'declarations',
+              semanticClass: 'architecture_node',
+            },
+          ],
+        },
+        {
+          group: 'incoming',
+          totalCount: 2,
+          truncated: false,
+          items: [
+            expect.objectContaining({
+              location: {
+                uri: appUri,
+                range: {
+                  start: { line: 0, character: 0 },
+                  end: {
+                    line: 0,
+                    character: expect.any(Number),
+                  },
+                },
+              },
+              label: 'src/app.ts',
+              detail: 'import sharedValue from ./shared',
+              relationKind: 'incoming',
+              semanticClass: 'architecture_node',
+            }),
+            expect.objectContaining({
+              location: {
+                uri: appUri,
+                range: {
+                  start: { line: 0, character: 28 },
+                  end: {
+                    line: 0,
+                    character: expect.any(Number),
+                  },
+                },
+              },
+              label: 'src/app.ts',
+              detail: 'import from ./shared',
+              relationKind: 'incoming',
+              semanticClass: 'architecture_node',
+            }),
+          ],
+        },
+        {
+          group: 'outgoing',
+          totalCount: 0,
+          truncated: false,
+          items: [],
+        },
+      ],
+      source: 'codepol',
+      semanticClass: 'architecture_node',
+    });
+
+    const semanticHover = await service.querySemanticHover({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      uri: sharedUri,
+    });
+    expect(semanticHover).toEqual({
+      target: {
+        uri: sharedUri,
+        semanticClass: 'architecture_node',
+      },
+      title: 'shared.ts',
+      subtitle: 'src/shared.ts',
+      summary: 'Indexed architecture node for the workspace module graph.',
+      fields: [
+        { label: 'Directory', value: 'src' },
+        { label: 'Inbound edges', value: '1' },
+        { label: 'Outbound edges', value: '0' },
+        { label: 'Entry point', value: 'No' },
+        { label: 'Cycle member', value: 'No' },
+      ],
+      tags: undefined,
+      actions: ['go_to_definition', 'find_references', 'show_graph'],
+      source: 'codepol',
+      semanticClass: 'architecture_node',
+    });
+
     const dependencyGraph = await service.queryDependencyGraph({
       clientSessionId: attached.clientSessionId,
       workspaceId: attached.workspaceId,
@@ -1673,15 +1806,150 @@ demo();
     );
 
     await expect(
-      service.querySemanticSearch({
+      service.querySemanticReferences({
         clientSessionId: attached.clientSessionId,
         workspaceId: attached.workspaceId,
-        query: 'OverlayOnly',
+        uri: sharedUri,
         analysisGeneration: readyStatus.analysisGeneration,
       }),
     ).rejects.toThrow(
       `Analysis generation mismatch: expected ${readyStatus.analysisGeneration! + 1}, received ${readyStatus.analysisGeneration}`,
     );
+  });
+
+  it('keeps architecture semantic references isolated per client overlay session', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
+
+    const sharedPath = path.join(workspaceRoot, 'src', 'shared.ts');
+    const otherPath = path.join(workspaceRoot, 'src', 'other.ts');
+    const appPath = path.join(workspaceRoot, 'src', 'app.ts');
+    const sharedUri = workspacePathToUri(sharedPath);
+    const otherUri = workspacePathToUri(otherPath);
+    const appUri = workspacePathToUri(appPath);
+    fs.writeFileSync(sharedPath, 'export const sharedValue = 1;\n', 'utf8');
+    fs.writeFileSync(otherPath, 'export const otherValue = 1;\n', 'utf8');
+    fs.writeFileSync(
+      appPath,
+      "import { sharedValue } from './shared';\nexport const appValue = sharedValue;\n",
+      'utf8',
+    );
+
+    const service = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine(),
+    });
+    const clientA = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientKind: 'lsp',
+      clientInstanceId: 'semantic-client-a',
+      clientSessionId: 'semantic-client-a-session',
+    });
+    const clientB = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientKind: 'lsp',
+      clientInstanceId: 'semantic-client-b',
+      clientSessionId: 'semantic-client-b-session',
+    });
+
+    await service.completeReplay({
+      clientSessionId: clientA.clientSessionId,
+      workspaceId: clientA.workspaceId,
+      workspaceInstanceId: clientA.workspaceInstanceId,
+    });
+    await service.completeReplay({
+      clientSessionId: clientB.clientSessionId,
+      workspaceId: clientB.workspaceId,
+      workspaceInstanceId: clientB.workspaceInstanceId,
+    });
+
+    expect(
+      (
+        await service.querySemanticReferences({
+          clientSessionId: clientA.clientSessionId,
+          workspaceId: clientA.workspaceId,
+          uri: sharedUri,
+        })
+      )?.groups[1],
+    ).toMatchObject({
+      group: 'incoming',
+      totalCount: 2,
+    });
+    expect(
+      (
+        await service.querySemanticReferences({
+          clientSessionId: clientB.clientSessionId,
+          workspaceId: clientB.workspaceId,
+          uri: sharedUri,
+        })
+      )?.groups[1],
+    ).toMatchObject({
+      group: 'incoming',
+      totalCount: 2,
+    });
+
+    await service.openOverlay({
+      clientSessionId: clientA.clientSessionId,
+      workspaceId: clientA.workspaceId,
+      uri: appUri,
+      version: 1,
+      text: "import { otherValue } from './other';\nexport const appValue = otherValue;\n",
+    });
+
+    expect(
+      (
+        await service.querySemanticReferences({
+          clientSessionId: clientA.clientSessionId,
+          workspaceId: clientA.workspaceId,
+          uri: sharedUri,
+        })
+      )?.groups[1],
+    ).toMatchObject({
+      group: 'incoming',
+      totalCount: 0,
+      items: [],
+    });
+    expect(
+      (
+        await service.querySemanticReferences({
+          clientSessionId: clientB.clientSessionId,
+          workspaceId: clientB.workspaceId,
+          uri: sharedUri,
+        })
+      )?.groups[1],
+    ).toMatchObject({
+      group: 'incoming',
+      totalCount: 2,
+    });
+    expect(
+      (
+        await service.querySemanticReferences({
+          clientSessionId: clientA.clientSessionId,
+          workspaceId: clientA.workspaceId,
+          uri: otherUri,
+        })
+      )?.groups[1],
+    ).toMatchObject({
+      group: 'incoming',
+      totalCount: 2,
+    });
+    expect(
+      (
+        await service.querySemanticReferences({
+          clientSessionId: clientB.clientSessionId,
+          workspaceId: clientB.workspaceId,
+          uri: otherUri,
+        })
+      )?.groups[1],
+    ).toMatchObject({
+      group: 'incoming',
+      totalCount: 0,
+      items: [],
+    });
   });
 
   it('invalidates ready workspace state when watched disk files change and closes the watcher on last detach', async () => {

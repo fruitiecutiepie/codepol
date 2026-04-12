@@ -95,6 +95,73 @@ export type WorkspaceSearchResult = {
   score: number;
 };
 
+export type WorkspaceSemanticTarget = {
+  uri: string;
+  semanticClass: 'architecture_node';
+};
+
+export type WorkspaceSemanticDefinitionResult = {
+  kind: 'single_location';
+  target: WorkspaceSemanticTarget;
+  location: WorkspaceLocation;
+  source: 'codepol';
+  semanticClass: 'architecture_node';
+};
+
+export type WorkspaceSemanticReferenceGroup =
+  | 'declarations'
+  | 'incoming'
+  | 'outgoing';
+
+export type WorkspaceSemanticReferenceItem = {
+  location: WorkspaceLocation;
+  label: string;
+  detail?: string;
+  relationKind: WorkspaceSemanticReferenceGroup;
+  semanticClass: 'architecture_node';
+};
+
+export type WorkspaceSemanticReferencesGroup = {
+  group: WorkspaceSemanticReferenceGroup;
+  totalCount: number;
+  truncated: boolean;
+  items: WorkspaceSemanticReferenceItem[];
+};
+
+export type WorkspaceSemanticReferencesResult = {
+  target: WorkspaceSemanticTarget;
+  presentation: 'grouped_list';
+  totalItems: number;
+  totalAvailableItems: number;
+  truncated: boolean;
+  groups: WorkspaceSemanticReferencesGroup[];
+  source: 'codepol';
+  semanticClass: 'architecture_node';
+};
+
+export type WorkspaceSemanticHoverField = {
+  label: string;
+  value: string;
+};
+
+export type WorkspaceSemanticHoverAction =
+  | 'go_to_definition'
+  | 'find_references'
+  | 'show_graph';
+
+export type WorkspaceSemanticHoverResult = {
+  target: WorkspaceSemanticTarget;
+  title: string;
+  subtitle?: string;
+  summary?: string;
+  statusText?: string;
+  fields: WorkspaceSemanticHoverField[];
+  tags?: string[];
+  actions?: WorkspaceSemanticHoverAction[];
+  source: 'codepol';
+  semanticClass: 'architecture_node';
+};
+
 export type WorkspaceDependencyGraphNode = {
   uri: string;
   workspaceRelativePath: string;

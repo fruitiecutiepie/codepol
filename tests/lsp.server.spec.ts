@@ -116,6 +116,9 @@ function workspaceReadQueriesStubCreate(): Pick<
   | 'queryWorkspaceSymbols'
   | 'queryDependencyGraph'
   | 'querySemanticSearch'
+  | 'querySemanticDefinition'
+  | 'querySemanticReferences'
+  | 'querySemanticHover'
   | 'queryArchitectureSummary'
 > {
   return {
@@ -132,6 +135,15 @@ function workspaceReadQueriesStubCreate(): Pick<
     },
     async querySemanticSearch() {
       return [];
+    },
+    async querySemanticDefinition() {
+      return null;
+    },
+    async querySemanticReferences() {
+      return null;
+    },
+    async querySemanticHover() {
+      return null;
     },
     async queryArchitectureSummary() {
       return {
@@ -367,6 +379,30 @@ describe('CodepolLspServer', () => {
       messages.find((message) => message.id === 1 && 'result' in message)?.result.capabilities
         .workspaceSymbolProvider,
     ).toBe(true);
+    expect(
+      messages.find((message) => message.id === 1 && 'result' in message)?.result.capabilities
+        .executeCommandProvider.commands,
+    ).toEqual([
+      'codepol.applyEditPlan',
+      'codepol.goToSemanticDefinition',
+      'codepol.showArchitectureLinks',
+    ]);
+    expect(
+      messages.find((message) => message.id === 1 && 'result' in message)?.result.capabilities
+        .definitionProvider,
+    ).toBeUndefined();
+    expect(
+      messages.find((message) => message.id === 1 && 'result' in message)?.result.capabilities
+        .referencesProvider,
+    ).toBeUndefined();
+    expect(
+      messages.find((message) => message.id === 1 && 'result' in message)?.result.capabilities
+        .hoverProvider,
+    ).toBeUndefined();
+    expect(
+      messages.find((message) => message.id === 1 && 'result' in message)?.result.capabilities
+        .renameProvider,
+    ).toBeUndefined();
 
     await server.handleMessage({
       jsonrpc: '2.0',
@@ -410,6 +446,48 @@ describe('CodepolLspServer', () => {
       jsonrpc: '2.0',
       id: 6,
       method: 'codepol/architectureSummary',
+    });
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 7,
+      method: 'codepol/semanticDefinition',
+      params: {
+        uri: sharedUri,
+      },
+    });
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 8,
+      method: 'codepol/semanticReferences',
+      params: {
+        uri: sharedUri,
+      },
+    });
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 9,
+      method: 'codepol/semanticHover',
+      params: {
+        uri: sharedUri,
+      },
+    });
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 10,
+      method: 'workspace/executeCommand',
+      params: {
+        command: 'codepol.goToSemanticDefinition',
+        arguments: [{ uri: sharedUri }],
+      },
+    });
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 11,
+      method: 'workspace/executeCommand',
+      params: {
+        command: 'codepol.showArchitectureLinks',
+        arguments: [{ uri: sharedUri }],
+      },
     });
 
     expect(messages.find((message) => message.id === 2)?.result).toEqual([
@@ -501,6 +579,109 @@ describe('CodepolLspServer', () => {
         },
       ],
     });
+    expect(messages.find((message) => message.id === 7)?.result).toEqual({
+      kind: 'single_location',
+      target: {
+        uri: sharedUri,
+        semanticClass: 'architecture_node',
+      },
+      location: {
+        uri: sharedUri,
+        range: {
+          start: { line: 0, character: 0 },
+          end: { line: 0, character: 0 },
+        },
+      },
+      source: 'codepol',
+      semanticClass: 'architecture_node',
+    });
+    expect(messages.find((message) => message.id === 8)?.result).toMatchObject({
+      target: {
+        uri: sharedUri,
+        semanticClass: 'architecture_node',
+      },
+      presentation: 'grouped_list',
+      totalItems: 3,
+      totalAvailableItems: 3,
+      truncated: false,
+      groups: [
+        {
+          group: 'declarations',
+          totalCount: 1,
+        },
+        {
+          group: 'incoming',
+          totalCount: 2,
+          items: [
+            expect.objectContaining({
+              location: {
+                uri: appUri,
+                range: {
+                  start: { line: 0, character: 0 },
+                  end: {
+                    line: 0,
+                    character: expect.any(Number),
+                  },
+                },
+              },
+              label: 'src/app.ts',
+              detail: 'import sharedValue from ./shared',
+              relationKind: 'incoming',
+              semanticClass: 'architecture_node',
+            }),
+            expect.objectContaining({
+              location: {
+                uri: appUri,
+                range: {
+                  start: { line: 0, character: 28 },
+                  end: {
+                    line: 0,
+                    character: expect.any(Number),
+                  },
+                },
+              },
+              label: 'src/app.ts',
+              detail: 'import from ./shared',
+              relationKind: 'incoming',
+              semanticClass: 'architecture_node',
+            }),
+          ],
+        },
+        {
+          group: 'outgoing',
+          totalCount: 0,
+          items: [],
+        },
+      ],
+      source: 'codepol',
+      semanticClass: 'architecture_node',
+    });
+    expect(messages.find((message) => message.id === 9)?.result).toEqual({
+      target: {
+        uri: sharedUri,
+        semanticClass: 'architecture_node',
+      },
+      title: 'shared.ts',
+      subtitle: 'src/shared.ts',
+      summary: 'Indexed architecture node for the workspace module graph.',
+      fields: [
+        { label: 'Directory', value: 'src' },
+        { label: 'Inbound edges', value: '1' },
+        { label: 'Outbound edges', value: '0' },
+        { label: 'Entry point', value: 'No' },
+        { label: 'Cycle member', value: 'No' },
+      ],
+      tags: undefined,
+      actions: ['go_to_definition', 'find_references', 'show_graph'],
+      source: 'codepol',
+      semanticClass: 'architecture_node',
+    });
+    expect(messages.find((message) => message.id === 10)?.result).toEqual(
+      messages.find((message) => message.id === 7)?.result,
+    );
+    expect(messages.find((message) => message.id === 11)?.result).toEqual(
+      messages.find((message) => message.id === 8)?.result,
+    );
   });
 
   it('polls index status into work-done progress and reopens progress after invalidation', async () => {
@@ -1443,6 +1624,202 @@ describe('CodepolLspServer', () => {
     expect(publishMessages[1]?.params.diagnostics).toEqual([]);
   });
 
+  it('reconnects and replays open documents before retrying a semantic definition read', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(workspaceRoot, 'codepol.toml'), noInterfaceConfigContentCreate(), 'utf8');
+
+    const sharedPath = path.join(workspaceRoot, 'src', 'shared.ts');
+    const sharedUri = pathToFileURL(sharedPath).href;
+    const sharedText = 'export const sharedValue = 1;\n';
+    fs.writeFileSync(sharedPath, sharedText, 'utf8');
+
+    const messages: any[] = [];
+    const firstCalls: string[] = [];
+    const secondCalls: string[] = [];
+    let serviceFactoryCalls = 0;
+
+    function serviceMockCreate(options: {
+      calls: string[];
+      daemonSessionId: string;
+      workspaceId: string;
+      failSemanticDefinition?: boolean;
+    }): WorkspaceService {
+      return {
+        ...workspaceReadQueriesStubCreate(),
+        async registerClientSession(input) {
+          options.calls.push(`register:${input.clientSessionId ?? 'generated'}`);
+          return {
+            clientSessionId: input.clientSessionId ?? 'client-1',
+            daemonSessionId: options.daemonSessionId,
+          };
+        },
+        async closeClientSession() {
+          options.calls.push('closeClientSession');
+        },
+        async attachWorkspace() {
+          options.calls.push('attachWorkspace');
+          return {
+            workspaceId: options.workspaceId,
+            workspaceInstanceId: `${options.workspaceId}-instance`,
+          };
+        },
+        async subscribeDiagnostics(input) {
+          options.calls.push(`subscribeDiagnostics:${input.scope}`);
+          return {
+            workspaceId: options.workspaceId,
+            workspaceInstanceId: `${options.workspaceId}-instance`,
+            scope: input.scope,
+            subscriptionState: 'active',
+          };
+        },
+        async completeReplay() {
+          options.calls.push('completeReplay');
+          return {
+            workspaceId: options.workspaceId,
+            workspaceInstanceId: `${options.workspaceId}-instance`,
+            replayEpoch: 1,
+            replayState: 'applied',
+          };
+        },
+        async openOverlay(input) {
+          options.calls.push(`openOverlay:${input.uri}@${input.version}`);
+        },
+        async updateOverlay(input) {
+          options.calls.push(`updateOverlay:${input.uri}@${input.version}`);
+        },
+        async closeOverlay(input) {
+          options.calls.push(`closeOverlay:${input.uri}`);
+        },
+        async queryDiagnostics() {
+          options.calls.push('queryDiagnostics');
+          return [];
+        },
+        async queryCodeActions() {
+          options.calls.push('queryCodeActions');
+          return [];
+        },
+        async applyEditPlan() {
+          options.calls.push('applyEditPlan');
+          return { applied: false, failureReason: 'plan_not_found' };
+        },
+        async queryIndexStatus() {
+          options.calls.push('queryIndexStatus');
+          return {
+            workspaceId: options.workspaceId,
+            workspaceInstanceId: `${options.workspaceId}-instance`,
+            status: 'ready',
+            indexedFileCount: 1,
+            openDocumentCount: 1,
+            overlayCount: 1,
+            analysisGeneration: 1,
+          };
+        },
+        async querySemanticDefinition(input) {
+          options.calls.push(`querySemanticDefinition:${input.uri}`);
+          if (options.failSemanticDefinition) {
+            throw new Error('Daemon connection closed');
+          }
+          return {
+            kind: 'single_location',
+            target: {
+              uri: input.uri,
+              semanticClass: 'architecture_node',
+            },
+            location: {
+              uri: input.uri,
+              range: {
+                start: { line: 0, character: 0 },
+                end: { line: 0, character: 0 },
+              },
+            },
+            source: 'codepol',
+            semanticClass: 'architecture_node',
+          };
+        },
+      };
+    }
+
+    const server = new CodepolLspServer({
+      clientInstanceId: 'lsp-semantic-reconnect-instance',
+      clientSessionId: 'lsp-semantic-reconnect-session',
+      serviceFactory: async () => {
+        serviceFactoryCalls += 1;
+        return serviceFactoryCalls === 1
+          ? serviceMockCreate({
+              calls: firstCalls,
+              daemonSessionId: 'daemon-1',
+              workspaceId: 'workspace-a',
+              failSemanticDefinition: true,
+            })
+          : serviceMockCreate({
+              calls: secondCalls,
+              daemonSessionId: 'daemon-2',
+              workspaceId: 'workspace-b',
+            });
+      },
+      sendMessage: (message) => {
+        messages.push(message);
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        rootUri: pathToFileURL(workspaceRoot).href,
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      method: 'textDocument/didOpen',
+      params: {
+        textDocument: {
+          uri: sharedUri,
+          version: 1,
+          text: `${sharedText}export const overlayValue = 2;\n`,
+        },
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'codepol/semanticDefinition',
+      params: {
+        uri: sharedUri,
+      },
+    });
+
+    expect(serviceFactoryCalls).toBe(2);
+    expect(firstCalls).toContain(`querySemanticDefinition:${sharedUri}`);
+    expect(secondCalls).toContain('register:lsp-semantic-reconnect-session');
+    expect(secondCalls).toContain('attachWorkspace');
+    expect(secondCalls).toContain('subscribeDiagnostics:workspace');
+    expect(secondCalls).toContain(`openOverlay:${sharedUri}@1`);
+    expect(secondCalls).toContain('completeReplay');
+    expect(secondCalls).toContain(`querySemanticDefinition:${sharedUri}`);
+    expect(messages.find((message) => message.id === 2)?.result).toEqual({
+      kind: 'single_location',
+      target: {
+        uri: sharedUri,
+        semanticClass: 'architecture_node',
+      },
+      location: {
+        uri: sharedUri,
+        range: {
+          start: { line: 0, character: 0 },
+          end: { line: 0, character: 0 },
+        },
+      },
+      source: 'codepol',
+      semanticClass: 'architecture_node',
+    });
+  });
+
   it('resolves a daemon-backed workspace service by default', async () => {
     const runtimeDir = tempWorkspaceCreate('codepol-lsp-daemon-runtime-');
     createdDirs.push(runtimeDir);
@@ -2205,6 +2582,129 @@ describe('CodepolLspServer', () => {
     });
 
     resolveCodeActions!([]);
+    await requestPromise;
+
+    const response = messages.find((message) => message.id === 2);
+    expect(response?.error).toEqual({
+      code: -32800,
+      message: 'Request cancelled',
+    });
+    expect(response?.result).toBeUndefined();
+  });
+
+  it('returns request-cancelled when a semantic references request is canceled in flight', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');
+    createdDirs.push(workspaceRoot);
+    fs.writeFileSync(path.join(workspaceRoot, 'codepol.toml'), noInterfaceConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    const uri = pathToFileURL(filePath).href;
+    let resolveSemanticReferences:
+      | ((value: Awaited<ReturnType<WorkspaceService['querySemanticReferences']>>) => void)
+      | undefined;
+
+    const service: WorkspaceService = {
+      ...workspaceReadQueriesStubCreate(),
+      async registerClientSession() {
+        return {
+          clientSessionId: 'client-1',
+          daemonSessionId: 'daemon-1',
+        };
+      },
+      async closeClientSession() {},
+      async attachWorkspace() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+        };
+      },
+      async subscribeDiagnostics() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          scope: 'workspace',
+          subscriptionState: 'active',
+        };
+      },
+      async completeReplay() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          replayEpoch: 1,
+          replayState: 'applied',
+        };
+      },
+      async openOverlay() {},
+      async updateOverlay() {},
+      async closeOverlay() {},
+      async queryDiagnostics() {
+        return [];
+      },
+      async queryCodeActions() {
+        return [];
+      },
+      async querySemanticReferences() {
+        return new Promise((resolve) => {
+          resolveSemanticReferences = resolve;
+        });
+      },
+      async applyEditPlan() {
+        return { applied: false, failureReason: 'plan_not_found' };
+      },
+      async queryIndexStatus() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          status: 'cold',
+          indexedFileCount: 0,
+          openDocumentCount: 0,
+          overlayCount: 0,
+          analysisGeneration: 0,
+        };
+      },
+    };
+
+    const messages: any[] = [];
+    const server = new CodepolLspServer({
+      service,
+      sendMessage: (message) => {
+        messages.push(message);
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        rootUri: pathToFileURL(workspaceRoot).href,
+      },
+    });
+
+    const requestPromise = server.handleMessage({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'codepol/semanticReferences',
+      params: {
+        uri,
+      },
+    });
+
+    for (let attempt = 0; attempt < 20 && !resolveSemanticReferences; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(resolveSemanticReferences).toBeDefined();
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      method: '$/cancelRequest',
+      params: {
+        id: 2,
+      },
+    });
+
+    resolveSemanticReferences!(null);
     await requestPromise;
 
     const response = messages.find((message) => message.id === 2);

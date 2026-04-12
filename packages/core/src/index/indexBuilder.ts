@@ -509,6 +509,26 @@ export function crossFileResolveForFile(
     }
   }
 
+  // Re-resolve ImportsRelation specifiers FROM this file so side-effect and
+  // dynamic import edges stay current for overlay-backed updates.
+  const imports = store.importsInFileGet(file);
+  for (const imp of imports) {
+    const resolvedPath = moduleResolve(imp.spec, file, {
+      ...resolveOptions,
+      indexedFiles,
+    });
+    const nextResolvedModulePath =
+      resolvedPath && indexedFiles.has(resolvedPath) ? resolvedPath : undefined;
+    if (imp.resolvedModulePath === nextResolvedModulePath) {
+      continue;
+    }
+    const updatedImport: ImportsRelation = {
+      ...imp,
+      resolvedModulePath: nextResolvedModulePath,
+    };
+    store.relationUpdate(imp, updatedImport);
+  }
+
   // Re-resolve import bindings TO this file (from other files)
   // This handles the case where this file's exports changed
   for (const otherFile of indexedFiles) {

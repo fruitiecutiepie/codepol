@@ -341,6 +341,9 @@ function workspaceReadQueriesStubCreate(): Pick<
   | 'queryWorkspaceSymbols'
   | 'queryDependencyGraph'
   | 'querySemanticSearch'
+  | 'querySemanticDefinition'
+  | 'querySemanticReferences'
+  | 'querySemanticHover'
   | 'queryArchitectureSummary'
 > {
   return {
@@ -357,6 +360,15 @@ function workspaceReadQueriesStubCreate(): Pick<
     },
     async querySemanticSearch() {
       return [];
+    },
+    async querySemanticDefinition() {
+      return null;
+    },
+    async querySemanticReferences() {
+      return null;
+    },
+    async querySemanticHover() {
+      return null;
     },
     async queryArchitectureSummary() {
       return {
@@ -1479,7 +1491,7 @@ describe('workspace daemon control plane', () => {
     await secondService.close();
   });
 
-  it('serves workspace symbol, graph, semantic search, and architecture summary RPCs through the daemon service client', async () => {
+  it('serves workspace symbol, graph, semantic search, semantic navigation, and architecture summary RPCs through the daemon service client', async () => {
     const runtimeDir = tempRuntimeDirCreate();
     tempDirs.push(runtimeDir);
 
@@ -1582,6 +1594,116 @@ describe('workspace daemon control plane', () => {
         semanticClass: 'exported_symbol',
       }),
     );
+    expect(
+      await service.querySemanticDefinition({
+        clientSessionId: registered.clientSessionId,
+        workspaceId: attached.workspaceId,
+        uri: sharedUri,
+      }),
+    ).toEqual({
+      kind: 'single_location',
+      target: {
+        uri: sharedUri,
+        semanticClass: 'architecture_node',
+      },
+      location: {
+        uri: sharedUri,
+        range: {
+          start: { line: 0, character: 0 },
+          end: { line: 0, character: 0 },
+        },
+      },
+      source: 'codepol',
+      semanticClass: 'architecture_node',
+    });
+    expect(
+      await service.querySemanticReferences({
+        clientSessionId: registered.clientSessionId,
+        workspaceId: attached.workspaceId,
+        uri: sharedUri,
+      }),
+    ).toMatchObject({
+      target: {
+        uri: sharedUri,
+        semanticClass: 'architecture_node',
+      },
+      presentation: 'grouped_list',
+      totalItems: 3,
+      totalAvailableItems: 3,
+      truncated: false,
+      groups: [
+        {
+          group: 'declarations',
+          totalCount: 1,
+        },
+        {
+          group: 'incoming',
+          totalCount: 2,
+          items: [
+            expect.objectContaining({
+              location: {
+                uri: appUri,
+                range: {
+                  start: { line: 0, character: 0 },
+                  end: {
+                    line: 0,
+                    character: expect.any(Number),
+                  },
+                },
+              },
+              label: 'src/app.ts',
+              detail: 'import sharedValue from ./shared',
+            }),
+            expect.objectContaining({
+              location: {
+                uri: appUri,
+                range: {
+                  start: { line: 0, character: 28 },
+                  end: {
+                    line: 0,
+                    character: expect.any(Number),
+                  },
+                },
+              },
+              label: 'src/app.ts',
+              detail: 'import from ./shared',
+            }),
+          ],
+        },
+        {
+          group: 'outgoing',
+          totalCount: 0,
+        },
+      ],
+      source: 'codepol',
+      semanticClass: 'architecture_node',
+    });
+    expect(
+      await service.querySemanticHover({
+        clientSessionId: registered.clientSessionId,
+        workspaceId: attached.workspaceId,
+        uri: sharedUri,
+      }),
+    ).toEqual({
+      target: {
+        uri: sharedUri,
+        semanticClass: 'architecture_node',
+      },
+      title: 'shared.ts',
+      subtitle: 'src/shared.ts',
+      summary: 'Indexed architecture node for the workspace module graph.',
+      fields: [
+        { label: 'Directory', value: 'src' },
+        { label: 'Inbound edges', value: '1' },
+        { label: 'Outbound edges', value: '0' },
+        { label: 'Entry point', value: 'No' },
+        { label: 'Cycle member', value: 'No' },
+      ],
+      tags: undefined,
+      actions: ['go_to_definition', 'find_references', 'show_graph'],
+      source: 'codepol',
+      semanticClass: 'architecture_node',
+    });
     expect(
       await service.queryDependencyGraph({
         clientSessionId: registered.clientSessionId,
@@ -1794,6 +1916,70 @@ describe('workspace daemon control plane', () => {
           clientSessionId: setup.registered.clientSessionId,
           workspaceId: setup.attached.workspaceId,
           query: 'OverlayOnly',
+          analysisGeneration: initialStatus.analysisGeneration,
+        }),
+      ).rejects.toThrow(
+        `Analysis generation mismatch: expected ${currentStatus.analysisGeneration}, received ${initialStatus.analysisGeneration}`,
+      );
+    } finally {
+      await setup.service.close();
+    }
+  });
+
+  it('rejects stale analysisGeneration for semantic-reference reads through the daemon service client', async () => {
+    const setup = await daemonReadWorkspaceCreate();
+
+    try {
+      expect(
+        await setup.service.querySemanticReferences({
+          clientSessionId: setup.registered.clientSessionId,
+          workspaceId: setup.attached.workspaceId,
+          uri: setup.sharedUri,
+        }),
+      ).toMatchObject({
+        target: {
+          uri: setup.sharedUri,
+          semanticClass: 'architecture_node',
+        },
+      });
+
+      const initialStatus = await setup.service.queryIndexStatus({
+        clientSessionId: setup.registered.clientSessionId,
+        workspaceId: setup.attached.workspaceId,
+      });
+
+      await setup.service.openOverlay({
+        clientSessionId: setup.registered.clientSessionId,
+        workspaceId: setup.attached.workspaceId,
+        uri: setup.sharedUri,
+        version: 1,
+        text: 'export const sharedValue = 1;\nexport const OverlayOnly = 2;\n',
+      });
+
+      expect(
+        await setup.service.querySemanticReferences({
+          clientSessionId: setup.registered.clientSessionId,
+          workspaceId: setup.attached.workspaceId,
+          uri: setup.sharedUri,
+        }),
+      ).toMatchObject({
+        target: {
+          uri: setup.sharedUri,
+          semanticClass: 'architecture_node',
+        },
+      });
+
+      const currentStatus = await setup.service.queryIndexStatus({
+        clientSessionId: setup.registered.clientSessionId,
+        workspaceId: setup.attached.workspaceId,
+      });
+      expect(currentStatus.analysisGeneration).toBeGreaterThan(initialStatus.analysisGeneration);
+
+      await expect(
+        setup.service.querySemanticReferences({
+          clientSessionId: setup.registered.clientSessionId,
+          workspaceId: setup.attached.workspaceId,
+          uri: setup.sharedUri,
           analysisGeneration: initialStatus.analysisGeneration,
         }),
       ).rejects.toThrow(
@@ -3187,6 +3373,187 @@ describe('workspace daemon control plane', () => {
       targetId: 2,
       cancellationState: 'cancel_requested',
     });
+
+    await expect(requestPromise).resolves.toEqual({
+      type: 'error',
+      code: 'request_cancelled',
+      message: 'Request cancelled',
+    });
+  });
+
+  it('cancels an in-flight semantic-references request through daemon request signals', async () => {
+    const runtimeDir = tempRuntimeDirCreate();
+    tempDirs.push(runtimeDir);
+
+    let resolveReferences:
+      | ((value: {
+          target: { uri: string; semanticClass: 'architecture_node' };
+          presentation: 'grouped_list';
+          totalItems: number;
+          totalAvailableItems: number;
+          truncated: boolean;
+          groups: [];
+          source: 'codepol';
+          semanticClass: 'architecture_node';
+        } | null) => void)
+      | undefined;
+
+    const service: WorkspaceService = {
+      ...workspaceReadQueriesStubCreate(),
+      async registerClientSession(input) {
+        return {
+          clientSessionId: input.clientSessionId ?? 'semantic-cancel-session',
+          daemonSessionId: 'daemon-semantic-cancel-session',
+        };
+      },
+      async closeClientSession() {},
+      async attachWorkspace() {
+        return {
+          workspaceId: 'semantic-cancel-workspace',
+          workspaceInstanceId: 'semantic-cancel-workspace-instance',
+        };
+      },
+      async subscribeDiagnostics() {
+        return {
+          workspaceId: 'semantic-cancel-workspace',
+          workspaceInstanceId: 'semantic-cancel-workspace-instance',
+          scope: 'workspace',
+          subscriptionState: 'active',
+        };
+      },
+      async completeReplay() {
+        return {
+          workspaceId: 'semantic-cancel-workspace',
+          workspaceInstanceId: 'semantic-cancel-workspace-instance',
+          replayEpoch: 1,
+          replayState: 'applied',
+        };
+      },
+      async openOverlay() {},
+      async updateOverlay() {},
+      async closeOverlay() {},
+      async queryDiagnostics() {
+        return [];
+      },
+      async queryCodeActions() {
+        return [];
+      },
+      async applyEditPlan() {
+        return {
+          applied: false,
+          failureReason: 'plan_not_found',
+        };
+      },
+      async queryIndexStatus() {
+        return {
+          workspaceId: 'semantic-cancel-workspace',
+          workspaceInstanceId: 'semantic-cancel-workspace-instance',
+          status: 'ready',
+          indexedFileCount: 1,
+          openDocumentCount: 0,
+          overlayCount: 0,
+          analysisGeneration: 1,
+        };
+      },
+      async querySemanticReferences() {
+        return new Promise((resolve) => {
+          resolveReferences = resolve;
+        });
+      },
+    };
+
+    const { descriptor } = workspaceDaemonDescriptorCreate({ runtimeDir });
+    const session = new WorkspaceDaemonSession({
+      descriptor,
+      service,
+    });
+
+    await expect(
+      session.handleEnvelope({
+        id: 1,
+        type: 'hello',
+        protocolVersion: WORKSPACE_DAEMON_PROTOCOL_VERSION,
+        client: clientIdentityCreate('semantic-cancel-client'),
+      }),
+    ).resolves.toMatchObject({
+      type: 'hello_ack',
+      compatibility: 'ok',
+    });
+
+    const registerResponse = await session.handleEnvelope({
+      id: 2,
+      type: 'register_client_session',
+      clientKind: 'test',
+      clientInstanceId: 'semantic-cancel-client',
+      clientSessionId: 'semantic-cancel-session',
+    });
+    expect(registerResponse.type).toBe('register_client_session_ack');
+    if (registerResponse.type !== 'register_client_session_ack') {
+      return;
+    }
+
+    const attachResponse = await session.handleEnvelope({
+      id: 3,
+      type: 'attach_workspace',
+      clientSessionId: 'semantic-cancel-session',
+      daemonSessionId: registerResponse.daemonSessionId,
+      rootPath: runtimeDir,
+      configPath: path.join(runtimeDir, 'codepol.toml'),
+    });
+    expect(attachResponse.type).toBe('attach_workspace_ack');
+    if (attachResponse.type !== 'attach_workspace_ack') {
+      return;
+    }
+
+    await expect(
+      session.handleEnvelope({
+        id: 4,
+        type: 'complete_replay',
+        clientSessionId: 'semantic-cancel-session',
+        daemonSessionId: registerResponse.daemonSessionId,
+        workspaceId: attachResponse.workspaceId,
+        workspaceInstanceId: attachResponse.workspaceInstanceId,
+      }),
+    ).resolves.toEqual({
+      type: 'complete_replay_ack',
+      result: {
+        workspaceId: attachResponse.workspaceId,
+        workspaceInstanceId: attachResponse.workspaceInstanceId,
+        replayEpoch: 1,
+        replayState: 'applied',
+      },
+    });
+
+    const requestPromise = session.handleEnvelope({
+      id: 5,
+      type: 'query_semantic_references',
+      clientSessionId: 'semantic-cancel-session',
+      daemonSessionId: registerResponse.daemonSessionId,
+      workspaceId: attachResponse.workspaceId,
+      workspaceInstanceId: attachResponse.workspaceInstanceId,
+      replayEpoch: 1,
+      uri: 'file:///semantic-target.ts',
+      requestId: 'semantic-references-request-1',
+    });
+
+    for (let attempt = 0; attempt < 20 && !resolveReferences; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(resolveReferences).toBeDefined();
+
+    await expect(
+      session.handleEnvelope({
+        id: 6,
+        type: 'cancel_request',
+        targetId: 5,
+      }),
+    ).resolves.toEqual({
+      type: 'cancel_request_ack',
+      targetId: 5,
+      cancellationState: 'cancel_requested',
+    });
+
+    resolveReferences!(null);
 
     await expect(requestPromise).resolves.toEqual({
       type: 'error',
