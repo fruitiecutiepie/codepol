@@ -12,6 +12,9 @@ import type {
   WorkspaceCodeAction,
   WorkspaceDependencyGraphResult,
   WorkspaceDiagnostic,
+  WorkspacePrepareRenameResult,
+  WorkspaceRenamePreviewResult,
+  WorkspaceRenameTarget,
   WorkspaceSearchResult,
   WorkspaceSemanticDefinitionResult,
   WorkspaceSemanticHoverResult,
@@ -362,6 +365,27 @@ type WorkspaceDaemonQuerySemanticHoverRequest = WorkspaceDaemonMessage &
   analysisGeneration?: number;
 };
 
+type WorkspaceDaemonPrepareRenameRequest = WorkspaceDaemonMessage &
+  WorkspaceDaemonClientSessionFreshness &
+  WorkspaceDaemonRequestFreshness &
+  WorkspaceDaemonWorkspaceFreshness & {
+  type: 'prepare_rename';
+  workspaceId: string;
+  target: WorkspaceRenameTarget;
+  analysisGeneration?: number;
+};
+
+type WorkspaceDaemonPreviewRenameRequest = WorkspaceDaemonMessage &
+  WorkspaceDaemonClientSessionFreshness &
+  WorkspaceDaemonRequestFreshness &
+  WorkspaceDaemonWorkspaceFreshness & {
+  type: 'preview_rename';
+  workspaceId: string;
+  target: WorkspaceRenameTarget;
+  newName: string;
+  analysisGeneration?: number;
+};
+
 type WorkspaceDaemonQueryArchitectureSummaryRequest = WorkspaceDaemonMessage &
   WorkspaceDaemonClientSessionFreshness &
   WorkspaceDaemonRequestFreshness &
@@ -454,6 +478,16 @@ type WorkspaceDaemonQuerySemanticHoverAck = {
   result: WorkspaceSemanticHoverResult | null;
 };
 
+type WorkspaceDaemonPrepareRenameAck = {
+  type: 'prepare_rename_ack';
+  result: WorkspacePrepareRenameResult;
+};
+
+type WorkspaceDaemonPreviewRenameAck = {
+  type: 'preview_rename_ack';
+  result: WorkspaceRenamePreviewResult;
+};
+
 type WorkspaceDaemonQueryArchitectureSummaryAck = {
   type: 'query_architecture_summary_ack';
   result: WorkspaceArchitectureSummaryResult;
@@ -491,6 +525,8 @@ type WorkspaceDaemonServiceResponse =
   | WorkspaceDaemonQuerySemanticDefinitionAck
   | WorkspaceDaemonQuerySemanticReferencesAck
   | WorkspaceDaemonQuerySemanticHoverAck
+  | WorkspaceDaemonPrepareRenameAck
+  | WorkspaceDaemonPreviewRenameAck
   | WorkspaceDaemonQueryArchitectureSummaryAck
   | WorkspaceDaemonPolicyCheckAck
   | WorkspaceDaemonCancelRequestAck
@@ -557,6 +593,12 @@ function messageErrorCreate(code: string, message: string): WorkspaceDaemonError
 
 function requestCancelledErrorCreate(): Error {
   return new Error('Request cancelled');
+}
+
+function workspaceRenameTargetKeyCreate(target: WorkspaceRenameTarget): string {
+  return 'uri' in target
+    ? `${target.semanticClass}:${target.uri}`
+    : `${target.semanticClass}:${target.targetId}`;
 }
 
 function lineDispatch(buffer: string, onLine: (line: string) => void): string {
@@ -1136,6 +1178,14 @@ export class WorkspaceDaemonSession {
         const input = message as WorkspaceDaemonQuerySemanticHoverRequest;
         return `query_semantic_hover:${input.clientSessionId}:${input.workspaceId}:${input.uri}`;
       }
+      case 'prepare_rename': {
+        const input = message as WorkspaceDaemonPrepareRenameRequest;
+        return `prepare_rename:${input.clientSessionId}:${input.workspaceId}:${workspaceRenameTargetKeyCreate(input.target)}`;
+      }
+      case 'preview_rename': {
+        const input = message as WorkspaceDaemonPreviewRenameRequest;
+        return `preview_rename:${input.clientSessionId}:${input.workspaceId}:${workspaceRenameTargetKeyCreate(input.target)}`;
+      }
       default:
         return undefined;
     }
@@ -1189,6 +1239,8 @@ export class WorkspaceDaemonSession {
       case 'query_semantic_definition':
       case 'query_semantic_references':
       case 'query_semantic_hover':
+      case 'prepare_rename':
+      case 'preview_rename':
       case 'query_architecture_summary': {
         const input = message as
           | WorkspaceDaemonSubscribeDiagnosticsRequest
@@ -1206,6 +1258,8 @@ export class WorkspaceDaemonSession {
           | WorkspaceDaemonQuerySemanticDefinitionRequest
           | WorkspaceDaemonQuerySemanticReferencesRequest
           | WorkspaceDaemonQuerySemanticHoverRequest
+          | WorkspaceDaemonPrepareRenameRequest
+          | WorkspaceDaemonPreviewRenameRequest
           | WorkspaceDaemonQueryArchitectureSummaryRequest;
         return `workspace:${input.clientSessionId}:${input.workspaceId}`;
       }
@@ -1232,11 +1286,13 @@ export class WorkspaceDaemonSession {
       case 'query_semantic_search':
       case 'query_semantic_definition':
       case 'query_semantic_hover':
+      case 'prepare_rename':
         return 'high';
       case 'query_code_actions':
       case 'apply_edit_plan':
       case 'query_dependency_graph':
       case 'query_semantic_references':
+      case 'preview_rename':
       case 'query_architecture_summary':
         return 'medium';
       default:
@@ -2043,6 +2099,86 @@ export class WorkspaceDaemonSession {
             result,
           };
         }
+        case 'prepare_rename': {
+          if (!this.options.service) {
+            return messageErrorCreate(
+              'unsupported_request',
+              `Unsupported daemon request: ${message.type}`,
+            );
+          }
+          const input = message as WorkspaceDaemonPrepareRenameRequest;
+          const daemonSessionError = this.daemonSessionValidate(input);
+          if (daemonSessionError) {
+            return daemonSessionError;
+          }
+          const replayGate = this.replayGateEnsure(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          if (replayGate) {
+            return replayGate;
+          }
+          const state = this.workspaceReplayStateGet(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          const workspaceInstanceError = this.workspaceInstanceValidate(state, input);
+          if (workspaceInstanceError) {
+            return workspaceInstanceError;
+          }
+          const replayEpochError = this.replayEpochValidate(state, input);
+          if (replayEpochError) {
+            return replayEpochError;
+          }
+          const result = await this.options.service.prepareRename({
+            ...input,
+            signal: options.signal,
+          });
+          return {
+            type: 'prepare_rename_ack',
+            result,
+          };
+        }
+        case 'preview_rename': {
+          if (!this.options.service) {
+            return messageErrorCreate(
+              'unsupported_request',
+              `Unsupported daemon request: ${message.type}`,
+            );
+          }
+          const input = message as WorkspaceDaemonPreviewRenameRequest;
+          const daemonSessionError = this.daemonSessionValidate(input);
+          if (daemonSessionError) {
+            return daemonSessionError;
+          }
+          const replayGate = this.replayGateEnsure(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          if (replayGate) {
+            return replayGate;
+          }
+          const state = this.workspaceReplayStateGet(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          const workspaceInstanceError = this.workspaceInstanceValidate(state, input);
+          if (workspaceInstanceError) {
+            return workspaceInstanceError;
+          }
+          const replayEpochError = this.replayEpochValidate(state, input);
+          if (replayEpochError) {
+            return replayEpochError;
+          }
+          const result = await this.options.service.previewRename({
+            ...input,
+            signal: options.signal,
+          });
+          return {
+            type: 'preview_rename_ack',
+            result,
+          };
+        }
         case 'query_architecture_summary': {
           if (!this.options.service) {
             return messageErrorCreate(
@@ -2567,6 +2703,58 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
       workspaceInstanceId: freshness?.workspaceInstanceId,
       replayEpoch: freshness?.replayEpoch,
       uri: input.uri,
+      analysisGeneration: input.analysisGeneration,
+    }, {
+      signal: input.signal,
+    }).then((response) => response.result);
+  }
+
+  prepareRename(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    target: WorkspaceRenameTarget;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspacePrepareRenameResult> {
+    const freshness = this.workspaceFreshnessGet(input);
+    const daemonSessionId = this.daemonSessionIdGet(input.clientSessionId);
+    return this.connection.request<WorkspaceDaemonPrepareRenameAck>({
+      type: 'prepare_rename',
+      clientSessionId: input.clientSessionId,
+      daemonSessionId,
+      requestId: input.requestId,
+      workspaceId: input.workspaceId,
+      workspaceInstanceId: freshness?.workspaceInstanceId,
+      replayEpoch: freshness?.replayEpoch,
+      target: input.target,
+      analysisGeneration: input.analysisGeneration,
+    }, {
+      signal: input.signal,
+    }).then((response) => response.result);
+  }
+
+  previewRename(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    target: WorkspaceRenameTarget;
+    newName: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceRenamePreviewResult> {
+    const freshness = this.workspaceFreshnessGet(input);
+    const daemonSessionId = this.daemonSessionIdGet(input.clientSessionId);
+    return this.connection.request<WorkspaceDaemonPreviewRenameAck>({
+      type: 'preview_rename',
+      clientSessionId: input.clientSessionId,
+      daemonSessionId,
+      requestId: input.requestId,
+      workspaceId: input.workspaceId,
+      workspaceInstanceId: freshness?.workspaceInstanceId,
+      replayEpoch: freshness?.replayEpoch,
+      target: input.target,
+      newName: input.newName,
       analysisGeneration: input.analysisGeneration,
     }, {
       signal: input.signal,

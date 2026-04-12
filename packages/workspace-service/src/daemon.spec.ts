@@ -344,6 +344,8 @@ function workspaceReadQueriesStubCreate(): Pick<
   | 'querySemanticDefinition'
   | 'querySemanticReferences'
   | 'querySemanticHover'
+  | 'prepareRename'
+  | 'previewRename'
   | 'queryArchitectureSummary'
 > {
   return {
@@ -369,6 +371,20 @@ function workspaceReadQueriesStubCreate(): Pick<
     },
     async querySemanticHover() {
       return null;
+    },
+    async prepareRename() {
+      return {
+        ok: false,
+        code: 'unsupported_context',
+        message: 'Rename foundations are wired, but no rename registry is available yet.',
+      };
+    },
+    async previewRename() {
+      return {
+        ok: false,
+        code: 'unsupported_context',
+        message: 'Rename foundations are wired, but no rename registry is available yet.',
+      };
     },
     async queryArchitectureSummary() {
       return {
@@ -1705,6 +1721,35 @@ describe('workspace daemon control plane', () => {
       semanticClass: 'architecture_node',
     });
     expect(
+      await service.prepareRename({
+        clientSessionId: registered.clientSessionId,
+        workspaceId: attached.workspaceId,
+        target: {
+          semanticClass: 'architecture_node',
+          uri: sharedUri,
+        },
+      }),
+    ).toEqual({
+      ok: false,
+      code: 'not_renameable_class',
+      message: 'Semantic class architecture_node is not renameable in MVP.',
+    });
+    expect(
+      await service.previewRename({
+        clientSessionId: registered.clientSessionId,
+        workspaceId: attached.workspaceId,
+        target: {
+          semanticClass: 'architecture_node',
+          uri: sharedUri,
+        },
+        newName: 'shared-renamed',
+      }),
+    ).toEqual({
+      ok: false,
+      code: 'not_renameable_class',
+      message: 'Semantic class architecture_node is not renameable in MVP.',
+    });
+    expect(
       await service.queryDependencyGraph({
         clientSessionId: registered.clientSessionId,
         workspaceId: attached.workspaceId,
@@ -1980,6 +2025,80 @@ describe('workspace daemon control plane', () => {
           clientSessionId: setup.registered.clientSessionId,
           workspaceId: setup.attached.workspaceId,
           uri: setup.sharedUri,
+          analysisGeneration: initialStatus.analysisGeneration,
+        }),
+      ).rejects.toThrow(
+        `Analysis generation mismatch: expected ${currentStatus.analysisGeneration}, received ${initialStatus.analysisGeneration}`,
+      );
+    } finally {
+      await setup.service.close();
+    }
+  });
+
+  it('rejects stale analysisGeneration for rename-preview reads through the daemon service client', async () => {
+    const setup = await daemonReadWorkspaceCreate();
+
+    try {
+      expect(
+        await setup.service.previewRename({
+          clientSessionId: setup.registered.clientSessionId,
+          workspaceId: setup.attached.workspaceId,
+          target: {
+            semanticClass: 'architecture_node',
+            uri: setup.sharedUri,
+          },
+          newName: 'shared-renamed',
+        }),
+      ).toEqual({
+        ok: false,
+        code: 'not_renameable_class',
+        message: 'Semantic class architecture_node is not renameable in MVP.',
+      });
+
+      const initialStatus = await setup.service.queryIndexStatus({
+        clientSessionId: setup.registered.clientSessionId,
+        workspaceId: setup.attached.workspaceId,
+      });
+
+      await setup.service.openOverlay({
+        clientSessionId: setup.registered.clientSessionId,
+        workspaceId: setup.attached.workspaceId,
+        uri: setup.sharedUri,
+        version: 1,
+        text: 'export const sharedValue = 1;\nexport const OverlayOnly = 2;\n',
+      });
+
+      expect(
+        await setup.service.previewRename({
+          clientSessionId: setup.registered.clientSessionId,
+          workspaceId: setup.attached.workspaceId,
+          target: {
+            semanticClass: 'architecture_node',
+            uri: setup.sharedUri,
+          },
+          newName: 'shared-renamed',
+        }),
+      ).toEqual({
+        ok: false,
+        code: 'not_renameable_class',
+        message: 'Semantic class architecture_node is not renameable in MVP.',
+      });
+
+      const currentStatus = await setup.service.queryIndexStatus({
+        clientSessionId: setup.registered.clientSessionId,
+        workspaceId: setup.attached.workspaceId,
+      });
+      expect(currentStatus.analysisGeneration).toBeGreaterThan(initialStatus.analysisGeneration);
+
+      await expect(
+        setup.service.previewRename({
+          clientSessionId: setup.registered.clientSessionId,
+          workspaceId: setup.attached.workspaceId,
+          target: {
+            semanticClass: 'architecture_node',
+            uri: setup.sharedUri,
+          },
+          newName: 'shared-renamed',
           analysisGeneration: initialStatus.analysisGeneration,
         }),
       ).rejects.toThrow(

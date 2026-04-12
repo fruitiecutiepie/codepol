@@ -119,6 +119,8 @@ function workspaceReadQueriesStubCreate(): Pick<
   | 'querySemanticDefinition'
   | 'querySemanticReferences'
   | 'querySemanticHover'
+  | 'prepareRename'
+  | 'previewRename'
   | 'queryArchitectureSummary'
 > {
   return {
@@ -144,6 +146,20 @@ function workspaceReadQueriesStubCreate(): Pick<
     },
     async querySemanticHover() {
       return null;
+    },
+    async prepareRename() {
+      return {
+        ok: false,
+        code: 'unsupported_context',
+        message: 'Rename foundations are wired, but no rename registry is available yet.',
+      };
+    },
+    async previewRename() {
+      return {
+        ok: false,
+        code: 'unsupported_context',
+        message: 'Rename foundations are wired, but no rename registry is available yet.',
+      };
     },
     async queryArchitectureSummary() {
       return {
@@ -474,6 +490,29 @@ describe('CodepolLspServer', () => {
     await server.handleMessage({
       jsonrpc: '2.0',
       id: 10,
+      method: 'codepol/prepareRename',
+      params: {
+        target: {
+          semanticClass: 'architecture_node',
+          uri: sharedUri,
+        },
+      },
+    });
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 11,
+      method: 'codepol/previewRename',
+      params: {
+        target: {
+          semanticClass: 'architecture_node',
+          uri: sharedUri,
+        },
+        newName: 'shared-renamed',
+      },
+    });
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 12,
       method: 'workspace/executeCommand',
       params: {
         command: 'codepol.goToSemanticDefinition',
@@ -482,7 +521,7 @@ describe('CodepolLspServer', () => {
     });
     await server.handleMessage({
       jsonrpc: '2.0',
-      id: 11,
+      id: 13,
       method: 'workspace/executeCommand',
       params: {
         command: 'codepol.showArchitectureLinks',
@@ -676,10 +715,20 @@ describe('CodepolLspServer', () => {
       source: 'codepol',
       semanticClass: 'architecture_node',
     });
-    expect(messages.find((message) => message.id === 10)?.result).toEqual(
+    expect(messages.find((message) => message.id === 10)?.result).toEqual({
+      ok: false,
+      code: 'not_renameable_class',
+      message: 'Semantic class architecture_node is not renameable in MVP.',
+    });
+    expect(messages.find((message) => message.id === 11)?.result).toEqual({
+      ok: false,
+      code: 'not_renameable_class',
+      message: 'Semantic class architecture_node is not renameable in MVP.',
+    });
+    expect(messages.find((message) => message.id === 12)?.result).toEqual(
       messages.find((message) => message.id === 7)?.result,
     );
-    expect(messages.find((message) => message.id === 11)?.result).toEqual(
+    expect(messages.find((message) => message.id === 13)?.result).toEqual(
       messages.find((message) => message.id === 8)?.result,
     );
   });
@@ -2705,6 +2754,137 @@ describe('CodepolLspServer', () => {
     });
 
     resolveSemanticReferences!(null);
+    await requestPromise;
+
+    const response = messages.find((message) => message.id === 2);
+    expect(response?.error).toEqual({
+      code: -32800,
+      message: 'Request cancelled',
+    });
+    expect(response?.result).toBeUndefined();
+  });
+
+  it('returns request-cancelled when a rename preview request is canceled in flight', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');
+    createdDirs.push(workspaceRoot);
+    fs.writeFileSync(path.join(workspaceRoot, 'codepol.toml'), noInterfaceConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    const uri = pathToFileURL(filePath).href;
+    let resolveRenamePreview:
+      | ((value: Awaited<ReturnType<WorkspaceService['previewRename']>>) => void)
+      | undefined;
+
+    const service: WorkspaceService = {
+      ...workspaceReadQueriesStubCreate(),
+      async registerClientSession() {
+        return {
+          clientSessionId: 'client-1',
+          daemonSessionId: 'daemon-1',
+        };
+      },
+      async closeClientSession() {},
+      async attachWorkspace() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+        };
+      },
+      async subscribeDiagnostics() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          scope: 'workspace',
+          subscriptionState: 'active',
+        };
+      },
+      async completeReplay() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          replayEpoch: 1,
+          replayState: 'applied',
+        };
+      },
+      async openOverlay() {},
+      async updateOverlay() {},
+      async closeOverlay() {},
+      async queryDiagnostics() {
+        return [];
+      },
+      async queryCodeActions() {
+        return [];
+      },
+      async previewRename() {
+        return new Promise((resolve) => {
+          resolveRenamePreview = resolve;
+        });
+      },
+      async applyEditPlan() {
+        return { applied: false, failureReason: 'plan_not_found' };
+      },
+      async queryIndexStatus() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          status: 'cold',
+          indexedFileCount: 0,
+          openDocumentCount: 0,
+          overlayCount: 0,
+          analysisGeneration: 0,
+        };
+      },
+    };
+
+    const messages: any[] = [];
+    const server = new CodepolLspServer({
+      service,
+      sendMessage: (message) => {
+        messages.push(message);
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        rootUri: pathToFileURL(workspaceRoot).href,
+      },
+    });
+
+    const requestPromise = server.handleMessage({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'codepol/previewRename',
+      params: {
+        target: {
+          semanticClass: 'architecture_node',
+          uri,
+        },
+        newName: 'app-renamed',
+      },
+    });
+
+    for (let attempt = 0; attempt < 20 && !resolveRenamePreview; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(resolveRenamePreview).toBeDefined();
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      method: '$/cancelRequest',
+      params: {
+        id: 2,
+      },
+    });
+
+    resolveRenamePreview!({
+      ok: false,
+      code: 'not_renameable_class',
+      message: 'Semantic class architecture_node is not renameable in MVP.',
+    });
     await requestPromise;
 
     const response = messages.find((message) => message.id === 2);

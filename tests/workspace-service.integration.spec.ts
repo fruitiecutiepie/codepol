@@ -1730,6 +1730,50 @@ demo();
       semanticClass: 'architecture_node',
     });
 
+    const prepareRename = await service.prepareRename({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      target: {
+        semanticClass: 'architecture_node',
+        uri: sharedUri,
+      },
+    });
+    expect(prepareRename).toEqual({
+      ok: false,
+      code: 'not_renameable_class',
+      message: 'Semantic class architecture_node is not renameable in MVP.',
+    });
+
+    const renamePreview = await service.previewRename({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      target: {
+        semanticClass: 'architecture_node',
+        uri: sharedUri,
+      },
+      newName: 'shared-renamed',
+    });
+    expect(renamePreview).toEqual({
+      ok: false,
+      code: 'not_renameable_class',
+      message: 'Semantic class architecture_node is not renameable in MVP.',
+    });
+
+    const configRenamePrepare = await service.prepareRename({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      target: {
+        semanticClass: 'config_component',
+        targetId: 'target:src',
+      },
+    });
+    expect(configRenamePrepare).toEqual({
+      ok: false,
+      code: 'unsupported_context',
+      message:
+        'Rename foundations are wired, but config_component does not have a materialized Codepol rename registry yet.',
+    });
+
     const dependencyGraph = await service.queryDependencyGraph({
       clientSessionId: attached.clientSessionId,
       workspaceId: attached.workspaceId,
@@ -1806,10 +1850,14 @@ demo();
     );
 
     await expect(
-      service.querySemanticReferences({
+      service.previewRename({
         clientSessionId: attached.clientSessionId,
         workspaceId: attached.workspaceId,
-        uri: sharedUri,
+        target: {
+          semanticClass: 'architecture_node',
+          uri: sharedUri,
+        },
+        newName: 'shared-renamed',
         analysisGeneration: readyStatus.analysisGeneration,
       }),
     ).rejects.toThrow(

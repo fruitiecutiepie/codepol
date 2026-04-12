@@ -1097,13 +1097,13 @@ Likely direction:
 - future extension package
   - custom RPC client plus UI glue
 
-Status on 2026-04-10:
+Status on 2026-04-13:
 
 - `packages/workspace-service` now owns shared diagnostics orchestration plus a sessionized workspace service with daemon transport, replay, watcher invalidation, warm-cache restore, and queueing/freshness control
-- `apps/lsp` exists as a stdio server and now ships diagnostics, code actions, edit-plan execution, `workspace/symbol`, read-only `codepol/*` RPC, sessionized overlay sync, and cold-start index status/progress through the shared service
+- `apps/lsp` exists as a stdio server and now ships diagnostics, code actions, edit-plan execution, `workspace/symbol`, explicit semantic navigation and hover over custom `codepol/*` RPC, rename-foundation `codepol/*` RPC, sessionized overlay sync, and cold-start index status/progress through the shared service
 - `apps/cli` is now a thin adapter over the shared service
 - per-client overlay isolation and session-scoped edit plans now exist in the shared service layer
-- generic hover, rename, definition, and references are no longer blocked by design; the ownership, surface-semantics, snapshot, and edit-plan prerequisites are now documented, so implementation can proceed as the next follow-up tranche
+- explicit Codepol-owned semantic `definition`, `references`, and `hover` now ship for `architecture_node`; rename is wired at the foundation layer only and still needs the first real closed-world renameable namespace plus apply flow
 
 Generic-surface readiness checklist:
 
@@ -1176,9 +1176,11 @@ Current follow-up: the daemon/session lifecycle is now in place, but richer obse
 - [x] Implement diagnostics publication using the shared diagnostic service.
 - [x] Implement `workspace/symbol` as a narrow Codepol-owned module-only `workspace_module` surface.
 - [x] Add progress and status signals for cold-start indexing.
-- [ ] Implement generic `definition`, `references`, `hover`, `prepare rename`, and `rename` now that the deferred-surface prerequisites are unblocked.
+- [x] Implement explicit Codepol-owned semantic `definition`, `references`, and `hover` over custom `codepol/*` RPC plus command surfaces.
+- [x] Add rename foundations with shared `prepare rename` / rename-preview contracts and fail-closed `codepol/*` adapter and transport wiring.
+- [ ] Implement the first successful closed-world Codepol rename namespace plus rename apply flow.
 
-Current status: the LSP server registers a client session, attaches a workspace, and implements overlay sync, diagnostics, `textDocument/codeAction`, `workspace/executeCommand`, module-only `workspace/symbol`, cold-start status publication, and read-only `codepol/indexStatus`, `codepol/dependencyGraph`, `codepol/semanticSearch`, and `codepol/architectureSummary` requests against the sessionized service boundary. Generic semantic navigation, hover, and rename are still pending implementation, but they are no longer deferred by design.
+Current status: the LSP server registers a client session, attaches a workspace, and implements overlay sync, diagnostics, `textDocument/codeAction`, `workspace/executeCommand`, module-only `workspace/symbol`, cold-start status publication, and custom `codepol/indexStatus`, `codepol/dependencyGraph`, `codepol/semanticSearch`, `codepol/architectureSummary`, `codepol/semanticDefinition`, `codepol/semanticReferences`, `codepol/semanticHover`, `codepol/prepareRename`, and `codepol/previewRename` requests against the sessionized service boundary. Semantic navigation and hover now ship for `architecture_node` through explicit Codepol-owned custom RPC and command surfaces. Rename is at foundation stage only and currently fails closed until the first real closed-world renameable namespace is materialized. Standard `textDocument/definition`, `textDocument/references`, `textDocument/hover`, `textDocument/prepareRename`, and `textDocument/rename` remain unadvertised.
 
 ### Phase 5: CLI and tests migrate fully
 
@@ -1187,12 +1189,12 @@ Current status: the LSP server registers a client session, attaches a workspace,
 - [x] Add daemon-level tests for multi-client overlay isolation.
 - [x] Add adapter-level tests for LSP request/response mapping.
 
-Current status: in-process integration coverage now includes multi-client overlay isolation, session-scoped edit-plan ownership, and per-session index-status transitions; daemon and adapter regression coverage now also includes read-RPC freshness, read-request supersession, reconnect-driven status-progress behavior, shared-workspace reuse, watched invalidation, and warm-start restore behavior.
+Current status: in-process integration coverage now includes multi-client overlay isolation, session-scoped edit-plan ownership, per-session index-status transitions, explicit semantic navigation and hover coverage, and rename-foundation failure contracts; daemon and adapter regression coverage now also includes read-RPC freshness, read-request supersession, reconnect-driven status-progress behavior, shared-workspace reuse, watched invalidation, warm-start restore behavior, and rename-foundation cancellation and stale-generation handling.
 
 ### Phase 6: extension RPC and richer features
 
 - [x] Use the existing LSP JSON-RPC stream as the first custom RPC carrier for read-only Codepol capabilities.
-- [x] Add first read-only custom RPC methods for dependency graphs, semantic search, index status, and architecture summaries.
+- [x] Add first custom RPC methods for dependency graphs, semantic search, index status, architecture summaries, explicit semantic navigation and hover, and rename foundations.
 - [ ] Add a separate extension RPC adapter only if later UI workflows outgrow the current LSP JSON-RPC carrier.
 - [ ] Add more invasive extension-only workflows only after the service API is stable.
 

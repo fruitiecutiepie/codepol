@@ -7,6 +7,9 @@ import {
   type WorkspaceDependencyGraphResult,
   type WorkspaceDiagnostic,
   type WorkspaceEditPlan,
+  type WorkspacePrepareRenameResult,
+  type WorkspaceRenamePreviewResult,
+  type WorkspaceRenameTarget,
   type WorkspaceSearchResult,
   type WorkspaceSemanticDefinitionResult,
   type WorkspaceSemanticHoverResult,
@@ -891,6 +894,15 @@ export class CodepolLspServer {
         return this.semanticHoverHandle(params as {
           uri?: string;
         }, context);
+      case 'codepol/prepareRename':
+        return this.prepareRenameHandle(params as {
+          target?: WorkspaceRenameTarget;
+        }, context);
+      case 'codepol/previewRename':
+        return this.previewRenameHandle(params as {
+          target?: WorkspaceRenameTarget;
+          newName?: string;
+        }, context);
       case 'codepol/architectureSummary':
         return this.architectureSummaryHandle(context);
       default:
@@ -1427,6 +1439,66 @@ export class CodepolLspServer {
           context.requestId === undefined || context.requestId === null
             ? undefined
             : `lsp-codepol-semantic-hover:${String(context.requestId)}`,
+        signal: context.signal,
+      }), {
+      signal: context.signal,
+    });
+  }
+
+  private async prepareRenameHandle(
+    params: {
+      target?: WorkspaceRenameTarget;
+    },
+    context: { requestId?: JsonRpcId; signal?: AbortSignal } = {},
+  ): Promise<WorkspacePrepareRenameResult | null> {
+    if (!this.registeredClientSessionId || !this.workspaceId || !params.target) {
+      return null;
+    }
+    const target = params.target;
+
+    return this.serviceCall((service) =>
+      service.prepareRename({
+        clientSessionId: this.registeredClientSessionId!,
+        workspaceId: this.workspaceId!,
+        target,
+        requestId:
+          context.requestId === undefined || context.requestId === null
+            ? undefined
+            : `lsp-codepol-prepare-rename:${String(context.requestId)}`,
+        signal: context.signal,
+      }), {
+      signal: context.signal,
+    });
+  }
+
+  private async previewRenameHandle(
+    params: {
+      target?: WorkspaceRenameTarget;
+      newName?: string;
+    },
+    context: { requestId?: JsonRpcId; signal?: AbortSignal } = {},
+  ): Promise<WorkspaceRenamePreviewResult | null> {
+    if (
+      !this.registeredClientSessionId ||
+      !this.workspaceId ||
+      !params.target ||
+      params.newName === undefined
+    ) {
+      return null;
+    }
+    const target = params.target;
+    const newName = params.newName;
+
+    return this.serviceCall((service) =>
+      service.previewRename({
+        clientSessionId: this.registeredClientSessionId!,
+        workspaceId: this.workspaceId!,
+        target,
+        newName,
+        requestId:
+          context.requestId === undefined || context.requestId === null
+            ? undefined
+            : `lsp-codepol-preview-rename:${String(context.requestId)}`,
         signal: context.signal,
       }), {
       signal: context.signal,

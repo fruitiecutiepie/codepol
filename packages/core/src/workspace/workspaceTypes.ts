@@ -43,13 +43,70 @@ export type WorkspaceEdit = {
   newText: string;
 };
 
+export type WorkspaceEditPlanKind = 'quickfix' | 'rename';
+
+export type WorkspaceEditPlanIntent = 'quickfix' | 'rename';
+
+export type WorkspaceEditExecutionMode = 'apply_direct' | 'preview_then_apply';
+
+export type WorkspaceEditStalePlanPolicy = 'reject' | 'recompute';
+
+export type WorkspaceEditApplyAtomicity = 'all_or_nothing' | 'per_file' | 'best_effort';
+
+export type WorkspaceEditSemanticRole =
+  | 'rename.definition'
+  | 'rename.reference'
+  | 'rename.string_literal'
+  | 'rename.comment'
+  | 'refactor.extract'
+  | 'refactor.inline'
+  | 'refactor.move'
+  | 'refactor.rewrite'
+  | 'import.add'
+  | 'import.remove'
+  | 'format.cleanup'
+  | 'other';
+
+export type WorkspaceEditPlanExecutionDetails =
+  | {
+      kind: 'rename';
+      targetId?: string;
+      oldName: string;
+      newName: string;
+    }
+  | {
+      kind: 'refactor';
+      refactorKind: string;
+    };
+
+export type WorkspaceEditPlanExecution = {
+  intent: WorkspaceEditPlanIntent;
+  mode: WorkspaceEditExecutionMode;
+  stalePlanPolicy?: WorkspaceEditStalePlanPolicy;
+  atomicity?: WorkspaceEditApplyAtomicity;
+  details?: WorkspaceEditPlanExecutionDetails;
+};
+
+export type WorkspaceEditPlanPreviewCountByRole = {
+  semanticRole: WorkspaceEditSemanticRole;
+  count: number;
+};
+
+export type WorkspaceEditPlanPreviewSummary = {
+  fileCount: number;
+  operationCount: number;
+  countsByRole?: WorkspaceEditPlanPreviewCountByRole[];
+};
+
 export type WorkspaceEditPlan = {
   id: string;
   title: string;
-  kind: 'quickfix';
+  kind: WorkspaceEditPlanKind;
   edits: WorkspaceEdit[];
   diagnosticIds: string[];
   isPreferred?: boolean;
+  execution?: WorkspaceEditPlanExecution;
+  previewSummary?: WorkspaceEditPlanPreviewSummary;
 };
 
 export type WorkspaceCodeAction = {
@@ -161,6 +218,154 @@ export type WorkspaceSemanticHoverResult = {
   source: 'codepol';
   semanticClass: 'architecture_node';
 };
+
+export type WorkspaceRenameableSemanticClass =
+  | 'domain_entity'
+  | 'config_component';
+
+export type WorkspaceRenameSemanticClass =
+  | WorkspaceRenameableSemanticClass
+  | 'architecture_node'
+  | 'generated_artifact'
+  | 'relation_anchor';
+
+export type WorkspaceSupportedRenameTarget = {
+  semanticClass: WorkspaceRenameableSemanticClass;
+  targetId: string;
+};
+
+export type WorkspaceRenameTarget =
+  | {
+      semanticClass: 'architecture_node';
+      uri: string;
+    }
+  | WorkspaceSupportedRenameTarget
+  | {
+      semanticClass: 'generated_artifact' | 'relation_anchor';
+      targetId: string;
+    };
+
+export type WorkspacePrepareRenameNamingRules = {
+  minLength?: number;
+  maxLength?: number;
+  patternDescription?: string;
+  casePolicy?: 'preserve' | 'kebab' | 'snake' | 'camel' | 'pascal';
+  reservedNames?: string[];
+};
+
+export type WorkspacePrepareRenameFailureCode =
+  | 'not_codepol_owned'
+  | 'not_renameable_class'
+  | 'ambiguous_target'
+  | 'read_only_target'
+  | 'generated_only_target'
+  | 'namespace_unknown'
+  | 'reference_set_incomplete'
+  | 'cross_owner_edits_required'
+  | 'declaration_missing'
+  | 'unsupported_context';
+
+export type WorkspacePrepareRenameSuccess = {
+  ok: true;
+  target: WorkspaceSupportedRenameTarget;
+  displayName: string;
+  currentName: string;
+  normalizedCurrentName: string;
+  namespaceId: string;
+  declarationLocation?: WorkspaceLocation;
+  placeholderRange?: WorkspaceRange;
+  impactedSiteCount: number;
+  requiresPreview: true;
+  namingRules: WorkspacePrepareRenameNamingRules;
+};
+
+export type WorkspacePrepareRenameFailure = {
+  ok: false;
+  code: WorkspacePrepareRenameFailureCode;
+  message: string;
+};
+
+export type WorkspacePrepareRenameResult =
+  | WorkspacePrepareRenameSuccess
+  | WorkspacePrepareRenameFailure;
+
+export type WorkspaceRenamePreviewEditKind =
+  | 'declaration'
+  | 'reference'
+  | 'derived_metadata'
+  | 'config_key'
+  | 'display_label';
+
+export type WorkspaceRenamePreviewEdit = {
+  uri: string;
+  range: WorkspaceRange;
+  oldText: string;
+  newText: string;
+  kind: WorkspaceRenamePreviewEditKind;
+  semanticClass: WorkspaceRenameableSemanticClass;
+  targetId: string;
+};
+
+export type WorkspaceRenamePreviewGroup = {
+  group: 'declarations' | 'references' | 'config' | 'metadata' | 'labels';
+  edits: WorkspaceRenamePreviewEdit[];
+};
+
+export type WorkspaceRenameWarningCode =
+  | 'display_label_not_canonical'
+  | 'case_only_change'
+  | 'generated_outputs_will_update_on_regen'
+  | 'partial_nonsemantic_mentions_not_updated'
+  | 'external_docs_not_updated'
+  | 'large_edit_set';
+
+export type WorkspaceRenameWarning = {
+  code: WorkspaceRenameWarningCode;
+  message: string;
+};
+
+export type WorkspaceRenameBlockingIssueCode =
+  | 'collision'
+  | 'namespace_unresolved'
+  | 'incomplete_reference_set'
+  | 'cross_owner_edit_required'
+  | 'stale_snapshot'
+  | 'write_conflict'
+  | 'read_only_path';
+
+export type WorkspaceRenameBlockingIssue = {
+  code: WorkspaceRenameBlockingIssueCode;
+  message: string;
+};
+
+export type WorkspaceRenamePreviewFailureCode =
+  | WorkspacePrepareRenameFailureCode
+  | 'validation_failed';
+
+export type WorkspaceRenamePreviewSuccess = {
+  ok: true;
+  target: WorkspaceSupportedRenameTarget;
+  oldName: string;
+  newName: string;
+  normalizedNewName: string;
+  namespaceId: string;
+  groups: WorkspaceRenamePreviewGroup[];
+  totalEdits: number;
+  warnings: WorkspaceRenameWarning[];
+  blockingIssues: WorkspaceRenameBlockingIssue[];
+  canApply: boolean;
+  plan?: WorkspaceEditPlan;
+};
+
+export type WorkspaceRenamePreviewFailure = {
+  ok: false;
+  code: WorkspaceRenamePreviewFailureCode;
+  message: string;
+};
+
+export type WorkspaceRenamePreviewResult =
+  | WorkspaceRenamePreviewSuccess
+  | WorkspaceRenamePreviewFailure;
 
 export type WorkspaceDependencyGraphNode = {
   uri: string;

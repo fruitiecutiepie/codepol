@@ -60,6 +60,11 @@ import {
   type WorkspaceDiagnosticSeverity,
   type WorkspaceFeatureStatus,
   type WorkspaceEditPlan,
+  type WorkspacePrepareRenameFailure,
+  type WorkspacePrepareRenameResult,
+  type WorkspaceRenamePreviewFailure,
+  type WorkspaceRenamePreviewResult,
+  type WorkspaceRenameTarget,
   type WorkspaceSemanticDefinitionResult,
   type WorkspaceSemanticHoverResult,
   type WorkspaceSemanticReferenceGroup,
@@ -409,6 +414,23 @@ export type WorkspaceService = {
     analysisGeneration?: number;
     signal?: AbortSignal;
   }) => Promise<WorkspaceSemanticHoverResult | null>;
+  prepareRename: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    target: WorkspaceRenameTarget;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspacePrepareRenameResult>;
+  previewRename: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    target: WorkspaceRenameTarget;
+    newName: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceRenamePreviewResult>;
   queryArchitectureSummary: (input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;
@@ -1800,6 +1822,70 @@ function workspaceSemanticHoverResultCreate(
     source: 'codepol',
     semanticClass: 'architecture_node',
   };
+}
+
+function workspacePrepareRenameFailureCreate(
+  code: WorkspacePrepareRenameFailure['code'],
+  message: string,
+): WorkspacePrepareRenameFailure {
+  return {
+    ok: false,
+    code,
+    message,
+  };
+}
+
+function workspaceRenamePreviewFailureCreate(
+  code: WorkspaceRenamePreviewFailure['code'],
+  message: string,
+): WorkspaceRenamePreviewFailure {
+  return {
+    ok: false,
+    code,
+    message,
+  };
+}
+
+function workspaceRenameTargetPrepareFailureResolve(
+  index: ProjectIndex,
+  target: WorkspaceRenameTarget,
+): WorkspacePrepareRenameFailure {
+  if (target.semanticClass === 'architecture_node') {
+    const resolvedTarget = workspaceSemanticTargetResolve(index, target.uri);
+    if (!resolvedTarget) {
+      return workspacePrepareRenameFailureCreate(
+        'not_codepol_owned',
+        'Target is not a Codepol-owned semantic target in this workspace.',
+      );
+    }
+    return workspacePrepareRenameFailureCreate(
+      'not_renameable_class',
+      'Semantic class architecture_node is not renameable in MVP.',
+    );
+  }
+
+  if (
+    target.semanticClass === 'generated_artifact' ||
+    target.semanticClass === 'relation_anchor'
+  ) {
+    return workspacePrepareRenameFailureCreate(
+      'not_renameable_class',
+      `Semantic class ${target.semanticClass} is not renameable in MVP.`,
+    );
+  }
+
+  return workspacePrepareRenameFailureCreate(
+    'unsupported_context',
+    `Rename foundations are wired, but ${target.semanticClass} does not have a materialized Codepol rename registry yet.`,
+  );
+}
+
+function workspaceRenameTargetPreviewFailureResolve(
+  index: ProjectIndex,
+  target: WorkspaceRenameTarget,
+): WorkspaceRenamePreviewFailure {
+  const prepareFailure = workspaceRenameTargetPrepareFailureResolve(index, target);
+  return workspaceRenamePreviewFailureCreate(prepareFailure.code, prepareFailure.message);
 }
 
 function workspaceDependencyGraphResultCreate(
@@ -4228,6 +4314,49 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     });
   }
 
+  async prepareRename(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    target: WorkspaceRenameTarget;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspacePrepareRenameResult> {
+    const { workspace, workspaceSession } = workspaceSessionGet(
+      this.workspaces,
+      this.clientSessions,
+      input.clientSessionId,
+      input.workspaceId,
+    );
+    const index = await this.workspaceSessionIndexEnsure(workspace, workspaceSession, {
+      signal: input.signal,
+    });
+    workspaceAnalysisGenerationValidate(workspaceSession, input);
+    return workspaceRenameTargetPrepareFailureResolve(index, input.target);
+  }
+
+  async previewRename(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    target: WorkspaceRenameTarget;
+    newName: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceRenamePreviewResult> {
+    const { workspace, workspaceSession } = workspaceSessionGet(
+      this.workspaces,
+      this.clientSessions,
+      input.clientSessionId,
+      input.workspaceId,
+    );
+    const index = await this.workspaceSessionIndexEnsure(workspace, workspaceSession, {
+      signal: input.signal,
+    });
+    workspaceAnalysisGenerationValidate(workspaceSession, input);
+    return workspaceRenameTargetPreviewFailureResolve(index, input.target);
+  }
+
   async queryArchitectureSummary(input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;
@@ -4428,6 +4557,29 @@ class InProcessWorkspaceService implements WorkspaceService {
     signal?: AbortSignal;
   }): Promise<WorkspaceSemanticHoverResult | null> {
     return this.engine.querySemanticHover(input);
+  }
+
+  prepareRename(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    target: WorkspaceRenameTarget;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspacePrepareRenameResult> {
+    return this.engine.prepareRename(input);
+  }
+
+  previewRename(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    target: WorkspaceRenameTarget;
+    newName: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceRenamePreviewResult> {
+    return this.engine.previewRename(input);
   }
 
   queryArchitectureSummary(input: {
