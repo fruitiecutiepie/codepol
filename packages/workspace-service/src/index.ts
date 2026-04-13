@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import chokidar from 'chokidar';
 import {
@@ -66,6 +66,7 @@ import {
   type WorkspaceRenamePreviewGroup,
   type WorkspaceRenamePreviewFailure,
   type WorkspaceRenamePreviewResult,
+  type WorkspaceRenamePreviewSuccess,
   type WorkspaceRenameTarget,
   type WorkspaceSemanticDefinitionResult,
   type WorkspaceSemanticHoverResult,
@@ -185,6 +186,11 @@ type WorkspaceAnalyzerInventoryEntry = {
   fixSurfaceNotes: string[];
 };
 
+type WorkspaceStoredEditPlan = {
+  plan: WorkspaceEditPlan;
+  analysisRevisionAtCreation: number;
+};
+
 type WorkspaceDocument = {
   uri: string;
   filePath: string;
@@ -269,7 +275,7 @@ type WorkspaceSessionState = WorkspaceDocumentsState &
     workspaceInstanceId: WorkspaceInstanceId;
     replayEpoch: number;
     replayState: 'pending' | 'applied';
-    codeActionPlans: Map<string, WorkspaceEditPlan>;
+    editPlans: Map<string, WorkspaceStoredEditPlan>;
     status: IndexStatusResult['status'];
     lastError?: string;
     analysisRevision: number;
@@ -2362,6 +2368,58 @@ function workspaceConfigComponentPreviewResultResolve(
   };
 }
 
+function workspaceRenamePreviewPlanCreate(input: {
+  preview: WorkspaceRenamePreviewSuccess;
+  idSalt: string;
+}): WorkspaceEditPlan {
+  const edits = input.preview.groups.flatMap((group) =>
+    group.edits.map((edit) => ({
+      uri: edit.uri,
+      range: edit.range,
+      newText: edit.newText,
+    })),
+  );
+  const title = `Rename config target "${input.preview.oldName}" to "${input.preview.newName}"`;
+  const id = createHash('sha256')
+    .update(input.idSalt)
+    .update('\0')
+    .update(title)
+    .update('\0')
+    .update(JSON.stringify(edits))
+    .digest('hex')
+    .slice(0, 16);
+
+  return {
+    id,
+    title,
+    kind: 'rename',
+    edits,
+    diagnosticIds: [],
+    execution: {
+      intent: 'rename',
+      mode: 'preview_then_apply',
+      stalePlanPolicy: 'reject',
+      atomicity: 'all_or_nothing',
+      details: {
+        kind: 'rename',
+        targetId: input.preview.target.targetId,
+        oldName: input.preview.oldName,
+        newName: input.preview.newName,
+      },
+    },
+  };
+}
+
+function workspaceSessionEditPlanStore(
+  workspaceSession: WorkspaceSessionState,
+  plan: WorkspaceEditPlan,
+): void {
+  workspaceSession.editPlans.set(plan.id, {
+    plan,
+    analysisRevisionAtCreation: workspaceSession.analysisRevision,
+  });
+}
+
 function workspacePrepareRenameFailureCreate(
   code: WorkspacePrepareRenameFailure['code'],
   message: string,
@@ -4349,7 +4407,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
         replayEpoch: 0,
         replayState: 'pending',
         documents: new Map(),
-        codeActionPlans: new Map(),
+        editPlans: new Map(),
         status: restoredWarmCache ? 'ready' : 'cold',
         analysisGeneration: restoredWarmCache?.analysisGeneration ?? 0,
         analysisRevision: 0,
@@ -4552,7 +4610,6 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       uri: input.uri,
       documentVersion: input.version,
     });
-    workspaceSession.codeActionPlans.clear();
     const analysis = await workspaceSessionAnalysisGet(workspace, workspaceSession, {
       signal: input.signal,
     });
@@ -4603,7 +4660,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
         if (isErr(planResult)) {
           continue;
         }
-        workspaceSession.codeActionPlans.set(planResult.Ok.id, planResult.Ok);
+        workspaceSessionEditPlanStore(workspaceSession, planResult.Ok);
         actions.push({
           id: planResult.Ok.id,
           title: planResult.Ok.title,
@@ -4632,13 +4689,20 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       input.clientSessionId,
       input.workspaceId,
     );
-    const plan = workspaceSession.codeActionPlans.get(input.planId);
-    if (!plan) {
+    const storedPlan = workspaceSession.editPlans.get(input.planId);
+    if (!storedPlan) {
       return {
         applied: false,
         failureReason: 'plan_not_found',
       };
     }
+    if (storedPlan.analysisRevisionAtCreation !== workspaceSession.analysisRevision) {
+      return {
+        applied: false,
+        failureReason: 'stale_document_version',
+      };
+    }
+    const { plan } = storedPlan;
 
     for (const edit of plan.edits) {
       let filePath: string;
@@ -4897,10 +4961,22 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     );
     workspaceAnalysisGenerationValidate(workspaceSession, input);
     if (input.target.semanticClass === 'config_component') {
-      return workspaceConfigComponentPreviewResultResolve(workspace, workspaceSession, {
+      const preview = workspaceConfigComponentPreviewResultResolve(workspace, workspaceSession, {
         targetId: input.target.targetId,
         newName: input.newName,
       });
+      if (!preview.ok || !preview.canApply) {
+        return preview;
+      }
+      const plan = workspaceRenamePreviewPlanCreate({
+        preview,
+        idSalt: input.clientSessionId,
+      });
+      workspaceSessionEditPlanStore(workspaceSession, plan);
+      return {
+        ...preview,
+        plan,
+      };
     }
     const index = await this.workspaceSessionIndexEnsure(workspace, workspaceSession, {
       signal: input.signal,

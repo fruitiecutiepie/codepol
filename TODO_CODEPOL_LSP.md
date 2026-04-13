@@ -1178,9 +1178,10 @@ Current follow-up: the daemon/session lifecycle is now in place, but richer obse
 - [x] Add progress and status signals for cold-start indexing.
 - [x] Implement explicit Codepol-owned semantic `definition`, `references`, and `hover` over custom `codepol/*` RPC plus command surfaces.
 - [x] Add rename foundations with shared `prepare rename` / rename-preview contracts and fail-closed `codepol/*` adapter and transport wiring.
-- [ ] Implement the first successful closed-world Codepol rename namespace plus rename apply flow.
+- [x] Implement the first successful closed-world Codepol rename namespace.
+- [x] Implement the first Codepol rename apply flow over session-owned edit plans.
 
-Current status: the LSP server registers a client session, attaches a workspace, and implements overlay sync, diagnostics, `textDocument/codeAction`, `workspace/executeCommand`, module-only `workspace/symbol`, cold-start status publication, and custom `codepol/indexStatus`, `codepol/dependencyGraph`, `codepol/semanticSearch`, `codepol/architectureSummary`, `codepol/semanticDefinition`, `codepol/semanticReferences`, `codepol/semanticHover`, `codepol/prepareRename`, and `codepol/previewRename` requests against the sessionized service boundary. Semantic navigation and hover now ship for `architecture_node` through explicit Codepol-owned custom RPC and command surfaces. Rename is at foundation stage only and currently fails closed until the first real closed-world renameable namespace is materialized. Standard `textDocument/definition`, `textDocument/references`, `textDocument/hover`, `textDocument/prepareRename`, and `textDocument/rename` remain unadvertised.
+Current status: the LSP server registers a client session, attaches a workspace, and implements overlay sync, diagnostics, `textDocument/codeAction`, `workspace/executeCommand`, module-only `workspace/symbol`, cold-start status publication, and custom `codepol/indexStatus`, `codepol/dependencyGraph`, `codepol/semanticSearch`, `codepol/architectureSummary`, `codepol/semanticDefinition`, `codepol/semanticReferences`, `codepol/semanticHover`, `codepol/prepareRename`, and `codepol/previewRename` requests against the sessionized service boundary. Semantic navigation and hover now ship for `architecture_node` through explicit Codepol-owned custom RPC and command surfaces. Rename now has one real closed-world namespace for `config_component` target names in `codepol.toml`, including prepare, preview, and apply through session-owned `WorkspaceEditPlan` execution over the existing `codepol.applyEditPlan` command surface. Standard `textDocument/definition`, `textDocument/references`, `textDocument/hover`, `textDocument/prepareRename`, and `textDocument/rename` remain unadvertised.
 
 ### Phase 5: CLI and tests migrate fully
 
@@ -1189,7 +1190,7 @@ Current status: the LSP server registers a client session, attaches a workspace,
 - [x] Add daemon-level tests for multi-client overlay isolation.
 - [x] Add adapter-level tests for LSP request/response mapping.
 
-Current status: in-process integration coverage now includes multi-client overlay isolation, session-scoped edit-plan ownership, per-session index-status transitions, explicit semantic navigation and hover coverage, and rename-foundation failure contracts; daemon and adapter regression coverage now also includes read-RPC freshness, read-request supersession, reconnect-driven status-progress behavior, shared-workspace reuse, watched invalidation, warm-start restore behavior, and rename-foundation cancellation and stale-generation handling.
+Current status: in-process integration coverage now includes multi-client overlay isolation, session-scoped edit-plan ownership, per-session index-status transitions, explicit semantic navigation and hover coverage, and config-target rename prepare/preview/apply coverage; daemon and adapter regression coverage now also includes read-RPC freshness, read-request supersession, reconnect-driven status-progress behavior, shared-workspace reuse, watched invalidation, warm-start restore behavior, and rename-preview cancellation and stale-generation handling.
 
 ### Phase 6: extension RPC and richer features
 

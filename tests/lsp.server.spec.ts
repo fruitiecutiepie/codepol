@@ -835,6 +835,42 @@ describe('CodepolLspServer', () => {
       warnings: [],
       blockingIssues: [],
       canApply: true,
+      plan: expect.objectContaining({
+        id: expect.any(String),
+        title: 'Rename config target "src" to "app-src"',
+        kind: 'rename',
+        edits: [
+          {
+            uri: configUri,
+            range: {
+              start: { line: 4, character: 9 },
+              end: { line: 4, character: 12 },
+            },
+            newText: 'app-src',
+          },
+          {
+            uri: configUri,
+            range: {
+              start: { line: 10, character: 12 },
+              end: { line: 10, character: 15 },
+            },
+            newText: 'app-src',
+          },
+        ],
+        diagnosticIds: [],
+        execution: {
+          intent: 'rename',
+          mode: 'preview_then_apply',
+          stalePlanPolicy: 'reject',
+          atomicity: 'all_or_nothing',
+          details: {
+            kind: 'rename',
+            targetId: 'target:src',
+            oldName: 'src',
+            newName: 'app-src',
+          },
+        },
+      }),
     });
   });
 
@@ -3386,6 +3422,210 @@ describe('CodepolLspServer', () => {
 
     const executeResponse = messages.find((message) => message.id === 3);
     expect(executeResponse?.result).toBeNull();
+  });
+
+  it('returns executable config rename previews and applies them through workspace/applyEdit', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');
+    createdDirs.push(workspaceRoot);
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    const configUri = pathToFileURL(configPath).href;
+    const configSource = noInterfaceConfigContentCreate();
+    fs.writeFileSync(configPath, configSource, 'utf8');
+
+    const messages: any[] = [];
+    const server = new CodepolLspServer({
+      sendMessage: (message) => {
+        messages.push(message);
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        rootUri: pathToFileURL(workspaceRoot).href,
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      method: 'textDocument/didOpen',
+      params: {
+        textDocument: {
+          uri: configUri,
+          version: 1,
+          text: configSource,
+        },
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'codepol/previewRename',
+      params: {
+        target: {
+          semanticClass: 'config_component',
+          targetId: 'target:src',
+        },
+        newName: 'app-src',
+      },
+    });
+
+    const previewResponse = messages.find((message) => message.id === 2);
+    expect(previewResponse?.result).toMatchObject({
+      ok: true,
+      canApply: true,
+      totalEdits: 2,
+      plan: {
+        kind: 'rename',
+        title: 'Rename config target "src" to "app-src"',
+        execution: {
+          intent: 'rename',
+          mode: 'preview_then_apply',
+          stalePlanPolicy: 'reject',
+          atomicity: 'all_or_nothing',
+          details: {
+            kind: 'rename',
+            targetId: 'target:src',
+            oldName: 'src',
+            newName: 'app-src',
+          },
+        },
+      },
+    });
+
+    const executePromise = server.handleMessage({
+      jsonrpc: '2.0',
+      id: 3,
+      method: 'workspace/executeCommand',
+      params: {
+        command: 'codepol.applyEditPlan',
+        arguments: [{ planId: previewResponse.result.plan.id }],
+      },
+    });
+
+    const applyEditRequest = await messageWaitFor(
+      messages,
+      (message) =>
+        message.method === 'workspace/applyEdit' &&
+        message.params?.label === 'Rename config target "src" to "app-src"',
+    );
+    expect(applyEditRequest?.params.edit.changes[configUri]).toEqual([
+      {
+        range: {
+          start: { line: 4, character: 9 },
+          end: { line: 4, character: 12 },
+        },
+        newText: 'app-src',
+      },
+      {
+        range: {
+          start: { line: 10, character: 12 },
+          end: { line: 10, character: 15 },
+        },
+        newText: 'app-src',
+      },
+    ]);
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: applyEditRequest.id,
+      result: { applied: true },
+    });
+    await executePromise;
+
+    const executeResponse = messages.find((message) => message.id === 3);
+    expect(executeResponse?.result).toBeNull();
+  });
+
+  it('does not apply stale config rename previews after the config overlay changes', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');
+    createdDirs.push(workspaceRoot);
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    const configUri = pathToFileURL(configPath).href;
+    const configSource = noInterfaceConfigContentCreate();
+    fs.writeFileSync(configPath, configSource, 'utf8');
+
+    const messages: any[] = [];
+    const server = new CodepolLspServer({
+      sendMessage: (message) => {
+        messages.push(message);
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        rootUri: pathToFileURL(workspaceRoot).href,
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      method: 'textDocument/didOpen',
+      params: {
+        textDocument: {
+          uri: configUri,
+          version: 1,
+          text: configSource,
+        },
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'codepol/previewRename',
+      params: {
+        target: {
+          semanticClass: 'config_component',
+          targetId: 'target:src',
+        },
+        newName: 'app-src',
+      },
+    });
+
+    const previewResponse = messages.find((message) => message.id === 2);
+    expect(previewResponse?.result).toMatchObject({
+      ok: true,
+      canApply: true,
+      plan: {
+        id: expect.any(String),
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      method: 'textDocument/didChange',
+      params: {
+        textDocument: { uri: configUri, version: 2 },
+        contentChanges: [{ text: `${configSource}\n# stale preview\n` }],
+      },
+    });
+
+    const applyEditCountBefore = messages.filter(
+      (message) => message.method === 'workspace/applyEdit',
+    ).length;
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 3,
+      method: 'workspace/executeCommand',
+      params: {
+        command: 'codepol.applyEditPlan',
+        arguments: [{ planId: previewResponse.result.plan.id }],
+      },
+    });
+
+    const applyEditCountAfter = messages.filter(
+      (message) => message.method === 'workspace/applyEdit',
+    ).length;
+    expect(applyEditCountAfter).toBe(applyEditCountBefore);
+    expect(messages.find((message) => message.id === 3)?.result).toBeNull();
   });
 
   it('preserves migrated no-unused-vars diagnostics and fixes through LSP code actions', async () => {

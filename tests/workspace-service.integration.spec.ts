@@ -1889,6 +1889,42 @@ demo();
       warnings: [],
       blockingIssues: [],
       canApply: true,
+      plan: expect.objectContaining({
+        id: expect.any(String),
+        title: 'Rename config target "src" to "app-src"',
+        kind: 'rename',
+        edits: [
+          {
+            uri: workspacePathToUri(configPath),
+            range: {
+              start: { line: 4, character: 9 },
+              end: { line: 4, character: 12 },
+            },
+            newText: 'app-src',
+          },
+          {
+            uri: workspacePathToUri(configPath),
+            range: {
+              start: { line: 10, character: 12 },
+              end: { line: 10, character: 15 },
+            },
+            newText: 'app-src',
+          },
+        ],
+        diagnosticIds: [],
+        execution: {
+          intent: 'rename',
+          mode: 'preview_then_apply',
+          stalePlanPolicy: 'reject',
+          atomicity: 'all_or_nothing',
+          details: {
+            kind: 'rename',
+            targetId: 'target:src',
+            oldName: 'src',
+            newName: 'app-src',
+          },
+        },
+      }),
     });
 
     const dependencyGraph = await service.queryDependencyGraph({
@@ -2054,17 +2090,16 @@ demo();
       clientInstanceId: 'collision-config-rename-client',
     });
 
-    expect(
-      await service.previewRename({
-        clientSessionId: attached.clientSessionId,
-        workspaceId: attached.workspaceId,
-        target: {
-          semanticClass: 'config_component',
-          targetId: 'target:src',
-        },
-        newName: 'shared',
-      }),
-    ).toMatchObject({
+    const collisionPreview = await service.previewRename({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      target: {
+        semanticClass: 'config_component',
+        targetId: 'target:src',
+      },
+      newName: 'shared',
+    });
+    expect(collisionPreview).toMatchObject({
       ok: true,
       target: {
         semanticClass: 'config_component',
@@ -2081,6 +2116,9 @@ demo();
         },
       ],
     });
+    if (collisionPreview.ok) {
+      expect(collisionPreview.plan).toBeUndefined();
+    }
 
     await expect(
       service.previewRename({
@@ -2253,6 +2291,196 @@ demo();
     ).rejects.toThrow(
       `Analysis generation mismatch: expected ${refreshedStatus.analysisGeneration}, received ${initialStatus.analysisGeneration}`,
     );
+  });
+
+  it('returns executable config target rename plans and applies them within the originating session', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    createdDirs.push(workspaceRoot);
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    const configUri = workspacePathToUri(configPath);
+    const configSource = noInterfaceConfigContentCreate();
+    fs.writeFileSync(configPath, configSource, 'utf8');
+
+    const service = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine(),
+    });
+    const attached = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientKind: 'lsp',
+      clientInstanceId: 'rename-apply-config-client',
+    });
+
+    await service.openOverlay({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      uri: configUri,
+      version: 1,
+      text: configSource,
+    });
+
+    const preview = await service.previewRename({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      target: {
+        semanticClass: 'config_component',
+        targetId: 'target:src',
+      },
+      newName: 'app-src',
+    });
+
+    expect(preview).toMatchObject({
+      ok: true,
+      canApply: true,
+      totalEdits: 2,
+      plan: {
+        kind: 'rename',
+        title: 'Rename config target "src" to "app-src"',
+        diagnosticIds: [],
+        execution: {
+          intent: 'rename',
+          mode: 'preview_then_apply',
+          stalePlanPolicy: 'reject',
+          atomicity: 'all_or_nothing',
+          details: {
+            kind: 'rename',
+            targetId: 'target:src',
+            oldName: 'src',
+            newName: 'app-src',
+          },
+        },
+      },
+    });
+    expect(preview.ok).toBe(true);
+    if (!preview.ok || !preview.plan) {
+      throw new Error('Expected executable rename plan');
+    }
+
+    expect(
+      await service.applyEditPlan({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        planId: preview.plan.id,
+        documentVersions: {
+          [configUri]: 1,
+        },
+      }),
+    ).toEqual({
+      applied: true,
+      plan: preview.plan,
+    });
+  });
+
+  it('rejects stale config target rename plans after config overlay changes', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    createdDirs.push(workspaceRoot);
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    const configUri = workspacePathToUri(configPath);
+    const configSource = noInterfaceConfigContentCreate();
+    fs.writeFileSync(configPath, configSource, 'utf8');
+
+    const service = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine(),
+    });
+    const attached = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientKind: 'lsp',
+      clientInstanceId: 'stale-rename-apply-config-client',
+    });
+
+    await service.openOverlay({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      uri: configUri,
+      version: 1,
+      text: configSource,
+    });
+
+    const preview = await service.previewRename({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      target: {
+        semanticClass: 'config_component',
+        targetId: 'target:src',
+      },
+      newName: 'app-src',
+    });
+    expect(preview.ok).toBe(true);
+    if (!preview.ok || !preview.plan) {
+      throw new Error('Expected executable rename plan');
+    }
+
+    await service.updateOverlay({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      uri: configUri,
+      version: 2,
+      text: `${configSource}\n# stale preview\n`,
+    });
+
+    expect(
+      await service.applyEditPlan({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        planId: preview.plan.id,
+        documentVersions: {
+          [configUri]: 1,
+        },
+      }),
+    ).toEqual({
+      applied: false,
+      failureReason: 'stale_document_version',
+    });
+  });
+
+  it('keeps config target rename plans session-owned', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    createdDirs.push(workspaceRoot);
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
+
+    const service = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine(),
+    });
+    const clientA = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientKind: 'lsp',
+      clientInstanceId: 'rename-plan-client-a',
+    });
+    const clientB = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientKind: 'lsp',
+      clientInstanceId: 'rename-plan-client-b',
+    });
+
+    const preview = await service.previewRename({
+      clientSessionId: clientB.clientSessionId,
+      workspaceId: clientB.workspaceId,
+      target: {
+        semanticClass: 'config_component',
+        targetId: 'target:src',
+      },
+      newName: 'app-src',
+    });
+    expect(preview.ok).toBe(true);
+    if (!preview.ok || !preview.plan) {
+      throw new Error('Expected executable rename plan');
+    }
+
+    expect(
+      await service.applyEditPlan({
+        clientSessionId: clientA.clientSessionId,
+        workspaceId: clientA.workspaceId,
+        planId: preview.plan.id,
+        documentVersions: {},
+      }),
+    ).toEqual({
+      applied: false,
+      failureReason: 'plan_not_found',
+    });
   });
 
   it('keeps architecture semantic references isolated per client overlay session', async () => {
