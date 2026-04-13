@@ -1,0 +1,20 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "baseUrl": "..",
+    "types": ["node", "vscode"],
+    "paths": {
+      "@codepol/core": ["./packages/core/src/index.ts"],
+      "@codepol/lsp": ["./apps/lsp/src/index.ts"],
+      "@codepol/lsp/protocol": ["./apps/lsp/src/protocol.ts"]
+    }
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["dist", "node_modules"],
+  "references": [
+    { "path": "../packages/core" },
+    { "path": "../apps/lsp" }
+  ]
+}

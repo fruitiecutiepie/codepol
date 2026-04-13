@@ -12,6 +12,7 @@ tests/**/*.js.map
 # IDE and editors
 .idea/
 .vscode/
+extension-vscode/.vscode-test/
 *.swp
 *.swo
 

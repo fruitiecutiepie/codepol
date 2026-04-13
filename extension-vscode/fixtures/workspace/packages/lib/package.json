@@ -1,0 +1,4 @@
+{
+  "name": "@acme/lib",
+  "main": "./dist/index.js"
+}

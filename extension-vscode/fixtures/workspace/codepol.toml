@@ -1,0 +1,11 @@
+[[plugins]]
+id = "@codepol/plugin"
+source = { kind = "builtin" }
+
+[targets.workspace]
+language = "typescript"
+files = ["packages/*/src/**/*.ts", "apps/*/src/**/*.ts"]
+
+[[rules]]
+ruleId = "@codepol/plugin/no-unused-exports"
+targets = ["workspace"]

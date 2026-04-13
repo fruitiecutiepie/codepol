@@ -1,0 +1,5 @@
+src/**
+fixtures/**
+tsconfig.json
+**/*.map
+**/*.tsbuildinfo

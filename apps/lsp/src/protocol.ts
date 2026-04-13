@@ -1,0 +1,18 @@
+export const CODEPOL_LSP_COMMAND_APPLY_EDIT_PLAN = 'codepol.applyEditPlan';
+export const CODEPOL_LSP_COMMAND_GO_TO_SEMANTIC_DEFINITION =
+  'codepol.goToSemanticDefinition';
+export const CODEPOL_LSP_COMMAND_SHOW_ARCHITECTURE_LINKS =
+  'codepol.showArchitectureLinks';
+
+export const CODEPOL_LSP_REQUEST_INDEX_STATUS = 'codepol/indexStatus';
+export const CODEPOL_LSP_REQUEST_DEPENDENCY_GRAPH = 'codepol/dependencyGraph';
+export const CODEPOL_LSP_REQUEST_SEMANTIC_SEARCH = 'codepol/semanticSearch';
+export const CODEPOL_LSP_REQUEST_SEMANTIC_DEFINITION =
+  'codepol/semanticDefinition';
+export const CODEPOL_LSP_REQUEST_SEMANTIC_REFERENCES =
+  'codepol/semanticReferences';
+export const CODEPOL_LSP_REQUEST_SEMANTIC_HOVER = 'codepol/semanticHover';
+export const CODEPOL_LSP_REQUEST_PREPARE_RENAME = 'codepol/prepareRename';
+export const CODEPOL_LSP_REQUEST_PREVIEW_RENAME = 'codepol/previewRename';
+export const CODEPOL_LSP_REQUEST_ARCHITECTURE_SUMMARY =
+  'codepol/architectureSummary';

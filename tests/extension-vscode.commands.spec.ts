@@ -1,0 +1,321 @@
+import { describe, expect, it, vi } from 'vitest';
+import { CodepolCommandController } from '../extension-vscode/src/commands';
+import type { RenameTargetCandidate } from '../extension-vscode/src/discovery';
+
+function hostCreate(overrides: Partial<{
+  activeUriGet: () => string | undefined;
+  renameTargetsLoad: () => Promise<RenameTargetCandidate[]>;
+  renameTargetPick: (
+    candidates: RenameTargetCandidate[],
+  ) => Promise<RenameTargetCandidate | undefined>;
+  renamePrompt: (input: {
+    title: string;
+    value: string;
+    namingRules: string[];
+  }) => Promise<string | undefined>;
+}> = {}) {
+  return {
+    activeUriGet: overrides.activeUriGet ?? (() => 'file:///workspace/packages/lib/src/index.ts'),
+    renameTargetsLoad: overrides.renameTargetsLoad ?? (async () => []),
+    renameTargetPick:
+      overrides.renameTargetPick ??
+      (async (candidates: RenameTargetCandidate[]) => candidates[0]),
+    renamePrompt:
+      overrides.renamePrompt ??
+      (async () => undefined),
+    infoShow: vi.fn(async () => {}),
+    errorShow: vi.fn(async () => {}),
+    openLocation: vi.fn(async () => {}),
+  };
+}
+
+function protocolCreate() {
+  return {
+    querySemanticDefinition: vi.fn(),
+    querySemanticReferences: vi.fn(),
+    querySemanticHover: vi.fn(),
+    prepareRename: vi.fn(),
+    previewRename: vi.fn(),
+    applyEditPlan: vi.fn(),
+  };
+}
+
+function panelsCreate() {
+  return {
+    showSemanticDefinition: vi.fn(),
+    showArchitectureLinks: vi.fn(),
+    showRenamePreview: vi.fn(),
+  };
+}
+
+const renameTargetCandidate: RenameTargetCandidate = {
+  kind: 'workspace_package',
+  label: '@acme/lib',
+  description: 'packages/lib',
+  detail: 'Workspace package',
+  target: {
+    semanticClass: 'domain_entity',
+    targetId: 'package:@acme/lib',
+  },
+};
+
+describe('CodepolCommandController', () => {
+  it('reports a missing active file for semantic definition requests', async () => {
+    const protocol = protocolCreate();
+    const panels = panelsCreate();
+    const host = hostCreate({ activeUriGet: () => undefined });
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    await expect(controller.showSemanticDefinition()).resolves.toBeNull();
+    expect(host.errorShow).toHaveBeenCalledWith(
+      'Open a workspace file before requesting a semantic definition.',
+    );
+    expect(protocol.querySemanticDefinition).not.toHaveBeenCalled();
+  });
+
+  it('opens semantic definition results and renders the structured panel', async () => {
+    const protocol = protocolCreate();
+    protocol.querySemanticDefinition.mockResolvedValue({
+      kind: 'single_location',
+      target: {
+        uri: 'file:///workspace/packages/lib/src/index.ts',
+        semanticClass: 'architecture_node',
+      },
+      location: {
+        uri: 'file:///workspace/packages/lib/src/index.ts',
+        range: {
+          start: { line: 0, character: 0 },
+          end: { line: 0, character: 0 },
+        },
+      },
+      source: 'codepol',
+      semanticClass: 'architecture_node',
+    });
+    protocol.querySemanticHover.mockResolvedValue({
+      target: {
+        uri: 'file:///workspace/packages/lib/src/index.ts',
+        semanticClass: 'architecture_node',
+      },
+      title: 'index.ts',
+      subtitle: 'packages/lib/src/index.ts',
+      summary: 'Indexed architecture node for the workspace module graph.',
+      fields: [],
+      actions: ['go_to_definition'],
+      source: 'codepol',
+      semanticClass: 'architecture_node',
+    });
+    const panels = panelsCreate();
+    const host = hostCreate();
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    const result = await controller.showSemanticDefinition();
+
+    expect(protocol.querySemanticDefinition).toHaveBeenCalledWith(
+      'file:///workspace/packages/lib/src/index.ts',
+    );
+    expect(protocol.querySemanticHover).toHaveBeenCalledWith(
+      'file:///workspace/packages/lib/src/index.ts',
+    );
+    expect(host.openLocation).toHaveBeenCalledWith({
+      uri: 'file:///workspace/packages/lib/src/index.ts',
+      line: 0,
+      character: 0,
+    });
+    expect(panels.showSemanticDefinition).toHaveBeenCalledWith(result);
+  });
+
+  it('renders architecture links for the active file', async () => {
+    const protocol = protocolCreate();
+    protocol.querySemanticReferences.mockResolvedValue({
+      target: {
+        uri: 'file:///workspace/packages/lib/src/index.ts',
+        semanticClass: 'architecture_node',
+      },
+      presentation: 'grouped_list',
+      totalItems: 1,
+      totalAvailableItems: 1,
+      truncated: false,
+      groups: [
+        {
+          group: 'incoming',
+          totalCount: 1,
+          truncated: false,
+          items: [
+            {
+              location: {
+                uri: 'file:///workspace/apps/web/src/app.ts',
+                range: {
+                  start: { line: 0, character: 0 },
+                  end: { line: 0, character: 10 },
+                },
+              },
+              label: 'apps/web/src/app.ts',
+              detail: 'import sharedValue from @acme/lib',
+              relationKind: 'incoming',
+              semanticClass: 'architecture_node',
+            },
+          ],
+        },
+      ],
+      source: 'codepol',
+      semanticClass: 'architecture_node',
+    });
+    protocol.querySemanticHover.mockResolvedValue(null);
+    const panels = panelsCreate();
+    const host = hostCreate();
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    const result = await controller.showArchitectureLinks();
+
+    expect(protocol.querySemanticReferences).toHaveBeenCalledWith(
+      'file:///workspace/packages/lib/src/index.ts',
+    );
+    expect(panels.showArchitectureLinks).toHaveBeenCalledWith(result);
+  });
+
+  it('shows rename preview for a successful rename flow', async () => {
+    const protocol = protocolCreate();
+    protocol.prepareRename.mockResolvedValue({
+      ok: true,
+      target: renameTargetCandidate.target,
+      displayName: '@acme/lib',
+      currentName: '@acme/lib',
+      normalizedCurrentName: '@acme/lib',
+      namespaceId: 'workspace.packages:file:///workspace',
+      impactedSiteCount: 2,
+      requiresPreview: true,
+      namingRules: {
+        minLength: 1,
+        patternDescription: 'npm package name (lowercase, optional @scope/name)',
+      },
+    });
+    protocol.previewRename.mockResolvedValue({
+      ok: true,
+      target: renameTargetCandidate.target,
+      oldName: '@acme/lib',
+      newName: '@acme/lib-next',
+      normalizedNewName: '@acme/lib-next',
+      namespaceId: 'workspace.packages:file:///workspace',
+      groups: [],
+      totalEdits: 2,
+      warnings: [],
+      blockingIssues: [],
+      canApply: true,
+      plan: {
+        id: 'plan-1',
+        title: 'Rename workspace package',
+        kind: 'rename',
+        edits: [],
+        diagnosticIds: [],
+      },
+    });
+    const panels = panelsCreate();
+    const host = hostCreate({
+      renameTargetsLoad: async () => [renameTargetCandidate],
+      renamePrompt: async () => '@acme/lib-next',
+    });
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    const result = await controller.renameCodepolEntity();
+
+    expect(protocol.prepareRename).toHaveBeenCalledWith(renameTargetCandidate.target);
+    expect(protocol.previewRename).toHaveBeenCalledWith(
+      renameTargetCandidate.target,
+      '@acme/lib-next',
+    );
+    expect(panels.showRenamePreview).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      ok: true,
+      newName: '@acme/lib-next',
+      canApply: true,
+    });
+  });
+
+  it('renders blocked rename previews without applying them', async () => {
+    const protocol = protocolCreate();
+    protocol.prepareRename.mockResolvedValue({
+      ok: true,
+      target: renameTargetCandidate.target,
+      displayName: '@acme/lib',
+      currentName: '@acme/lib',
+      normalizedCurrentName: '@acme/lib',
+      namespaceId: 'workspace.packages:file:///workspace',
+      impactedSiteCount: 2,
+      requiresPreview: true,
+      namingRules: {
+        minLength: 1,
+      },
+    });
+    protocol.previewRename.mockResolvedValue({
+      ok: true,
+      target: renameTargetCandidate.target,
+      oldName: '@acme/lib',
+      newName: '@acme/lib-next',
+      normalizedNewName: '@acme/lib-next',
+      namespaceId: 'workspace.packages:file:///workspace',
+      groups: [],
+      totalEdits: 2,
+      warnings: [],
+      blockingIssues: [{ code: 'collision', message: 'Package already exists.' }],
+      canApply: false,
+    });
+    const panels = panelsCreate();
+    const host = hostCreate({
+      renameTargetsLoad: async () => [renameTargetCandidate],
+      renamePrompt: async () => '@acme/lib-next',
+    });
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    const result = await controller.renameCodepolEntity();
+
+    expect(protocol.applyEditPlan).not.toHaveBeenCalled();
+    expect(panels.showRenamePreview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        canApply: false,
+        blockingIssues: ['Package already exists.'],
+      }),
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      canApply: false,
+    });
+  });
+
+  it('reports prepare failures and empty target discovery clearly', async () => {
+    const protocol = protocolCreate();
+    protocol.prepareRename.mockResolvedValue({
+      ok: false,
+      code: 'unsupported_context',
+      message: 'Rename is not available in the current workspace.',
+    });
+    const panels = panelsCreate();
+    const host = hostCreate({
+      renameTargetsLoad: async () => [renameTargetCandidate],
+    });
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    await expect(
+      controller.renameCodepolEntity({ target: renameTargetCandidate.target }),
+    ).resolves.toEqual({
+      ok: false,
+      code: 'unsupported_context',
+      message: 'Rename is not available in the current workspace.',
+    });
+    expect(host.errorShow).toHaveBeenCalledWith(
+      'Rename is not available in the current workspace.',
+    );
+
+    const emptyHost = hostCreate({
+      renameTargetsLoad: async () => [],
+    });
+    const emptyController = new CodepolCommandController(
+      protocol as never,
+      panelsCreate(),
+      emptyHost,
+    );
+    await expect(emptyController.renameCodepolEntity()).resolves.toBeNull();
+    expect(emptyHost.errorShow).toHaveBeenCalledWith(
+      'No renameable Codepol targets were discovered in the current workspace.',
+    );
+  });
+});

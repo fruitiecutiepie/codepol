@@ -3,6 +3,8 @@ import { defineConfig } from 'vitest/config';
 
 const workspaceSourceEntries = {
   '@codepol/core': 'packages/core/src/index.ts',
+  '@codepol/lsp': 'apps/lsp/src/index.ts',
+  '@codepol/lsp/protocol': 'apps/lsp/src/protocol.ts',
   '@codepol/plugin': 'packages/plugin/src/index.ts',
   '@codepol/plugin-biome': 'packages/plugin-biome/src/index.ts',
   '@codepol/plugin-eslint': 'packages/plugin-eslint/src/index.ts',

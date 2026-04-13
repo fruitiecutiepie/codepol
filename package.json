@@ -10,6 +10,7 @@
     "dev:cli": "node --watch --enable-source-maps apps/cli/dist/index.js",
     "dev:daemon": "node --watch --enable-source-maps apps/daemon/dist/index.js",
     "dev:lsp": "node --watch --enable-source-maps apps/lsp/dist/index.js",
+    "dev:extension-vscode": "pnpm --dir extension-vscode watch",
     "test": "pnpm build && vitest run --exclude '**/e2e.*.spec.ts'",
     "test:unit": "vitest run packages/",
     "test:integration": "pnpm build && vitest run tests/ --exclude '**/e2e.*.spec.ts'",

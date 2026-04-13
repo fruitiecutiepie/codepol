@@ -9,6 +9,8 @@
     "baseUrl": ".",
     "paths": {
       "@codepol/core": ["./packages/core/src/index.ts"],
+      "@codepol/lsp": ["./apps/lsp/src/index.ts"],
+      "@codepol/lsp/protocol": ["./apps/lsp/src/protocol.ts"],
       "@codepol/plugin-biome": ["./packages/plugin-biome/src/index.ts"],
       "@codepol/plugin-eslint": ["./packages/plugin-eslint/src/index.ts"],
       "@codepol/plugin-esbuild": ["./packages/plugin-esbuild/src/index.ts"],
@@ -26,6 +28,7 @@
     { "path": "./packages/plugin" },
     { "path": "./packages/workspace-service" },
     { "path": "./apps/cli" },
-    { "path": "./apps/lsp" }
+    { "path": "./apps/lsp" },
+    { "path": "./extension-vscode" }
   ]
 }

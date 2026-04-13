@@ -22,10 +22,26 @@ import {
   workspaceServiceCreate,
   type WorkspaceService,
 } from '@codepol/workspace-service';
+import {
+  CODEPOL_LSP_COMMAND_APPLY_EDIT_PLAN,
+  CODEPOL_LSP_COMMAND_GO_TO_SEMANTIC_DEFINITION,
+  CODEPOL_LSP_COMMAND_SHOW_ARCHITECTURE_LINKS,
+  CODEPOL_LSP_REQUEST_ARCHITECTURE_SUMMARY,
+  CODEPOL_LSP_REQUEST_DEPENDENCY_GRAPH,
+  CODEPOL_LSP_REQUEST_INDEX_STATUS,
+  CODEPOL_LSP_REQUEST_PREPARE_RENAME,
+  CODEPOL_LSP_REQUEST_PREVIEW_RENAME,
+  CODEPOL_LSP_REQUEST_SEMANTIC_DEFINITION,
+  CODEPOL_LSP_REQUEST_SEMANTIC_HOVER,
+  CODEPOL_LSP_REQUEST_SEMANTIC_REFERENCES,
+  CODEPOL_LSP_REQUEST_SEMANTIC_SEARCH,
+} from './protocol';
 
-const APPLY_EDIT_PLAN_COMMAND = 'codepol.applyEditPlan';
-const GO_TO_SEMANTIC_DEFINITION_COMMAND = 'codepol.goToSemanticDefinition';
-const SHOW_ARCHITECTURE_LINKS_COMMAND = 'codepol.showArchitectureLinks';
+const APPLY_EDIT_PLAN_COMMAND = CODEPOL_LSP_COMMAND_APPLY_EDIT_PLAN;
+const GO_TO_SEMANTIC_DEFINITION_COMMAND =
+  CODEPOL_LSP_COMMAND_GO_TO_SEMANTIC_DEFINITION;
+const SHOW_ARCHITECTURE_LINKS_COMMAND =
+  CODEPOL_LSP_COMMAND_SHOW_ARCHITECTURE_LINKS;
 const STATUS_PROGRESS_TOKEN = 'codepol/index-status';
 const STATUS_POLL_INTERVAL_ACTIVE_MS = 25;
 const STATUS_POLL_INTERVAL_IDLE_MS = 250;
@@ -873,37 +889,37 @@ export class CodepolLspServer {
         return this.workspaceSymbolHandle(params as {
           query?: string;
         }, context);
-      case 'codepol/indexStatus':
+      case CODEPOL_LSP_REQUEST_INDEX_STATUS:
         return this.indexStatusHandle(context);
-      case 'codepol/dependencyGraph':
+      case CODEPOL_LSP_REQUEST_DEPENDENCY_GRAPH:
         return this.dependencyGraphHandle(context);
-      case 'codepol/semanticSearch':
+      case CODEPOL_LSP_REQUEST_SEMANTIC_SEARCH:
         return this.semanticSearchHandle(params as {
           query?: string;
           limit?: number;
         }, context);
-      case 'codepol/semanticDefinition':
+      case CODEPOL_LSP_REQUEST_SEMANTIC_DEFINITION:
         return this.semanticDefinitionHandle(params as {
           uri?: string;
         }, context);
-      case 'codepol/semanticReferences':
+      case CODEPOL_LSP_REQUEST_SEMANTIC_REFERENCES:
         return this.semanticReferencesHandle(params as {
           uri?: string;
         }, context);
-      case 'codepol/semanticHover':
+      case CODEPOL_LSP_REQUEST_SEMANTIC_HOVER:
         return this.semanticHoverHandle(params as {
           uri?: string;
         }, context);
-      case 'codepol/prepareRename':
+      case CODEPOL_LSP_REQUEST_PREPARE_RENAME:
         return this.prepareRenameHandle(params as {
           target?: WorkspaceRenameTarget;
         }, context);
-      case 'codepol/previewRename':
+      case CODEPOL_LSP_REQUEST_PREVIEW_RENAME:
         return this.previewRenameHandle(params as {
           target?: WorkspaceRenameTarget;
           newName?: string;
         }, context);
-      case 'codepol/architectureSummary':
+      case CODEPOL_LSP_REQUEST_ARCHITECTURE_SUMMARY:
         return this.architectureSummaryHandle(context);
       default:
         return null;

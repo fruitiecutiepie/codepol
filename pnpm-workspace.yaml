@@ -1,6 +1,7 @@
 packages:
   - 'packages/*'
   - 'apps/*'
+  - 'extension-vscode'
 
 onlyBuiltDependencies:
   - esbuild

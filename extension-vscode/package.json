@@ -1,0 +1,105 @@
+{
+  "name": "codepol-extension-vscode",
+  "displayName": "Codepol",
+  "version": "1.0.0",
+  "description": "VS Code client for the Codepol LSP",
+  "private": true,
+  "publisher": "codepol",
+  "type": "commonjs",
+  "main": "./dist/extension.js",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "workspaceContains:codepol.toml",
+    "onCommand:codepol.extension.showSemanticDefinition",
+    "onCommand:codepol.extension.showArchitectureLinks",
+    "onCommand:codepol.extension.renameCodepolEntity",
+    "onView:codepol.currentContext",
+    "onView:codepol.renameTargets"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "icon": "media/codepol.svg",
+  "contributes": {
+    "commands": [
+      {
+        "command": "codepol.extension.showSemanticDefinition",
+        "title": "Codepol: Show Semantic Definition"
+      },
+      {
+        "command": "codepol.extension.showArchitectureLinks",
+        "title": "Codepol: Show Architecture Links"
+      },
+      {
+        "command": "codepol.extension.renameCodepolEntity",
+        "title": "Codepol: Rename Codepol Entity"
+      },
+      {
+        "command": "codepol.extension.refreshRenameTargets",
+        "title": "Codepol: Refresh Rename Targets"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "codepol",
+          "title": "Codepol",
+          "icon": "media/codepol.svg"
+        }
+      ]
+    },
+    "views": {
+      "codepol": [
+        {
+          "id": "codepol.currentContext",
+          "name": "Current Context"
+        },
+        {
+          "id": "codepol.renameTargets",
+          "name": "Rename Targets"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "codepol.extension.refreshRenameTargets",
+          "when": "view == codepol.renameTargets",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "files": [
+    "dist",
+    "media"
+  ],
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "watch": "tsc -b tsconfig.json --watch --preserveWatchOutput",
+    "typecheck": "pnpm --filter @codepol/core build && pnpm --filter @codepol/lsp build && tsc --noEmit",
+    "test:smoke": "pnpm run build && node ./dist/smoke/run.js"
+  },
+  "dependencies": {
+    "@codepol/core": "workspace:*",
+    "@codepol/lsp": "workspace:*",
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.3",
+    "@types/vscode": "^1.96.0",
+    "@vscode/test-electron": "^2.5.2",
+    "typescript": "^5.9.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fruitiecutiepie/codepol",
+    "directory": "extension-vscode"
+  },
+  "license": "MIT"
+}
