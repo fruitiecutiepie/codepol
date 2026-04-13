@@ -1,14 +1,25 @@
 import assert from 'node:assert/strict';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
+import { smokeWorkspaceCreate, type SmokeWorkspace } from '../workspace';
+
+let smokeWorkspace: SmokeWorkspace | undefined;
+
+function smokeWorkspacePathGet(): string {
+  if (!smokeWorkspace) {
+    smokeWorkspace = smokeWorkspaceCreate();
+    process.once('exit', () => {
+      smokeWorkspace?.cleanup();
+    });
+  }
+
+  return smokeWorkspace.workspacePath;
+}
 
 async function workspaceOpen(): Promise<void> {
   const existing = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  const fixtureWorkspacePath = path.resolve(
-    __dirname,
-    '../../../../fixtures/workspace',
-  );
-  if (existing === fixtureWorkspacePath) {
+  const workspacePath = smokeWorkspacePathGet();
+  if (existing === workspacePath) {
     return;
   }
 
@@ -20,7 +31,7 @@ async function workspaceOpen(): Promise<void> {
   });
 
   const opened = vscode.workspace.updateWorkspaceFolders(0, null, {
-    uri: vscode.Uri.file(fixtureWorkspacePath),
+    uri: vscode.Uri.file(workspacePath),
     name: 'codepol-extension-smoke',
   });
   assert.equal(opened, true, 'Expected the smoke-test workspace to open.');

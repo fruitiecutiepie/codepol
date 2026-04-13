@@ -46,6 +46,8 @@ function protocolCreate() {
     querySemanticDefinition: vi.fn(),
     querySemanticReferences: vi.fn(),
     querySemanticHover: vi.fn(),
+    queryDependencyGraph: vi.fn(async () => null),
+    queryArchitectureSummary: vi.fn(async () => null),
     prepareRename: vi.fn(),
     previewRename: vi.fn(),
     applyEditPlan: vi.fn(),
@@ -55,6 +57,8 @@ function protocolCreate() {
 function panelsCreate() {
   return {
     showSemanticDefinition: vi.fn(),
+    showArchitectureSummary: vi.fn(),
+    showDependencyGraph: vi.fn(),
     showArchitectureLinks: vi.fn(),
     showRenamePreview: vi.fn(),
   };
@@ -305,6 +309,69 @@ describe('CodepolCommandController', () => {
       '@acme/lib-next',
     );
     expect(panels.showRenamePreview).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      ok: true,
+      newName: '@acme/lib-next',
+      canApply: true,
+    });
+  });
+
+  it('auto-applies executable rename previews when requested explicitly', async () => {
+    const protocol = protocolCreate();
+    protocol.prepareRename.mockResolvedValue({
+      ok: true,
+      target: renameTargetCandidate.target,
+      displayName: '@acme/lib',
+      currentName: '@acme/lib',
+      normalizedCurrentName: '@acme/lib',
+      namespaceId: 'workspace.packages:file:///workspace',
+      impactedSiteCount: 2,
+      requiresPreview: true,
+      namingRules: {
+        minLength: 1,
+        patternDescription: 'npm package name (lowercase, optional @scope/name)',
+      },
+    });
+    protocol.previewRename.mockResolvedValue({
+      ok: true,
+      target: renameTargetCandidate.target,
+      oldName: '@acme/lib',
+      newName: '@acme/lib-next',
+      normalizedNewName: '@acme/lib-next',
+      namespaceId: 'workspace.packages:file:///workspace',
+      groups: [],
+      totalEdits: 2,
+      warnings: [],
+      blockingIssues: [],
+      canApply: true,
+      plan: {
+        id: 'plan-1',
+        title: 'Rename workspace package',
+        kind: 'rename',
+        edits: [],
+        diagnosticIds: [],
+      },
+    });
+    const renamePrompt = vi.fn(async () => undefined);
+    const host = hostCreate({ renamePrompt });
+    const panels = panelsCreate();
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    const result = await controller.renameCodepolEntity({
+      target: renameTargetCandidate.target,
+      newName: '@acme/lib-next',
+      autoApply: true,
+    });
+
+    expect(renamePrompt).not.toHaveBeenCalled();
+    expect(protocol.prepareRename).toHaveBeenCalledWith(renameTargetCandidate.target);
+    expect(protocol.previewRename).toHaveBeenCalledWith(
+      renameTargetCandidate.target,
+      '@acme/lib-next',
+    );
+    expect(protocol.applyEditPlan).toHaveBeenCalledWith('plan-1');
+    expect(host.infoShow).toHaveBeenCalledWith('Applied rename for package:@acme/lib.');
+    expect(panels.showRenamePreview).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       ok: true,
       newName: '@acme/lib-next',

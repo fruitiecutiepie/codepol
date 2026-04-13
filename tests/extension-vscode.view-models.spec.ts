@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  architectureLinksPanelViewModelCreate,
   renamePreviewPanelViewModelCreate,
   semanticDefinitionPanelViewModelCreate,
   semanticHoverCardViewModelCreate,
-  semanticReferencesPanelViewModelCreate,
 } from '../extension-vscode/src/viewModels';
 
 describe('extension-vscode view model mapping', () => {
@@ -99,7 +99,7 @@ describe('extension-vscode view model mapping', () => {
 
   it('maps semantic references and rename preview payloads into grouped UI models', () => {
     expect(
-      semanticReferencesPanelViewModelCreate({
+      architectureLinksPanelViewModelCreate({
         uri: 'file:///workspace/packages/lib/src/index.ts',
         references: {
           target: {
@@ -156,10 +156,22 @@ describe('extension-vscode view model mapping', () => {
           semanticClass: 'architecture_node',
         },
         hover: null,
+        graph: null,
+        summary: null,
       }),
     ).toEqual({
       uri: 'file:///workspace/packages/lib/src/index.ts',
       hoverCard: null,
+      workspaceSummaryCard: null,
+      graph: {
+        mode: 'focus',
+        focusUri: 'file:///workspace/packages/lib/src/index.ts',
+        width: 0,
+        height: 0,
+        nodes: [],
+        edges: [],
+        emptyMessage: 'No dependency graph context is available for this target.',
+      },
       totalItems: 2,
       totalAvailableItems: 2,
       truncated: false,
