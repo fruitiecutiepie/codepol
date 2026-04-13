@@ -83,7 +83,7 @@
     },
     "menus": {
       "view/title": [
-{
+        {
           "command": "codepol.extension.refreshRenameTargets",
           "when": "view == codepol.currentContext",
           "group": "navigation"

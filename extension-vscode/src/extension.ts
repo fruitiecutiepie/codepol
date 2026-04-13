@@ -15,7 +15,7 @@ import {
   CODEPOL_EXTENSION_COMMAND_SHOW_DEPENDENCY_GRAPH,
   CODEPOL_EXTENSION_COMMAND_SHOW_SEMANTIC_DEFINITION,
   CODEPOL_EXTENSION_COMMAND_SHOW_SEMANTIC_SEARCH,
-CODEPOL_EXTENSION_VIEW_CURRENT_CONTEXT_ID,
+  CODEPOL_EXTENSION_VIEW_CURRENT_CONTEXT_ID,
   CODEPOL_EXTENSION_VIEW_RENAME_TARGETS_ID,
 } from './constants';
 import {
@@ -27,16 +27,15 @@ import {
   VscodeLanguageClientProtocol,
   type CodepolProtocolClient,
 } from './protocolClient';
+import { CodepolSidebarViewProvider } from './sidebarView';
 import {
   semanticSearchInitialQueryResolve,
   semanticSearchQuickPickItemsCreate,
 } from './semanticSearch';
-import {
-  CurrentContextTreeProvider,
-  RenameTargetsTreeProvider,
-} from './treeProviders';
+import { RenameTargetsTreeProvider } from './treeProviders';
 
 let protocolClient: CodepolProtocolClient | undefined;
+let sidebarProvider: CodepolSidebarViewProvider | undefined;
 
 function workspaceRootPathGet(): string | undefined {
   return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -48,6 +47,25 @@ function activeEditorUriGet(): string | undefined {
     return undefined;
   }
   return editor.document.uri.toString();
+}
+
+function activeEditorLocationGet():
+  | {
+      uri: string;
+      line: number;
+      character: number;
+    }
+  | undefined {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || editor.document.uri.scheme !== 'file') {
+    return undefined;
+  }
+
+  return {
+    uri: editor.document.uri.toString(),
+    line: editor.selection.active.line,
+    character: editor.selection.active.character,
+  };
 }
 
 type SemanticSearchQuickPickItem = vscode.QuickPickItem & {
@@ -68,6 +86,12 @@ async function locationOpen(input: {
   const position = new vscode.Position(input.line, input.character);
   editor.selection = new vscode.Selection(position, position);
   editor.revealRange(new vscode.Range(position, position));
+  void sidebarProvider?.recordLocationVisit({
+    uri: input.uri,
+    line: input.line,
+    character: input.character,
+    sourceLabel: 'Opened',
+  });
 }
 
 function renameTargetsLoad(): Promise<RenameTargetCandidate[]> {
@@ -275,9 +299,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     },
   });
 
-  const currentContextProvider = new CurrentContextTreeProvider(
+  sidebarProvider = new CodepolSidebarViewProvider(
     protocol,
-    activeEditorUriGet,
+    {
+      openLocation: locationOpen,
+      executeCommand: async (command: string, uri: string) => {
+        await vscode.commands.executeCommand(command, uri);
+      },
+    },
+    activeEditorLocationGet,
+    semanticSearchQueryResolve,
   );
   const renameTargetsProvider = new RenameTargetsTreeProvider(renameTargetsLoad);
 
@@ -299,7 +330,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(
     panels,
-sidebarProvider,
+    sidebarProvider,
     vscode.window.registerWebviewViewProvider(
       CODEPOL_EXTENSION_VIEW_CURRENT_CONTEXT_ID,
       sidebarProvider,
@@ -343,11 +374,11 @@ sidebarProvider,
       CODEPOL_EXTENSION_COMMAND_REFRESH_RENAME_TARGETS,
       () => {
         renameTargetsProvider.refresh();
-        currentContextProvider.refresh();
+        void sidebarProvider?.refresh();
       },
     ),
     vscode.window.onDidChangeActiveTextEditor(() => {
-      currentContextProvider.refresh();
+      void sidebarProvider?.refresh();
     }),
   );
 
@@ -355,7 +386,7 @@ sidebarProvider,
   const configWatcher = vscode.workspace.createFileSystemWatcher('**/codepol.toml');
   const refreshTargets = () => {
     renameTargetsProvider.refresh();
-    currentContextProvider.refresh();
+    void sidebarProvider?.refresh();
   };
   context.subscriptions.push(
     packageWatcher,
@@ -380,6 +411,8 @@ sidebarProvider,
 }
 
 export async function deactivate(): Promise<void> {
+  sidebarProvider?.dispose();
+  sidebarProvider = undefined;
   if (protocolClient) {
     await protocolClient.stop();
     protocolClient = undefined;
