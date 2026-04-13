@@ -1,0 +1,37 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Codepol Extension: Fixture Workspace",
+      "type": "extensionHost",
+      "request": "launch",
+      "runtimeExecutable": "${execPath}",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/extension-vscode",
+        "${workspaceFolder}/extension-vscode/fixtures/workspace"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/extension-vscode/dist/**/*.js",
+        "${workspaceFolder}/apps/lsp/dist/**/*.js",
+        "${workspaceFolder}/packages/core/dist/**/*.js"
+      ],
+      "preLaunchTask": "codepol: build extension-vscode stack"
+    },
+    {
+      "name": "Codepol Extension: Current Repo Workspace",
+      "type": "extensionHost",
+      "request": "launch",
+      "runtimeExecutable": "${execPath}",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/extension-vscode",
+        "${workspaceFolder}"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/extension-vscode/dist/**/*.js",
+        "${workspaceFolder}/apps/lsp/dist/**/*.js",
+        "${workspaceFolder}/packages/core/dist/**/*.js"
+      ],
+      "preLaunchTask": "codepol: build extension-vscode stack"
+    }
+  ]
+}

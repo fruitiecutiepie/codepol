@@ -11,7 +11,9 @@ tests/**/*.js.map
 
 # IDE and editors
 .idea/
-.vscode/
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
 extension-vscode/.vscode-test/
 *.swp
 *.swo
