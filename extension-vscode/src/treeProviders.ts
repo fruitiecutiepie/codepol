@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import type { RenameTargetCandidate } from './discovery';
 import { CODEPOL_EXTENSION_COMMAND_RENAME_CODEPOL_ENTITY } from './constants';
+import type { CodepolReadinessSource } from './readinessController';
+import { codepolFeatureGateResolve } from './readiness';
 
 type RenameTargetGroupKind = RenameTargetCandidate['kind'];
 
@@ -24,6 +26,7 @@ export class RenameTargetsTreeProvider
 
   constructor(
     private readonly candidatesLoad: () => Promise<RenameTargetCandidate[]>,
+    private readonly readiness?: CodepolReadinessSource,
   ) {}
 
   refresh(): void {
@@ -73,22 +76,48 @@ export class RenameTargetsTreeProvider
     }
 
     const group = element as RenameTargetGroupItem;
+    const workspacePackageRenameGate = this.readiness
+      ? codepolFeatureGateResolve(
+          this.readiness.snapshotGet(),
+          'workspacePackageRename',
+        )
+      : { blocked: false as const, message: undefined };
     return candidates
       .filter((candidate) => candidate.kind === group.kind)
       .map(
-        (candidate) =>
-          new StaticTreeItem(candidate.label, {
-            description: candidate.description,
-            tooltip: `${candidate.label}\n${candidate.detail}\n${candidate.description}`,
+        (candidate) => {
+          const renameBlocked =
+            candidate.kind === 'workspace_package' &&
+            workspacePackageRenameGate.blocked;
+
+          const tooltipParts = [
+            candidate.label,
+            candidate.detail,
+            candidate.description,
+          ];
+          if (renameBlocked && workspacePackageRenameGate.message) {
+            tooltipParts.push(workspacePackageRenameGate.message);
+          }
+
+          return new StaticTreeItem(candidate.label, {
+            description: renameBlocked ? 'Blocked until ready' : candidate.description,
+            tooltip: tooltipParts.join('\n'),
             iconPath: new vscode.ThemeIcon(
-              candidate.kind === 'workspace_package' ? 'package' : 'settings-gear',
+              renameBlocked
+                ? 'lock'
+                : candidate.kind === 'workspace_package'
+                  ? 'package'
+                  : 'settings-gear',
             ),
-            command: {
-              command: CODEPOL_EXTENSION_COMMAND_RENAME_CODEPOL_ENTITY,
-              title: 'Rename Codepol Entity',
-              arguments: [{ target: candidate.target }],
-            },
-          }),
+            command: renameBlocked
+              ? undefined
+              : {
+                  command: CODEPOL_EXTENSION_COMMAND_RENAME_CODEPOL_ENTITY,
+                  title: 'Rename Codepol Entity',
+                  arguments: [{ target: candidate.target }],
+                },
+          });
+        },
       );
   }
 

@@ -1,11 +1,18 @@
 import { randomBytes } from 'node:crypto';
 import * as vscode from 'vscode';
-import type { IndexStatusResult, WorkspaceSemanticHoverResult } from '@codepol/core';
+import type { WorkspaceSemanticHoverResult } from '@codepol/core';
 import {
   CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_LINKS,
   CODEPOL_EXTENSION_COMMAND_SHOW_SEMANTIC_DEFINITION,
 } from './constants';
 import type { CodepolProtocolClient } from './protocolClient';
+import {
+  codepolFeatureBlockedMessageResolve,
+  codepolFeatureGateResolve,
+  codepolFeatureUnavailableMessageResolve,
+  type CodepolReadinessSnapshot,
+} from './readiness';
+import type { CodepolReadinessSource } from './readinessController';
 import {
   sidebarActiveTargetCreate,
   sidebarIndexStatusCreate,
@@ -29,6 +36,8 @@ type CodepolSidebarState = {
   search: {
     query: string;
     busy: boolean;
+    disabled: boolean;
+    disabledReason?: string;
     message: string;
     tone: SidebarTone;
     results: SidebarSearchResultViewModel[];
@@ -74,6 +83,7 @@ function errorMessageResolve(error: unknown): string {
 function searchPresentationCreate(input: {
   query: string;
   busy: boolean;
+  blockedMessage?: string;
   unavailable?: boolean;
   errorMessage?: string;
   results: SidebarSearchResultViewModel[];
@@ -87,6 +97,13 @@ function searchPresentationCreate(input: {
     return {
       message: 'Searching workspace modules and exported symbols…',
       tone: 'neutral',
+    };
+  }
+
+  if (input.blockedMessage) {
+    return {
+      message: input.blockedMessage,
+      tone: 'warning',
     };
   }
 
@@ -135,6 +152,7 @@ function sidebarStateCreate(): CodepolSidebarState {
     search: {
       query: '',
       busy: false,
+      disabled: false,
       message: searchPresentation.message,
       tone: searchPresentation.tone,
       results: [],
@@ -240,6 +258,13 @@ function sidebarHtmlCreate(input: {
         .action-button:hover {
           background: var(--vscode-button-secondaryHoverBackground);
         }
+        .toolbar-button:disabled,
+        .list-button:disabled,
+        .action-button:disabled {
+          cursor: default;
+          opacity: 0.6;
+          background: color-mix(in srgb, var(--vscode-button-secondaryBackground) 82%, transparent);
+        }
         .search-input {
           width: 100%;
           box-sizing: border-box;
@@ -252,6 +277,10 @@ function sidebarHtmlCreate(input: {
         }
         .search-input:focus {
           border-color: var(--vscode-focusBorder);
+        }
+        .search-input:disabled {
+          opacity: 0.75;
+          cursor: default;
         }
         .helper {
           margin: 10px 0 0;
@@ -507,6 +536,10 @@ function sidebarHtmlCreate(input: {
           if (searchInput instanceof HTMLInputElement && searchInput.value !== currentState.search.query) {
             searchInput.value = currentState.search.query;
           }
+          if (searchInput instanceof HTMLInputElement) {
+            searchInput.disabled = currentState.search.disabled;
+            searchInput.title = currentState.search.disabledReason || '';
+          }
           searchStatus.innerHTML = helperHtml(currentState.search.message, currentState.search.tone);
           if (currentState.search.results.length === 0) {
             searchResults.innerHTML = '';
@@ -538,7 +571,11 @@ function sidebarHtmlCreate(input: {
           const actions = !target.uri || target.actions.length === 0
             ? ''
             : '<div class="action-row">' + target.actions.map(function(action) {
-                return '<button class="action-button" data-action="' + escapeHtml(action.action) + '" data-uri="' + escapeHtml(target.uri) + '">' + escapeHtml(action.label) + '</button>';
+                const disabled = action.disabled ? ' disabled' : '';
+                const title = action.disabledReason
+                  ? ' title="' + escapeHtml(action.disabledReason) + '"'
+                  : '';
+                return '<button class="action-button" data-action="' + escapeHtml(action.action) + '" data-uri="' + escapeHtml(target.uri) + '"' + disabled + title + '>' + escapeHtml(action.label) + '</button>';
               }).join('') + '</div>';
           activeTarget.innerHTML = title + subtitle + summary + status + message + fields + actions;
         }
@@ -656,17 +693,28 @@ export class CodepolSidebarViewProvider
   private refreshRequestId = 0;
   private searchRequestId = 0;
   private searchInitialized = false;
-  private pollHandle: ReturnType<typeof setTimeout> | undefined;
+  private activeTargetHover: WorkspaceSemanticHoverResult | null = null;
+  private activeTargetErrorMessage: string | undefined;
+  private searchErrorMessage: string | undefined;
+  private searchUnavailable = false;
 
   constructor(
     private readonly protocol: CodepolProtocolClient,
+    private readonly readiness: CodepolReadinessSource,
     private readonly actions: CodepolSidebarActions,
     private readonly activeLocationGet: () => ActiveEditorLocation | undefined,
     private readonly initialSearchQueryGet: () => string | undefined,
-  ) {}
+  ) {
+    this.state.indexStatus = sidebarIndexStatusCreate(this.readiness.snapshotGet());
+    this.disposables.push(
+      this.readiness.onDidChange((snapshot) => {
+        this.readinessStateApply(snapshot);
+      }),
+    );
+    this.readinessStateApply(this.readiness.snapshotGet());
+  }
 
   dispose(): void {
-    this.pollStop();
     for (const disposable of this.disposables) {
       disposable.dispose();
     }
@@ -687,15 +735,12 @@ export class CodepolSidebarViewProvider
       webviewView.onDidDispose(() => {
         if (this.view === webviewView) {
           this.view = undefined;
-          this.pollStop();
         }
       }),
       webviewView.onDidChangeVisibility(() => {
         if (webviewView.visible) {
           void this.refresh();
-          return;
         }
-        this.pollStop();
       }),
       webviewView.webview.onDidReceiveMessage((message: SidebarViewMessage) => {
         void this.messageHandle(message);
@@ -712,29 +757,28 @@ export class CodepolSidebarViewProvider
 
     const activeLocation = this.activeLocationGet();
     const requestId = ++this.refreshRequestId;
+    this.activeTargetHover = null;
+    this.activeTargetErrorMessage = undefined;
     this.state.activeTarget = sidebarActiveTargetCreate({
       activeUri: activeLocation?.uri,
       hover: null,
+      disabledActionMessages: this.activeTargetDisabledActionMessagesResolve(),
     });
-    this.state.indexStatus = {
-      ...this.state.indexStatus,
-      detail: 'Refreshing Codepol workspace status…',
-    };
+    this.state.indexStatus = sidebarIndexStatusCreate(this.readiness.snapshotGet());
     this.statePush();
 
-    const [statusResult, hoverResult] = await Promise.all([
-      this.indexStatusQuery(),
-      this.hoverQuery(activeLocation?.uri),
-    ]);
+    const hoverResult = await this.hoverQuery(activeLocation?.uri);
     if (requestId !== this.refreshRequestId) {
       return;
     }
 
-    this.state.indexStatus = sidebarIndexStatusCreate(statusResult);
+    this.activeTargetHover = hoverResult.result;
+    this.activeTargetErrorMessage = hoverResult.errorMessage;
     this.state.activeTarget = sidebarActiveTargetCreate({
       activeUri: activeLocation?.uri,
       hover: hoverResult.result,
       errorMessage: hoverResult.errorMessage,
+      disabledActionMessages: this.activeTargetDisabledActionMessagesResolve(),
     });
     if (activeLocation?.uri) {
       this.recentTargetRecord(
@@ -749,7 +793,6 @@ export class CodepolSidebarViewProvider
     }
 
     this.statePush();
-    this.pollSchedule(statusResult.status);
   }
 
   async recordLocationVisit(input: {
@@ -838,6 +881,32 @@ export class CodepolSidebarViewProvider
     this.searchSeedEnsure();
     const normalizedQuery = query.trim();
     const requestId = ++this.searchRequestId;
+    const blockedMessage = codepolFeatureBlockedMessageResolve(
+      this.readiness.snapshotGet(),
+      'semanticSearch',
+    );
+
+    if (blockedMessage) {
+      const presentation = searchPresentationCreate({
+        query: normalizedQuery,
+        busy: false,
+        blockedMessage,
+        results: [],
+      });
+      this.searchErrorMessage = undefined;
+      this.searchUnavailable = false;
+      this.state.search = {
+        query: normalizedQuery,
+        busy: false,
+        disabled: true,
+        disabledReason: blockedMessage,
+        results: [],
+        message: presentation.message,
+        tone: presentation.tone,
+      };
+      this.statePush();
+      return;
+    }
 
     if (normalizedQuery.length === 0) {
       const presentation = searchPresentationCreate({
@@ -845,10 +914,14 @@ export class CodepolSidebarViewProvider
         busy: false,
         results: [],
       });
+      this.searchErrorMessage = undefined;
+      this.searchUnavailable = false;
       this.state.search = {
         query: '',
         busy: false,
+        disabled: false,
         results: [],
+        disabledReason: undefined,
         message: presentation.message,
         tone: presentation.tone,
       };
@@ -864,6 +937,8 @@ export class CodepolSidebarViewProvider
     this.state.search = {
       query: normalizedQuery,
       busy: true,
+      disabled: false,
+      disabledReason: undefined,
       results: this.state.search.results,
       message: busyPresentation.message,
       tone: busyPresentation.tone,
@@ -891,16 +966,24 @@ export class CodepolSidebarViewProvider
       errorMessage = errorMessageResolve(error);
     }
 
+    this.searchErrorMessage = errorMessage;
+    this.searchUnavailable = unavailable;
     const presentation = searchPresentationCreate({
       query: normalizedQuery,
       busy: false,
       unavailable,
-      errorMessage,
+      errorMessage:
+        errorMessage ??
+        (unavailable
+          ? this.semanticSearchUnavailableMessageResolve()
+          : undefined),
       results,
     });
     this.state.search = {
       query: normalizedQuery,
       busy: false,
+      disabled: false,
+      disabledReason: undefined,
       results,
       message: presentation.message,
       tone: presentation.tone,
@@ -915,26 +998,6 @@ export class CodepolSidebarViewProvider
     );
   }
 
-  private pollSchedule(status: IndexStatusResult | null): void {
-    this.pollStop();
-    if (!this.view?.visible) {
-      return;
-    }
-    if (!status || (status.status === 'ready' && status.replayState !== 'pending')) {
-      return;
-    }
-    this.pollHandle = setTimeout(() => {
-      void this.refresh();
-    }, 2500);
-  }
-
-  private pollStop(): void {
-    if (this.pollHandle) {
-      clearTimeout(this.pollHandle);
-      this.pollHandle = undefined;
-    }
-  }
-
   private searchSeedEnsure(): void {
     if (this.searchInitialized) {
       return;
@@ -945,22 +1008,6 @@ export class CodepolSidebarViewProvider
       return;
     }
     void this.searchRun(initialQuery);
-  }
-
-  private async indexStatusQuery(): Promise<{
-    status: IndexStatusResult | null;
-    errorMessage?: string;
-  }> {
-    try {
-      return {
-        status: await this.protocol.queryIndexStatus(),
-      };
-    } catch (error) {
-      return {
-        status: null,
-        errorMessage: errorMessageResolve(error),
-      };
-    }
   }
 
   private async hoverQuery(
@@ -985,6 +1032,89 @@ export class CodepolSidebarViewProvider
         errorMessage: errorMessageResolve(error),
       };
     }
+  }
+
+  private semanticSearchUnavailableMessageResolve(): string {
+    const snapshot = this.readiness.snapshotGet();
+    return codepolFeatureUnavailableMessageResolve(snapshot, 'semanticSearch');
+  }
+
+  private activeTargetDisabledActionMessagesResolve(): Partial<
+    Record<'go_to_definition' | 'find_references' | 'show_graph', string>
+  > {
+    const snapshot = this.readiness.snapshotGet();
+    const referencesBlocked = codepolFeatureBlockedMessageResolve(
+      snapshot,
+      'architectureLinks',
+    );
+    const graphBlocked =
+      codepolFeatureBlockedMessageResolve(snapshot, 'dependencyGraph') ??
+      referencesBlocked;
+
+    return {
+      find_references: referencesBlocked,
+      show_graph: graphBlocked,
+    };
+  }
+
+  private readinessStateApply(snapshot: CodepolReadinessSnapshot): void {
+    this.state.indexStatus = sidebarIndexStatusCreate(snapshot);
+
+    const activeLocation = this.activeLocationGet();
+    this.state.activeTarget = sidebarActiveTargetCreate({
+      activeUri: activeLocation?.uri,
+      hover: this.activeTargetHover,
+      errorMessage: this.activeTargetErrorMessage,
+      disabledActionMessages: this.activeTargetDisabledActionMessagesResolve(),
+    });
+
+    const searchBlockedMessage = codepolFeatureBlockedMessageResolve(
+      snapshot,
+      'semanticSearch',
+    );
+    const wasDisabled = this.state.search.disabled;
+    this.state.search.disabled = searchBlockedMessage !== undefined;
+    this.state.search.disabledReason = searchBlockedMessage;
+
+    if (searchBlockedMessage) {
+      const presentation = searchPresentationCreate({
+        query: this.state.search.query,
+        busy: false,
+        blockedMessage: searchBlockedMessage,
+        results: [],
+      });
+      this.searchErrorMessage = undefined;
+      this.searchUnavailable = false;
+      this.state.search.busy = false;
+      this.state.search.results = [];
+      this.state.search.message = presentation.message;
+      this.state.search.tone = presentation.tone;
+      this.statePush();
+      return;
+    }
+
+    if (
+      this.state.search.query.trim().length > 0 &&
+      (wasDisabled || this.searchUnavailable)
+    ) {
+      void this.searchRun(this.state.search.query);
+      return;
+    }
+
+    const presentation = searchPresentationCreate({
+      query: this.state.search.query,
+      busy: this.state.search.busy,
+      unavailable: this.searchUnavailable,
+      errorMessage:
+        this.searchErrorMessage ??
+        (this.searchUnavailable
+          ? this.semanticSearchUnavailableMessageResolve()
+          : undefined),
+      results: this.state.search.results,
+    });
+    this.state.search.message = presentation.message;
+    this.state.search.tone = presentation.tone;
+    this.statePush();
   }
 
   private statePush(): void {

@@ -24,6 +24,11 @@ export type SidebarSearchResultViewModel = {
   scoreLabel: string;
 };
 
+export type SidebarActionViewModel = HoverActionViewModel & {
+  disabled?: boolean;
+  disabledReason?: string;
+};
+
 export type SidebarActiveTargetViewModel = {
   uri?: string;
   title: string;
@@ -31,7 +36,7 @@ export type SidebarActiveTargetViewModel = {
   summary?: string;
   statusText?: string;
   fields: Array<{ label: string; value: string }>;
-  actions: HoverActionViewModel[];
+  actions: SidebarActionViewModel[];
   message?: string;
   tone: SidebarTone;
 };
@@ -157,6 +162,7 @@ export function sidebarActiveTargetCreate(input: {
   activeUri?: string;
   hover: WorkspaceSemanticHoverResult | null;
   errorMessage?: string;
+  disabledActionMessages?: Partial<Record<HoverActionViewModel['action'], string>>;
 }): SidebarActiveTargetViewModel {
   if (!input.activeUri) {
     return {
@@ -177,7 +183,16 @@ export function sidebarActiveTargetCreate(input: {
       summary: card.summary,
       statusText: card.statusText,
       fields: card.fields,
-      actions: card.actions,
+      actions: card.actions.map((action) => {
+        const disabledReason = input.disabledActionMessages?.[action.action];
+        return disabledReason
+          ? {
+              ...action,
+              disabled: true,
+              disabledReason,
+            }
+          : action;
+      }),
       tone: 'neutral',
     };
   }
@@ -222,6 +237,7 @@ export function sidebarIndexStatusCreate(input: {
   const features = [
     featureViewModelCreate('Workspace Index', status.featureStatus?.workspaceIndex),
     featureViewModelCreate('Semantic Search', status.featureStatus?.semanticSearch),
+    featureViewModelCreate('Dependency Graph', status.featureStatus?.dependencyGraph),
     featureViewModelCreate(
       'Architecture Summary',
       status.featureStatus?.architectureSummary,

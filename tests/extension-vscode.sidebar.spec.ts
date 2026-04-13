@@ -95,6 +95,57 @@ describe('extension-vscode sidebar models', () => {
     });
   });
 
+  it('marks graph-backed active-target actions as disabled when readiness blocks them', () => {
+    expect(
+      sidebarActiveTargetCreate({
+        activeUri: 'file:///workspace/packages/lib/src/index.ts',
+        hover: {
+          ...semanticHover,
+          actions: ['go_to_definition', 'find_references', 'show_graph'],
+        },
+        disabledActionMessages: {
+          find_references:
+            'Codepol architecture links are blocked while the workspace index is warming.',
+          show_graph:
+            'Codepol dependency graph is blocked while the workspace index is warming.',
+        },
+      }),
+    ).toEqual({
+      uri: 'file:///workspace/packages/lib/src/index.ts',
+      title: 'sharedValue',
+      subtitle: 'packages/lib/src/index.ts',
+      summary: 'Shared value consumed by the web app.',
+      statusText: 'Architecture node is indexed.',
+      fields: [
+        {
+          label: 'Semantic class',
+          value: 'exported_symbol',
+        },
+      ],
+      actions: [
+        {
+          action: 'go_to_definition',
+          label: 'Go To Definition',
+        },
+        {
+          action: 'find_references',
+          label: 'Show Architecture Links',
+          disabled: true,
+          disabledReason:
+            'Codepol architecture links are blocked while the workspace index is warming.',
+        },
+        {
+          action: 'show_graph',
+          label: 'Show Graph',
+          disabled: true,
+          disabledReason:
+            'Codepol dependency graph is blocked while the workspace index is warming.',
+        },
+      ],
+      tone: 'neutral',
+    });
+  });
+
   it('maps index status into sidebar metrics and feature pills', () => {
     const status: IndexStatusResult = {
       workspaceId: 'workspace-1',
@@ -144,6 +195,11 @@ describe('extension-vscode sidebar models', () => {
           readiness: 'Warming',
           detail: 'Ranking exported symbols.',
           tone: 'warning',
+        },
+        {
+          label: 'Dependency Graph',
+          readiness: 'Ready',
+          tone: 'success',
         },
         {
           label: 'Architecture Summary',

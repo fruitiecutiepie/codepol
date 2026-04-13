@@ -15,6 +15,7 @@ import {
   CODEPOL_EXTENSION_COMMAND_SHOW_DEPENDENCY_GRAPH,
   CODEPOL_EXTENSION_COMMAND_SHOW_SEMANTIC_DEFINITION,
   CODEPOL_EXTENSION_COMMAND_SHOW_SEMANTIC_SEARCH,
+  CODEPOL_EXTENSION_VIEW_CONTAINER_ID,
   CODEPOL_EXTENSION_VIEW_CURRENT_CONTEXT_ID,
   CODEPOL_EXTENSION_VIEW_RENAME_TARGETS_ID,
 } from './constants';
@@ -32,10 +33,26 @@ import {
   semanticSearchInitialQueryResolve,
   semanticSearchQuickPickItemsCreate,
 } from './semanticSearch';
+import { codepolStatusBarPresentationCreate } from './readiness';
+import { CodepolReadinessController } from './readinessController';
 import { RenameTargetsTreeProvider } from './treeProviders';
 
 let protocolClient: CodepolProtocolClient | undefined;
 let sidebarProvider: CodepolSidebarViewProvider | undefined;
+
+function statusBarApply(
+  item: vscode.StatusBarItem,
+  presentation: ReturnType<typeof codepolStatusBarPresentationCreate>,
+): void {
+  item.text = presentation.text;
+  item.tooltip = presentation.tooltip;
+  item.backgroundColor =
+    presentation.tone === 'warning'
+      ? new vscode.ThemeColor('statusBarItem.warningBackground')
+      : presentation.tone === 'error'
+        ? new vscode.ThemeColor('statusBarItem.errorBackground')
+        : undefined;
+}
 
 function workspaceRootPathGet(): string | undefined {
   return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -282,6 +299,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const protocol = new VscodeLanguageClientProtocol();
   await protocol.start();
   protocolClient = protocol;
+  const readiness = new CodepolReadinessController(protocol);
+  const statusBarItem = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Left,
+    100,
+  );
+  statusBarItem.name = 'Codepol Status';
+  statusBarItem.command = `workbench.view.extension.${CODEPOL_EXTENSION_VIEW_CONTAINER_ID}`;
+  statusBarApply(statusBarItem, codepolStatusBarPresentationCreate(readiness.snapshotGet()));
+  statusBarItem.show();
 
   let controller: CodepolCommandController | undefined;
   const panels = new CodepolPanelManager({
@@ -301,6 +327,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   sidebarProvider = new CodepolSidebarViewProvider(
     protocol,
+    readiness,
     {
       openLocation: locationOpen,
       executeCommand: async (command: string, uri: string) => {
@@ -310,27 +337,33 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     activeEditorLocationGet,
     semanticSearchQueryResolve,
   );
-  const renameTargetsProvider = new RenameTargetsTreeProvider(renameTargetsLoad);
+  const renameTargetsProvider = new RenameTargetsTreeProvider(
+    renameTargetsLoad,
+    readiness,
+  );
 
   controller = new CodepolCommandController(protocol, panels, {
     activeUriGet: activeEditorUriGet,
+    readinessSnapshotGet: () => readiness.snapshotGet(),
     semanticSearchInitialQueryResolve: semanticSearchQueryResolve,
     semanticSearchPick,
     renameTargetsLoad,
     renameTargetPick,
     renamePrompt,
-    infoShow: async (message: string) => {
-      await vscode.window.showInformationMessage(message);
+    infoShow: (message: string) => {
+      void vscode.window.showInformationMessage(message);
     },
-    errorShow: async (message: string) => {
-      await vscode.window.showErrorMessage(message);
+    errorShow: (message: string) => {
+      void vscode.window.showErrorMessage(message);
     },
     openLocation: locationOpen,
   });
 
   context.subscriptions.push(
     panels,
+    readiness,
     sidebarProvider,
+    statusBarItem,
     vscode.window.registerWebviewViewProvider(
       CODEPOL_EXTENSION_VIEW_CURRENT_CONTEXT_ID,
       sidebarProvider,
@@ -373,18 +406,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand(
       CODEPOL_EXTENSION_COMMAND_REFRESH_RENAME_TARGETS,
       () => {
+        void readiness.refresh();
         renameTargetsProvider.refresh();
         void sidebarProvider?.refresh();
       },
     ),
     vscode.window.onDidChangeActiveTextEditor(() => {
+      void readiness.refresh();
       void sidebarProvider?.refresh();
     }),
+    readiness.onDidChange((snapshot) => {
+      statusBarApply(statusBarItem, codepolStatusBarPresentationCreate(snapshot));
+      renameTargetsProvider.refresh();
+    }),
   );
+  readiness.start();
 
   const packageWatcher = vscode.workspace.createFileSystemWatcher('**/package.json');
   const configWatcher = vscode.workspace.createFileSystemWatcher('**/codepol.toml');
   const refreshTargets = () => {
+    void readiness.refresh();
     renameTargetsProvider.refresh();
     void sidebarProvider?.refresh();
   };

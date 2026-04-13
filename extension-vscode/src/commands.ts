@@ -9,6 +9,15 @@ import type {
   CodepolProtocolClient,
 } from './protocolClient';
 import type {
+  CodepolReadinessFeature,
+  CodepolReadinessSnapshot,
+} from './readiness';
+import {
+  codepolFeatureGateResolve,
+  codepolFeatureUnavailableMessageResolve,
+  codepolReadinessStateResolve,
+} from './readiness';
+import type {
   ArchitectureLinksPanelViewModel,
   ArchitectureSummaryPanelViewModel,
   DependencyGraphPanelViewModel,
@@ -50,6 +59,7 @@ export type CodepolPanels = {
 
 export type CodepolCommandHost = {
   activeUriGet(): string | undefined;
+  readinessSnapshotGet(): CodepolReadinessSnapshot;
   semanticSearchInitialQueryResolve(): string | undefined;
   semanticSearchPick(input: {
     initialQuery: string;
@@ -91,9 +101,36 @@ export class CodepolCommandController {
     private readonly host: CodepolCommandHost,
   ) {}
 
+  private featureBlockedMessageResolve(
+    feature: CodepolReadinessFeature,
+  ): string | undefined {
+    return codepolFeatureGateResolve(
+      this.host.readinessSnapshotGet(),
+      feature,
+    ).message;
+  }
+
+  private featureUnavailableMessageResolve(
+    feature: CodepolReadinessFeature,
+    fallback: string,
+  ): string {
+    const snapshot = this.host.readinessSnapshotGet();
+    const state = codepolReadinessStateResolve(snapshot);
+    if (state === 'error' || state === 'unknown') {
+      return codepolFeatureUnavailableMessageResolve(snapshot, feature);
+    }
+    return fallback;
+  }
+
   async showSemanticSearch(
     options: SemanticSearchCommandOptions = {},
   ): Promise<WorkspaceSearchResult | null> {
+    const blockedMessage = this.featureBlockedMessageResolve('semanticSearch');
+    if (blockedMessage) {
+      await this.host.errorShow(blockedMessage);
+      return null;
+    }
+
     const initialQuery =
       options.query ?? this.host.semanticSearchInitialQueryResolve() ?? '';
 
@@ -101,7 +138,10 @@ export class CodepolCommandController {
       const results = await this.protocol.querySemanticSearch(initialQuery);
       if (!results) {
         await this.host.errorShow(
-          'Codepol semantic search is not available for this workspace yet.',
+          this.featureUnavailableMessageResolve(
+            'semanticSearch',
+            'Codepol semantic search is not available for this workspace yet.',
+          ),
         );
         return null;
       }
@@ -128,7 +168,10 @@ export class CodepolCommandController {
     });
     if (picked === null) {
       await this.host.errorShow(
-        'Codepol semantic search is not available for this workspace yet.',
+        this.featureUnavailableMessageResolve(
+          'semanticSearch',
+          'Codepol semantic search is not available for this workspace yet.',
+        ),
       );
       return null;
     }
@@ -173,10 +216,19 @@ export class CodepolCommandController {
   }
 
   async showArchitectureSummary(): Promise<ArchitectureSummaryPanelViewModel | null> {
+    const blockedMessage = this.featureBlockedMessageResolve('architectureSummary');
+    if (blockedMessage) {
+      await this.host.errorShow(blockedMessage);
+      return null;
+    }
+
     const summary = await this.protocol.queryArchitectureSummary();
     if (!summary) {
       await this.host.errorShow(
-        'Codepol architecture summary is not available for this workspace yet.',
+        this.featureUnavailableMessageResolve(
+          'architectureSummary',
+          'Codepol architecture summary is not available for this workspace yet.',
+        ),
       );
       return null;
     }
@@ -189,6 +241,12 @@ export class CodepolCommandController {
   async showDependencyGraph(
     uri?: string,
   ): Promise<DependencyGraphPanelViewModel | null> {
+    const blockedMessage = this.featureBlockedMessageResolve('dependencyGraph');
+    if (blockedMessage) {
+      await this.host.errorShow(blockedMessage);
+      return null;
+    }
+
     const focusUri = uri ?? this.host.activeUriGet();
     const [graph, summary] = await Promise.all([
       this.protocol.queryDependencyGraph(),
@@ -196,7 +254,10 @@ export class CodepolCommandController {
     ]);
     if (!graph) {
       await this.host.errorShow(
-        'Codepol dependency graph is not available for this workspace yet.',
+        this.featureUnavailableMessageResolve(
+          'dependencyGraph',
+          'Codepol dependency graph is not available for this workspace yet.',
+        ),
       );
       return null;
     }
@@ -214,6 +275,12 @@ export class CodepolCommandController {
     const targetUri = uri ?? this.host.activeUriGet();
     if (!targetUri) {
       await this.host.errorShow('Open a workspace file before requesting architecture links.');
+      return null;
+    }
+
+    const blockedMessage = this.featureBlockedMessageResolve('architectureLinks');
+    if (blockedMessage) {
+      await this.host.errorShow(blockedMessage);
       return null;
     }
 
@@ -244,7 +311,14 @@ export class CodepolCommandController {
 
     const prepare = await this.protocol.prepareRename(selection.target);
     if (!prepare) {
-      await this.host.errorShow('Codepol rename is not available for this workspace yet.');
+      await this.host.errorShow(
+        selection.kind === 'workspace_package'
+          ? this.featureUnavailableMessageResolve(
+              'workspacePackageRename',
+              'Codepol rename is not available for this workspace yet.',
+            )
+          : 'Codepol rename is not available for this workspace yet.',
+      );
       return null;
     }
     if (!prepare.ok) {
@@ -292,7 +366,16 @@ export class CodepolCommandController {
   private async renameTargetResolve(
     target?: WorkspaceSupportedRenameTarget,
   ): Promise<RenameTargetCandidate | undefined> {
+    const renameGate = codepolFeatureGateResolve(
+      this.host.readinessSnapshotGet(),
+      'workspacePackageRename',
+    );
+
     if (target) {
+      if (target.semanticClass === 'domain_entity' && renameGate.blocked) {
+        await this.host.errorShow(renameGate.message!);
+        return undefined;
+      }
       return {
         kind:
           target.semanticClass === 'domain_entity'
@@ -310,6 +393,25 @@ export class CodepolCommandController {
       await this.host.errorShow('No renameable Codepol targets were discovered in the current workspace.');
       return undefined;
     }
-    return this.host.renameTargetPick(candidates);
+
+    if (!renameGate.blocked) {
+      return this.host.renameTargetPick(candidates);
+    }
+
+    const configTargets = candidates.filter(
+      (candidate) => candidate.kind === 'config_target',
+    );
+    if (configTargets.length === 0) {
+      await this.host.errorShow(renameGate.message!);
+      return undefined;
+    }
+
+    const workspacePackageCount = candidates.length - configTargets.length;
+    if (workspacePackageCount > 0) {
+      await this.host.infoShow(
+        `${renameGate.message!} Config target rename is still available.`,
+      );
+    }
+    return this.host.renameTargetPick(configTargets);
   }
 }

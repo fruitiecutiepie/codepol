@@ -32,11 +32,13 @@
     "commands": [
       {
         "command": "codepol.extension.showArchitectureSummary",
-        "title": "Codepol: Show Architecture Summary"
+        "title": "Codepol: Show Architecture Summary",
+        "enablement": "codepol.indexBackedCommandsEnabled"
       },
       {
         "command": "codepol.extension.showDependencyGraph",
-        "title": "Codepol: Show Dependency Graph"
+        "title": "Codepol: Show Dependency Graph",
+        "enablement": "codepol.indexBackedCommandsEnabled"
       },
       {
         "command": "codepol.extension.showSemanticDefinition",
@@ -44,11 +46,13 @@
       },
       {
         "command": "codepol.extension.showSemanticSearch",
-        "title": "Codepol: Semantic Search"
+        "title": "Codepol: Semantic Search",
+        "enablement": "codepol.indexBackedCommandsEnabled"
       },
       {
         "command": "codepol.extension.showArchitectureLinks",
-        "title": "Codepol: Show Architecture Links"
+        "title": "Codepol: Show Architecture Links",
+        "enablement": "codepol.indexBackedCommandsEnabled"
       },
       {
         "command": "codepol.extension.renameCodepolEntity",

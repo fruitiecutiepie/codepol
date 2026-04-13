@@ -1,10 +1,29 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { IndexStatusResult } from '@codepol/core';
 import { CodepolCommandController } from '../extension-vscode/src/commands';
 import type { RenameTargetCandidate } from '../extension-vscode/src/discovery';
 import type { WorkspaceSearchResult } from '@codepol/core';
 
+function readinessStatusCreate(
+  overrides: Partial<IndexStatusResult> = {},
+): IndexStatusResult {
+  return {
+    workspaceId: 'workspace-1',
+    workspaceInstanceId: 'instance-1',
+    status: 'ready',
+    replayState: 'applied',
+    workspaceReady: true,
+    indexedFileCount: 12,
+    openDocumentCount: 1,
+    overlayCount: 1,
+    analysisGeneration: 3,
+    ...overrides,
+  };
+}
+
 function hostCreate(overrides: Partial<{
   activeUriGet: () => string | undefined;
+  readinessSnapshotGet: () => { status: IndexStatusResult | null; errorMessage?: string };
   semanticSearchInitialQueryResolve: () => string | undefined;
   semanticSearchPick: (input: {
     initialQuery: string;
@@ -22,6 +41,11 @@ function hostCreate(overrides: Partial<{
 }> = {}) {
   return {
     activeUriGet: overrides.activeUriGet ?? (() => 'file:///workspace/packages/lib/src/index.ts'),
+    readinessSnapshotGet:
+      overrides.readinessSnapshotGet ??
+      (() => ({
+        status: readinessStatusCreate(),
+      })),
     semanticSearchInitialQueryResolve:
       overrides.semanticSearchInitialQueryResolve ?? (() => undefined),
     semanticSearchPick:
@@ -73,6 +97,17 @@ const renameTargetCandidate: RenameTargetCandidate = {
   target: {
     semanticClass: 'domain_entity',
     targetId: 'package:@acme/lib',
+  },
+};
+
+const configRenameTargetCandidate: RenameTargetCandidate = {
+  kind: 'config_target',
+  label: 'web',
+  description: 'codepol.toml',
+  detail: 'Codepol config target',
+  target: {
+    semanticClass: 'config_component',
+    targetId: 'target:web',
   },
 };
 
@@ -138,6 +173,27 @@ const architectureSummaryResult = {
 };
 
 describe('CodepolCommandController', () => {
+  it('blocks semantic search while the workspace index is warming', async () => {
+    const protocol = protocolCreate();
+    const panels = panelsCreate();
+    const host = hostCreate({
+      readinessSnapshotGet: () => ({
+        status: readinessStatusCreate({
+          status: 'warming',
+          replayState: 'pending',
+          workspaceReady: false,
+        }),
+      }),
+    });
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    await expect(controller.showSemanticSearch({ query: 'sharedValue' })).resolves.toBeNull();
+    expect(host.errorShow).toHaveBeenCalledWith(
+      'Codepol semantic search is blocked while Codepol restores workspace state.',
+    );
+    expect(protocol.querySemanticSearch).not.toHaveBeenCalled();
+  });
+
   it('reports unavailable semantic search results clearly', async () => {
     const protocol = protocolCreate();
     protocol.querySemanticSearch.mockResolvedValue(null);
@@ -345,6 +401,27 @@ describe('CodepolCommandController', () => {
     expect(panels.showDependencyGraph).not.toHaveBeenCalled();
   });
 
+  it('blocks architecture links while the workspace index is cold', async () => {
+    const protocol = protocolCreate();
+    const panels = panelsCreate();
+    const host = hostCreate({
+      readinessSnapshotGet: () => ({
+        status: readinessStatusCreate({
+          status: 'cold',
+          replayState: 'applied',
+          workspaceReady: false,
+        }),
+      }),
+    });
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    await expect(controller.showArchitectureLinks()).resolves.toBeNull();
+    expect(host.errorShow).toHaveBeenCalledWith(
+      'Codepol architecture links are blocked while the workspace index is preparing.',
+    );
+    expect(protocol.querySemanticReferences).not.toHaveBeenCalled();
+  });
+
   it('renders graph-first architecture links for the active file', async () => {
     const protocol = protocolCreate();
     protocol.queryDependencyGraph.mockResolvedValue(dependencyGraphResult);
@@ -547,6 +624,86 @@ describe('CodepolCommandController', () => {
     expect(result).toMatchObject({
       ok: true,
       canApply: false,
+    });
+  });
+
+  it('blocks workspace package rename while the workspace index is warming', async () => {
+    const protocol = protocolCreate();
+    const panels = panelsCreate();
+    const host = hostCreate({
+      readinessSnapshotGet: () => ({
+        status: readinessStatusCreate({
+          status: 'warming',
+          replayState: 'applied',
+          workspaceReady: false,
+        }),
+      }),
+    });
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    await expect(
+      controller.renameCodepolEntity({ target: renameTargetCandidate.target }),
+    ).resolves.toBeNull();
+    expect(host.errorShow).toHaveBeenCalledWith(
+      'Codepol workspace package rename is blocked while the workspace index is warming.',
+    );
+    expect(protocol.prepareRename).not.toHaveBeenCalled();
+  });
+
+  it('keeps config target rename available while workspace package rename is blocked', async () => {
+    const protocol = protocolCreate();
+    protocol.prepareRename.mockResolvedValue({
+      ok: true,
+      target: configRenameTargetCandidate.target,
+      displayName: 'web',
+      currentName: 'web',
+      normalizedCurrentName: 'web',
+      namespaceId: 'workspace.targets:file:///workspace',
+      impactedSiteCount: 1,
+      requiresPreview: true,
+      namingRules: {
+        minLength: 1,
+      },
+    });
+    protocol.previewRename.mockResolvedValue({
+      ok: true,
+      target: configRenameTargetCandidate.target,
+      oldName: 'web',
+      newName: 'frontend',
+      normalizedNewName: 'frontend',
+      namespaceId: 'workspace.targets:file:///workspace',
+      groups: [],
+      totalEdits: 1,
+      warnings: [],
+      blockingIssues: [],
+      canApply: true,
+    });
+    const panels = panelsCreate();
+    const host = hostCreate({
+      readinessSnapshotGet: () => ({
+        status: readinessStatusCreate({
+          status: 'warming',
+          replayState: 'applied',
+          workspaceReady: false,
+        }),
+      }),
+      renameTargetsLoad: async () => [
+        renameTargetCandidate,
+        configRenameTargetCandidate,
+      ],
+      renamePrompt: async () => 'frontend',
+    });
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    const result = await controller.renameCodepolEntity();
+
+    expect(host.infoShow).toHaveBeenCalledWith(
+      'Codepol workspace package rename is blocked while the workspace index is warming. Config target rename is still available.',
+    );
+    expect(protocol.prepareRename).toHaveBeenCalledWith(configRenameTargetCandidate.target);
+    expect(result).toMatchObject({
+      ok: true,
+      newName: 'frontend',
     });
   });
 
