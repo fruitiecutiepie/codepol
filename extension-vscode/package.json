@@ -1,5 +1,5 @@
 {
-  "name": "codepol-extension-vscode",
+  "name": "extension-vscode",
   "displayName": "Codepol",
   "version": "1.0.0",
   "description": "VS Code client for the Codepol LSP",
