@@ -358,7 +358,9 @@ describe('CodepolLspServer', () => {
     const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');
     createdDirs.push(workspaceRoot);
     fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
-    fs.writeFileSync(path.join(workspaceRoot, 'codepol.toml'), noInterfaceConfigContentCreate(), 'utf8');
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    const configUri = pathToFileURL(configPath).href;
+    fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
 
     const sharedPath = path.join(workspaceRoot, 'src', 'shared.ts');
     const appPath = path.join(workspaceRoot, 'src', 'app.ts');
@@ -526,6 +528,29 @@ describe('CodepolLspServer', () => {
       params: {
         command: 'codepol.showArchitectureLinks',
         arguments: [{ uri: sharedUri }],
+      },
+    });
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 14,
+      method: 'codepol/prepareRename',
+      params: {
+        target: {
+          semanticClass: 'config_component',
+          targetId: 'target:src',
+        },
+      },
+    });
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 15,
+      method: 'codepol/previewRename',
+      params: {
+        target: {
+          semanticClass: 'config_component',
+          targetId: 'target:src',
+        },
+        newName: 'app-src',
       },
     });
 
@@ -731,6 +756,86 @@ describe('CodepolLspServer', () => {
     expect(messages.find((message) => message.id === 13)?.result).toEqual(
       messages.find((message) => message.id === 8)?.result,
     );
+    expect(messages.find((message) => message.id === 14)?.result).toEqual({
+      ok: true,
+      target: {
+        semanticClass: 'config_component',
+        targetId: 'target:src',
+      },
+      displayName: 'src',
+      currentName: 'src',
+      normalizedCurrentName: 'src',
+      namespaceId: `config.targets:${configUri}`,
+      declarationLocation: {
+        uri: configUri,
+        range: {
+          start: { line: 4, character: 9 },
+          end: { line: 4, character: 12 },
+        },
+      },
+      placeholderRange: {
+        start: { line: 4, character: 9 },
+        end: { line: 4, character: 12 },
+      },
+      impactedSiteCount: 2,
+      requiresPreview: true,
+      namingRules: {
+        minLength: 1,
+        patternDescription: 'bare TOML key segment ([A-Za-z0-9_-]+)',
+        casePolicy: 'preserve',
+      },
+    });
+    expect(messages.find((message) => message.id === 15)?.result).toEqual({
+      ok: true,
+      target: {
+        semanticClass: 'config_component',
+        targetId: 'target:src',
+      },
+      oldName: 'src',
+      newName: 'app-src',
+      normalizedNewName: 'app-src',
+      namespaceId: `config.targets:${configUri}`,
+      groups: [
+        {
+          group: 'declarations',
+          edits: [
+            {
+              uri: configUri,
+              range: {
+                start: { line: 4, character: 9 },
+                end: { line: 4, character: 12 },
+              },
+              oldText: 'src',
+              newText: 'app-src',
+              kind: 'declaration',
+              semanticClass: 'config_component',
+              targetId: 'target:src',
+            },
+          ],
+        },
+        {
+          group: 'config',
+          edits: [
+            {
+              uri: configUri,
+              range: {
+                start: { line: 10, character: 12 },
+                end: { line: 10, character: 15 },
+              },
+              oldText: 'src',
+              newText: 'app-src',
+              kind: 'config_key',
+              semanticClass: 'config_component',
+              targetId: 'target:src',
+            },
+          ],
+        },
+      ],
+      totalEdits: 2,
+      warnings: [],
+      blockingIssues: [],
+      canApply: true,
+    });
   });
 
   it('polls index status into work-done progress and reopens progress after invalidation', async () => {

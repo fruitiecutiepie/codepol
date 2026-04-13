@@ -472,6 +472,7 @@ export {
   configGetFromPathSync,
   configFileDiscover,
   configCacheClear,
+  configParseFromSource,
 } from './config/configDiscover';
 
 // ============================================================================

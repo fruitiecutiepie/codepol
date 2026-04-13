@@ -59,17 +59,30 @@ export function configFileDiscover(startDir: string): string | null {
 }
 
 /**
- * Parses TOML from disk and validates it against the runtime config schema.
+ * Parses config source text and validates it against the runtime config schema.
  */
-function configFileParse(configPath: string): CodepolConfig {
+export function configParseFromSource(
+  source: string,
+  options: {
+    configPath?: string;
+  } = {},
+): CodepolConfig {
   try {
-    const raw = fs.readFileSync(configPath, 'utf8');
-    const parsed = TOML.parse(raw) as unknown;
+    const parsed = TOML.parse(source) as unknown;
     return configValidate(parsed);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    const configPath = options.configPath ?? '<inline>';
     throw new Error(`Failed to parse config file ${configPath}: ${message}`);
   }
+}
+
+/**
+ * Parses TOML from disk and validates it against the runtime config schema.
+ */
+function configFileParse(configPath: string): CodepolConfig {
+  const raw = fs.readFileSync(configPath, 'utf8');
+  return configParseFromSource(raw, { configPath });
 }
 
 /**

@@ -5,4 +5,5 @@ export {
   configGetFromPath,
   configFileDiscover,
   configCacheClear,
+  configParseFromSource,
 } from './configDiscover';

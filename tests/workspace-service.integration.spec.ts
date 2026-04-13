@@ -80,6 +80,39 @@ targets = ["src"]
 `;
 }
 
+function dottedTargetConfigContentCreate(): string {
+  return `targets.codepol-src.language = "typescript"
+targets.codepol-src.files = ["src/**/*.ts"]
+
+[[plugins]]
+id = "@codepol/plugin"
+source = { kind = "builtin" }
+
+[[rules]]
+ruleId = "@codepol/plugin/no-interface"
+targets = ["codepol-src"]
+`;
+}
+
+function collisionTargetConfigContentCreate(): string {
+  return `[[plugins]]
+id = "@codepol/plugin"
+source = { kind = "builtin" }
+
+[targets.src]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[targets.shared]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[[rules]]
+ruleId = "@codepol/plugin/no-interface"
+targets = ["src", "shared"]
+`;
+}
+
 function noMixedExportsConfigContentCreate(): string {
   return `[[plugins]]
 id = "@codepol/plugin"
@@ -1768,10 +1801,94 @@ demo();
       },
     });
     expect(configRenamePrepare).toEqual({
-      ok: false,
-      code: 'unsupported_context',
-      message:
-        'Rename foundations are wired, but config_component does not have a materialized Codepol rename registry yet.',
+      ok: true,
+      target: {
+        semanticClass: 'config_component',
+        targetId: 'target:src',
+      },
+      displayName: 'src',
+      currentName: 'src',
+      normalizedCurrentName: 'src',
+      namespaceId: `config.targets:${workspacePathToUri(configPath)}`,
+      declarationLocation: {
+        uri: workspacePathToUri(configPath),
+        range: {
+          start: { line: 4, character: 9 },
+          end: { line: 4, character: 12 },
+        },
+      },
+      placeholderRange: {
+        start: { line: 4, character: 9 },
+        end: { line: 4, character: 12 },
+      },
+      impactedSiteCount: 2,
+      requiresPreview: true,
+      namingRules: {
+        minLength: 1,
+        patternDescription: 'bare TOML key segment ([A-Za-z0-9_-]+)',
+        casePolicy: 'preserve',
+      },
+    });
+
+    const configRenamePreview = await service.previewRename({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      target: {
+        semanticClass: 'config_component',
+        targetId: 'target:src',
+      },
+      newName: 'app-src',
+    });
+    expect(configRenamePreview).toEqual({
+      ok: true,
+      target: {
+        semanticClass: 'config_component',
+        targetId: 'target:src',
+      },
+      oldName: 'src',
+      newName: 'app-src',
+      normalizedNewName: 'app-src',
+      namespaceId: `config.targets:${workspacePathToUri(configPath)}`,
+      groups: [
+        {
+          group: 'declarations',
+          edits: [
+            {
+              uri: workspacePathToUri(configPath),
+              range: {
+                start: { line: 4, character: 9 },
+                end: { line: 4, character: 12 },
+              },
+              oldText: 'src',
+              newText: 'app-src',
+              kind: 'declaration',
+              semanticClass: 'config_component',
+              targetId: 'target:src',
+            },
+          ],
+        },
+        {
+          group: 'config',
+          edits: [
+            {
+              uri: workspacePathToUri(configPath),
+              range: {
+                start: { line: 10, character: 12 },
+                end: { line: 10, character: 15 },
+              },
+              oldText: 'src',
+              newText: 'app-src',
+              kind: 'config_key',
+              semanticClass: 'config_component',
+              targetId: 'target:src',
+            },
+          ],
+        },
+      ],
+      totalEdits: 2,
+      warnings: [],
+      blockingIssues: [],
+      canApply: true,
     });
 
     const dependencyGraph = await service.queryDependencyGraph({
@@ -1862,6 +1979,279 @@ demo();
       }),
     ).rejects.toThrow(
       `Analysis generation mismatch: expected ${readyStatus.analysisGeneration! + 1}, received ${readyStatus.analysisGeneration}`,
+    );
+  });
+
+  it('prepares config target rename for dotted-key declarations', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    createdDirs.push(workspaceRoot);
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(configPath, dottedTargetConfigContentCreate(), 'utf8');
+
+    const service = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine(),
+    });
+    const attached = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientKind: 'lsp',
+      clientInstanceId: 'dotted-config-rename-client',
+    });
+
+    expect(
+      await service.prepareRename({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        target: {
+          semanticClass: 'config_component',
+          targetId: 'target:codepol-src',
+        },
+      }),
+    ).toEqual({
+      ok: true,
+      target: {
+        semanticClass: 'config_component',
+        targetId: 'target:codepol-src',
+      },
+      displayName: 'codepol-src',
+      currentName: 'codepol-src',
+      normalizedCurrentName: 'codepol-src',
+      namespaceId: `config.targets:${workspacePathToUri(configPath)}`,
+      declarationLocation: {
+        uri: workspacePathToUri(configPath),
+        range: {
+          start: { line: 0, character: 8 },
+          end: { line: 0, character: 19 },
+        },
+      },
+      placeholderRange: {
+        start: { line: 0, character: 8 },
+        end: { line: 0, character: 19 },
+      },
+      impactedSiteCount: 3,
+      requiresPreview: true,
+      namingRules: {
+        minLength: 1,
+        patternDescription: 'bare TOML key segment ([A-Za-z0-9_-]+)',
+        casePolicy: 'preserve',
+      },
+    });
+  });
+
+  it('blocks colliding config target rename previews and rejects invalid new names', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    createdDirs.push(workspaceRoot);
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(configPath, collisionTargetConfigContentCreate(), 'utf8');
+
+    const service = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine(),
+    });
+    const attached = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientKind: 'lsp',
+      clientInstanceId: 'collision-config-rename-client',
+    });
+
+    expect(
+      await service.previewRename({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        target: {
+          semanticClass: 'config_component',
+          targetId: 'target:src',
+        },
+        newName: 'shared',
+      }),
+    ).toMatchObject({
+      ok: true,
+      target: {
+        semanticClass: 'config_component',
+        targetId: 'target:src',
+      },
+      oldName: 'src',
+      newName: 'shared',
+      normalizedNewName: 'shared',
+      totalEdits: 2,
+      canApply: false,
+      blockingIssues: [
+        {
+          code: 'collision',
+        },
+      ],
+    });
+
+    await expect(
+      service.previewRename({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        target: {
+          semanticClass: 'config_component',
+          targetId: 'target:src',
+        },
+        newName: '   ',
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      code: 'validation_failed',
+      message: 'Config target rename must not be empty.',
+    });
+
+    await expect(
+      service.previewRename({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        target: {
+          semanticClass: 'config_component',
+          targetId: 'target:src',
+        },
+        newName: 'bad.name',
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      code: 'validation_failed',
+      message: 'Config target rename must match bare TOML key segment ([A-Za-z0-9_-]+).',
+    });
+
+    await expect(
+      service.previewRename({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        target: {
+          semanticClass: 'config_component',
+          targetId: 'target:src',
+        },
+        newName: 'SRC',
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      code: 'validation_failed',
+      message: 'Case-only config target renames are not supported in MVP.',
+    });
+  });
+
+  it('keeps config target rename overlay-aware and rejects stale analysisGeneration after config overlays', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    createdDirs.push(workspaceRoot);
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    const configUri = workspacePathToUri(configPath);
+    fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
+
+    const service = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine(),
+    });
+    const attached = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientKind: 'lsp',
+      clientInstanceId: 'overlay-config-rename-client',
+    });
+
+    const initialStatus = await service.queryIndexStatus({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+    });
+
+    expect(
+      await service.prepareRename({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        target: {
+          semanticClass: 'config_component',
+          targetId: 'target:src',
+        },
+      }),
+    ).toMatchObject({
+      ok: true,
+      currentName: 'src',
+      impactedSiteCount: 2,
+    });
+
+    const overlayConfig = noInterfaceConfigContentCreate()
+      .replace('[targets.src]', '[targets.overlay-src]')
+      .replace('targets = ["src"]', 'targets = ["overlay-src"]');
+
+    await service.openOverlay({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      uri: configUri,
+      version: 1,
+      text: overlayConfig,
+    });
+
+    expect(
+      await service.prepareRename({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        target: {
+          semanticClass: 'config_component',
+          targetId: 'target:src',
+        },
+      }),
+    ).toEqual({
+      ok: false,
+      code: 'unsupported_context',
+      message: 'Config target target:src is not defined in the active Codepol config.',
+    });
+
+    expect(
+      await service.prepareRename({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        target: {
+          semanticClass: 'config_component',
+          targetId: 'target:overlay-src',
+        },
+      }),
+    ).toMatchObject({
+      ok: true,
+      currentName: 'overlay-src',
+      impactedSiteCount: 2,
+    });
+
+    expect(
+      await service.previewRename({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        target: {
+          semanticClass: 'config_component',
+          targetId: 'target:overlay-src',
+        },
+        newName: 'final-src',
+      }),
+    ).toMatchObject({
+      ok: true,
+      oldName: 'overlay-src',
+      newName: 'final-src',
+      totalEdits: 2,
+      canApply: true,
+    });
+
+    await service.queryDiagnostics({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+    });
+
+    const refreshedStatus = await service.queryIndexStatus({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+    });
+    expect(refreshedStatus.analysisGeneration).toBeGreaterThan(initialStatus.analysisGeneration);
+
+    await expect(
+      service.previewRename({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        target: {
+          semanticClass: 'config_component',
+          targetId: 'target:overlay-src',
+        },
+        newName: 'final-src',
+        analysisGeneration: initialStatus.analysisGeneration,
+      }),
+    ).rejects.toThrow(
+      `Analysis generation mismatch: expected ${refreshedStatus.analysisGeneration}, received ${initialStatus.analysisGeneration}`,
     );
   });
 

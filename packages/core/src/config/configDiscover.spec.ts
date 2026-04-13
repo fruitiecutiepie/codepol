@@ -8,6 +8,7 @@ import {
   configGet,
   configGetFromPath,
   configGetFromPathSync,
+  configParseFromSource,
 } from './configDiscover';
 import { defineConfig } from './defineConfig';
 
@@ -229,6 +230,36 @@ targets = ["ts-src"]
 `);
 
       await expect(configGetFromPath(configPath)).rejects.toThrow('Invalid codepol config');
+    });
+
+    it('should parse config text directly from source', () => {
+      const config = configParseFromSource(`
+[targets.ts-src]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[[rules]]
+ruleId = "test-rule"
+targets = ["ts-src"]
+`, {
+        configPath: '/tmp/codepol.toml',
+      });
+
+      expect(config.targets['ts-src']).toEqual({
+        language: 'typescript',
+        files: ['src/**/*.ts'],
+      });
+      expect(config.rules).toEqual([
+        {
+          ruleId: 'test-rule',
+          targets: ['ts-src'],
+          id: undefined,
+          description: undefined,
+          severity: undefined,
+          providers: undefined,
+          args: undefined,
+        },
+      ]);
     });
   });
 });

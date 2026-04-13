@@ -8,6 +8,7 @@ import {
   configCacheClear,
   configGet,
   configGetFromPath,
+  configParseFromSource,
   crossFileResolveForFile,
   indexStoreNew,
   isErr,
@@ -62,6 +63,7 @@ import {
   type WorkspaceEditPlan,
   type WorkspacePrepareRenameFailure,
   type WorkspacePrepareRenameResult,
+  type WorkspaceRenamePreviewGroup,
   type WorkspaceRenamePreviewFailure,
   type WorkspaceRenamePreviewResult,
   type WorkspaceRenameTarget,
@@ -109,6 +111,10 @@ const WORKSPACE_SEARCH_LIMIT_DEFAULT = 20;
 const WORKSPACE_SEMANTIC_REFERENCES_TOTAL_LIMIT = 200;
 const WORKSPACE_SEMANTIC_REFERENCES_GROUP_LIMIT = 50;
 const WORKSPACE_NATIVE_OWNERSHIP_LANGUAGES = ['javascript', 'jsx', 'typescript', 'tsx'];
+const WORKSPACE_CONFIG_RENAME_TARGET_ID_PREFIX = 'target:';
+const WORKSPACE_CONFIG_RENAME_TARGET_SEGMENT_PATTERN = /^[A-Za-z0-9_-]+$/;
+const WORKSPACE_CONFIG_RENAME_TARGET_SEGMENT_DESCRIPTION =
+  'bare TOML key segment ([A-Za-z0-9_-]+)';
 
 function workspaceRequestCancelledErrorCreate(): Error {
   return new Error('Request cancelled');
@@ -1821,6 +1827,538 @@ function workspaceSemanticHoverResultCreate(
     actions: ['go_to_definition', 'find_references', 'show_graph'],
     source: 'codepol',
     semanticClass: 'architecture_node',
+  };
+}
+
+type WorkspaceByteRange = {
+  start: number;
+  end: number;
+};
+
+type WorkspaceConfigRenameAnchor = {
+  uri: string;
+  range: ReturnType<typeof workspaceRangeFromByteRange>;
+  byteRange: WorkspaceByteRange;
+  oldText: string;
+  group: 'declarations' | 'config';
+  editKind: 'declaration' | 'config_key';
+};
+
+type WorkspaceConfigRenameRegistryEntry = {
+  targetId: string;
+  name: string;
+  normalizedName: string;
+  namespaceId: string;
+  declarationAnchor: WorkspaceConfigRenameAnchor;
+  declarationAnchors: WorkspaceConfigRenameAnchor[];
+  referenceAnchors: WorkspaceConfigRenameAnchor[];
+  impactedSiteCount: number;
+};
+
+type WorkspaceConfigRenameRegistryResolution =
+  | {
+      ok: true;
+      source: string;
+      entry: WorkspaceConfigRenameRegistryEntry;
+      targetNames: string[];
+    }
+  | {
+      ok: false;
+      code: WorkspacePrepareRenameFailure['code'];
+      message: string;
+    };
+
+type WorkspaceTomlStringArrayEntry = {
+  value: string;
+  start: number;
+  end: number;
+};
+
+function workspaceCodeUnitIndexByteOffsetResolve(
+  source: string,
+  codeUnitIndex: number,
+): number {
+  return Buffer.byteLength(source.slice(0, codeUnitIndex), 'utf8');
+}
+
+function workspaceByteRangeFromCodeUnitRangeCreate(
+  source: string,
+  start: number,
+  end: number,
+): WorkspaceByteRange {
+  return {
+    start: workspaceCodeUnitIndexByteOffsetResolve(source, start),
+    end: workspaceCodeUnitIndexByteOffsetResolve(source, end),
+  };
+}
+
+function workspaceRegexEscape(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function workspaceConfigRenameNameNormalize(name: string): string {
+  return name.trim().toLowerCase();
+}
+
+function workspaceConfigRenameTargetNameResolve(targetId: string): string | undefined {
+  if (!targetId.startsWith(WORKSPACE_CONFIG_RENAME_TARGET_ID_PREFIX)) {
+    return undefined;
+  }
+  const targetName = targetId.slice(WORKSPACE_CONFIG_RENAME_TARGET_ID_PREFIX.length);
+  if (!WORKSPACE_CONFIG_RENAME_TARGET_SEGMENT_PATTERN.test(targetName)) {
+    return undefined;
+  }
+  return targetName;
+}
+
+function workspaceConfigRenameAnchorCreate(input: {
+  source: string;
+  filePath: string;
+  start: number;
+  end: number;
+  group: WorkspaceConfigRenameAnchor['group'];
+  editKind: WorkspaceConfigRenameAnchor['editKind'];
+}): WorkspaceConfigRenameAnchor {
+  const byteRange = workspaceByteRangeFromCodeUnitRangeCreate(
+    input.source,
+    input.start,
+    input.end,
+  );
+  return {
+    uri: workspacePathToUri(input.filePath),
+    range: workspaceRangeFromByteRange(input.source, byteRange),
+    byteRange,
+    oldText: input.source.slice(input.start, input.end),
+    group: input.group,
+    editKind: input.editKind,
+  };
+}
+
+function workspaceConfigRenameAnchorsSort(
+  anchors: WorkspaceConfigRenameAnchor[],
+): WorkspaceConfigRenameAnchor[] {
+  return [...anchors].sort((left, right) => {
+    const uriDifference = left.uri.localeCompare(right.uri);
+    if (uriDifference !== 0) {
+      return uriDifference;
+    }
+    if (left.byteRange.start !== right.byteRange.start) {
+      return left.byteRange.start - right.byteRange.start;
+    }
+    return left.byteRange.end - right.byteRange.end;
+  });
+}
+
+function workspaceConfigTargetDeclarationAnchorsCollect(input: {
+  source: string;
+  filePath: string;
+  targetId: string;
+  targetName: string;
+}): WorkspaceConfigRenameAnchor[] {
+  const escapedTargetName = workspaceRegexEscape(input.targetName);
+  const anchors: WorkspaceConfigRenameAnchor[] = [];
+  const seen = new Set<string>();
+  const expressions = [
+    new RegExp(
+      `^[ \\t]*\\[targets\\.${escapedTargetName}\\][ \\t]*(?:#.*)?$`,
+      'gm',
+    ),
+    new RegExp(
+      `^[ \\t]*targets\\.${escapedTargetName}(?:\\.[A-Za-z0-9_-]+)*[ \\t]*=`,
+      'gm',
+    ),
+  ];
+
+  const anchorAdd = (matchIndex: number, matchText: string) => {
+    const relativeStart = matchText.indexOf(input.targetName);
+    if (relativeStart < 0) {
+      return;
+    }
+    const start = matchIndex + relativeStart;
+    const end = start + input.targetName.length;
+    const dedupeKey = `${start}:${end}`;
+    if (seen.has(dedupeKey)) {
+      return;
+    }
+    seen.add(dedupeKey);
+    anchors.push(
+      workspaceConfigRenameAnchorCreate({
+        source: input.source,
+        filePath: input.filePath,
+        start,
+        end,
+        group: 'declarations',
+        editKind: 'declaration',
+      }),
+    );
+  };
+
+  for (const expression of expressions) {
+    for (const match of input.source.matchAll(expression)) {
+      if (match.index === undefined) {
+        continue;
+      }
+      anchorAdd(match.index, match[0]);
+    }
+  }
+
+  return workspaceConfigRenameAnchorsSort(anchors);
+}
+
+function workspaceTomlStringArrayEntriesCollect(
+  source: string,
+  arrayStartIndex: number,
+  maxIndex: number,
+): WorkspaceTomlStringArrayEntry[] | undefined {
+  const entries: WorkspaceTomlStringArrayEntry[] = [];
+  let index = arrayStartIndex + 1;
+  let quote: '"' | "'" | undefined;
+  let valueStart = -1;
+  let value = '';
+  let escaping = false;
+
+  while (index < source.length && index < maxIndex) {
+    const char = source[index];
+    if (quote) {
+      if (quote === '"' && escaping) {
+        value += char;
+        escaping = false;
+        index += 1;
+        continue;
+      }
+      if (quote === '"' && char === '\\') {
+        escaping = true;
+        index += 1;
+        continue;
+      }
+      if (char === quote) {
+        entries.push({
+          value,
+          start: valueStart,
+          end: index,
+        });
+        quote = undefined;
+        valueStart = -1;
+        value = '';
+        escaping = false;
+        index += 1;
+        continue;
+      }
+      value += char;
+      index += 1;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      valueStart = index + 1;
+      value = '';
+      escaping = false;
+      index += 1;
+      continue;
+    }
+    if (char === '#') {
+      while (index < source.length && source[index] !== '\n') {
+        index += 1;
+      }
+      continue;
+    }
+    if (char === ']') {
+      return entries;
+    }
+    index += 1;
+  }
+
+  return undefined;
+}
+
+function workspaceConfigTargetReferenceAnchorsCollect(input: {
+  source: string;
+  filePath: string;
+  targetId: string;
+  targetName: string;
+}): {
+  anchors: WorkspaceConfigRenameAnchor[];
+  complete: boolean;
+} {
+  const anchors: WorkspaceConfigRenameAnchor[] = [];
+  const ruleBlockStarts = [
+    ...input.source.matchAll(/^[ \t]*\[\[rules\]\][ \t]*(?:#.*)?$/gm),
+  ].map((match) => match.index ?? 0);
+
+  for (let index = 0; index < ruleBlockStarts.length; index += 1) {
+    const blockStart = ruleBlockStarts[index]!;
+    const blockEnd = ruleBlockStarts[index + 1] ?? input.source.length;
+    const blockSource = input.source.slice(blockStart, blockEnd);
+    const targetsAssignments = blockSource.matchAll(/^[ \t]*targets[ \t]*=[ \t]*\[/gm);
+    for (const match of targetsAssignments) {
+      if (match.index === undefined) {
+        continue;
+      }
+      const arrayRelativeStart = match[0].lastIndexOf('[');
+      if (arrayRelativeStart < 0) {
+        return { anchors: [], complete: false };
+      }
+      const arrayStart = blockStart + match.index + arrayRelativeStart;
+      const entries = workspaceTomlStringArrayEntriesCollect(
+        input.source,
+        arrayStart,
+        blockEnd,
+      );
+      if (!entries) {
+        return { anchors: [], complete: false };
+      }
+      for (const entry of entries) {
+        if (entry.value !== input.targetName) {
+          continue;
+        }
+        anchors.push(
+          workspaceConfigRenameAnchorCreate({
+            source: input.source,
+            filePath: input.filePath,
+            start: entry.start,
+            end: entry.end,
+            group: 'config',
+            editKind: 'config_key',
+          }),
+        );
+      }
+    }
+  }
+
+  return {
+    anchors: workspaceConfigRenameAnchorsSort(anchors),
+    complete: true,
+  };
+}
+
+function workspaceConfigTargetRenameRegistryResolve(
+  workspace: WorkspaceContextState,
+  state: WorkspaceDocumentsState,
+  targetId: string,
+): WorkspaceConfigRenameRegistryResolution {
+  const targetName = workspaceConfigRenameTargetNameResolve(targetId);
+  if (!targetName) {
+    return {
+      ok: false,
+      code: 'unsupported_context',
+      message: `Config rename target ${targetId} is not a supported v1 target id.`,
+    };
+  }
+
+  const source = workspaceSourceGet(state, workspace.configPath);
+  let config: CodepolConfig;
+  try {
+    config = configParseFromSource(source, {
+      configPath: workspace.configPath,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      code: 'unsupported_context',
+      message: `Active Codepol config source is not parseable: ${message}`,
+    };
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(config.targets, targetName)) {
+    return {
+      ok: false,
+      code: 'unsupported_context',
+      message: `Config target ${targetId} is not defined in the active Codepol config.`,
+    };
+  }
+
+  const configUri = workspacePathToUri(workspace.configPath);
+  const declarationAnchors = workspaceConfigTargetDeclarationAnchorsCollect({
+    source,
+    filePath: workspace.configPath,
+    targetId,
+    targetName,
+  });
+  if (declarationAnchors.length === 0) {
+    return {
+      ok: false,
+      code: 'declaration_missing',
+      message: `Config target ${targetName} does not have a canonical bare-key declaration anchor in codepol.toml.`,
+    };
+  }
+
+  const expectedReferenceCount = config.rules.reduce((count, rule) => {
+    return count + rule.targets.filter((name) => name === targetName).length;
+  }, 0);
+  const referenceAnchorsResult = workspaceConfigTargetReferenceAnchorsCollect({
+    source,
+    filePath: workspace.configPath,
+    targetId,
+    targetName,
+  });
+  if (
+    !referenceAnchorsResult.complete ||
+    referenceAnchorsResult.anchors.length !== expectedReferenceCount
+  ) {
+    return {
+      ok: false,
+      code: 'reference_set_incomplete',
+      message:
+        `Config target ${targetName} does not have a fully materialized closed-world ` +
+        'reference set in codepol.toml.',
+    };
+  }
+
+  return {
+    ok: true,
+    source,
+    targetNames: Object.keys(config.targets),
+    entry: {
+      targetId,
+      name: targetName,
+      normalizedName: workspaceConfigRenameNameNormalize(targetName),
+      namespaceId: `config.targets:${configUri}`,
+      declarationAnchor: declarationAnchors[0]!,
+      declarationAnchors,
+      referenceAnchors: referenceAnchorsResult.anchors,
+      impactedSiteCount:
+        declarationAnchors.length + referenceAnchorsResult.anchors.length,
+    },
+  };
+}
+
+function workspaceConfigComponentPrepareResultResolve(
+  workspace: WorkspaceContextState,
+  state: WorkspaceDocumentsState,
+  targetId: string,
+): WorkspacePrepareRenameResult {
+  const resolved = workspaceConfigTargetRenameRegistryResolve(workspace, state, targetId);
+  if (!resolved.ok) {
+    return workspacePrepareRenameFailureCreate(resolved.code, resolved.message);
+  }
+
+  return {
+    ok: true,
+    target: {
+      semanticClass: 'config_component',
+      targetId: resolved.entry.targetId,
+    },
+    displayName: resolved.entry.name,
+    currentName: resolved.entry.name,
+    normalizedCurrentName: resolved.entry.normalizedName,
+    namespaceId: resolved.entry.namespaceId,
+    declarationLocation: {
+      uri: resolved.entry.declarationAnchor.uri,
+      range: resolved.entry.declarationAnchor.range,
+    },
+    placeholderRange: resolved.entry.declarationAnchor.range,
+    impactedSiteCount: resolved.entry.impactedSiteCount,
+    requiresPreview: true,
+    namingRules: {
+      minLength: 1,
+      patternDescription: WORKSPACE_CONFIG_RENAME_TARGET_SEGMENT_DESCRIPTION,
+      casePolicy: 'preserve',
+    },
+  };
+}
+
+function workspaceConfigComponentPreviewResultResolve(
+  workspace: WorkspaceContextState,
+  state: WorkspaceDocumentsState,
+  input: {
+    targetId: string;
+    newName: string;
+  },
+): WorkspaceRenamePreviewResult {
+  const resolved = workspaceConfigTargetRenameRegistryResolve(
+    workspace,
+    state,
+    input.targetId,
+  );
+  if (!resolved.ok) {
+    return workspaceRenamePreviewFailureCreate(resolved.code, resolved.message);
+  }
+
+  const proposedName = input.newName.trim();
+  if (proposedName.length === 0) {
+    return workspaceRenamePreviewFailureCreate(
+      'validation_failed',
+      'Config target rename must not be empty.',
+    );
+  }
+  if (!WORKSPACE_CONFIG_RENAME_TARGET_SEGMENT_PATTERN.test(proposedName)) {
+    return workspaceRenamePreviewFailureCreate(
+      'validation_failed',
+      `Config target rename must match ${WORKSPACE_CONFIG_RENAME_TARGET_SEGMENT_DESCRIPTION}.`,
+    );
+  }
+
+  const normalizedNewName = workspaceConfigRenameNameNormalize(proposedName);
+  if (normalizedNewName === resolved.entry.normalizedName) {
+    const message = proposedName === resolved.entry.name
+      ? 'Config target rename is unchanged after normalization.'
+      : 'Case-only config target renames are not supported in MVP.';
+    return workspaceRenamePreviewFailureCreate('validation_failed', message);
+  }
+
+  const conflictingTargetName = resolved.targetNames.find((candidate) => {
+    if (candidate === resolved.entry.name) {
+      return false;
+    }
+    return workspaceConfigRenameNameNormalize(candidate) === normalizedNewName;
+  });
+
+  const declarations = resolved.entry.declarationAnchors.map((anchor) => ({
+    uri: anchor.uri,
+    range: anchor.range,
+    oldText: anchor.oldText,
+    newText: proposedName,
+    kind: anchor.editKind,
+    semanticClass: 'config_component' as const,
+    targetId: resolved.entry.targetId,
+  }));
+  const configEdits = resolved.entry.referenceAnchors.map((anchor) => ({
+    uri: anchor.uri,
+    range: anchor.range,
+    oldText: anchor.oldText,
+    newText: proposedName,
+    kind: anchor.editKind,
+    semanticClass: 'config_component' as const,
+    targetId: resolved.entry.targetId,
+  }));
+  const blockingIssues = conflictingTargetName
+    ? [{
+        code: 'collision' as const,
+        message:
+          `Config target ${proposedName} conflicts with existing target ` +
+          `${conflictingTargetName} in ${resolved.entry.namespaceId}.`,
+      }]
+    : [];
+  const groups: WorkspaceRenamePreviewGroup[] = [];
+  if (declarations.length > 0) {
+    groups.push({
+      group: 'declarations',
+      edits: declarations,
+    });
+  }
+  if (configEdits.length > 0) {
+    groups.push({
+      group: 'config',
+      edits: configEdits,
+    });
+  }
+
+  return {
+    ok: true,
+    target: {
+      semanticClass: 'config_component',
+      targetId: resolved.entry.targetId,
+    },
+    oldName: resolved.entry.name,
+    newName: proposedName,
+    normalizedNewName,
+    namespaceId: resolved.entry.namespaceId,
+    groups,
+    totalEdits: declarations.length + configEdits.length,
+    warnings: [],
+    blockingIssues,
+    canApply: blockingIssues.length === 0,
   };
 }
 
@@ -4328,10 +4866,17 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       input.clientSessionId,
       input.workspaceId,
     );
+    workspaceAnalysisGenerationValidate(workspaceSession, input);
+    if (input.target.semanticClass === 'config_component') {
+      return workspaceConfigComponentPrepareResultResolve(
+        workspace,
+        workspaceSession,
+        input.target.targetId,
+      );
+    }
     const index = await this.workspaceSessionIndexEnsure(workspace, workspaceSession, {
       signal: input.signal,
     });
-    workspaceAnalysisGenerationValidate(workspaceSession, input);
     return workspaceRenameTargetPrepareFailureResolve(index, input.target);
   }
 
@@ -4350,10 +4895,16 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       input.clientSessionId,
       input.workspaceId,
     );
+    workspaceAnalysisGenerationValidate(workspaceSession, input);
+    if (input.target.semanticClass === 'config_component') {
+      return workspaceConfigComponentPreviewResultResolve(workspace, workspaceSession, {
+        targetId: input.target.targetId,
+        newName: input.newName,
+      });
+    }
     const index = await this.workspaceSessionIndexEnsure(workspace, workspaceSession, {
       signal: input.signal,
     });
-    workspaceAnalysisGenerationValidate(workspaceSession, input);
     return workspaceRenameTargetPreviewFailureResolve(index, input.target);
   }
 
