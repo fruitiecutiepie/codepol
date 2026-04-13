@@ -552,7 +552,13 @@ export type { FileIndexDelta } from './index/indexStore';
 export { IndexStore, indexStoreNew } from './index/indexStore';
 
 // Workspace package discovery
-export { workspacePackageMapDiscover } from './index/workspacePackages';
+export type { WorkspacePackageRecord } from './index/workspacePackages';
+export {
+  workspacePackageMapCreate,
+  workspacePackageMapDiscover,
+  workspacePackageRecordFromManifestSource,
+  workspacePackageRecordsDiscover,
+} from './index/workspacePackages';
 
 // Process plugin protocol
 export type {

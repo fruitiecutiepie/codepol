@@ -28,9 +28,12 @@ import {
   ruleMatchesGet,
   treeCheckProviderSupportsLanguage,
   workspaceIdCreate,
+  workspacePackageMapCreate,
   workspacePathToUri,
   workspaceRangeFromByteRange,
   workspacePackageMapDiscover,
+  workspacePackageRecordFromManifestSource,
+  workspacePackageRecordsDiscover,
   workspaceUriToPath,
   type ClientSessionId,
   type CodepolConfig,
@@ -53,6 +56,7 @@ import {
   type Result,
   type RuffProviderConfig,
   type RuleMatch,
+  type WorkspacePackageRecord,
   type WorkspaceApplyResult,
   type WorkspaceArchitectureSummaryResult,
   type WorkspaceCodeAction,
@@ -116,6 +120,11 @@ const WORKSPACE_CONFIG_RENAME_TARGET_ID_PREFIX = 'target:';
 const WORKSPACE_CONFIG_RENAME_TARGET_SEGMENT_PATTERN = /^[A-Za-z0-9_-]+$/;
 const WORKSPACE_CONFIG_RENAME_TARGET_SEGMENT_DESCRIPTION =
   'bare TOML key segment ([A-Za-z0-9_-]+)';
+const WORKSPACE_PACKAGE_RENAME_TARGET_ID_PREFIX = 'package:';
+const WORKSPACE_PACKAGE_NAME_PATTERN =
+  /^(?:@[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?\/)?[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/;
+const WORKSPACE_PACKAGE_NAME_DESCRIPTION =
+  'npm package name (lowercase, optional @scope/name)';
 
 function workspaceRequestCancelledErrorCreate(): Error {
   return new Error('Request cancelled');
@@ -202,6 +211,7 @@ type WorkspaceBaseIndexState = {
   files: string[];
   fileKey: string;
   workspacePackages: Map<string, string>;
+  workspacePackageRecords?: WorkspacePackageRecord[];
 };
 
 type WorkspaceIndexState = {
@@ -490,11 +500,33 @@ export type WorkspaceDiagnosticsSubscriptionResult = {
   subscriptionState: 'active';
 };
 
+export type WorkspaceFeatureStatusState = {
+  status: 'cold' | 'warming' | 'ready' | 'error';
+  lastError?: string;
+  lastAnalysis?: {
+    featureStatus: IndexStatusFeatureStatus;
+  };
+  workspaceIndexRequired?: boolean;
+};
+
+export type WorkspaceDocumentVersionState = {
+  documents: Map<
+    string,
+    {
+      version: number;
+    }
+  >;
+};
+
+export type WorkspaceAnalysisGenerationState = {
+  analysisGeneration: number;
+};
+
 function fileHasExtension(filePath: string, extensions: string[]): boolean {
   return extensions.some((extension) => filePath.endsWith(extension));
 }
 
-function severityFromLintSeverity(
+export function severityFromLintSeverity(
   severity?: LintSeverity,
 ): WorkspaceDiagnosticSeverity {
   if (severity === 'warn') {
@@ -520,7 +552,7 @@ function workspaceFeatureStatusCreate(
   };
 }
 
-function workspaceFeatureStatusReadyOrDegraded(
+export function workspaceFeatureStatusReadyOrDegraded(
   issues: string[],
   options: {
     readyDetail?: string;
@@ -538,7 +570,7 @@ function workspaceFeatureStatusReadyOrDegraded(
   });
 }
 
-function workspaceIndexBackedFeatureStatusCreate(input: {
+export function workspaceIndexBackedFeatureStatusCreate(input: {
   indexReady: boolean;
   indexRequired: boolean;
 }): WorkspaceFeatureStatus {
@@ -559,8 +591,8 @@ function workspaceIndexBackedFeatureStatusCreate(input: {
   });
 }
 
-function workspaceFeatureStatusesCreate(
-  state: WorkspaceSessionState,
+export function workspaceFeatureStatusesCreate(
+  state: WorkspaceFeatureStatusState,
 ): IndexStatusFeatureStatus {
   if (state.status === 'ready' && state.lastAnalysis) {
     return state.lastAnalysis.featureStatus;
@@ -1293,16 +1325,23 @@ function workspaceSourceOverridesGet(
   return overrides;
 }
 
+function workspaceDocumentGetByFilePath(
+  state: WorkspaceDocumentsState,
+  filePath: string,
+): WorkspaceDocument | undefined {
+  for (const document of state.documents.values()) {
+    if (document.filePath === filePath) {
+      return document;
+    }
+  }
+  return undefined;
+}
+
 function workspaceSourceGet(
   state: WorkspaceDocumentsState,
   filePath: string,
 ): string {
-  for (const document of state.documents.values()) {
-    if (document.filePath === filePath) {
-      return document.text;
-    }
-  }
-  return fs.readFileSync(filePath, 'utf8');
+  return workspaceDocumentGetByFilePath(state, filePath)?.text ?? fs.readFileSync(filePath, 'utf8');
 }
 
 function workspaceRelativePathCreate(
@@ -1874,6 +1913,41 @@ type WorkspaceConfigRenameRegistryResolution =
       message: string;
     };
 
+type WorkspacePackageRenameAnchor = {
+  uri: string;
+  range: ReturnType<typeof workspaceRangeFromByteRange>;
+  byteRange: WorkspaceByteRange;
+  oldText: string;
+  group: 'declarations' | 'references';
+  editKind: 'declaration' | 'reference';
+};
+
+type WorkspacePackageRenameRegistryEntry = {
+  targetId: string;
+  name: string;
+  normalizedName: string;
+  namespaceId: string;
+  packageJsonPath: string;
+  entryPointPath: string;
+  declarationAnchor: WorkspacePackageRenameAnchor;
+  declarationAnchors: WorkspacePackageRenameAnchor[];
+  referenceAnchors: WorkspacePackageRenameAnchor[];
+  impactedSiteCount: number;
+};
+
+type WorkspacePackageRenameRegistryResolution =
+  | {
+      ok: true;
+      source: string;
+      entry: WorkspacePackageRenameRegistryEntry;
+      packageNames: string[];
+    }
+  | {
+      ok: false;
+      code: WorkspacePrepareRenameFailure['code'];
+      message: string;
+    };
+
 type WorkspaceTomlStringArrayEntry = {
   value: string;
   start: number;
@@ -1898,11 +1972,24 @@ function workspaceByteRangeFromCodeUnitRangeCreate(
   };
 }
 
+function workspaceByteRangeTextRead(
+  source: string,
+  byteRange: WorkspaceByteRange,
+): string {
+  return Buffer.from(source, 'utf8')
+    .subarray(byteRange.start, byteRange.end)
+    .toString('utf8');
+}
+
 function workspaceRegexEscape(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function workspaceConfigRenameNameNormalize(name: string): string {
+  return name.trim().toLowerCase();
+}
+
+function workspacePackageRenameNameNormalize(name: string): string {
   return name.trim().toLowerCase();
 }
 
@@ -1915,6 +2002,14 @@ function workspaceConfigRenameTargetNameResolve(targetId: string): string | unde
     return undefined;
   }
   return targetName;
+}
+
+function workspacePackageRenameTargetNameResolve(targetId: string): string | undefined {
+  if (!targetId.startsWith(WORKSPACE_PACKAGE_RENAME_TARGET_ID_PREFIX)) {
+    return undefined;
+  }
+  const packageName = targetId.slice(WORKSPACE_PACKAGE_RENAME_TARGET_ID_PREFIX.length).trim();
+  return packageName.length > 0 ? packageName : undefined;
 }
 
 function workspaceConfigRenameAnchorCreate(input: {
@@ -1953,6 +2048,196 @@ function workspaceConfigRenameAnchorsSort(
     }
     return left.byteRange.end - right.byteRange.end;
   });
+}
+
+function workspacePackageRenameAnchorCreate(input: {
+  source: string;
+  filePath: string;
+  byteRange: WorkspaceByteRange;
+  group: WorkspacePackageRenameAnchor['group'];
+  editKind: WorkspacePackageRenameAnchor['editKind'];
+}): WorkspacePackageRenameAnchor {
+  return {
+    uri: workspacePathToUri(input.filePath),
+    range: workspaceRangeFromByteRange(input.source, input.byteRange),
+    byteRange: input.byteRange,
+    oldText: workspaceByteRangeTextRead(input.source, input.byteRange),
+    group: input.group,
+    editKind: input.editKind,
+  };
+}
+
+function workspacePackageRenameAnchorsSort(
+  anchors: WorkspacePackageRenameAnchor[],
+): WorkspacePackageRenameAnchor[] {
+  return [...anchors].sort((left, right) => {
+    const uriDifference = left.uri.localeCompare(right.uri);
+    if (uriDifference !== 0) {
+      return uriDifference;
+    }
+    if (left.byteRange.start !== right.byteRange.start) {
+      return left.byteRange.start - right.byteRange.start;
+    }
+    return left.byteRange.end - right.byteRange.end;
+  });
+}
+
+function workspaceJsonWhitespaceSkip(source: string, index: number): number {
+  let nextIndex = index;
+  while (nextIndex < source.length && /\s/.test(source[nextIndex]!)) {
+    nextIndex += 1;
+  }
+  return nextIndex;
+}
+
+function workspaceJsonStringLiteralRead(
+  source: string,
+  startQuoteIndex: number,
+): {
+  start: number;
+  end: number;
+  value: string;
+  nextIndex: number;
+} | undefined {
+  if (source[startQuoteIndex] !== '"') {
+    return undefined;
+  }
+  let index = startQuoteIndex + 1;
+  let value = '';
+
+  while (index < source.length) {
+    const char = source[index]!;
+    if (char === '\\') {
+      const nextChar = source[index + 1];
+      if (nextChar === undefined) {
+        return undefined;
+      }
+      value += char;
+      value += nextChar;
+      index += 2;
+      continue;
+    }
+    if (char === '"') {
+      return {
+        start: startQuoteIndex + 1,
+        end: index,
+        value,
+        nextIndex: index + 1,
+      };
+    }
+    value += char;
+    index += 1;
+  }
+
+  return undefined;
+}
+
+function workspaceJsonTopLevelStringPropertyRangeResolve(
+  source: string,
+  propertyName: string,
+): {
+  start: number;
+  end: number;
+  value: string;
+} | undefined {
+  let depth = 0;
+  let index = 0;
+
+  while (index < source.length) {
+    const char = source[index]!;
+    if (char === '"') {
+      if (depth !== 1) {
+        const parsedString = workspaceJsonStringLiteralRead(source, index);
+        if (!parsedString) {
+          return undefined;
+        }
+        index = parsedString.nextIndex;
+        continue;
+      }
+
+      const parsedKey = workspaceJsonStringLiteralRead(source, index);
+      if (!parsedKey) {
+        return undefined;
+      }
+      let cursor = workspaceJsonWhitespaceSkip(source, parsedKey.nextIndex);
+      if (source[cursor] !== ':') {
+        index = parsedKey.nextIndex;
+        continue;
+      }
+      cursor = workspaceJsonWhitespaceSkip(source, cursor + 1);
+      if (parsedKey.value !== propertyName) {
+        index = parsedKey.nextIndex;
+        continue;
+      }
+      if (source[cursor] !== '"') {
+        return undefined;
+      }
+      const parsedValue = workspaceJsonStringLiteralRead(source, cursor);
+      if (!parsedValue) {
+        return undefined;
+      }
+      return {
+        start: parsedValue.start,
+        end: parsedValue.end,
+        value: parsedValue.value,
+      };
+    }
+    if (char === '{' || char === '[') {
+      depth += 1;
+      index += 1;
+      continue;
+    }
+    if (char === '}' || char === ']') {
+      depth = Math.max(0, depth - 1);
+      index += 1;
+      continue;
+    }
+    index += 1;
+  }
+
+  return undefined;
+}
+
+function workspacePackageDeclarationAnchorsCollect(input: {
+  source: string;
+  filePath: string;
+}): WorkspacePackageRenameAnchor[] {
+  const nameRange = workspaceJsonTopLevelStringPropertyRangeResolve(input.source, 'name');
+  if (!nameRange) {
+    return [];
+  }
+  return [
+    workspacePackageRenameAnchorCreate({
+      source: input.source,
+      filePath: input.filePath,
+      byteRange: workspaceByteRangeFromCodeUnitRangeCreate(
+        input.source,
+        nameRange.start,
+        nameRange.end,
+      ),
+      group: 'declarations',
+      editKind: 'declaration',
+    }),
+  ];
+}
+
+function workspaceImportSpecifierInnerByteRangeResolve(
+  source: string,
+  byteRange: WorkspaceByteRange,
+): WorkspaceByteRange | undefined {
+  const rawText = workspaceByteRangeTextRead(source, byteRange);
+  const quote = rawText[0];
+  if (
+    rawText.length < 2 ||
+    (quote !== '"' && quote !== "'") ||
+    rawText[rawText.length - 1] !== quote
+  ) {
+    return undefined;
+  }
+  return {
+    start: byteRange.start + 1,
+    end: byteRange.end - 1,
+  };
 }
 
 function workspaceConfigTargetDeclarationAnchorsCollect(input: {
@@ -2134,6 +2419,351 @@ function workspaceConfigTargetReferenceAnchorsCollect(input: {
   return {
     anchors: workspaceConfigRenameAnchorsSort(anchors),
     complete: true,
+  };
+}
+
+function workspacePackageRegistryNamespaceIdCreate(
+  workspace: WorkspaceContextState,
+): string {
+  return `workspace.packages:${workspacePathToUri(workspace.rootPath)}`;
+}
+
+function workspacePackageRecordsResolve(
+  workspace: WorkspaceContextState,
+  state: WorkspaceDocumentsState,
+  files: string[],
+): WorkspacePackageRecord[] {
+  const baseIndexState = workspaceBaseIndexStateGetOrBuild(workspace, files);
+  const baseRecords =
+    baseIndexState.workspacePackageRecords ??
+    workspacePackageRecordsDiscover(workspace.rootPath);
+
+  if (!baseIndexState.workspacePackageRecords) {
+    baseIndexState.workspacePackageRecords = baseRecords;
+    baseIndexState.workspacePackages = workspacePackageMapCreate(baseRecords);
+  }
+
+  const records: WorkspacePackageRecord[] = [];
+  for (const record of baseRecords) {
+    const overlayDocument = workspaceDocumentGetByFilePath(state, record.packageJsonPath);
+    if (!overlayDocument) {
+      records.push(record);
+      continue;
+    }
+
+    try {
+      const nextRecord = workspacePackageRecordFromManifestSource(
+        record.packageJsonPath,
+        overlayDocument.text,
+      );
+      if (nextRecord) {
+        records.push(nextRecord);
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return records.sort((left, right) =>
+    left.packageJsonPath.localeCompare(right.packageJsonPath),
+  );
+}
+
+function workspacePackageMapResolve(
+  workspace: WorkspaceContextState,
+  state: WorkspaceDocumentsState,
+  files: string[],
+): Map<string, string> {
+  return workspacePackageMapCreate(
+    workspacePackageRecordsResolve(workspace, state, files),
+  );
+}
+
+function workspacePackageReferenceAnchorsCollect(
+  state: WorkspaceDocumentsState,
+  index: ProjectIndex,
+  input: {
+    packageName: string;
+    entryPointPath: string;
+  },
+): {
+  anchors: WorkspacePackageRenameAnchor[];
+  complete: boolean;
+} {
+  const anchors: WorkspacePackageRenameAnchor[] = [];
+  const seen = new Set<string>();
+
+  for (const filePath of index.filesGet()) {
+    const source = workspaceSourceGet(state, filePath);
+    for (const imp of index.importsGet(filePath)) {
+      if (
+        imp.spec !== input.packageName ||
+        imp.resolvedModulePath !== input.entryPointPath
+      ) {
+        continue;
+      }
+      const innerByteRange = workspaceImportSpecifierInnerByteRangeResolve(
+        source,
+        imp.byteRange,
+      );
+      if (!innerByteRange) {
+        return { anchors: [], complete: false };
+      }
+      const dedupeKey = `${filePath}:${innerByteRange.start}:${innerByteRange.end}`;
+      if (seen.has(dedupeKey)) {
+        continue;
+      }
+      seen.add(dedupeKey);
+      anchors.push(
+        workspacePackageRenameAnchorCreate({
+          source,
+          filePath,
+          byteRange: innerByteRange,
+          group: 'references',
+          editKind: 'reference',
+        }),
+      );
+    }
+  }
+
+  return {
+    anchors: workspacePackageRenameAnchorsSort(anchors),
+    complete: true,
+  };
+}
+
+function workspacePackageRenameRegistryResolve(
+  workspace: WorkspaceContextState,
+  state: WorkspaceDocumentsState,
+  index: ProjectIndex,
+  targetId: string,
+): WorkspacePackageRenameRegistryResolution {
+  const targetName = workspacePackageRenameTargetNameResolve(targetId);
+  if (!targetName) {
+    return {
+      ok: false,
+      code: 'unsupported_context',
+      message: `Package rename target ${targetId} is not a supported v1 target id.`,
+    };
+  }
+
+  const packageRecords = workspacePackageRecordsResolve(
+    workspace,
+    state,
+    index.filesGet(),
+  );
+  const normalizedTargetName = workspacePackageRenameNameNormalize(targetName);
+  const matchingRecords = packageRecords.filter(
+    (record) => workspacePackageRenameNameNormalize(record.name) === normalizedTargetName,
+  );
+  if (matchingRecords.length === 0) {
+    return {
+      ok: false,
+      code: 'unsupported_context',
+      message:
+        `Workspace package ${targetId} is not defined in the active workspace package registry.`,
+    };
+  }
+  if (matchingRecords.length > 1) {
+    return {
+      ok: false,
+      code: 'ambiguous_target',
+      message:
+        `Workspace package ${targetName} does not resolve to one canonical package declaration.`,
+    };
+  }
+
+  const record = matchingRecords[0]!;
+  const source = workspaceSourceGet(state, record.packageJsonPath);
+  const declarationAnchors = workspacePackageDeclarationAnchorsCollect({
+    source,
+    filePath: record.packageJsonPath,
+  });
+  if (declarationAnchors.length === 0) {
+    return {
+      ok: false,
+      code: 'declaration_missing',
+      message:
+        `Workspace package ${record.name} does not have a canonical package.json "name" anchor.`,
+    };
+  }
+
+  const referenceAnchorsResult = workspacePackageReferenceAnchorsCollect(
+    state,
+    index,
+    {
+      packageName: record.name,
+      entryPointPath: record.entryPointPath,
+    },
+  );
+  if (!referenceAnchorsResult.complete) {
+    return {
+      ok: false,
+      code: 'reference_set_incomplete',
+      message:
+        `Workspace package ${record.name} does not have a fully materialized closed-world ` +
+        'reference set in the indexed workspace.',
+    };
+  }
+
+  return {
+    ok: true,
+    source,
+    packageNames: packageRecords.map((packageRecord) => packageRecord.name),
+    entry: {
+      targetId,
+      name: record.name,
+      normalizedName: workspacePackageRenameNameNormalize(record.name),
+      namespaceId: workspacePackageRegistryNamespaceIdCreate(workspace),
+      packageJsonPath: record.packageJsonPath,
+      entryPointPath: record.entryPointPath,
+      declarationAnchor: declarationAnchors[0]!,
+      declarationAnchors,
+      referenceAnchors: referenceAnchorsResult.anchors,
+      impactedSiteCount:
+        declarationAnchors.length + referenceAnchorsResult.anchors.length,
+    },
+  };
+}
+
+function workspaceDomainEntityPrepareResultResolve(
+  workspace: WorkspaceContextState,
+  state: WorkspaceDocumentsState,
+  index: ProjectIndex,
+  targetId: string,
+): WorkspacePrepareRenameResult {
+  const resolved = workspacePackageRenameRegistryResolve(workspace, state, index, targetId);
+  if (!resolved.ok) {
+    return workspacePrepareRenameFailureCreate(resolved.code, resolved.message);
+  }
+
+  return {
+    ok: true,
+    target: {
+      semanticClass: 'domain_entity',
+      targetId: resolved.entry.targetId,
+    },
+    displayName: resolved.entry.name,
+    currentName: resolved.entry.name,
+    normalizedCurrentName: resolved.entry.normalizedName,
+    namespaceId: resolved.entry.namespaceId,
+    declarationLocation: {
+      uri: resolved.entry.declarationAnchor.uri,
+      range: resolved.entry.declarationAnchor.range,
+    },
+    placeholderRange: resolved.entry.declarationAnchor.range,
+    impactedSiteCount: resolved.entry.impactedSiteCount,
+    requiresPreview: true,
+    namingRules: {
+      minLength: 1,
+      patternDescription: WORKSPACE_PACKAGE_NAME_DESCRIPTION,
+    },
+  };
+}
+
+function workspaceDomainEntityPreviewResultResolve(
+  workspace: WorkspaceContextState,
+  state: WorkspaceDocumentsState,
+  index: ProjectIndex,
+  input: {
+    targetId: string;
+    newName: string;
+  },
+): WorkspaceRenamePreviewResult {
+  const resolved = workspacePackageRenameRegistryResolve(
+    workspace,
+    state,
+    index,
+    input.targetId,
+  );
+  if (!resolved.ok) {
+    return workspaceRenamePreviewFailureCreate(resolved.code, resolved.message);
+  }
+
+  const proposedName = input.newName.trim();
+  if (proposedName.length === 0) {
+    return workspaceRenamePreviewFailureCreate(
+      'validation_failed',
+      'Workspace package rename must not be empty.',
+    );
+  }
+  if (!WORKSPACE_PACKAGE_NAME_PATTERN.test(proposedName)) {
+    return workspaceRenamePreviewFailureCreate(
+      'validation_failed',
+      `Workspace package rename must match ${WORKSPACE_PACKAGE_NAME_DESCRIPTION}.`,
+    );
+  }
+
+  const normalizedNewName = workspacePackageRenameNameNormalize(proposedName);
+  if (normalizedNewName === resolved.entry.normalizedName) {
+    const message = proposedName === resolved.entry.name
+      ? 'Workspace package rename is unchanged after normalization.'
+      : 'Case-only workspace package renames are not supported in MVP.';
+    return workspaceRenamePreviewFailureCreate('validation_failed', message);
+  }
+
+  const conflictingPackageName = resolved.packageNames.find((candidate) => {
+    if (candidate === resolved.entry.name) {
+      return false;
+    }
+    return workspacePackageRenameNameNormalize(candidate) === normalizedNewName;
+  });
+
+  const declarations = resolved.entry.declarationAnchors.map((anchor) => ({
+    uri: anchor.uri,
+    range: anchor.range,
+    oldText: anchor.oldText,
+    newText: proposedName,
+    kind: anchor.editKind,
+    semanticClass: 'domain_entity' as const,
+    targetId: resolved.entry.targetId,
+  }));
+  const references = resolved.entry.referenceAnchors.map((anchor) => ({
+    uri: anchor.uri,
+    range: anchor.range,
+    oldText: anchor.oldText,
+    newText: proposedName,
+    kind: anchor.editKind,
+    semanticClass: 'domain_entity' as const,
+    targetId: resolved.entry.targetId,
+  }));
+  const blockingIssues = conflictingPackageName
+    ? [{
+        code: 'collision' as const,
+        message:
+          `Workspace package ${proposedName} conflicts with existing package ` +
+          `${conflictingPackageName} in ${resolved.entry.namespaceId}.`,
+      }]
+    : [];
+  const groups: WorkspaceRenamePreviewGroup[] = [];
+  if (declarations.length > 0) {
+    groups.push({
+      group: 'declarations',
+      edits: declarations,
+    });
+  }
+  if (references.length > 0) {
+    groups.push({
+      group: 'references',
+      edits: references,
+    });
+  }
+
+  return {
+    ok: true,
+    target: {
+      semanticClass: 'domain_entity',
+      targetId: resolved.entry.targetId,
+    },
+    oldName: resolved.entry.name,
+    newName: proposedName,
+    normalizedNewName,
+    namespaceId: resolved.entry.namespaceId,
+    groups,
+    totalEdits: declarations.length + references.length,
+    warnings: [],
+    blockingIssues,
+    canApply: blockingIssues.length === 0,
   };
 }
 
@@ -2379,7 +3009,9 @@ function workspaceRenamePreviewPlanCreate(input: {
       newText: edit.newText,
     })),
   );
-  const title = `Rename config target "${input.preview.oldName}" to "${input.preview.newName}"`;
+  const title = input.preview.target.semanticClass === 'config_component'
+    ? `Rename config target "${input.preview.oldName}" to "${input.preview.newName}"`
+    : `Rename workspace package "${input.preview.oldName}" to "${input.preview.newName}"`;
   const id = createHash('sha256')
     .update(input.idSalt)
     .update('\0')
@@ -2559,8 +3191,8 @@ function workspaceArchitectureSummaryResultCreate(
   };
 }
 
-function workspaceDocumentVersionValidate(
-  state: WorkspaceDocumentsState,
+export function workspaceDocumentVersionValidate(
+  state: WorkspaceDocumentVersionState,
   input: {
     uri: string;
     documentVersion?: number;
@@ -2578,8 +3210,8 @@ function workspaceDocumentVersionValidate(
   );
 }
 
-function workspaceAnalysisGenerationValidate(
-  state: WorkspaceAnalysisCacheState,
+export function workspaceAnalysisGenerationValidate(
+  state: WorkspaceAnalysisGenerationState,
   input: {
     analysisGeneration?: number;
   },
@@ -2604,12 +3236,19 @@ function workspaceBaseIndexStateGetOrBuild(
   let baseIndexState = state.baseIndexState;
 
   if (!baseIndexState || baseIndexState.fileKey !== fileKey) {
+    const workspacePackageRecords = workspacePackageRecordsDiscover(state.rootPath);
     baseIndexState = {
       files: normalizedFiles,
       fileKey,
-      workspacePackages: workspacePackageMapDiscover(state.rootPath),
+      workspacePackages: workspacePackageMapCreate(workspacePackageRecords),
+      workspacePackageRecords,
     };
     state.baseIndexState = baseIndexState;
+  }
+  if (!baseIndexState.workspacePackageRecords) {
+    const workspacePackageRecords = workspacePackageRecordsDiscover(state.rootPath);
+    baseIndexState.workspacePackageRecords = workspacePackageRecords;
+    baseIndexState.workspacePackages = workspacePackageMapCreate(workspacePackageRecords);
   }
 
   return baseIndexState;
@@ -2621,15 +3260,24 @@ function workspaceIndexGetOrBuild(
   files: string[],
 ): ProjectIndex {
   const baseIndexState = workspaceBaseIndexStateGetOrBuild(workspace, files);
+  const effectiveWorkspacePackages = workspacePackageMapResolve(
+    workspace,
+    state,
+    baseIndexState.files,
+  );
   let indexState = state.indexState;
 
-  if (!indexState || indexState.fileKey !== baseIndexState.fileKey) {
+  if (
+    !indexState ||
+    indexState.fileKey !== baseIndexState.fileKey ||
+    !workspacePackageMapEquals(indexState.workspacePackages, effectiveWorkspacePackages)
+  ) {
     const store = indexStoreNew();
     const { index } = projectIndexBuildSync({
       files: baseIndexState.files,
       dir: workspace.rootPath,
       store,
-      workspacePackages: baseIndexState.workspacePackages,
+      workspacePackages: effectiveWorkspacePackages,
     });
 
     indexState = {
@@ -2638,7 +3286,7 @@ function workspaceIndexGetOrBuild(
       capabilities: index.capabilities,
       files: baseIndexState.files,
       fileKey: baseIndexState.fileKey,
-      workspacePackages: baseIndexState.workspacePackages,
+      workspacePackages: effectiveWorkspacePackages,
     };
     state.indexState = indexState;
   }
@@ -4938,6 +5586,17 @@ export class WorkspaceServiceEngine implements WorkspaceService {
         input.target.targetId,
       );
     }
+    if (input.target.semanticClass === 'domain_entity') {
+      const index = await this.workspaceSessionIndexEnsure(workspace, workspaceSession, {
+        signal: input.signal,
+      });
+      return workspaceDomainEntityPrepareResultResolve(
+        workspace,
+        workspaceSession,
+        index,
+        input.target.targetId,
+      );
+    }
     const index = await this.workspaceSessionIndexEnsure(workspace, workspaceSession, {
       signal: input.signal,
     });
@@ -4965,6 +5624,32 @@ export class WorkspaceServiceEngine implements WorkspaceService {
         targetId: input.target.targetId,
         newName: input.newName,
       });
+      if (!preview.ok || !preview.canApply) {
+        return preview;
+      }
+      const plan = workspaceRenamePreviewPlanCreate({
+        preview,
+        idSalt: input.clientSessionId,
+      });
+      workspaceSessionEditPlanStore(workspaceSession, plan);
+      return {
+        ...preview,
+        plan,
+      };
+    }
+    if (input.target.semanticClass === 'domain_entity') {
+      const index = await this.workspaceSessionIndexEnsure(workspace, workspaceSession, {
+        signal: input.signal,
+      });
+      const preview = workspaceDomainEntityPreviewResultResolve(
+        workspace,
+        workspaceSession,
+        index,
+        {
+          targetId: input.target.targetId,
+          newName: input.newName,
+        },
+      );
       if (!preview.ok || !preview.canApply) {
         return preview;
       }

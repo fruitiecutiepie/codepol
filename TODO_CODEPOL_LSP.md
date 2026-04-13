@@ -1181,7 +1181,7 @@ Current follow-up: the daemon/session lifecycle is now in place, but richer obse
 - [x] Implement the first successful closed-world Codepol rename namespace.
 - [x] Implement the first Codepol rename apply flow over session-owned edit plans.
 
-Current status: the LSP server registers a client session, attaches a workspace, and implements overlay sync, diagnostics, `textDocument/codeAction`, `workspace/executeCommand`, module-only `workspace/symbol`, cold-start status publication, and custom `codepol/indexStatus`, `codepol/dependencyGraph`, `codepol/semanticSearch`, `codepol/architectureSummary`, `codepol/semanticDefinition`, `codepol/semanticReferences`, `codepol/semanticHover`, `codepol/prepareRename`, and `codepol/previewRename` requests against the sessionized service boundary. Semantic navigation and hover now ship for `architecture_node` through explicit Codepol-owned custom RPC and command surfaces. Rename now has one real closed-world namespace for `config_component` target names in `codepol.toml`, including prepare, preview, and apply through session-owned `WorkspaceEditPlan` execution over the existing `codepol.applyEditPlan` command surface. Standard `textDocument/definition`, `textDocument/references`, `textDocument/hover`, `textDocument/prepareRename`, and `textDocument/rename` remain unadvertised.
+Current status: the LSP server registers a client session, attaches a workspace, and implements overlay sync, diagnostics, `textDocument/codeAction`, `workspace/executeCommand`, module-only `workspace/symbol`, cold-start status publication, and custom `codepol/indexStatus`, `codepol/dependencyGraph`, `codepol/semanticSearch`, `codepol/architectureSummary`, `codepol/semanticDefinition`, `codepol/semanticReferences`, `codepol/semanticHover`, `codepol/prepareRename`, and `codepol/previewRename` requests against the sessionized service boundary. Semantic navigation and hover now ship for `architecture_node` through explicit Codepol-owned custom RPC and command surfaces. Rename now has real closed-world namespaces for `config_component` target names in `codepol.toml` and workspace-package `domain_entity` names discovered from monorepo `package.json` files, both including prepare, preview, and apply through session-owned `WorkspaceEditPlan` execution over the existing `codepol.applyEditPlan` command surface. Standard `textDocument/definition`, `textDocument/references`, `textDocument/hover`, `textDocument/prepareRename`, and `textDocument/rename` remain unadvertised.
 
 ### Phase 5: CLI and tests migrate fully
 
@@ -1190,7 +1190,7 @@ Current status: the LSP server registers a client session, attaches a workspace,
 - [x] Add daemon-level tests for multi-client overlay isolation.
 - [x] Add adapter-level tests for LSP request/response mapping.
 
-Current status: in-process integration coverage now includes multi-client overlay isolation, session-scoped edit-plan ownership, per-session index-status transitions, explicit semantic navigation and hover coverage, and config-target rename prepare/preview/apply coverage; daemon and adapter regression coverage now also includes read-RPC freshness, read-request supersession, reconnect-driven status-progress behavior, shared-workspace reuse, watched invalidation, warm-start restore behavior, and rename-preview cancellation and stale-generation handling.
+Current status: in-process integration coverage now includes multi-client overlay isolation, session-scoped edit-plan ownership, per-session index-status transitions, explicit semantic navigation and hover coverage, config-target rename prepare/preview/apply coverage, workspace-package `domain_entity` rename prepare/preview/apply coverage, cross-file rename against overlays, diagnostics merged from native tree checks plus wrapped analyzers, and direct cancellation plus timeout degradation behavior at the shared service boundary; focused unit coverage now also exercises normalized feature-status/result helpers and freshness validators for overlay-aware read entrypoints; daemon and adapter regression coverage now also includes read-RPC freshness, read-request supersession, reconnect-driven status-progress behavior, shared-workspace reuse, watched invalidation, warm-start restore behavior, and rename-preview cancellation and stale-generation handling.
 
 ### Phase 6: extension RPC and richer features
 
@@ -1222,12 +1222,12 @@ Note on diagnostics and fixes: `WorkspaceDiagnostic` intentionally carries norma
 
 ## Test Coverage To Add
 
-- [ ] unit tests for normalized service result types and adapters
-- [ ] unit tests for overlay-aware analysis entrypoints
+- [x] unit tests for normalized service result types and adapters
+- [x] unit tests for overlay-aware analysis entrypoints
 - [x] integration tests for open buffer with unsaved changes
-- [ ] integration tests for cross-file rename against overlays
-- [ ] integration tests for diagnostics merged from native tree checks and wrapped linters
-- [ ] integration tests for cancellation and timeout behavior
+- [x] integration tests for cross-file rename against overlays
+- [x] integration tests for diagnostics merged from native tree checks and wrapped linters
+- [x] integration tests for cancellation and timeout behavior
 - [x] daemon tests for multi-client isolation
 - [x] daemon tests for workspace reuse
 - [x] daemon tests for cache invalidation

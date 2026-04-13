@@ -65,6 +65,91 @@ targets = ["workspace"]
 `;
 }
 
+function workspacePackageRootPackageJsonContentCreate(): string {
+  return `${JSON.stringify({ workspaces: ['packages/*', 'apps/*'] }, null, 2)}\n`;
+}
+
+function workspacePackageManifestContentCreate(name: string): string {
+  return `${JSON.stringify({ name, main: './dist/index.js' }, null, 2)}\n`;
+}
+
+function workspacePackageRenameFixtureCreate(
+  workspaceRoot: string,
+  options: {
+    packageName?: string;
+    appPackageName?: string;
+    exporterSource?: string;
+    importerSource?: string;
+  } = {},
+): {
+  configPath: string;
+  rootPackageJsonPath: string;
+  libPackageJsonPath: string;
+  libPackageJsonUri: string;
+  libPackageJsonSource: string;
+  libEntryPath: string;
+  libEntryUri: string;
+  appPackageJsonPath: string;
+  appPath: string;
+  appUri: string;
+  appSource: string;
+} {
+  const packageName = options.packageName ?? '@acme/lib';
+  const appPackageName = options.appPackageName ?? '@acme/web';
+  const exporterSource = options.exporterSource ?? 'export const sharedValue = 1;\n';
+  const appSource =
+    options.importerSource ??
+    `import { sharedValue } from '${packageName}';\nexport const value = sharedValue;\n`;
+
+  fs.mkdirSync(path.join(workspaceRoot, 'packages/lib/src'), { recursive: true });
+  fs.mkdirSync(path.join(workspaceRoot, 'apps/web/src'), { recursive: true });
+
+  const rootPackageJsonPath = path.join(workspaceRoot, 'package.json');
+  fs.writeFileSync(
+    rootPackageJsonPath,
+    workspacePackageRootPackageJsonContentCreate(),
+    'utf8',
+  );
+
+  const configPath = path.join(workspaceRoot, 'codepol.toml');
+  fs.writeFileSync(
+    configPath,
+    unusedExportsWorkspacePackagesConfigContentCreate(),
+    'utf8',
+  );
+
+  const libPackageJsonPath = path.join(workspaceRoot, 'packages/lib/package.json');
+  const libPackageJsonSource = workspacePackageManifestContentCreate(packageName);
+  fs.writeFileSync(libPackageJsonPath, libPackageJsonSource, 'utf8');
+
+  const appPackageJsonPath = path.join(workspaceRoot, 'apps/web/package.json');
+  fs.writeFileSync(
+    appPackageJsonPath,
+    workspacePackageManifestContentCreate(appPackageName),
+    'utf8',
+  );
+
+  const libEntryPath = path.join(workspaceRoot, 'packages/lib/src/index.ts');
+  fs.writeFileSync(libEntryPath, exporterSource, 'utf8');
+
+  const appPath = path.join(workspaceRoot, 'apps/web/src/app.ts');
+  fs.writeFileSync(appPath, appSource, 'utf8');
+
+  return {
+    configPath,
+    rootPackageJsonPath,
+    libPackageJsonPath,
+    libPackageJsonUri: workspacePathToUri(libPackageJsonPath),
+    libPackageJsonSource,
+    libEntryPath,
+    libEntryUri: workspacePathToUri(libEntryPath),
+    appPackageJsonPath,
+    appPath,
+    appUri: workspacePathToUri(appPath),
+    appSource,
+  };
+}
+
 function noUnusedVarsConfigContentCreate(): string {
   return `[[plugins]]
 id = "@codepol/plugin"
@@ -145,7 +230,12 @@ providers = ["biome"]
 `;
 }
 
-function processPluginConfigContentCreate(pluginScriptPath: string): string {
+function processPluginConfigContentCreate(
+  pluginScriptPath: string,
+  options: {
+    timeoutMs?: number;
+  } = {},
+): string {
   return `[[plugins]]
 id = "fixture/process-plugin"
 
@@ -153,7 +243,7 @@ id = "fixture/process-plugin"
 kind = "process"
 command = ${JSON.stringify(process.execPath)}
 args = [${JSON.stringify(pluginScriptPath)}]
-timeoutMs = 5000
+timeoutMs = ${options.timeoutMs ?? 5000}
 
 [targets.src]
 language = "typescript"
@@ -236,6 +326,46 @@ function mockBiomeDiagnosticScriptCreate(
     `#!/usr/bin/env node
 process.stdout.write(${JSON.stringify(JSON.stringify({ diagnostics: [diagnostic] }))});
 process.exit(0);
+`,
+    'utf8',
+  );
+  fs.chmodSync(biomeBin, 0o755);
+  return biomeBin;
+}
+
+function mockBiomeBlockingScriptCreate(
+  projectDir: string,
+  options: {
+    markerPath: string;
+    delayMs?: number;
+    fileName?: string;
+  },
+): string {
+  const biomeBin = path.join(
+    projectDir,
+    options.fileName ?? 'mock-biome-blocking.cjs',
+  );
+  fs.writeFileSync(
+    biomeBin,
+    `#!/usr/bin/env node
+const fs = require('node:fs');
+const markerPath = ${JSON.stringify(options.markerPath)};
+const delayMs = ${options.delayMs ?? 5000};
+let settled = false;
+fs.writeFileSync(markerPath, 'started', 'utf8');
+function finish(state) {
+  if (settled) {
+    return;
+  }
+  settled = true;
+  fs.writeFileSync(markerPath, state, 'utf8');
+  process.exit(state === 'aborted' ? 143 : 0);
+}
+process.on('SIGTERM', () => finish('aborted'));
+setTimeout(() => {
+  process.stdout.write(JSON.stringify({ diagnostics: [] }));
+  finish('completed');
+}, delayMs);
 `,
     'utf8',
   );
@@ -418,6 +548,98 @@ process.stdout.write(JSON.stringify({
   );
   fs.chmodSync(pluginPath, 0o755);
   return pluginPath;
+}
+
+function mockBlockingProcessPluginScriptCreate(
+  projectDir: string,
+  options: {
+    delayMs?: number;
+    fileName?: string;
+  } = {},
+): string {
+  const pluginPath = path.join(
+    projectDir,
+    options.fileName ?? 'mock-blocking-process-plugin.cjs',
+  );
+  fs.writeFileSync(
+    pluginPath,
+    `#!/usr/bin/env node
+const fs = require('node:fs');
+const delayMs = ${options.delayMs ?? 250};
+
+const request = JSON.parse(fs.readFileSync(0, 'utf8'));
+if (request.method === 'describe') {
+  process.stdout.write(JSON.stringify({
+    protocolVersion: 1,
+    ok: true,
+    result: {
+      pluginId: request.pluginId,
+      rules: [{ id: 'no-todo-comment', languages: ['typescript'] }],
+    },
+  }));
+  process.exit(0);
+}
+
+if (request.method === 'check') {
+  setTimeout(() => {
+    process.stdout.write(JSON.stringify({
+      protocolVersion: 1,
+      ok: true,
+      result: {
+        violations: [{
+          ruleId: request.ruleId,
+          filePath: request.context.filePath,
+          message: 'late TODO comment detected',
+          line: 1,
+          column: 1,
+        }],
+      },
+    }));
+    process.exit(0);
+  }, delayMs);
+  return;
+}
+
+process.stdout.write(JSON.stringify({
+  protocolVersion: 1,
+  ok: true,
+  result: {},
+}));
+`,
+    'utf8',
+  );
+  fs.chmodSync(pluginPath, 0o755);
+  return pluginPath;
+}
+
+async function fileContentsWaitFor(
+  filePath: string,
+  options: {
+    attempts?: number;
+    delayMs?: number;
+    expected?: string;
+  } = {},
+): Promise<string | undefined> {
+  const attempts = options.attempts ?? 40;
+  const delayMs = options.delayMs ?? 25;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const contents = fs.readFileSync(filePath, 'utf8');
+      if (options.expected === undefined || contents === options.expected) {
+        return contents;
+      }
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  try {
+    const contents = fs.readFileSync(filePath, 'utf8');
+    if (options.expected === undefined || contents === options.expected) {
+      return contents;
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function workspaceWatcherStubCreate(): {
@@ -1128,6 +1350,296 @@ demo();
         recentNativeDiagnosticCount: 0,
         recentWrappedDiagnosticCount: 1,
         fixSurfaceNotes: ['wrapped_external_fix:biome'],
+      }),
+    );
+  });
+
+  it('merges native tree diagnostics with wrapped analyzer diagnostics in one analysis result', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = workspacePathToUri(filePath);
+    fs.writeFileSync(filePath, 'export const value = 1;\n', 'utf8');
+
+    const pluginId = `test-merged-native-wrapped-${randomUUID()}`;
+    const nativeRuleId = 'native-merge';
+    const nativeResolvedRuleId = `${pluginId}/${nativeRuleId}`;
+    const wrappedRuleId = 'wrapped-merge';
+    const wrappedResolvedRuleId = `${pluginId}/${wrappedRuleId}`;
+    const wrappedDiagnosticCode = 'lint/mock/wrapped-merge';
+    const biomeBin = mockBiomeDiagnosticScriptCreate(workspaceRoot, {
+      fileName: 'mock-biome-merged-native-wrapped.cjs',
+      diagnostic: {
+        code: wrappedDiagnosticCode,
+        filePath,
+        message: 'wrapped merge diagnostic',
+      },
+    });
+    pluginModuleRegister(pluginId, {
+      default: [
+        pluginRuleNew({
+          id: nativeRuleId,
+          capabilities: {
+            treeCheckProvider: treeCheckProviderNew({
+              languages: ['typescript'],
+              check: () => [
+                {
+                  ruleId: nativeResolvedRuleId,
+                  filePath,
+                  message: 'native merge diagnostic',
+                  line: 1,
+                  column: 1,
+                },
+              ],
+            }),
+          },
+        }),
+        pluginRuleNew({
+          id: wrappedRuleId,
+          capabilities: {
+            lintProviders: [
+              {
+                platform: 'biome',
+                languages: ['typescript'],
+                config: {
+                  biomeBin,
+                },
+              },
+            ],
+          },
+        }),
+      ],
+    });
+
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(
+      configPath,
+      `[[plugins]]
+id = "${pluginId}"
+source = { kind = "builtin" }
+
+[targets.src]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[[rules]]
+ruleId = "${nativeResolvedRuleId}"
+targets = ["src"]
+
+[[rules]]
+ruleId = "${wrappedResolvedRuleId}"
+targets = ["src"]
+`,
+      'utf8',
+    );
+
+    const engine = new WorkspaceServiceEngine();
+    const service = workspaceServiceCreate({ engine });
+    const attached = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'merged-native-wrapped-client',
+    });
+
+    const diagnostics = await service.queryDiagnostics({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      uri,
+    });
+    expect(diagnostics).toHaveLength(2);
+    expect(diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: 'codepol',
+          code: nativeResolvedRuleId,
+          message: 'native merge diagnostic',
+        }),
+        expect.objectContaining({
+          source: 'biome',
+          code: wrappedDiagnosticCode,
+          message: 'wrapped merge diagnostic',
+        }),
+      ]),
+    );
+
+    const scorecard = analyzerScorecardGet(engine, {
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+    });
+    expect(scorecard).toContainEqual(
+      expect.objectContaining({
+        analyzerId: 'codepol/tree',
+        platform: 'codepol_tree',
+        status: 'ran',
+        ownedRuleIds: [nativeResolvedRuleId],
+      }),
+    );
+    expect(scorecard).toContainEqual(
+      expect.objectContaining({
+        analyzerId: 'biome',
+        platform: 'biome',
+        status: 'ran',
+        ownedRuleIds: [wrappedResolvedRuleId],
+        skippedRuleIds: [],
+      }),
+    );
+    expect(
+      analyzerInventoryGet(engine, {
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+      }),
+    ).toContainEqual(
+      expect.objectContaining({
+        ruleId: wrappedResolvedRuleId,
+        ownership: 'keep_wrapped',
+        recentNativeDiagnosticCount: 0,
+        recentWrappedDiagnosticCount: 1,
+        wrappedPlatforms: ['biome'],
+      }),
+    );
+  });
+
+  it('cancels a long-running diagnostics query and aborts the wrapped analyzer process', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = workspacePathToUri(filePath);
+    fs.writeFileSync(filePath, 'export const value = 1;\n', 'utf8');
+
+    const markerPath = path.join(workspaceRoot, 'biome-abort-marker.txt');
+    const biomeBin = mockBiomeBlockingScriptCreate(workspaceRoot, {
+      markerPath,
+      fileName: 'mock-biome-cancel-integration.cjs',
+    });
+
+    const pluginId = `service-cancel-biome-${randomUUID()}`;
+    const ruleId = 'blocking-biome';
+    pluginModuleRegister(pluginId, {
+      default: [
+        pluginRuleNew({
+          id: ruleId,
+          capabilities: {
+            lintProviders: [
+              {
+                platform: 'biome',
+                languages: ['typescript'],
+                config: {
+                  biomeBin,
+                },
+              },
+            ],
+          },
+        }),
+      ],
+    });
+
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(
+      configPath,
+      pluginRuleConfigContentCreate({ pluginId, ruleId }),
+      'utf8',
+    );
+
+    const service = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine(),
+    });
+    const attached = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'service-cancel-biome-client',
+    });
+
+    const controller = new AbortController();
+    const diagnosticsPromise = service.queryDiagnostics({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      uri,
+      signal: controller.signal,
+    });
+
+    await expect(
+      fileContentsWaitFor(markerPath, {
+        expected: 'started',
+      }),
+    ).resolves.toBe('started');
+
+    controller.abort();
+
+    await expect(diagnosticsPromise).rejects.toThrow(/aborted|cancelled/i);
+    await expect(
+      fileContentsWaitFor(markerPath, {
+        expected: 'aborted',
+      }),
+    ).resolves.toBe('aborted');
+  });
+
+  it('degrades diagnostics when a process plugin tree check times out', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+
+    const pluginPath = mockBlockingProcessPluginScriptCreate(workspaceRoot, {
+      delayMs: 1000,
+    });
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(
+      configPath,
+      processPluginConfigContentCreate(pluginPath, {
+        timeoutMs: 250,
+      }),
+      'utf8',
+    );
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = workspacePathToUri(filePath);
+    fs.writeFileSync(filePath, '// TODO fix\nexport const value = 1;\n', 'utf8');
+
+    const engine = new WorkspaceServiceEngine();
+    const service = workspaceServiceCreate({ engine });
+    const attached = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'process-plugin-timeout-client',
+    });
+
+    expect(
+      await service.queryDiagnostics({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        uri,
+      }),
+    ).toEqual([]);
+    expect(
+      await service.queryIndexStatus({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+      }),
+    ).toMatchObject({
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+      status: 'ready',
+      featureStatus: {
+        diagnostics: {
+          readiness: 'degraded',
+          detail: expect.stringContaining('ETIMEDOUT'),
+        },
+      },
+    });
+
+    const scorecard = analyzerScorecardGet(engine, {
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+    });
+    expect(scorecard).toContainEqual(
+      expect.objectContaining({
+        analyzerId: 'codepol/tree',
+        platform: 'codepol_tree',
+        status: 'failed',
+        issues: [expect.stringContaining('ETIMEDOUT')],
       }),
     );
   });
@@ -2464,6 +2976,596 @@ demo();
         targetId: 'target:src',
       },
       newName: 'app-src',
+    });
+    expect(preview.ok).toBe(true);
+    if (!preview.ok || !preview.plan) {
+      throw new Error('Expected executable rename plan');
+    }
+
+    expect(
+      await service.applyEditPlan({
+        clientSessionId: clientA.clientSessionId,
+        workspaceId: clientA.workspaceId,
+        planId: preview.plan.id,
+        documentVersions: {},
+      }),
+    ).toEqual({
+      applied: false,
+      failureReason: 'plan_not_found',
+    });
+  });
+
+  it('prepares and previews workspace package rename across manifests and imports', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    createdDirs.push(workspaceRoot);
+    const fixture = workspacePackageRenameFixtureCreate(workspaceRoot);
+
+    const service = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine(),
+    });
+    const attached = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath: fixture.configPath,
+      clientKind: 'lsp',
+      clientInstanceId: 'workspace-package-rename-client',
+    });
+
+    expect(
+      await service.prepareRename({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        target: {
+          semanticClass: 'domain_entity',
+          targetId: 'package:@acme/lib',
+        },
+      }),
+    ).toEqual({
+      ok: true,
+      target: {
+        semanticClass: 'domain_entity',
+        targetId: 'package:@acme/lib',
+      },
+      displayName: '@acme/lib',
+      currentName: '@acme/lib',
+      normalizedCurrentName: '@acme/lib',
+      namespaceId: `workspace.packages:${workspacePathToUri(workspaceRoot)}`,
+      declarationLocation: {
+        uri: fixture.libPackageJsonUri,
+        range: {
+          start: { line: 1, character: 11 },
+          end: { line: 1, character: 20 },
+        },
+      },
+      placeholderRange: {
+        start: { line: 1, character: 11 },
+        end: { line: 1, character: 20 },
+      },
+      impactedSiteCount: 2,
+      requiresPreview: true,
+      namingRules: {
+        minLength: 1,
+        patternDescription: 'npm package name (lowercase, optional @scope/name)',
+      },
+    });
+
+    expect(
+      await service.previewRename({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        target: {
+          semanticClass: 'domain_entity',
+          targetId: 'package:@acme/lib',
+        },
+        newName: '@acme/lib-renamed',
+      }),
+    ).toEqual({
+      ok: true,
+      target: {
+        semanticClass: 'domain_entity',
+        targetId: 'package:@acme/lib',
+      },
+      oldName: '@acme/lib',
+      newName: '@acme/lib-renamed',
+      normalizedNewName: '@acme/lib-renamed',
+      namespaceId: `workspace.packages:${workspacePathToUri(workspaceRoot)}`,
+      groups: [
+        {
+          group: 'declarations',
+          edits: [
+            {
+              uri: fixture.libPackageJsonUri,
+              range: {
+                start: { line: 1, character: 11 },
+                end: { line: 1, character: 20 },
+              },
+              oldText: '@acme/lib',
+              newText: '@acme/lib-renamed',
+              kind: 'declaration',
+              semanticClass: 'domain_entity',
+              targetId: 'package:@acme/lib',
+            },
+          ],
+        },
+        {
+          group: 'references',
+          edits: [
+            {
+              uri: fixture.appUri,
+              range: {
+                start: { line: 0, character: 29 },
+                end: { line: 0, character: 38 },
+              },
+              oldText: '@acme/lib',
+              newText: '@acme/lib-renamed',
+              kind: 'reference',
+              semanticClass: 'domain_entity',
+              targetId: 'package:@acme/lib',
+            },
+          ],
+        },
+      ],
+      totalEdits: 2,
+      warnings: [],
+      blockingIssues: [],
+      canApply: true,
+      plan: expect.objectContaining({
+        id: expect.any(String),
+        title: 'Rename workspace package "@acme/lib" to "@acme/lib-renamed"',
+        kind: 'rename',
+        edits: [
+          {
+            uri: fixture.libPackageJsonUri,
+            range: {
+              start: { line: 1, character: 11 },
+              end: { line: 1, character: 20 },
+            },
+            newText: '@acme/lib-renamed',
+          },
+          {
+            uri: fixture.appUri,
+            range: {
+              start: { line: 0, character: 29 },
+              end: { line: 0, character: 38 },
+            },
+            newText: '@acme/lib-renamed',
+          },
+        ],
+        diagnosticIds: [],
+        execution: {
+          intent: 'rename',
+          mode: 'preview_then_apply',
+          stalePlanPolicy: 'reject',
+          atomicity: 'all_or_nothing',
+          details: {
+            kind: 'rename',
+            targetId: 'package:@acme/lib',
+            oldName: '@acme/lib',
+            newName: '@acme/lib-renamed',
+          },
+        },
+      }),
+    });
+  });
+
+  it('blocks colliding workspace package rename previews and rejects invalid new names', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    createdDirs.push(workspaceRoot);
+    const fixture = workspacePackageRenameFixtureCreate(workspaceRoot);
+
+    fs.mkdirSync(path.join(workspaceRoot, 'packages/other/src'), { recursive: true });
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'packages/other/package.json'),
+      workspacePackageManifestContentCreate('@acme/lib-next'),
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'packages/other/src/index.ts'),
+      'export const otherValue = 1;\n',
+      'utf8',
+    );
+
+    const service = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine(),
+    });
+    const attached = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath: fixture.configPath,
+      clientKind: 'lsp',
+      clientInstanceId: 'collision-workspace-package-rename-client',
+    });
+
+    const collisionPreview = await service.previewRename({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      target: {
+        semanticClass: 'domain_entity',
+        targetId: 'package:@acme/lib',
+      },
+      newName: '@acme/lib-next',
+    });
+    expect(collisionPreview).toMatchObject({
+      ok: true,
+      target: {
+        semanticClass: 'domain_entity',
+        targetId: 'package:@acme/lib',
+      },
+      oldName: '@acme/lib',
+      newName: '@acme/lib-next',
+      normalizedNewName: '@acme/lib-next',
+      totalEdits: 2,
+      canApply: false,
+      blockingIssues: [
+        {
+          code: 'collision',
+        },
+      ],
+    });
+    if (collisionPreview.ok) {
+      expect(collisionPreview.plan).toBeUndefined();
+    }
+
+    await expect(
+      service.previewRename({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        target: {
+          semanticClass: 'domain_entity',
+          targetId: 'package:@acme/lib',
+        },
+        newName: '   ',
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      code: 'validation_failed',
+      message: 'Workspace package rename must not be empty.',
+    });
+
+    await expect(
+      service.previewRename({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        target: {
+          semanticClass: 'domain_entity',
+          targetId: 'package:@acme/lib',
+        },
+        newName: '@Acme/Lib',
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      code: 'validation_failed',
+      message:
+        'Workspace package rename must match npm package name (lowercase, optional @scope/name).',
+    });
+
+    await expect(
+      service.previewRename({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        target: {
+          semanticClass: 'domain_entity',
+          targetId: 'package:@acme/lib',
+        },
+        newName: '@acme/lib',
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      code: 'validation_failed',
+      message: 'Workspace package rename is unchanged after normalization.',
+    });
+  });
+
+  it('keeps workspace package rename overlay-aware across files and rejects stale analysisGeneration', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    createdDirs.push(workspaceRoot);
+    const fixture = workspacePackageRenameFixtureCreate(workspaceRoot);
+
+    const service = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine(),
+    });
+    const attached = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath: fixture.configPath,
+      clientKind: 'lsp',
+      clientInstanceId: 'overlay-workspace-package-rename-client',
+    });
+
+    const initialStatus = await service.queryIndexStatus({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+    });
+
+    expect(
+      await service.prepareRename({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        target: {
+          semanticClass: 'domain_entity',
+          targetId: 'package:@acme/lib',
+        },
+      }),
+    ).toMatchObject({
+      ok: true,
+      currentName: '@acme/lib',
+      impactedSiteCount: 2,
+    });
+
+    const overlayLibPackageJsonSource =
+      workspacePackageManifestContentCreate('@acme/lib-overlay');
+    const overlayAppSource =
+      "import { sharedValue } from '@acme/lib-overlay';\nexport const value = sharedValue;\n";
+
+    await service.openOverlay({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      uri: fixture.libPackageJsonUri,
+      version: 1,
+      text: overlayLibPackageJsonSource,
+    });
+    await service.openOverlay({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      uri: fixture.appUri,
+      version: 1,
+      text: overlayAppSource,
+    });
+
+    expect(
+      await service.prepareRename({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        target: {
+          semanticClass: 'domain_entity',
+          targetId: 'package:@acme/lib',
+        },
+      }),
+    ).toEqual({
+      ok: false,
+      code: 'unsupported_context',
+      message:
+        'Workspace package package:@acme/lib is not defined in the active workspace package registry.',
+    });
+
+    expect(
+      await service.prepareRename({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        target: {
+          semanticClass: 'domain_entity',
+          targetId: 'package:@acme/lib-overlay',
+        },
+      }),
+    ).toMatchObject({
+      ok: true,
+      currentName: '@acme/lib-overlay',
+      impactedSiteCount: 2,
+    });
+
+    expect(
+      await service.previewRename({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        target: {
+          semanticClass: 'domain_entity',
+          targetId: 'package:@acme/lib-overlay',
+        },
+        newName: '@acme/lib-final',
+      }),
+    ).toMatchObject({
+      ok: true,
+      oldName: '@acme/lib-overlay',
+      newName: '@acme/lib-final',
+      totalEdits: 2,
+      canApply: true,
+    });
+
+    await service.queryDiagnostics({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      uri: fixture.libEntryUri,
+    });
+
+    const refreshedStatus = await service.queryIndexStatus({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+    });
+    expect(refreshedStatus.analysisGeneration).toBeGreaterThan(initialStatus.analysisGeneration);
+
+    await expect(
+      service.previewRename({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        target: {
+          semanticClass: 'domain_entity',
+          targetId: 'package:@acme/lib-overlay',
+        },
+        newName: '@acme/lib-final',
+        analysisGeneration: initialStatus.analysisGeneration,
+      }),
+    ).rejects.toThrow(
+      `Analysis generation mismatch: expected ${refreshedStatus.analysisGeneration}, received ${initialStatus.analysisGeneration}`,
+    );
+  });
+
+  it('returns executable workspace package rename plans and applies them within the originating session', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    createdDirs.push(workspaceRoot);
+    const fixture = workspacePackageRenameFixtureCreate(workspaceRoot);
+
+    const service = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine(),
+    });
+    const attached = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath: fixture.configPath,
+      clientKind: 'lsp',
+      clientInstanceId: 'rename-apply-workspace-package-client',
+    });
+
+    await service.openOverlay({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      uri: fixture.libPackageJsonUri,
+      version: 1,
+      text: fixture.libPackageJsonSource,
+    });
+    await service.openOverlay({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      uri: fixture.appUri,
+      version: 1,
+      text: fixture.appSource,
+    });
+
+    const preview = await service.previewRename({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      target: {
+        semanticClass: 'domain_entity',
+        targetId: 'package:@acme/lib',
+      },
+      newName: '@acme/lib-renamed',
+    });
+
+    expect(preview).toMatchObject({
+      ok: true,
+      canApply: true,
+      totalEdits: 2,
+      plan: {
+        kind: 'rename',
+        title: 'Rename workspace package "@acme/lib" to "@acme/lib-renamed"',
+        diagnosticIds: [],
+        execution: {
+          intent: 'rename',
+          mode: 'preview_then_apply',
+          stalePlanPolicy: 'reject',
+          atomicity: 'all_or_nothing',
+          details: {
+            kind: 'rename',
+            targetId: 'package:@acme/lib',
+            oldName: '@acme/lib',
+            newName: '@acme/lib-renamed',
+          },
+        },
+      },
+    });
+    expect(preview.ok).toBe(true);
+    if (!preview.ok || !preview.plan) {
+      throw new Error('Expected executable rename plan');
+    }
+
+    expect(
+      await service.applyEditPlan({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        planId: preview.plan.id,
+        documentVersions: {
+          [fixture.libPackageJsonUri]: 1,
+          [fixture.appUri]: 1,
+        },
+      }),
+    ).toEqual({
+      applied: true,
+      plan: preview.plan,
+    });
+  });
+
+  it('rejects stale workspace package rename plans after overlay changes', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    createdDirs.push(workspaceRoot);
+    const fixture = workspacePackageRenameFixtureCreate(workspaceRoot);
+
+    const service = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine(),
+    });
+    const attached = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath: fixture.configPath,
+      clientKind: 'lsp',
+      clientInstanceId: 'stale-rename-apply-workspace-package-client',
+    });
+
+    await service.openOverlay({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      uri: fixture.libPackageJsonUri,
+      version: 1,
+      text: fixture.libPackageJsonSource,
+    });
+    await service.openOverlay({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      uri: fixture.appUri,
+      version: 1,
+      text: fixture.appSource,
+    });
+
+    const preview = await service.previewRename({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      target: {
+        semanticClass: 'domain_entity',
+        targetId: 'package:@acme/lib',
+      },
+      newName: '@acme/lib-renamed',
+    });
+    expect(preview.ok).toBe(true);
+    if (!preview.ok || !preview.plan) {
+      throw new Error('Expected executable rename plan');
+    }
+
+    await service.updateOverlay({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      uri: fixture.appUri,
+      version: 2,
+      text: `${fixture.appSource}// stale preview\n`,
+    });
+
+    expect(
+      await service.applyEditPlan({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        planId: preview.plan.id,
+        documentVersions: {
+          [fixture.libPackageJsonUri]: 1,
+          [fixture.appUri]: 1,
+        },
+      }),
+    ).toEqual({
+      applied: false,
+      failureReason: 'stale_document_version',
+    });
+  });
+
+  it('keeps workspace package rename plans session-owned', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    createdDirs.push(workspaceRoot);
+    const fixture = workspacePackageRenameFixtureCreate(workspaceRoot);
+
+    const service = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine(),
+    });
+    const clientA = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath: fixture.configPath,
+      clientKind: 'lsp',
+      clientInstanceId: 'workspace-package-rename-plan-client-a',
+    });
+    const clientB = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath: fixture.configPath,
+      clientKind: 'lsp',
+      clientInstanceId: 'workspace-package-rename-plan-client-b',
+    });
+
+    const preview = await service.previewRename({
+      clientSessionId: clientB.clientSessionId,
+      workspaceId: clientB.workspaceId,
+      target: {
+        semanticClass: 'domain_entity',
+        targetId: 'package:@acme/lib',
+      },
+      newName: '@acme/lib-renamed',
     });
     expect(preview.ok).toBe(true);
     if (!preview.ok || !preview.plan) {

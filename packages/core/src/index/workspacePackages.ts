@@ -10,6 +10,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import fg from 'fast-glob';
 
+export type WorkspacePackageRecord = {
+  name: string;
+  packageJsonPath: string;
+  entryPointPath: string;
+};
+
 /**
  * Discover all workspace packages and map each package name to the
  * absolute path of its source entry-point file.
@@ -27,10 +33,19 @@ import fg from 'fast-glob';
 export function workspacePackageMapDiscover(
   rootDir: string,
 ): Map<string, string> {
-  const result = new Map<string, string>();
+  return workspacePackageMapCreate(workspacePackageRecordsDiscover(rootDir));
+}
+
+/**
+ * Discover all workspace packages with their manifest and entry-point paths.
+ */
+export function workspacePackageRecordsDiscover(
+  rootDir: string,
+): WorkspacePackageRecord[] {
+  const records: WorkspacePackageRecord[] = [];
 
   const patterns = workspacePatternsRead(rootDir);
-  if (patterns.length === 0) return result;
+  if (patterns.length === 0) return records;
 
   const pkgJsonGlobs = patterns.map(p => path.posix.join(p, 'package.json'));
   const pkgJsonPaths = fg.sync(pkgJsonGlobs, {
@@ -42,13 +57,9 @@ export function workspacePackageMapDiscover(
   for (const pkgJsonPath of pkgJsonPaths) {
     try {
       const raw = fs.readFileSync(pkgJsonPath, 'utf8');
-      const pkg = JSON.parse(raw) as Record<string, unknown>;
-      const name = pkg.name;
-      if (typeof name !== 'string') continue;
-
-      const entryPoint = packageSourceEntryPoint(pkgJsonPath, pkg);
-      if (entryPoint) {
-        result.set(name, entryPoint);
+      const record = workspacePackageRecordFromManifestSource(pkgJsonPath, raw);
+      if (record) {
+        records.push(record);
       }
     } catch {
       // Skip unreadable / unparseable package.json files
@@ -56,6 +67,43 @@ export function workspacePackageMapDiscover(
     }
   }
 
+  return records.sort((left, right) =>
+    left.packageJsonPath.localeCompare(right.packageJsonPath),
+  );
+}
+
+/**
+ * Parse one workspace package manifest into a normalized package record.
+ */
+export function workspacePackageRecordFromManifestSource(
+  pkgJsonPath: string,
+  source: string,
+): WorkspacePackageRecord | undefined {
+  const pkg = JSON.parse(source) as Record<string, unknown>;
+  const name = pkg.name;
+  if (typeof name !== 'string') {
+    return undefined;
+  }
+
+  const entryPoint = packageSourceEntryPoint(pkgJsonPath, pkg);
+  if (!entryPoint) {
+    return undefined;
+  }
+
+  return {
+    name,
+    packageJsonPath: path.resolve(pkgJsonPath),
+    entryPointPath: entryPoint,
+  };
+}
+
+export function workspacePackageMapCreate(
+  records: WorkspacePackageRecord[],
+): Map<string, string> {
+  const result = new Map<string, string>();
+  for (const record of records) {
+    result.set(record.name, record.entryPointPath);
+  }
   return result;
 }
 

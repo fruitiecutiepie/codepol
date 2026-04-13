@@ -57,6 +57,88 @@ targets = ["src"]
 `;
 }
 
+function unusedExportsWorkspacePackagesConfigContentCreate(): string {
+  return `[[plugins]]
+id = "@codepol/plugin"
+source = { kind = "builtin" }
+
+[targets.workspace]
+language = "typescript"
+files = ["packages/*/src/**/*.ts", "apps/*/src/**/*.ts"]
+
+[[rules]]
+ruleId = "@codepol/plugin/no-unused-exports"
+targets = ["workspace"]
+`;
+}
+
+function workspacePackageRootPackageJsonContentCreate(): string {
+  return `${JSON.stringify({ workspaces: ['packages/*', 'apps/*'] }, null, 2)}\n`;
+}
+
+function workspacePackageManifestContentCreate(name: string): string {
+  return `${JSON.stringify({ name, main: './dist/index.js' }, null, 2)}\n`;
+}
+
+function workspacePackageRenameFixtureCreate(
+  workspaceRoot: string,
+  options: {
+    packageName?: string;
+    appPackageName?: string;
+    exporterSource?: string;
+    importerSource?: string;
+  } = {},
+): {
+  libPackageJsonPath: string;
+  libPackageJsonSource: string;
+  appPath: string;
+  appSource: string;
+} {
+  const packageName = options.packageName ?? '@acme/lib';
+  const appPackageName = options.appPackageName ?? '@acme/web';
+  const exporterSource = options.exporterSource ?? 'export const sharedValue = 1;\n';
+  const appSource =
+    options.importerSource ??
+    `import { sharedValue } from '${packageName}';\nexport const value = sharedValue;\n`;
+
+  fs.mkdirSync(path.join(workspaceRoot, 'packages/lib/src'), { recursive: true });
+  fs.mkdirSync(path.join(workspaceRoot, 'apps/web/src'), { recursive: true });
+
+  fs.writeFileSync(
+    path.join(workspaceRoot, 'package.json'),
+    workspacePackageRootPackageJsonContentCreate(),
+    'utf8',
+  );
+  fs.writeFileSync(
+    path.join(workspaceRoot, 'codepol.toml'),
+    unusedExportsWorkspacePackagesConfigContentCreate(),
+    'utf8',
+  );
+
+  const libPackageJsonPath = path.join(workspaceRoot, 'packages/lib/package.json');
+  const libPackageJsonSource = workspacePackageManifestContentCreate(packageName);
+  fs.writeFileSync(libPackageJsonPath, libPackageJsonSource, 'utf8');
+  fs.writeFileSync(
+    path.join(workspaceRoot, 'apps/web/package.json'),
+    workspacePackageManifestContentCreate(appPackageName),
+    'utf8',
+  );
+  fs.writeFileSync(
+    path.join(workspaceRoot, 'packages/lib/src/index.ts'),
+    exporterSource,
+    'utf8',
+  );
+  const appPath = path.join(workspaceRoot, 'apps/web/src/app.ts');
+  fs.writeFileSync(appPath, appSource, 'utf8');
+
+  return {
+    libPackageJsonPath,
+    libPackageJsonSource,
+    appPath,
+    appSource,
+  };
+}
+
 function daemonClientIdentityCreate(instanceId: string) {
   return {
     kind: 'test',
@@ -3537,6 +3619,161 @@ describe('CodepolLspServer', () => {
     await executePromise;
 
     const executeResponse = messages.find((message) => message.id === 3);
+    expect(executeResponse?.result).toBeNull();
+  });
+
+  it('prepares and previews workspace package rename and applies it through workspace/applyEdit', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');
+    createdDirs.push(workspaceRoot);
+    const fixture = workspacePackageRenameFixtureCreate(workspaceRoot);
+    const libPackageJsonUri = pathToFileURL(fixture.libPackageJsonPath).href;
+    const appUri = pathToFileURL(fixture.appPath).href;
+
+    const messages: any[] = [];
+    const server = new CodepolLspServer({
+      sendMessage: (message) => {
+        messages.push(message);
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        rootUri: pathToFileURL(workspaceRoot).href,
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      method: 'textDocument/didOpen',
+      params: {
+        textDocument: {
+          uri: libPackageJsonUri,
+          version: 1,
+          text: fixture.libPackageJsonSource,
+        },
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      method: 'textDocument/didOpen',
+      params: {
+        textDocument: {
+          uri: appUri,
+          version: 1,
+          text: fixture.appSource,
+        },
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'codepol/prepareRename',
+      params: {
+        target: {
+          semanticClass: 'domain_entity',
+          targetId: 'package:@acme/lib',
+        },
+      },
+    });
+
+    const prepareResponse = messages.find((message) => message.id === 2);
+    expect(prepareResponse?.result).toMatchObject({
+      ok: true,
+      target: {
+        semanticClass: 'domain_entity',
+        targetId: 'package:@acme/lib',
+      },
+      currentName: '@acme/lib',
+      impactedSiteCount: 2,
+      declarationLocation: {
+        uri: libPackageJsonUri,
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 3,
+      method: 'codepol/previewRename',
+      params: {
+        target: {
+          semanticClass: 'domain_entity',
+          targetId: 'package:@acme/lib',
+        },
+        newName: '@acme/lib-renamed',
+      },
+    });
+
+    const previewResponse = messages.find((message) => message.id === 3);
+    expect(previewResponse?.result).toMatchObject({
+      ok: true,
+      canApply: true,
+      totalEdits: 2,
+      plan: {
+        kind: 'rename',
+        title: 'Rename workspace package "@acme/lib" to "@acme/lib-renamed"',
+        execution: {
+          intent: 'rename',
+          mode: 'preview_then_apply',
+          stalePlanPolicy: 'reject',
+          atomicity: 'all_or_nothing',
+          details: {
+            kind: 'rename',
+            targetId: 'package:@acme/lib',
+            oldName: '@acme/lib',
+            newName: '@acme/lib-renamed',
+          },
+        },
+      },
+    });
+
+    const executePromise = server.handleMessage({
+      jsonrpc: '2.0',
+      id: 4,
+      method: 'workspace/executeCommand',
+      params: {
+        command: 'codepol.applyEditPlan',
+        arguments: [{ planId: previewResponse.result.plan.id }],
+      },
+    });
+
+    const applyEditRequest = await messageWaitFor(
+      messages,
+      (message) =>
+        message.method === 'workspace/applyEdit' &&
+        message.params?.label === 'Rename workspace package "@acme/lib" to "@acme/lib-renamed"',
+    );
+    expect(applyEditRequest?.params.edit.changes[libPackageJsonUri]).toEqual([
+      {
+        range: {
+          start: { line: 1, character: 11 },
+          end: { line: 1, character: 20 },
+        },
+        newText: '@acme/lib-renamed',
+      },
+    ]);
+    expect(applyEditRequest?.params.edit.changes[appUri]).toEqual([
+      {
+        range: {
+          start: { line: 0, character: 29 },
+          end: { line: 0, character: 38 },
+        },
+        newText: '@acme/lib-renamed',
+      },
+    ]);
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: applyEditRequest.id,
+      result: { applied: true },
+    });
+    await executePromise;
+
+    const executeResponse = messages.find((message) => message.id === 4);
     expect(executeResponse?.result).toBeNull();
   });
 
