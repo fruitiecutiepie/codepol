@@ -10,6 +10,8 @@ import {
 } from 'vscode-languageclient/node';
 import type {
   IndexStatusResult,
+  WorkspaceArchitectureSummaryResult,
+  WorkspaceDependencyGraphResult,
   WorkspacePrepareRenameResult,
   WorkspaceRenamePreviewResult,
   WorkspaceRenameTarget,
@@ -20,6 +22,8 @@ import type {
 } from '@codepol/core';
 import {
   CODEPOL_LSP_COMMAND_APPLY_EDIT_PLAN,
+  CODEPOL_LSP_REQUEST_ARCHITECTURE_SUMMARY,
+  CODEPOL_LSP_REQUEST_DEPENDENCY_GRAPH,
   CODEPOL_LSP_REQUEST_INDEX_STATUS,
   CODEPOL_LSP_REQUEST_PREPARE_RENAME,
   CODEPOL_LSP_REQUEST_PREVIEW_RENAME,
@@ -35,6 +39,8 @@ export type CodepolProtocolClient = {
   start(): Promise<void>;
   stop(): Promise<void>;
   queryIndexStatus(): Promise<IndexStatusResult | null>;
+  queryArchitectureSummary(): Promise<WorkspaceArchitectureSummaryResult | null>;
+  queryDependencyGraph(): Promise<WorkspaceDependencyGraphResult | null>;
   querySemanticSearch(query: string): Promise<WorkspaceSearchResult[] | null>;
   querySemanticDefinition(uri: string): Promise<WorkspaceSemanticDefinitionResult | null>;
   querySemanticReferences(uri: string): Promise<WorkspaceSemanticReferencesResult | null>;
@@ -92,6 +98,18 @@ export class VscodeLanguageClientProtocol implements CodepolProtocolClient {
   async queryIndexStatus(): Promise<IndexStatusResult | null> {
     return this.client.sendRequest<IndexStatusResult | null>(
       CODEPOL_LSP_REQUEST_INDEX_STATUS,
+    );
+  }
+
+  async queryArchitectureSummary(): Promise<WorkspaceArchitectureSummaryResult | null> {
+    return this.client.sendRequest<WorkspaceArchitectureSummaryResult | null>(
+      CODEPOL_LSP_REQUEST_ARCHITECTURE_SUMMARY,
+    );
+  }
+
+  async queryDependencyGraph(): Promise<WorkspaceDependencyGraphResult | null> {
+    return this.client.sendRequest<WorkspaceDependencyGraphResult | null>(
+      CODEPOL_LSP_REQUEST_DEPENDENCY_GRAPH,
     );
   }
 

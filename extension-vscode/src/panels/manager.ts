@@ -2,16 +2,20 @@ import { randomBytes } from 'node:crypto';
 import * as vscode from 'vscode';
 import {
   CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_LINKS,
-  CODEPOL_EXTENSION_COMMAND_SHOW_SEMANTIC_DEFINITION,
+  CODEPOL_EXTENSION_PANEL_ARCHITECTURE_SUMMARY,
   CODEPOL_EXTENSION_PANEL_ARCHITECTURE_LINKS,
+  CODEPOL_EXTENSION_PANEL_DEPENDENCY_GRAPH,
   CODEPOL_EXTENSION_PANEL_RENAME_PREVIEW,
   CODEPOL_EXTENSION_PANEL_SEMANTIC_DEFINITION,
 } from '../constants';
 import type {
+  ArchitectureLinksPanelViewModel,
+  ArchitectureSummaryPanelViewModel,
+  DependencyGraphPanelViewModel,
   RenamePreviewPanelViewModel,
   SemanticDefinitionPanelViewModel,
-  SemanticReferencesPanelViewModel,
 } from '../viewModels';
+import { codepolHoverActionCommandResolve } from './messages';
 import { codepolPanelHtmlRender, type CodepolPanelViewModel } from './render';
 
 type CodepolPanelMessage =
@@ -31,7 +35,12 @@ type CodepolPanelMessage =
       planId?: string;
     };
 
-type PanelKind = 'semanticDefinition' | 'architectureLinks' | 'renamePreview';
+type PanelKind =
+  | 'semanticDefinition'
+  | 'architectureSummary'
+  | 'dependencyGraph'
+  | 'architectureLinks'
+  | 'renamePreview';
 
 export type CodepolPanelActions = {
   openLocation(input: {
@@ -40,7 +49,7 @@ export type CodepolPanelActions = {
     character: number;
   }): Promise<void>;
   applyEditPlan(planId: string): Promise<void>;
-  executeCommand(command: string, uri: string): Promise<void>;
+  executeCommand(command: string, uri?: string): Promise<void>;
 };
 
 type ManagedPanel = {
@@ -69,7 +78,23 @@ export class CodepolPanelManager implements vscode.Disposable {
     });
   }
 
-  showArchitectureLinks(model: SemanticReferencesPanelViewModel): void {
+  showArchitectureSummary(model: ArchitectureSummaryPanelViewModel): void {
+    this.panelShow('architectureSummary', {
+      kind: 'architectureSummary',
+      title: 'Codepol: Architecture Summary',
+      data: model,
+    });
+  }
+
+  showDependencyGraph(model: DependencyGraphPanelViewModel): void {
+    this.panelShow('dependencyGraph', {
+      kind: 'dependencyGraph',
+      title: 'Codepol: Dependency Graph',
+      data: model,
+    });
+  }
+
+  showArchitectureLinks(model: ArchitectureLinksPanelViewModel): void {
     this.panelShow('architectureLinks', {
       kind: 'architectureLinks',
       title: 'Codepol: Architecture Links',
@@ -102,6 +127,10 @@ export class CodepolPanelManager implements vscode.Disposable {
     const panelId =
       kind === 'semanticDefinition'
         ? CODEPOL_EXTENSION_PANEL_SEMANTIC_DEFINITION
+        : kind === 'architectureSummary'
+          ? CODEPOL_EXTENSION_PANEL_ARCHITECTURE_SUMMARY
+          : kind === 'dependencyGraph'
+            ? CODEPOL_EXTENSION_PANEL_DEPENDENCY_GRAPH
         : kind === 'architectureLinks'
           ? CODEPOL_EXTENSION_PANEL_ARCHITECTURE_LINKS
           : CODEPOL_EXTENSION_PANEL_RENAME_PREVIEW;
@@ -142,21 +171,9 @@ export class CodepolPanelManager implements vscode.Disposable {
     }
 
     if (message.type === 'hoverAction' && message.uri) {
-      if (message.action === 'go_to_definition') {
-        await this.actions.executeCommand(
-          CODEPOL_EXTENSION_COMMAND_SHOW_SEMANTIC_DEFINITION,
-          message.uri,
-        );
-        return;
-      }
-      if (
-        message.action === 'find_references' ||
-        message.action === 'show_graph'
-      ) {
-        await this.actions.executeCommand(
-          CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_LINKS,
-          message.uri,
-        );
+      const command = codepolHoverActionCommandResolve(message.action);
+      if (command) {
+        await this.actions.executeCommand(command, message.uri);
       }
       return;
     }

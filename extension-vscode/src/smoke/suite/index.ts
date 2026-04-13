@@ -62,6 +62,8 @@ export async function run(): Promise<void> {
     query: 'sharedValue',
     autoOpenFirstResult: true,
   });
+  await vscode.commands.executeCommand('codepol.extension.showArchitectureSummary');
+  await vscode.commands.executeCommand('codepol.extension.showDependencyGraph');
   await vscode.commands.executeCommand('codepol.extension.showSemanticDefinition');
   await vscode.commands.executeCommand('codepol.extension.showArchitectureLinks');
 

@@ -6,6 +6,10 @@ export const CODEPOL_EXTENSION_COMMAND_SHOW_SEMANTIC_DEFINITION =
   'codepol.extension.showSemanticDefinition';
 export const CODEPOL_EXTENSION_COMMAND_SHOW_SEMANTIC_SEARCH =
   'codepol.extension.showSemanticSearch';
+export const CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_SUMMARY =
+  'codepol.extension.showArchitectureSummary';
+export const CODEPOL_EXTENSION_COMMAND_SHOW_DEPENDENCY_GRAPH =
+  'codepol.extension.showDependencyGraph';
 export const CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_LINKS =
   'codepol.extension.showArchitectureLinks';
 export const CODEPOL_EXTENSION_COMMAND_RENAME_CODEPOL_ENTITY =
@@ -15,6 +19,10 @@ export const CODEPOL_EXTENSION_COMMAND_REFRESH_RENAME_TARGETS =
 
 export const CODEPOL_EXTENSION_PANEL_SEMANTIC_DEFINITION =
   'codepol.semanticDefinitionPanel';
+export const CODEPOL_EXTENSION_PANEL_ARCHITECTURE_SUMMARY =
+  'codepol.architectureSummaryPanel';
+export const CODEPOL_EXTENSION_PANEL_DEPENDENCY_GRAPH =
+  'codepol.dependencyGraphPanel';
 export const CODEPOL_EXTENSION_PANEL_ARCHITECTURE_LINKS =
   'codepol.architectureLinksPanel';
 export const CODEPOL_EXTENSION_PANEL_RENAME_PREVIEW =

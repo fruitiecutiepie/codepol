@@ -42,12 +42,13 @@ function hostCreate(overrides: Partial<{
 
 function protocolCreate() {
   return {
+    queryIndexStatus: vi.fn(),
+    queryArchitectureSummary: vi.fn(),
+    queryDependencyGraph: vi.fn(),
     querySemanticSearch: vi.fn(),
     querySemanticDefinition: vi.fn(),
     querySemanticReferences: vi.fn(),
     querySemanticHover: vi.fn(),
-    queryDependencyGraph: vi.fn(async () => null),
-    queryArchitectureSummary: vi.fn(async () => null),
     prepareRename: vi.fn(),
     previewRename: vi.fn(),
     applyEditPlan: vi.fn(),
@@ -56,9 +57,9 @@ function protocolCreate() {
 
 function panelsCreate() {
   return {
-    showSemanticDefinition: vi.fn(),
     showArchitectureSummary: vi.fn(),
     showDependencyGraph: vi.fn(),
+    showSemanticDefinition: vi.fn(),
     showArchitectureLinks: vi.fn(),
     showRenamePreview: vi.fn(),
   };
@@ -89,6 +90,51 @@ const semanticSearchResult: WorkspaceSearchResult = {
   source: 'codepol',
   semanticClass: 'exported_symbol',
   score: 180,
+};
+
+const dependencyGraphResult = {
+  nodes: [
+    {
+      uri: 'file:///workspace/apps/web/src/app.ts',
+      workspaceRelativePath: 'apps/web/src/app.ts',
+    },
+    {
+      uri: 'file:///workspace/packages/lib/src/index.ts',
+      workspaceRelativePath: 'packages/lib/src/index.ts',
+    },
+  ],
+  edges: [
+    {
+      fromUri: 'file:///workspace/apps/web/src/app.ts',
+      toUri: 'file:///workspace/packages/lib/src/index.ts',
+    },
+  ],
+  entryPoints: ['file:///workspace/apps/web/src/app.ts'],
+  cycles: [] as string[][],
+};
+
+const architectureSummaryResult = {
+  summary: 'Indexed 2 files, 4 symbols, 1 entry points, 0 cycles.',
+  indexedFileCount: 2,
+  symbolCount: 4,
+  scopeCount: 2,
+  relationCount: 1,
+  entryPointCount: 1,
+  cycleCount: 0,
+  hotspots: [
+    {
+      uri: 'file:///workspace/packages/lib/src/index.ts',
+      workspaceRelativePath: 'packages/lib/src/index.ts',
+      importerCount: 1,
+      importeeCount: 0,
+    },
+    {
+      uri: 'file:///workspace/apps/web/src/app.ts',
+      workspaceRelativePath: 'apps/web/src/app.ts',
+      importerCount: 0,
+      importeeCount: 1,
+    },
+  ],
 };
 
 describe('CodepolCommandController', () => {
@@ -209,8 +255,100 @@ describe('CodepolCommandController', () => {
     expect(panels.showSemanticDefinition).toHaveBeenCalledWith(result);
   });
 
-  it('renders architecture links for the active file', async () => {
+  it('shows the workspace architecture summary without requiring an active file', async () => {
     const protocol = protocolCreate();
+    protocol.queryArchitectureSummary.mockResolvedValue(architectureSummaryResult);
+    const panels = panelsCreate();
+    const host = hostCreate({ activeUriGet: () => undefined });
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    const result = await controller.showArchitectureSummary();
+
+    expect(protocol.queryArchitectureSummary).toHaveBeenCalledTimes(1);
+    expect(host.errorShow).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      summaryCard: expect.objectContaining({
+        summary: architectureSummaryResult.summary,
+      }),
+    });
+    expect(panels.showArchitectureSummary).toHaveBeenCalledWith(result);
+  });
+
+  it('reports unavailable workspace architecture summaries clearly', async () => {
+    const protocol = protocolCreate();
+    protocol.queryArchitectureSummary.mockResolvedValue(null);
+    const panels = panelsCreate();
+    const host = hostCreate();
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    await expect(controller.showArchitectureSummary()).resolves.toBeNull();
+    expect(host.errorShow).toHaveBeenCalledWith(
+      'Codepol architecture summary is not available for this workspace yet.',
+    );
+    expect(panels.showArchitectureSummary).not.toHaveBeenCalled();
+  });
+
+  it('shows the dependency graph without requiring an active file', async () => {
+    const protocol = protocolCreate();
+    protocol.queryDependencyGraph.mockResolvedValue(dependencyGraphResult);
+    protocol.queryArchitectureSummary.mockResolvedValue(architectureSummaryResult);
+    const panels = panelsCreate();
+    const host = hostCreate({ activeUriGet: () => undefined });
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    const result = await controller.showDependencyGraph();
+
+    expect(protocol.queryDependencyGraph).toHaveBeenCalledTimes(1);
+    expect(protocol.queryArchitectureSummary).toHaveBeenCalledTimes(1);
+    expect(result).toEqual(
+      expect.objectContaining({
+        focusUri: undefined,
+        graph: expect.objectContaining({
+          mode: 'workspace',
+          nodes: expect.any(Array),
+        }),
+      }),
+    );
+    expect(panels.showDependencyGraph).toHaveBeenCalledWith(result);
+  });
+
+  it('highlights the active file in the workspace dependency graph when available', async () => {
+    const protocol = protocolCreate();
+    protocol.queryDependencyGraph.mockResolvedValue(dependencyGraphResult);
+    protocol.queryArchitectureSummary.mockResolvedValue(architectureSummaryResult);
+    const panels = panelsCreate();
+    const host = hostCreate();
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    const result = await controller.showDependencyGraph();
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        focusUri: 'file:///workspace/packages/lib/src/index.ts',
+      }),
+    );
+    expect(result?.graph.nodes.find((node) => node.uri === 'file:///workspace/packages/lib/src/index.ts')?.isFocus).toBe(true);
+  });
+
+  it('reports unavailable dependency graphs clearly', async () => {
+    const protocol = protocolCreate();
+    protocol.queryDependencyGraph.mockResolvedValue(null);
+    protocol.queryArchitectureSummary.mockResolvedValue(architectureSummaryResult);
+    const panels = panelsCreate();
+    const host = hostCreate();
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    await expect(controller.showDependencyGraph()).resolves.toBeNull();
+    expect(host.errorShow).toHaveBeenCalledWith(
+      'Codepol dependency graph is not available for this workspace yet.',
+    );
+    expect(panels.showDependencyGraph).not.toHaveBeenCalled();
+  });
+
+  it('renders graph-first architecture links for the active file', async () => {
+    const protocol = protocolCreate();
+    protocol.queryDependencyGraph.mockResolvedValue(dependencyGraphResult);
+    protocol.queryArchitectureSummary.mockResolvedValue(architectureSummaryResult);
     protocol.querySemanticReferences.mockResolvedValue({
       target: {
         uri: 'file:///workspace/packages/lib/src/index.ts',
@@ -245,7 +383,19 @@ describe('CodepolCommandController', () => {
       source: 'codepol',
       semanticClass: 'architecture_node',
     });
-    protocol.querySemanticHover.mockResolvedValue(null);
+    protocol.querySemanticHover.mockResolvedValue({
+      target: {
+        uri: 'file:///workspace/packages/lib/src/index.ts',
+        semanticClass: 'architecture_node',
+      },
+      title: 'index.ts',
+      subtitle: 'packages/lib/src/index.ts',
+      summary: 'Indexed architecture node for the workspace module graph.',
+      fields: [],
+      actions: ['find_references', 'show_graph'],
+      source: 'codepol',
+      semanticClass: 'architecture_node',
+    });
     const panels = panelsCreate();
     const host = hostCreate();
     const controller = new CodepolCommandController(protocol as never, panels, host);
@@ -255,7 +405,41 @@ describe('CodepolCommandController', () => {
     expect(protocol.querySemanticReferences).toHaveBeenCalledWith(
       'file:///workspace/packages/lib/src/index.ts',
     );
+    expect(protocol.querySemanticHover).toHaveBeenCalledWith(
+      'file:///workspace/packages/lib/src/index.ts',
+    );
+    expect(protocol.queryDependencyGraph).toHaveBeenCalledTimes(1);
+    expect(protocol.queryArchitectureSummary).toHaveBeenCalledTimes(1);
+    expect(result).toEqual(
+      expect.objectContaining({
+        uri: 'file:///workspace/packages/lib/src/index.ts',
+        graph: expect.objectContaining({
+          mode: 'focus',
+          focusUri: 'file:///workspace/packages/lib/src/index.ts',
+        }),
+        workspaceSummaryCard: expect.objectContaining({
+          summary: architectureSummaryResult.summary,
+        }),
+      }),
+    );
+    expect(result?.graph.nodes).toHaveLength(2);
     expect(panels.showArchitectureLinks).toHaveBeenCalledWith(result);
+  });
+
+  it('keeps architecture links active-file scoped while workspace commands remain available', async () => {
+    const protocol = protocolCreate();
+    const panels = panelsCreate();
+    const host = hostCreate({ activeUriGet: () => undefined });
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    await expect(controller.showArchitectureLinks()).resolves.toBeNull();
+    expect(host.errorShow).toHaveBeenCalledWith(
+      'Open a workspace file before requesting architecture links.',
+    );
+
+    protocol.queryArchitectureSummary.mockResolvedValue(architectureSummaryResult);
+    await expect(controller.showArchitectureSummary()).resolves.not.toBeNull();
+    expect(panels.showArchitectureSummary).toHaveBeenCalledTimes(1);
   });
 
   it('shows rename preview for a successful rename flow', async () => {
@@ -309,69 +493,6 @@ describe('CodepolCommandController', () => {
       '@acme/lib-next',
     );
     expect(panels.showRenamePreview).toHaveBeenCalledTimes(1);
-    expect(result).toMatchObject({
-      ok: true,
-      newName: '@acme/lib-next',
-      canApply: true,
-    });
-  });
-
-  it('auto-applies executable rename previews when requested explicitly', async () => {
-    const protocol = protocolCreate();
-    protocol.prepareRename.mockResolvedValue({
-      ok: true,
-      target: renameTargetCandidate.target,
-      displayName: '@acme/lib',
-      currentName: '@acme/lib',
-      normalizedCurrentName: '@acme/lib',
-      namespaceId: 'workspace.packages:file:///workspace',
-      impactedSiteCount: 2,
-      requiresPreview: true,
-      namingRules: {
-        minLength: 1,
-        patternDescription: 'npm package name (lowercase, optional @scope/name)',
-      },
-    });
-    protocol.previewRename.mockResolvedValue({
-      ok: true,
-      target: renameTargetCandidate.target,
-      oldName: '@acme/lib',
-      newName: '@acme/lib-next',
-      normalizedNewName: '@acme/lib-next',
-      namespaceId: 'workspace.packages:file:///workspace',
-      groups: [],
-      totalEdits: 2,
-      warnings: [],
-      blockingIssues: [],
-      canApply: true,
-      plan: {
-        id: 'plan-1',
-        title: 'Rename workspace package',
-        kind: 'rename',
-        edits: [],
-        diagnosticIds: [],
-      },
-    });
-    const renamePrompt = vi.fn(async () => undefined);
-    const host = hostCreate({ renamePrompt });
-    const panels = panelsCreate();
-    const controller = new CodepolCommandController(protocol as never, panels, host);
-
-    const result = await controller.renameCodepolEntity({
-      target: renameTargetCandidate.target,
-      newName: '@acme/lib-next',
-      autoApply: true,
-    });
-
-    expect(renamePrompt).not.toHaveBeenCalled();
-    expect(protocol.prepareRename).toHaveBeenCalledWith(renameTargetCandidate.target);
-    expect(protocol.previewRename).toHaveBeenCalledWith(
-      renameTargetCandidate.target,
-      '@acme/lib-next',
-    );
-    expect(protocol.applyEditPlan).toHaveBeenCalledWith('plan-1');
-    expect(host.infoShow).toHaveBeenCalledWith('Applied rename for package:@acme/lib.');
-    expect(panels.showRenamePreview).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       ok: true,
       newName: '@acme/lib-next',

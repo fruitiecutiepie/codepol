@@ -1,8 +1,12 @@
 import type {
+  ArchitectureLinksPanelViewModel,
+  ArchitectureSummaryPanelViewModel,
+  DependencyGraphCanvasViewModel,
+  DependencyGraphPanelViewModel,
   HoverCardViewModel,
   RenamePreviewPanelViewModel,
   SemanticDefinitionPanelViewModel,
-  SemanticReferencesPanelViewModel,
+  WorkspaceSummaryCardViewModel,
 } from '../viewModels';
 
 export type CodepolPanelViewModel =
@@ -13,10 +17,20 @@ export type CodepolPanelViewModel =
       data: SemanticDefinitionPanelViewModel;
     }
   | {
+      kind: 'architectureSummary';
+      title: string;
+      data: ArchitectureSummaryPanelViewModel;
+    }
+  | {
+      kind: 'dependencyGraph';
+      title: string;
+      data: DependencyGraphPanelViewModel;
+    }
+  | {
       kind: 'architectureLinks';
       title: string;
       uri: string;
-      data: SemanticReferencesPanelViewModel;
+      data: ArchitectureLinksPanelViewModel;
     }
   | {
       kind: 'renamePreview';
@@ -95,6 +109,107 @@ function locationsHtml(
     .join('')}</ul>`;
 }
 
+function workspaceSummaryCardHtml(
+  summaryCard: WorkspaceSummaryCardViewModel | null,
+  title = 'Workspace Summary',
+): string {
+  if (!summaryCard) {
+    return '';
+  }
+
+  const hotspotsHtml =
+    summaryCard.hotspots.length === 0
+      ? '<p class="empty">No hotspots are available yet.</p>'
+      : `<ul class="list">${summaryCard.hotspots
+          .map(
+            (hotspot) => `<li>
+              <button class="location" data-open-uri="${htmlEscape(hotspot.uri)}" data-open-line="${hotspot.line}" data-open-character="${hotspot.character}">
+                <span class="label">${htmlEscape(hotspot.label)}</span>
+                <span class="detail">${htmlEscape(hotspot.detail ?? '')}</span>
+              </button>
+            </li>`,
+          )
+          .join('')}</ul>`;
+
+  return `<section class="card">
+    <header>
+      <h2>${htmlEscape(title)}</h2>
+      <p class="summary">${htmlEscape(summaryCard.summary)}</p>
+    </header>
+    <dl>
+      ${summaryCard.metrics
+        .map(
+          (metric) =>
+            `<div class="field"><dt>${htmlEscape(metric.label)}</dt><dd>${htmlEscape(metric.value)}</dd></div>`,
+        )
+        .join('')}
+    </dl>
+    <div class="section">
+      <h3>Hotspots</h3>
+      ${hotspotsHtml}
+    </div>
+  </section>`;
+}
+
+function graphOverviewHtml(summaryCard: WorkspaceSummaryCardViewModel | null): string {
+  if (!summaryCard) {
+    return '';
+  }
+
+  return `<div class="graph-overview">
+    <p class="summary">${htmlEscape(summaryCard.summary)}</p>
+    <div class="metric-row">${summaryCard.metrics
+      .slice(0, 3)
+      .map(
+        (metric) =>
+          `<span class="metric-pill">${htmlEscape(metric.label)}: ${htmlEscape(metric.value)}</span>`,
+      )
+      .join('')}</div>
+  </div>`;
+}
+
+function graphSvgHtml(graph: DependencyGraphCanvasViewModel): string {
+  if (graph.nodes.length === 0) {
+    return `<p class="empty">${htmlEscape(graph.emptyMessage)}</p>`;
+  }
+
+  return `<svg class="graph" viewBox="0 0 ${graph.width} ${graph.height}" aria-label="Codepol dependency graph">
+    <defs>
+      <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" class="graph-marker"></path>
+      </marker>
+    </defs>
+    ${graph.edges
+      .map(
+        (edge) => `<line
+          class="graph-edge${edge.isFocus ? ' focus' : ''}"
+          x1="${edge.x1}"
+          y1="${edge.y1}"
+          x2="${edge.x2}"
+          y2="${edge.y2}"
+          marker-end="url(#arrow)"
+        ></line>`,
+      )
+      .join('')}
+    ${graph.nodes
+      .map(
+        (node) => `<g
+          class="graph-node${node.isFocus ? ' focus' : ''}${node.isEntryPoint ? ' entry' : ''}${node.isCycleMember ? ' cycle' : ''}"
+          data-open-uri="${htmlEscape(node.uri)}"
+          data-open-line="0"
+          data-open-character="0"
+        >
+          <rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" rx="14" ry="14"></rect>
+          <text x="${node.x + 16}" y="${node.y + 28}">
+            <tspan x="${node.x + 16}" dy="0">${htmlEscape(node.label)}</tspan>
+            <tspan x="${node.x + 16}" dy="22" class="graph-detail">${htmlEscape(node.detail)}</tspan>
+          </text>
+        </g>`,
+      )
+      .join('')}
+  </svg>`;
+}
+
 function semanticDefinitionBodyHtml(model: SemanticDefinitionPanelViewModel): string {
   return `${hoverCardHtml(model.hoverCard, model.uri)}
     <section class="card">
@@ -103,7 +218,22 @@ function semanticDefinitionBodyHtml(model: SemanticDefinitionPanelViewModel): st
     </section>`;
 }
 
-function semanticReferencesBodyHtml(model: SemanticReferencesPanelViewModel): string {
+function architectureSummaryBodyHtml(model: ArchitectureSummaryPanelViewModel): string {
+  return workspaceSummaryCardHtml(model.summaryCard);
+}
+
+function dependencyGraphBodyHtml(model: DependencyGraphPanelViewModel): string {
+  return `${workspaceSummaryCardHtml(model.summaryCard)}
+    <section class="card">
+      <header>
+        <h2>Dependency Graph</h2>
+        <p class="summary">Showing ${model.graph.nodes.length} nodes and ${model.graph.edges.length} edges.${model.focusUri ? ` Highlighting ${htmlEscape(model.focusUri)}.` : ''}</p>
+      </header>
+      ${graphSvgHtml(model.graph)}
+    </section>`;
+}
+
+function architectureLinksBodyHtml(model: ArchitectureLinksPanelViewModel): string {
   const groupsHtml =
     model.groups.length === 0
       ? '<p class="empty">No Codepol architecture links are available for this target.</p>'
@@ -119,8 +249,13 @@ function semanticReferencesBodyHtml(model: SemanticReferencesPanelViewModel): st
 
   return `${hoverCardHtml(model.hoverCard, model.uri)}
     <section class="card">
-      <h3>Architecture Links</h3>
-      <p class="summary">Showing ${model.totalItems} of ${model.totalAvailableItems} semantic links.</p>
+      <header>
+        <h2>Focused Graph</h2>
+        <p class="summary">Showing ${model.totalItems} of ${model.totalAvailableItems} semantic links.</p>
+        ${model.truncated ? '<p class="status">Semantic link results are truncated.</p>' : ''}
+      </header>
+      ${graphOverviewHtml(model.workspaceSummaryCard)}
+      ${graphSvgHtml(model.graph)}
     </section>
     ${groupsHtml}`;
 }
@@ -200,11 +335,11 @@ const BASE_SCRIPT = `
   const vscode = acquireVsCodeApi();
   document.addEventListener('click', (event) => {
     const target = event.target;
-    if (!(target instanceof HTMLElement)) {
+    if (!(target instanceof Element)) {
       return;
     }
     const locationButton = target.closest('[data-open-uri]');
-    if (locationButton instanceof HTMLElement) {
+    if (locationButton instanceof HTMLElement || locationButton instanceof SVGElement) {
       vscode.postMessage({
         type: 'openLocation',
         uri: locationButton.dataset.openUri,
@@ -214,7 +349,7 @@ const BASE_SCRIPT = `
       return;
     }
     const actionButton = target.closest('[data-action]');
-    if (actionButton instanceof HTMLElement) {
+    if (actionButton instanceof HTMLElement || actionButton instanceof SVGElement) {
       vscode.postMessage({
         type: 'hoverAction',
         action: actionButton.dataset.action,
@@ -223,7 +358,7 @@ const BASE_SCRIPT = `
       return;
     }
     const applyButton = target.closest('[data-plan-id]');
-    if (applyButton instanceof HTMLElement) {
+    if (applyButton instanceof HTMLElement || applyButton instanceof SVGElement) {
       vscode.postMessage({
         type: 'applyPlan',
         planId: applyButton.dataset.planId,
@@ -239,9 +374,13 @@ export function codepolPanelHtmlRender(input: {
   const body =
     input.model.kind === 'semanticDefinition'
       ? semanticDefinitionBodyHtml(input.model.data)
-      : input.model.kind === 'architectureLinks'
-        ? semanticReferencesBodyHtml(input.model.data)
-        : renamePreviewBodyHtml(input.model.data);
+      : input.model.kind === 'architectureSummary'
+        ? architectureSummaryBodyHtml(input.model.data)
+        : input.model.kind === 'dependencyGraph'
+          ? dependencyGraphBodyHtml(input.model.data)
+          : input.model.kind === 'architectureLinks'
+            ? architectureLinksBodyHtml(input.model.data)
+            : renamePreviewBodyHtml(input.model.data);
 
   return `<!DOCTYPE html>
   <html lang="en">
@@ -266,6 +405,9 @@ export function codepolPanelHtmlRender(input: {
           padding: 14px;
           margin-bottom: 14px;
           background: color-mix(in srgb, var(--vscode-editor-background) 90%, var(--vscode-editorInfo-foreground) 10%);
+        }
+        .section {
+          margin-top: 14px;
         }
         .subtitle, .detail, .summary, .status {
           color: var(--vscode-descriptionForeground);
@@ -325,6 +467,67 @@ export function codepolPanelHtmlRender(input: {
         }
         .empty {
           color: var(--vscode-descriptionForeground);
+        }
+        .graph-overview {
+          margin-bottom: 12px;
+        }
+        .metric-row {
+          display: flex;
+          gap: 8px;
+          flex-wrap: wrap;
+          margin-top: 8px;
+        }
+        .metric-pill {
+          border: 1px solid var(--vscode-panel-border);
+          border-radius: 999px;
+          padding: 4px 10px;
+          color: var(--vscode-descriptionForeground);
+          background: color-mix(in srgb, var(--vscode-editor-background) 82%, var(--vscode-textLink-foreground) 18%);
+        }
+        .graph {
+          width: 100%;
+          height: auto;
+          border: 1px solid var(--vscode-panel-border);
+          border-radius: 12px;
+          background: color-mix(in srgb, var(--vscode-editor-background) 84%, var(--vscode-textBlockQuote-background) 16%);
+        }
+        .graph-edge {
+          stroke: var(--vscode-panel-border);
+          stroke-width: 2;
+        }
+        .graph-edge.focus {
+          stroke: var(--vscode-textLink-foreground);
+          stroke-width: 2.5;
+        }
+        .graph-marker {
+          fill: var(--vscode-panel-border);
+        }
+        .graph-node {
+          cursor: pointer;
+        }
+        .graph-node rect {
+          fill: var(--vscode-input-background);
+          stroke: var(--vscode-panel-border);
+          stroke-width: 1.5;
+        }
+        .graph-node.focus rect {
+          stroke: var(--vscode-textLink-foreground);
+          stroke-width: 2.5;
+        }
+        .graph-node.entry rect {
+          fill: color-mix(in srgb, var(--vscode-input-background) 78%, var(--vscode-testing-iconPassed) 22%);
+        }
+        .graph-node.cycle rect {
+          stroke-dasharray: 6 4;
+        }
+        .graph-node text {
+          fill: var(--vscode-foreground);
+          font: 600 13px var(--vscode-font-family);
+          pointer-events: none;
+        }
+        .graph-detail {
+          fill: var(--vscode-descriptionForeground);
+          font: 400 11px var(--vscode-font-family);
         }
       </style>
     </head>

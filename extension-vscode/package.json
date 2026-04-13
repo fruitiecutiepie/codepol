@@ -15,6 +15,8 @@
   ],
   "activationEvents": [
     "workspaceContains:codepol.toml",
+    "onCommand:codepol.extension.showArchitectureSummary",
+    "onCommand:codepol.extension.showDependencyGraph",
     "onCommand:codepol.extension.showSemanticDefinition",
     "onCommand:codepol.extension.showSemanticSearch",
     "onCommand:codepol.extension.showArchitectureLinks",
@@ -28,6 +30,14 @@
   "icon": "media/codepol.svg",
   "contributes": {
     "commands": [
+      {
+        "command": "codepol.extension.showArchitectureSummary",
+        "title": "Codepol: Show Architecture Summary"
+      },
+      {
+        "command": "codepol.extension.showDependencyGraph",
+        "title": "Codepol: Show Dependency Graph"
+      },
       {
         "command": "codepol.extension.showSemanticDefinition",
         "title": "Codepol: Show Semantic Definition"
@@ -62,7 +72,8 @@
       "codepol": [
         {
           "id": "codepol.currentContext",
-          "name": "Current Context"
+          "name": "Search & Details",
+          "type": "webview"
         },
         {
           "id": "codepol.renameTargets",
@@ -72,6 +83,11 @@
     },
     "menus": {
       "view/title": [
+{
+          "command": "codepol.extension.refreshRenameTargets",
+          "when": "view == codepol.currentContext",
+          "group": "navigation"
+        },
         {
           "command": "codepol.extension.refreshRenameTargets",
           "when": "view == codepol.renameTargets",

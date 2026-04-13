@@ -9,14 +9,18 @@ import type {
   CodepolProtocolClient,
 } from './protocolClient';
 import type {
+  ArchitectureLinksPanelViewModel,
+  ArchitectureSummaryPanelViewModel,
+  DependencyGraphPanelViewModel,
   RenamePreviewPanelViewModel,
   SemanticDefinitionPanelViewModel,
-  SemanticReferencesPanelViewModel,
 } from './viewModels';
 import {
+  architectureLinksPanelViewModelCreate,
+  architectureSummaryPanelViewModelCreate,
+  dependencyGraphPanelViewModelCreate,
   renamePreviewPanelViewModelCreate,
   semanticDefinitionPanelViewModelCreate,
-  semanticReferencesPanelViewModelCreate,
 } from './viewModels';
 
 export type RenameCommandOptions = {
@@ -37,8 +41,10 @@ type OpenLocationInput = {
 };
 
 export type CodepolPanels = {
+  showArchitectureSummary(input: ArchitectureSummaryPanelViewModel): void;
+  showDependencyGraph(input: DependencyGraphPanelViewModel): void;
   showSemanticDefinition(input: SemanticDefinitionPanelViewModel): void;
-  showArchitectureLinks(input: SemanticReferencesPanelViewModel): void;
+  showArchitectureLinks(input: ArchitectureLinksPanelViewModel): void;
   showRenamePreview(input: RenamePreviewPanelViewModel): void;
 };
 
@@ -166,21 +172,63 @@ export class CodepolCommandController {
     return model;
   }
 
-  async showArchitectureLinks(uri?: string): Promise<SemanticReferencesPanelViewModel | null> {
+  async showArchitectureSummary(): Promise<ArchitectureSummaryPanelViewModel | null> {
+    const summary = await this.protocol.queryArchitectureSummary();
+    if (!summary) {
+      await this.host.errorShow(
+        'Codepol architecture summary is not available for this workspace yet.',
+      );
+      return null;
+    }
+
+    const model = architectureSummaryPanelViewModelCreate({ summary });
+    this.panels.showArchitectureSummary(model);
+    return model;
+  }
+
+  async showDependencyGraph(
+    uri?: string,
+  ): Promise<DependencyGraphPanelViewModel | null> {
+    const focusUri = uri ?? this.host.activeUriGet();
+    const [graph, summary] = await Promise.all([
+      this.protocol.queryDependencyGraph(),
+      this.protocol.queryArchitectureSummary(),
+    ]);
+    if (!graph) {
+      await this.host.errorShow(
+        'Codepol dependency graph is not available for this workspace yet.',
+      );
+      return null;
+    }
+
+    const model = dependencyGraphPanelViewModelCreate({
+      graph,
+      summary,
+      focusUri,
+    });
+    this.panels.showDependencyGraph(model);
+    return model;
+  }
+
+  async showArchitectureLinks(uri?: string): Promise<ArchitectureLinksPanelViewModel | null> {
     const targetUri = uri ?? this.host.activeUriGet();
     if (!targetUri) {
       await this.host.errorShow('Open a workspace file before requesting architecture links.');
       return null;
     }
 
-    const [references, hover] = await Promise.all([
+    const [references, hover, graph, summary] = await Promise.all([
       this.protocol.querySemanticReferences(targetUri),
       this.protocol.querySemanticHover(targetUri),
+      this.protocol.queryDependencyGraph(),
+      this.protocol.queryArchitectureSummary(),
     ]);
-    const model = semanticReferencesPanelViewModelCreate({
+    const model = architectureLinksPanelViewModelCreate({
       uri: targetUri,
       references,
       hover,
+      graph,
+      summary,
     });
     this.panels.showArchitectureLinks(model);
     return model;

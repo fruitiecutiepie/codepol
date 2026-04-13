@@ -10,9 +10,13 @@ import {
 import {
   CODEPOL_EXTENSION_COMMAND_REFRESH_RENAME_TARGETS,
   CODEPOL_EXTENSION_COMMAND_RENAME_CODEPOL_ENTITY,
+  CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_SUMMARY,
   CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_LINKS,
+  CODEPOL_EXTENSION_COMMAND_SHOW_DEPENDENCY_GRAPH,
   CODEPOL_EXTENSION_COMMAND_SHOW_SEMANTIC_DEFINITION,
   CODEPOL_EXTENSION_COMMAND_SHOW_SEMANTIC_SEARCH,
+CODEPOL_EXTENSION_VIEW_CURRENT_CONTEXT_ID,
+  CODEPOL_EXTENSION_VIEW_RENAME_TARGETS_ID,
 } from './constants';
 import {
   renameTargetCandidatesDiscover,
@@ -262,8 +266,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await protocol.applyEditPlan(planId);
       void vscode.window.showInformationMessage('Codepol rename applied.');
     },
-    executeCommand: async (command: string, uri: string) => {
-      await vscode.commands.executeCommand(command, uri);
+    executeCommand: async (command: string, uri?: string) => {
+      if (uri) {
+        await vscode.commands.executeCommand(command, uri);
+        return;
+      }
+      await vscode.commands.executeCommand(command);
     },
   });
 
@@ -291,13 +299,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(
     panels,
-    vscode.window.registerTreeDataProvider(
-      'codepol.currentContext',
-      currentContextProvider,
+sidebarProvider,
+    vscode.window.registerWebviewViewProvider(
+      CODEPOL_EXTENSION_VIEW_CURRENT_CONTEXT_ID,
+      sidebarProvider,
+      {
+        webviewOptions: {
+          retainContextWhenHidden: true,
+        },
+      },
     ),
     vscode.window.registerTreeDataProvider(
-      'codepol.renameTargets',
+      CODEPOL_EXTENSION_VIEW_RENAME_TARGETS_ID,
       renameTargetsProvider,
+    ),
+    vscode.commands.registerCommand(
+      CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_SUMMARY,
+      async () => controller?.showArchitectureSummary(),
+    ),
+    vscode.commands.registerCommand(
+      CODEPOL_EXTENSION_COMMAND_SHOW_DEPENDENCY_GRAPH,
+      async (uri?: string) => controller?.showDependencyGraph(uri),
     ),
     vscode.commands.registerCommand(
       CODEPOL_EXTENSION_COMMAND_SHOW_SEMANTIC_DEFINITION,
