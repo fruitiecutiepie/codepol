@@ -1,9 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CodepolCommandController } from '../extension-vscode/src/commands';
 import type { RenameTargetCandidate } from '../extension-vscode/src/discovery';
+import type { WorkspaceSearchResult } from '@codepol/core';
 
 function hostCreate(overrides: Partial<{
   activeUriGet: () => string | undefined;
+  semanticSearchInitialQueryResolve: () => string | undefined;
+  semanticSearchPick: (input: {
+    initialQuery: string;
+    queryResults(query: string): Promise<WorkspaceSearchResult[] | null>;
+  }) => Promise<WorkspaceSearchResult | null | undefined>;
   renameTargetsLoad: () => Promise<RenameTargetCandidate[]>;
   renameTargetPick: (
     candidates: RenameTargetCandidate[],
@@ -16,6 +22,11 @@ function hostCreate(overrides: Partial<{
 }> = {}) {
   return {
     activeUriGet: overrides.activeUriGet ?? (() => 'file:///workspace/packages/lib/src/index.ts'),
+    semanticSearchInitialQueryResolve:
+      overrides.semanticSearchInitialQueryResolve ?? (() => undefined),
+    semanticSearchPick:
+      overrides.semanticSearchPick ??
+      (async () => undefined),
     renameTargetsLoad: overrides.renameTargetsLoad ?? (async () => []),
     renameTargetPick:
       overrides.renameTargetPick ??
@@ -31,6 +42,7 @@ function hostCreate(overrides: Partial<{
 
 function protocolCreate() {
   return {
+    querySemanticSearch: vi.fn(),
     querySemanticDefinition: vi.fn(),
     querySemanticReferences: vi.fn(),
     querySemanticHover: vi.fn(),
@@ -59,7 +71,76 @@ const renameTargetCandidate: RenameTargetCandidate = {
   },
 };
 
+const semanticSearchResult: WorkspaceSearchResult = {
+  name: 'sharedValue',
+  kind: 'exported_symbol',
+  location: {
+    uri: 'file:///workspace/packages/lib/src/index.ts',
+    range: {
+      start: { line: 0, character: 13 },
+      end: { line: 0, character: 24 },
+    },
+  },
+  detail: 'packages/lib/src/index.ts • const',
+  source: 'codepol',
+  semanticClass: 'exported_symbol',
+  score: 180,
+};
+
 describe('CodepolCommandController', () => {
+  it('reports unavailable semantic search results clearly', async () => {
+    const protocol = protocolCreate();
+    protocol.querySemanticSearch.mockResolvedValue(null);
+    const panels = panelsCreate();
+    const host = hostCreate({
+      semanticSearchInitialQueryResolve: () => 'sharedValue',
+    });
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    await expect(
+      controller.showSemanticSearch({ autoOpenFirstResult: true }),
+    ).resolves.toBeNull();
+    expect(protocol.querySemanticSearch).toHaveBeenCalledWith('sharedValue');
+    expect(host.errorShow).toHaveBeenCalledWith(
+      'Codepol semantic search is not available for this workspace yet.',
+    );
+    expect(host.openLocation).not.toHaveBeenCalled();
+  });
+
+  it('opens the first semantic search result for non-interactive execution', async () => {
+    const protocol = protocolCreate();
+    protocol.querySemanticSearch.mockResolvedValue([semanticSearchResult]);
+    const panels = panelsCreate();
+    const host = hostCreate();
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    const result = await controller.showSemanticSearch({
+      query: 'sharedValue',
+      autoOpenFirstResult: true,
+    });
+
+    expect(protocol.querySemanticSearch).toHaveBeenCalledWith('sharedValue');
+    expect(host.openLocation).toHaveBeenCalledWith({
+      uri: 'file:///workspace/packages/lib/src/index.ts',
+      line: 0,
+      character: 13,
+    });
+    expect(result).toEqual(semanticSearchResult);
+  });
+
+  it('does not open a location when semantic search is cancelled', async () => {
+    const protocol = protocolCreate();
+    const panels = panelsCreate();
+    const host = hostCreate({
+      semanticSearchInitialQueryResolve: () => 'sharedValue',
+      semanticSearchPick: async () => undefined,
+    });
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    await expect(controller.showSemanticSearch()).resolves.toBeNull();
+    expect(host.openLocation).not.toHaveBeenCalled();
+  });
+
   it('reports a missing active file for semantic definition requests', async () => {
     const protocol = protocolCreate();
     const panels = panelsCreate();

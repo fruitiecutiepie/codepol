@@ -1,6 +1,7 @@
 import type {
   WorkspacePrepareRenameResult,
   WorkspaceRenamePreviewResult,
+  WorkspaceSearchResult,
   WorkspaceSupportedRenameTarget,
 } from '@codepol/core';
 import type { RenameTargetCandidate } from './discovery';
@@ -24,6 +25,11 @@ export type RenameCommandOptions = {
   autoApply?: boolean;
 };
 
+export type SemanticSearchCommandOptions = {
+  query?: string;
+  autoOpenFirstResult?: boolean;
+};
+
 type OpenLocationInput = {
   uri: string;
   line: number;
@@ -38,6 +44,11 @@ export type CodepolPanels = {
 
 export type CodepolCommandHost = {
   activeUriGet(): string | undefined;
+  semanticSearchInitialQueryResolve(): string | undefined;
+  semanticSearchPick(input: {
+    initialQuery: string;
+    queryResults(query: string): Promise<WorkspaceSearchResult[] | null>;
+  }): Promise<WorkspaceSearchResult | null | undefined>;
   renameTargetsLoad(): Promise<RenameTargetCandidate[]>;
   renameTargetPick(
     candidates: RenameTargetCandidate[],
@@ -73,6 +84,59 @@ export class CodepolCommandController {
     private readonly panels: CodepolPanels,
     private readonly host: CodepolCommandHost,
   ) {}
+
+  async showSemanticSearch(
+    options: SemanticSearchCommandOptions = {},
+  ): Promise<WorkspaceSearchResult | null> {
+    const initialQuery =
+      options.query ?? this.host.semanticSearchInitialQueryResolve() ?? '';
+
+    if (options.autoOpenFirstResult === true) {
+      const results = await this.protocol.querySemanticSearch(initialQuery);
+      if (!results) {
+        await this.host.errorShow(
+          'Codepol semantic search is not available for this workspace yet.',
+        );
+        return null;
+      }
+      const firstResult = results[0];
+      if (!firstResult) {
+        await this.host.infoShow(
+          initialQuery.length > 0
+            ? `No Codepol semantic search results matched "${initialQuery}".`
+            : 'No Codepol semantic search results are available yet.',
+        );
+        return null;
+      }
+      await this.host.openLocation({
+        uri: firstResult.location.uri,
+        line: firstResult.location.range.start.line,
+        character: firstResult.location.range.start.character,
+      });
+      return firstResult;
+    }
+
+    const picked = await this.host.semanticSearchPick({
+      initialQuery,
+      queryResults: (query) => this.protocol.querySemanticSearch(query),
+    });
+    if (picked === null) {
+      await this.host.errorShow(
+        'Codepol semantic search is not available for this workspace yet.',
+      );
+      return null;
+    }
+    if (!picked) {
+      return null;
+    }
+
+    await this.host.openLocation({
+      uri: picked.location.uri,
+      line: picked.location.range.start.line,
+      character: picked.location.range.start.character,
+    });
+    return picked;
+  }
 
   async showSemanticDefinition(uri?: string): Promise<SemanticDefinitionPanelViewModel | null> {
     const targetUri = uri ?? this.host.activeUriGet();

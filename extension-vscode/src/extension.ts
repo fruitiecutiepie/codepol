@@ -1,13 +1,18 @@
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import type { WorkspaceSupportedRenameTarget } from '@codepol/core';
+import type { WorkspaceSearchResult } from '@codepol/core';
 import { configFileDiscover } from '@codepol/core';
-import { CodepolCommandController, type RenameCommandOptions } from './commands';
+import {
+  CodepolCommandController,
+  type RenameCommandOptions,
+  type SemanticSearchCommandOptions,
+} from './commands';
 import {
   CODEPOL_EXTENSION_COMMAND_REFRESH_RENAME_TARGETS,
   CODEPOL_EXTENSION_COMMAND_RENAME_CODEPOL_ENTITY,
   CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_LINKS,
   CODEPOL_EXTENSION_COMMAND_SHOW_SEMANTIC_DEFINITION,
+  CODEPOL_EXTENSION_COMMAND_SHOW_SEMANTIC_SEARCH,
 } from './constants';
 import {
   renameTargetCandidatesDiscover,
@@ -18,6 +23,10 @@ import {
   VscodeLanguageClientProtocol,
   type CodepolProtocolClient,
 } from './protocolClient';
+import {
+  semanticSearchInitialQueryResolve,
+  semanticSearchQuickPickItemsCreate,
+} from './semanticSearch';
 import {
   CurrentContextTreeProvider,
   RenameTargetsTreeProvider,
@@ -36,6 +45,10 @@ function activeEditorUriGet(): string | undefined {
   }
   return editor.document.uri.toString();
 }
+
+type SemanticSearchQuickPickItem = vscode.QuickPickItem & {
+  result?: WorkspaceSearchResult;
+};
 
 async function locationOpen(input: {
   uri: string;
@@ -125,6 +138,118 @@ async function renamePrompt(input: {
   });
 }
 
+function semanticSearchQueryResolve(): string | undefined {
+  return semanticSearchInitialQueryResolve(vscode.window.activeTextEditor);
+}
+
+function semanticSearchItemsMap(
+  results: WorkspaceSearchResult[],
+  query: string,
+): SemanticSearchQuickPickItem[] {
+  return semanticSearchQuickPickItemsCreate(results, query).map((item) => ({
+    label: item.label,
+    description: item.description,
+    detail: item.detail,
+    alwaysShow: item.alwaysShow,
+    result: item.result,
+  }));
+}
+
+async function semanticSearchPick(input: {
+  initialQuery: string;
+  queryResults(query: string): Promise<WorkspaceSearchResult[] | null>;
+}): Promise<WorkspaceSearchResult | null | undefined> {
+  return new Promise((resolve) => {
+    const quickPick = vscode.window.createQuickPick<SemanticSearchQuickPickItem>();
+    let settled = false;
+    let debounceHandle: ReturnType<typeof setTimeout> | undefined;
+    let requestVersion = 0;
+
+    const finish = (
+      value: WorkspaceSearchResult | null | undefined,
+    ): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (debounceHandle) {
+        clearTimeout(debounceHandle);
+      }
+      quickPick.hide();
+      quickPick.dispose();
+      resolve(value);
+    };
+
+    const refresh = (query: string): void => {
+      const currentRequestVersion = ++requestVersion;
+      quickPick.busy = true;
+      void input
+        .queryResults(query)
+        .then((results) => {
+          if (settled || currentRequestVersion !== requestVersion) {
+            return;
+          }
+          quickPick.busy = false;
+          if (results === null) {
+            finish(null);
+            return;
+          }
+          quickPick.items = semanticSearchItemsMap(results, query);
+        })
+        .catch((error: unknown) => {
+          if (settled || currentRequestVersion !== requestVersion) {
+            return;
+          }
+          quickPick.busy = false;
+          quickPick.items = [
+            {
+              label: 'Semantic search failed',
+              description: 'Codepol semantic search',
+              detail: error instanceof Error ? error.message : String(error),
+              alwaysShow: true,
+            },
+          ];
+        });
+    };
+
+    const refreshSchedule = (): void => {
+      if (debounceHandle) {
+        clearTimeout(debounceHandle);
+      }
+      debounceHandle = setTimeout(() => {
+        refresh(quickPick.value);
+      }, 150);
+    };
+
+    quickPick.title = 'Codepol: Semantic Search';
+    quickPick.placeholder = 'Search workspace modules and exported symbols';
+    quickPick.matchOnDescription = true;
+    quickPick.matchOnDetail = true;
+    quickPick.ignoreFocusOut = true;
+    quickPick.items = [
+      {
+        label: 'Searching…',
+        description: 'Codepol semantic search',
+        alwaysShow: true,
+      },
+    ];
+    quickPick.value = input.initialQuery;
+
+    quickPick.onDidChangeValue(() => {
+      refreshSchedule();
+    });
+    quickPick.onDidAccept(() => {
+      finish(quickPick.selectedItems[0]?.result);
+    });
+    quickPick.onDidHide(() => {
+      finish(undefined);
+    });
+
+    quickPick.show();
+    refreshSchedule();
+  });
+}
+
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const protocol = new VscodeLanguageClientProtocol();
   await protocol.start();
@@ -150,6 +275,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   controller = new CodepolCommandController(protocol, panels, {
     activeUriGet: activeEditorUriGet,
+    semanticSearchInitialQueryResolve: semanticSearchQueryResolve,
+    semanticSearchPick,
     renameTargetsLoad,
     renameTargetPick,
     renamePrompt,
@@ -175,6 +302,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand(
       CODEPOL_EXTENSION_COMMAND_SHOW_SEMANTIC_DEFINITION,
       async (uri?: string) => controller?.showSemanticDefinition(uri),
+    ),
+    vscode.commands.registerCommand(
+      CODEPOL_EXTENSION_COMMAND_SHOW_SEMANTIC_SEARCH,
+      async (options?: SemanticSearchCommandOptions) =>
+        controller?.showSemanticSearch(options),
     ),
     vscode.commands.registerCommand(
       CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_LINKS,

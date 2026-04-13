@@ -46,9 +46,28 @@ export async function run(): Promise<void> {
   assert.ok(extension, 'Expected the Codepol VS Code extension to be installed.');
   await extension.activate();
 
-  await documentOpen(path.join('packages', 'lib', 'src', 'index.ts'));
+  await documentOpen(path.join('apps', 'web', 'src', 'app.ts'));
+  await vscode.commands.executeCommand('codepol.extension.showSemanticSearch', {
+    query: 'sharedValue',
+    autoOpenFirstResult: true,
+  });
   await vscode.commands.executeCommand('codepol.extension.showSemanticDefinition');
   await vscode.commands.executeCommand('codepol.extension.showArchitectureLinks');
+
+  const activeEditor = vscode.window.activeTextEditor;
+  assert.ok(activeEditor, 'Expected semantic search to open a result.');
+  assert.equal(
+    activeEditor.document.uri.fsPath,
+    path.join(
+      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '',
+      'packages',
+      'lib',
+      'src',
+      'index.ts',
+    ),
+  );
+  assert.equal(activeEditor.selection.active.line, 0);
+  assert.equal(activeEditor.selection.active.character, 13);
 
   await vscode.commands.executeCommand('codepol.extension.renameCodepolEntity', {
     target: {

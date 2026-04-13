@@ -16,6 +16,7 @@ import type {
   WorkspaceSemanticDefinitionResult,
   WorkspaceSemanticHoverResult,
   WorkspaceSemanticReferencesResult,
+  WorkspaceSearchResult,
 } from '@codepol/core';
 import {
   CODEPOL_LSP_COMMAND_APPLY_EDIT_PLAN,
@@ -25,6 +26,7 @@ import {
   CODEPOL_LSP_REQUEST_SEMANTIC_DEFINITION,
   CODEPOL_LSP_REQUEST_SEMANTIC_HOVER,
   CODEPOL_LSP_REQUEST_SEMANTIC_REFERENCES,
+  CODEPOL_LSP_REQUEST_SEMANTIC_SEARCH,
 } from '@codepol/lsp/protocol';
 
 const nodeRequire = createRequire(__filename);
@@ -33,6 +35,7 @@ export type CodepolProtocolClient = {
   start(): Promise<void>;
   stop(): Promise<void>;
   queryIndexStatus(): Promise<IndexStatusResult | null>;
+  querySemanticSearch(query: string): Promise<WorkspaceSearchResult[] | null>;
   querySemanticDefinition(uri: string): Promise<WorkspaceSemanticDefinitionResult | null>;
   querySemanticReferences(uri: string): Promise<WorkspaceSemanticReferencesResult | null>;
   querySemanticHover(uri: string): Promise<WorkspaceSemanticHoverResult | null>;
@@ -89,6 +92,15 @@ export class VscodeLanguageClientProtocol implements CodepolProtocolClient {
   async queryIndexStatus(): Promise<IndexStatusResult | null> {
     return this.client.sendRequest<IndexStatusResult | null>(
       CODEPOL_LSP_REQUEST_INDEX_STATUS,
+    );
+  }
+
+  async querySemanticSearch(
+    query: string,
+  ): Promise<WorkspaceSearchResult[] | null> {
+    return this.client.sendRequest<WorkspaceSearchResult[] | null>(
+      CODEPOL_LSP_REQUEST_SEMANTIC_SEARCH,
+      { query },
     );
   }
 

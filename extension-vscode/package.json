@@ -16,6 +16,7 @@
   "activationEvents": [
     "workspaceContains:codepol.toml",
     "onCommand:codepol.extension.showSemanticDefinition",
+    "onCommand:codepol.extension.showSemanticSearch",
     "onCommand:codepol.extension.showArchitectureLinks",
     "onCommand:codepol.extension.renameCodepolEntity",
     "onView:codepol.currentContext",
@@ -30,6 +31,10 @@
       {
         "command": "codepol.extension.showSemanticDefinition",
         "title": "Codepol: Show Semantic Definition"
+      },
+      {
+        "command": "codepol.extension.showSemanticSearch",
+        "title": "Codepol: Semantic Search"
       },
       {
         "command": "codepol.extension.showArchitectureLinks",
