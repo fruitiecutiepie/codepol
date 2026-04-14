@@ -69,7 +69,12 @@ process.stdin.on('data', (chunk: Buffer) => {
     const payload = buffer.subarray(bodyStart, bodyEnd).toString('utf8');
     buffer = buffer.subarray(bodyEnd);
 
-    void server.handleMessage(JSON.parse(payload) as never);
+    void server.handleMessage(JSON.parse(payload) as never).catch((error) => {
+      const message = error instanceof Error
+        ? (error.stack ?? error.message)
+        : String(error);
+      process.stderr.write(`[codepol-lsp] unhandled message error: ${message}\n`);
+    });
   }
 });
 

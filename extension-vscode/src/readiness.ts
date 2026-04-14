@@ -24,6 +24,8 @@ export type CodepolReadinessFeature =
   | 'architectureLinks'
   | 'workspacePackageRename';
 
+export type CodepolProtocolConnectionState = 'stopped' | 'starting' | 'running';
+
 export type CodepolFeatureGate = {
   blocked: boolean;
   state: CodepolReadinessState;
@@ -35,6 +37,21 @@ export type CodepolStatusBarPresentation = {
   tooltip: string;
   tone: SidebarTone;
 };
+
+function errorMessageResolve(error: unknown): string | undefined {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'message' in error &&
+    typeof error.message === 'string'
+  ) {
+    return error.message;
+  }
+  return undefined;
+}
 
 function featureLabelResolve(feature: CodepolReadinessFeature): string {
   switch (feature) {
@@ -144,6 +161,35 @@ export function codepolWorkspacePackageRenameEnabledResolve(
   snapshot: CodepolReadinessSnapshot,
 ): boolean {
   return !codepolFeatureGateResolve(snapshot, 'workspacePackageRename').blocked;
+}
+
+export function codepolConnectionDisposedErrorIs(error: unknown): boolean {
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error.code === -32097 || error.code === -32096)
+  ) {
+    return true;
+  }
+
+  const message = errorMessageResolve(error);
+  if (!message) {
+    return false;
+  }
+
+  return (
+    message.includes('Pending response rejected since connection got disposed') ||
+    message.includes('Connection is disposed.') ||
+    message.includes('Client is not running')
+  );
+}
+
+export function codepolProtocolStartNeededResolve(input: {
+  hasStartPromise: boolean;
+  state: CodepolProtocolConnectionState;
+}): boolean {
+  return !input.hasStartPromise || input.state === 'stopped';
 }
 
 function statusBarIconResolve(state: CodepolReadinessState): string {

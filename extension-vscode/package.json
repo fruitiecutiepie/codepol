@@ -21,6 +21,7 @@
     "onCommand:codepol.extension.showSemanticSearch",
     "onCommand:codepol.extension.showArchitectureLinks",
     "onCommand:codepol.extension.renameCodepolEntity",
+    "onCommand:codepol.extension.refreshRenameTargets",
     "onView:codepol.currentContext",
     "onView:codepol.renameTargets"
   ],

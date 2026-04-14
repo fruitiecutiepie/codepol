@@ -297,7 +297,6 @@ async function semanticSearchPick(input: {
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const protocol = new VscodeLanguageClientProtocol();
-  await protocol.start();
   protocolClient = protocol;
   const readiness = new CodepolReadinessController(protocol);
   const statusBarItem = vscode.window.createStatusBarItem(
@@ -420,6 +419,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       renameTargetsProvider.refresh();
     }),
   );
+
+  void protocol.start().catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    void vscode.window.showErrorMessage(`Codepol failed to start the language client: ${message}`);
+  });
   readiness.start();
 
   const packageWatcher = vscode.workspace.createFileSystemWatcher('**/package.json');

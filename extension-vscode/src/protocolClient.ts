@@ -8,6 +8,7 @@ import type {
 } from 'vscode-languageclient/node';
 import {
   LanguageClient,
+  State,
   TransportKind,
 } from 'vscode-languageclient/node';
 import type {
@@ -34,6 +35,11 @@ import {
   CODEPOL_LSP_REQUEST_SEMANTIC_REFERENCES,
   CODEPOL_LSP_REQUEST_SEMANTIC_SEARCH,
 } from '@codepol/lsp/protocol';
+import {
+  codepolConnectionDisposedErrorIs,
+  codepolProtocolStartNeededResolve,
+  type CodepolProtocolConnectionState,
+} from './readiness';
 
 const nodeRequire = createRequire(__filename);
 
@@ -63,9 +69,18 @@ export type CodepolProtocolClient = {
 };
 
 export class VscodeLanguageClientProtocol implements CodepolProtocolClient {
-  private readonly client: LanguageClient;
+  private readonly client: Pick<LanguageClient, 'start' | 'state' | 'stop' | 'sendRequest'>;
+  private startPromise: Promise<void> | undefined;
+  private startError: unknown;
 
-  constructor() {
+  constructor(
+    client?: Pick<LanguageClient, 'start' | 'state' | 'stop' | 'sendRequest'>,
+  ) {
+    if (client) {
+      this.client = client;
+      return;
+    }
+
     const serverModule = bundledServerModulePathResolve() ?? nodeRequire.resolve('@codepol/lsp');
     const serverOptions: ServerOptions = {
       run: {
@@ -93,29 +108,99 @@ export class VscodeLanguageClientProtocol implements CodepolProtocolClient {
     );
   }
 
+  private connectionStateResolve(): CodepolProtocolConnectionState {
+    if (this.client.state === State.Running) {
+      return 'running';
+    }
+    if (this.client.state === State.Starting) {
+      return 'starting';
+    }
+    return 'stopped';
+  }
+
   async start(): Promise<void> {
-    const started = this.client.start();
-    await Promise.resolve(started);
+    if (
+      codepolProtocolStartNeededResolve({
+        hasStartPromise: this.startPromise !== undefined,
+        state: this.connectionStateResolve(),
+      })
+    ) {
+      this.startError = undefined;
+      const started = this.client.start();
+      this.startPromise = Promise.resolve(started).catch((error) => {
+        this.startError = error;
+        throw error;
+      });
+    }
+    await this.startPromise;
   }
 
   async stop(): Promise<void> {
     await this.client.stop();
+    this.startPromise = undefined;
+    this.startError = undefined;
+  }
+
+  private async ensureStarted(): Promise<void> {
+    if (
+      codepolProtocolStartNeededResolve({
+        hasStartPromise: this.startPromise !== undefined,
+        state: this.connectionStateResolve(),
+      })
+    ) {
+      await this.start();
+      return;
+    }
+
+    if (this.startError) {
+      throw this.startError;
+    }
+
+    await this.startPromise;
+  }
+
+  private async requestSend<TResult>(
+    method: string,
+    params?: unknown,
+  ): Promise<TResult> {
+    if (params === undefined) {
+      return this.client.sendRequest<TResult>(method);
+    }
+    return this.client.sendRequest<TResult>(method, params);
+  }
+
+  private async requestRun<TResult>(
+    method: string,
+    params?: unknown,
+  ): Promise<TResult> {
+    await this.ensureStarted();
+
+    try {
+      return await this.requestSend<TResult>(method, params);
+    } catch (error) {
+      if (!codepolConnectionDisposedErrorIs(error)) {
+        throw error;
+      }
+
+      await this.start();
+      return this.requestSend<TResult>(method, params);
+    }
   }
 
   async queryIndexStatus(): Promise<IndexStatusResult | null> {
-    return this.client.sendRequest<IndexStatusResult | null>(
+    return this.requestRun<IndexStatusResult | null>(
       CODEPOL_LSP_REQUEST_INDEX_STATUS,
     );
   }
 
   async queryArchitectureSummary(): Promise<WorkspaceArchitectureSummaryResult | null> {
-    return this.client.sendRequest<WorkspaceArchitectureSummaryResult | null>(
+    return this.requestRun<WorkspaceArchitectureSummaryResult | null>(
       CODEPOL_LSP_REQUEST_ARCHITECTURE_SUMMARY,
     );
   }
 
   async queryDependencyGraph(): Promise<WorkspaceDependencyGraphResult | null> {
-    return this.client.sendRequest<WorkspaceDependencyGraphResult | null>(
+    return this.requestRun<WorkspaceDependencyGraphResult | null>(
       CODEPOL_LSP_REQUEST_DEPENDENCY_GRAPH,
     );
   }
@@ -123,7 +208,7 @@ export class VscodeLanguageClientProtocol implements CodepolProtocolClient {
   async querySemanticSearch(
     query: string,
   ): Promise<WorkspaceSearchResult[] | null> {
-    return this.client.sendRequest<WorkspaceSearchResult[] | null>(
+    return this.requestRun<WorkspaceSearchResult[] | null>(
       CODEPOL_LSP_REQUEST_SEMANTIC_SEARCH,
       { query },
     );
@@ -132,7 +217,7 @@ export class VscodeLanguageClientProtocol implements CodepolProtocolClient {
   async querySemanticDefinition(
     uri: string,
   ): Promise<WorkspaceSemanticDefinitionResult | null> {
-    return this.client.sendRequest<WorkspaceSemanticDefinitionResult | null>(
+    return this.requestRun<WorkspaceSemanticDefinitionResult | null>(
       CODEPOL_LSP_REQUEST_SEMANTIC_DEFINITION,
       { uri },
     );
@@ -141,7 +226,7 @@ export class VscodeLanguageClientProtocol implements CodepolProtocolClient {
   async querySemanticReferences(
     uri: string,
   ): Promise<WorkspaceSemanticReferencesResult | null> {
-    return this.client.sendRequest<WorkspaceSemanticReferencesResult | null>(
+    return this.requestRun<WorkspaceSemanticReferencesResult | null>(
       CODEPOL_LSP_REQUEST_SEMANTIC_REFERENCES,
       { uri },
     );
@@ -150,7 +235,7 @@ export class VscodeLanguageClientProtocol implements CodepolProtocolClient {
   async querySemanticHover(
     uri: string,
   ): Promise<WorkspaceSemanticHoverResult | null> {
-    return this.client.sendRequest<WorkspaceSemanticHoverResult | null>(
+    return this.requestRun<WorkspaceSemanticHoverResult | null>(
       CODEPOL_LSP_REQUEST_SEMANTIC_HOVER,
       { uri },
     );
@@ -159,7 +244,7 @@ export class VscodeLanguageClientProtocol implements CodepolProtocolClient {
   async prepareRename(
     target: WorkspaceRenameTarget,
   ): Promise<WorkspacePrepareRenameResult | null> {
-    return this.client.sendRequest<WorkspacePrepareRenameResult | null>(
+    return this.requestRun<WorkspacePrepareRenameResult | null>(
       CODEPOL_LSP_REQUEST_PREPARE_RENAME,
       { target },
     );
@@ -169,7 +254,7 @@ export class VscodeLanguageClientProtocol implements CodepolProtocolClient {
     target: WorkspaceRenameTarget,
     newName: string,
   ): Promise<WorkspaceRenamePreviewResult | null> {
-    return this.client.sendRequest<WorkspaceRenamePreviewResult | null>(
+    return this.requestRun<WorkspaceRenamePreviewResult | null>(
       CODEPOL_LSP_REQUEST_PREVIEW_RENAME,
       { target, newName },
     );
@@ -180,6 +265,6 @@ export class VscodeLanguageClientProtocol implements CodepolProtocolClient {
       command: CODEPOL_LSP_COMMAND_APPLY_EDIT_PLAN,
       arguments: [{ planId }],
     };
-    await this.client.sendRequest('workspace/executeCommand', params);
+    await this.requestRun('workspace/executeCommand', params);
   }
 }
