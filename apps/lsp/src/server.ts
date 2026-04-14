@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  configFileDiscover,
   workspaceUriToPath,
   type IndexStatusResult,
   type WorkspaceArchitectureSummaryResult,
@@ -16,12 +17,7 @@ import {
   type WorkspaceSemanticReferencesResult,
   type WorkspaceSymbolResult,
 } from '@codepol/core';
-import {
-  configDiscover,
-  WorkspaceServiceEngine,
-  workspaceServiceCreate,
-  type WorkspaceService,
-} from '@codepol/workspace-service';
+import type { WorkspaceService } from '@codepol/workspace-service/contracts';
 import {
   CODEPOL_LSP_COMMAND_APPLY_EDIT_PLAN,
   CODEPOL_LSP_COMMAND_GO_TO_SEMANTIC_DEFINITION,
@@ -90,6 +86,18 @@ type LspRange = {
 type SendMessage = (message: JsonRpcRequest | JsonRpcNotification | JsonRpcResponse) => void;
 type WorkspaceServiceFactory = () => WorkspaceService | Promise<WorkspaceService>;
 type TimeoutHandle = ReturnType<typeof setTimeout>;
+const bundledRuntime = process.env.CODEPOL_BUNDLED_RUNTIME === '1';
+const workspaceServiceDefaultFactory: WorkspaceServiceFactory | undefined =
+  bundledRuntime
+    ? undefined
+    : async () => {
+        const runtime = await import('@codepol/workspace-service');
+        return runtime.workspaceServiceCreate({
+          engine: new runtime.WorkspaceServiceEngine({
+            backgroundWarmup: true,
+          }),
+        });
+      };
 
 function promiseLikeIs<T>(value: T | Promise<T>): value is Promise<T> {
   return (
@@ -362,12 +370,10 @@ export class CodepolLspServer {
     this.service = options.service;
     this.serviceFactory =
       options.serviceFactory ??
-      (() =>
-        workspaceServiceCreate({
-          engine: new WorkspaceServiceEngine({
-            backgroundWarmup: true,
-          }),
-        }));
+      workspaceServiceDefaultFactory ??
+      (() => {
+        throw new Error('Codepol LSP requires an explicit workspace service factory in bundled mode');
+      });
     this.sendMessage = options.sendMessage;
     this.clientInstanceId = options.clientInstanceId ?? `codepol-lsp-${process.pid}`;
     this.stableClientSessionId = options.clientSessionId ?? `client-${randomUUID()}`;
@@ -954,7 +960,10 @@ export class CodepolLspServer {
     if (rootUri && this.registeredClientSessionId) {
       try {
         const rootPath = workspaceUriToPath(rootUri);
-        const { configPath } = await configDiscover(rootPath);
+        const configPath = await configFileDiscover(rootPath);
+        if (!configPath) {
+          throw new Error('No codepol config file found');
+        }
         this.workspaceRootPath = rootPath;
         this.workspaceConfigPath = configPath;
         const attached = await service.attachWorkspace({

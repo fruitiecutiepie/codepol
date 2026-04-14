@@ -25,12 +25,12 @@ import type {
 import type {
   WorkspaceDiagnosticsSubscriptionResult,
   WorkspaceDiagnosticsSubscriptionScope,
+  WorkspaceClientKind,
   WorkspacePolicyCheckOptions,
   WorkspacePolicyCheckResult,
   WorkspaceReplayResult,
-  WorkspaceClientKind,
   WorkspaceService,
-} from './index';
+} from './contracts';
 
 export const WORKSPACE_DAEMON_PROTOCOL_VERSION = '0.1';
 export const WORKSPACE_DAEMON_ENGINE_VERSION =

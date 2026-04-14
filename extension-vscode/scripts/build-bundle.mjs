@@ -44,7 +44,26 @@ async function main() {
     },
     entryPoints: {
       extension: path.join(extensionRoot, 'src/extension.ts'),
-      lsp: path.join(repoRoot, 'apps/lsp/src/index.ts'),
+      lsp: path.join(repoRoot, 'apps/lsp/src/indexBundled.ts'),
+    },
+    external: ['vscode', '@codepol/workspace-service'],
+    format: 'cjs',
+    logLevel: 'warning',
+    minify: production,
+    outdir: bundleRoot,
+    platform: 'node',
+    sourcemap: !production,
+    sourcesContent: false,
+    target: 'node18',
+  });
+
+  await esbuild.build({
+    absWorkingDir: repoRoot,
+    bundle: true,
+    define: {
+      'process.env.CODEPOL_BUNDLED_RUNTIME': JSON.stringify('1'),
+    },
+    entryPoints: {
       daemon: path.join(repoRoot, 'apps/daemon/src/index.ts'),
     },
     external: ['vscode'],

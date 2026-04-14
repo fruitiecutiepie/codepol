@@ -4,15 +4,14 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import {
   WorkspaceDaemonServiceClient,
-  WorkspaceServiceEngine,
   workspaceDaemonLaunchOrConnect,
-  workspaceServiceCreate,
   WORKSPACE_DAEMON_PROTOCOL_VERSION,
   type WorkspaceDaemonConnectFn,
-  type WorkspaceService,
-} from '@codepol/workspace-service';
+} from '@codepol/workspace-service/daemon';
+import type { WorkspaceService } from '@codepol/workspace-service/contracts';
 
 const nodeRequire = createRequire(__filename);
+const runtimeBundled = process.env.CODEPOL_BUNDLED_RUNTIME === '1';
 
 export type LspWorkspaceServiceMode = 'in_process' | 'daemon';
 export type LspWorkspaceServiceResolvedMode =
@@ -53,6 +52,15 @@ function errorAsError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
+async function workspaceServiceInProcessCreate(): Promise<WorkspaceService> {
+  const runtime = await import('@codepol/workspace-service');
+  return runtime.workspaceServiceCreate({
+    engine: new runtime.WorkspaceServiceEngine({
+      backgroundWarmup: true,
+    }),
+  });
+}
+
 export async function lspWorkspaceServiceResolve(options: {
   env?: NodeJS.ProcessEnv;
   clientInstanceId?: string;
@@ -65,11 +73,10 @@ export async function lspWorkspaceServiceResolve(options: {
   const mode = lspWorkspaceServiceModeGet(env);
 
   if (mode === 'in_process') {
-    const service = workspaceServiceCreate({
-      engine: new WorkspaceServiceEngine({
-        backgroundWarmup: true,
-      }),
-    });
+    if (runtimeBundled) {
+      throw new Error('CODEPOL_WORKSPACE_SERVICE_MODE=in_process is unavailable in the bundled runtime');
+    }
+    const service = await workspaceServiceInProcessCreate();
     options.onResolved?.({ mode: 'in_process' });
     return service;
   }
@@ -82,7 +89,7 @@ export async function lspWorkspaceServiceResolve(options: {
         clientVersion: '1.0.0',
         instanceId: clientInstanceId,
         supportedProtocols: [WORKSPACE_DAEMON_PROTOCOL_VERSION],
-        supportsFallbackModes: ['in_process'],
+        supportsFallbackModes: runtimeBundled ? [] : ['in_process'],
       },
       runtimeDir: env.CODEPOL_DAEMON_RUNTIME_DIR,
       expectedInstallId: env.CODEPOL_INSTALL_ID,
@@ -97,15 +104,11 @@ export async function lspWorkspaceServiceResolve(options: {
     return new WorkspaceDaemonServiceClient(launched.connection);
   } catch (error) {
     const daemonError = errorAsError(error);
-    if (options.allowInProcessFallback === false) {
+    if (options.allowInProcessFallback === false || runtimeBundled) {
       throw daemonError;
     }
 
-    const service = workspaceServiceCreate({
-      engine: new WorkspaceServiceEngine({
-        backgroundWarmup: true,
-      }),
-    });
+    const service = await workspaceServiceInProcessCreate();
     options.onResolved?.({
       mode: 'in_process_fallback',
       error: daemonError,
