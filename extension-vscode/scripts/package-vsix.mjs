@@ -32,6 +32,35 @@ const expectedArchivePaths = [
   'extension/node_modules/@codepol/plugin-eslint/dist/index.js',
   'extension/node_modules/vscode-languageclient/lib/node/main.js',
 ];
+const nodeModulesPruneDirNames = new Set([
+  '.github',
+  '.vscode',
+  '__tests__',
+  'coverage',
+  'doc',
+  'docs',
+  'example',
+  'examples',
+  'test',
+  'tests',
+]);
+const nodeModulesPruneFilePatterns = [
+  /^\.editorconfig$/iu,
+  /^\.gitattributes$/iu,
+  /^\.gitignore$/iu,
+  /^\.npmignore$/iu,
+  /^authors?(?:\..+)?$/iu,
+  /^changelog(?:\..+)?$/iu,
+  /^history(?:\..+)?$/iu,
+  /^license(?:\..+)?$/iu,
+  /^licence(?:\..+)?$/iu,
+  /^notice(?:\..+)?$/iu,
+  /^readme(?:\..+)?$/iu,
+  /^security(?:\..+)?$/iu,
+  /^thirdpartynoticetext(?:\..+)?$/iu,
+  /^tsconfig(?:\..+)?\.json$/iu,
+  /\.map$/iu,
+];
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -51,6 +80,66 @@ function run(command, args, options = {}) {
 
 function removeIfExists(entryPath) {
   fs.rmSync(entryPath, { recursive: true, force: true });
+}
+
+function nodeModulesArtifactPruneRecursive(entryPath) {
+  const entryName = path.basename(entryPath);
+  let stat;
+  try {
+    stat = fs.statSync(entryPath);
+  } catch {
+    return;
+  }
+
+  if (stat.isDirectory()) {
+    if (nodeModulesPruneDirNames.has(entryName)) {
+      removeIfExists(entryPath);
+      return;
+    }
+    for (const childName of fs.readdirSync(entryPath)) {
+      nodeModulesArtifactPruneRecursive(path.join(entryPath, childName));
+    }
+    return;
+  }
+
+  if (nodeModulesPruneFilePatterns.some((pattern) => pattern.test(entryName))) {
+    removeIfExists(entryPath);
+  }
+}
+
+function typescriptPackagePrune() {
+  const typescriptRoot = path.join(stageRoot, 'node_modules', 'typescript');
+  if (!fs.existsSync(typescriptRoot)) {
+    return;
+  }
+
+  const keepAtRoot = new Set(['lib', 'package.json']);
+  for (const entryName of fs.readdirSync(typescriptRoot)) {
+    if (!keepAtRoot.has(entryName)) {
+      removeIfExists(path.join(typescriptRoot, entryName));
+    }
+  }
+
+  const libDir = path.join(typescriptRoot, 'lib');
+  if (!fs.existsSync(libDir)) {
+    return;
+  }
+
+  for (const entryName of fs.readdirSync(libDir)) {
+    if (entryName !== 'typescript.js') {
+      removeIfExists(path.join(libDir, entryName));
+    }
+  }
+}
+
+function nodeModulesPrune() {
+  const nodeModulesRoot = path.join(stageRoot, 'node_modules');
+  if (!fs.existsSync(nodeModulesRoot)) {
+    return;
+  }
+
+  nodeModulesArtifactPruneRecursive(nodeModulesRoot);
+  typescriptPackagePrune();
 }
 
 function sourceManifestRead() {
@@ -201,6 +290,7 @@ const tarballDependencies = workspaceTarballsPack();
 stageRuntimeFilesCopy();
 installManifestWrite(tarballDependencies);
 run('npm', ['install', '--omit=dev'], { cwd: stageRoot });
+nodeModulesPrune();
 removeIfExists(path.join(stageRoot, 'package-lock.json'));
 finalManifestWrite();
 stageIgnoreWrite();
