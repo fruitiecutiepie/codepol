@@ -7,6 +7,8 @@
     "build:wasm": "node scripts/build-wasm.mjs",
     "build": "pnpm run build:wasm && pnpm -r build",
     "build:extension-vscode-stack": "pnpm --filter @codepol/core build && pnpm --filter @codepol/lsp build && pnpm --dir extension-vscode build",
+    "build:extension-vscode-vsix-stack": "pnpm run build:wasm && pnpm --filter @codepol/core build && pnpm --filter @codepol/plugin build && pnpm --filter @codepol/plugin-biome build && pnpm --filter @codepol/plugin-eslint build && pnpm --filter @codepol/plugin-ruff build && pnpm --filter @codepol/plugin-vulture build && pnpm --filter @codepol/workspace-service build && pnpm --filter @codepol/daemon build && pnpm --filter @codepol/lsp build && pnpm --dir extension-vscode build",
+    "package:extension-vscode:vsix": "pnpm --dir extension-vscode package:vsix",
     "dev:build": "pnpm exec tsc -b --watch --preserveWatchOutput",
     "dev:cli": "node --watch --enable-source-maps apps/cli/dist/index.js",
     "dev:daemon": "node --watch --enable-source-maps apps/daemon/dist/index.js",

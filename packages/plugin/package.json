@@ -22,7 +22,8 @@
   "dependencies": {
     "@codepol/plugin-eslint": "workspace:^",
     "@codepol/plugin-vulture": "workspace:^",
-    "minimatch": "^10.1.1"
+    "minimatch": "^10.1.1",
+    "typescript": "^5.9.3"
   },
   "peerDependencies": {
     "@codepol/core": "^1.0.0"

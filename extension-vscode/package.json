@@ -27,7 +27,6 @@
   "extensionKind": [
     "workspace"
   ],
-  "icon": "media/codepol.svg",
   "contributes": {
     "commands": [
       {
@@ -107,6 +106,7 @@
   "scripts": {
     "build": "tsc -b tsconfig.json",
     "watch": "tsc -b tsconfig.json --watch --preserveWatchOutput",
+    "package:vsix": "pnpm --dir .. run build:extension-vscode-vsix-stack && node ./scripts/package-vsix.mjs",
     "typecheck": "pnpm --filter @codepol/core build && pnpm --filter @codepol/lsp build && tsc --noEmit",
     "test:smoke": "pnpm run build && node ./dist/smoke/run.js"
   },
@@ -118,6 +118,7 @@
   "devDependencies": {
     "@types/node": "^25.0.3",
     "@types/vscode": "^1.96.0",
+    "@vscode/vsce": "^3.6.2",
     "@vscode/test-electron": "^2.5.2",
     "typescript": "^5.9.3"
   },

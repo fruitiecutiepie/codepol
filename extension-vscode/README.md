@@ -13,8 +13,15 @@ Useful local helpers:
 
 - `pnpm run dev:extension-vscode-stack`
 - `pnpm run test:extension-vscode:smoke`
+- `pnpm run package:extension-vscode:vsix`
 
 The checked-in VS Code tasks and launch config live at the repo root in `.vscode/`.
+
+## Packaging
+
+Run `pnpm run package:extension-vscode:vsix` from the repo root to build a local installable VSIX at `artifacts/codepol-extension-vscode.vsix`.
+
+The packaging flow packs the workspace runtime packages into local tarballs, installs them into a clean staging extension with `npm install --omit=dev`, runs `vsce`, and verifies that the VSIX contains the bundled Codepol runtime packages and Tree-sitter WASM assets.
 
 ## Smoke Test
 

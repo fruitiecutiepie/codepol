@@ -1,5 +1,8 @@
 src/**
 fixtures/**
 tsconfig.json
+dist/smoke/**
+**/*.d.ts
+**/*.d.ts.map
 **/*.map
 **/*.tsbuildinfo

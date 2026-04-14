@@ -15,6 +15,12 @@ tests/**/*.js.map
 !.vscode/launch.json
 !.vscode/tasks.json
 extension-vscode/.vscode-test/
+extension-vscode/.install-test/
+extension-vscode/.pack-test/
+extension-vscode/.vsix-stage/
+extension-vscode/.vsix-stage-materialized/
+extension-vscode/.vsix-tarballs/
+artifacts/*.vsix
 *.swp
 *.swo
 

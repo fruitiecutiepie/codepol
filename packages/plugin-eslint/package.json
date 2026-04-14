@@ -19,10 +19,12 @@
     "build": "tsc --project tsconfig.json",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@typescript-eslint/utils": "^8.53.0",
+    "fast-glob": "^3.3.3"
+  },
   "peerDependencies": {
     "@codepol/core": "^1.0.0",
-    "@typescript-eslint/utils": "^8.53.0",
     "eslint": "^9.0.0"
   },
   "devDependencies": {
