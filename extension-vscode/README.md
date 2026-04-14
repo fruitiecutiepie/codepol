@@ -21,7 +21,7 @@ The checked-in VS Code tasks and launch config live at the repo root in `.vscode
 
 Run `pnpm run package:extension-vscode:vsix` from the repo root to build a local installable VSIX at `artifacts/codepol-extension-vscode.vsix`.
 
-The packaging flow packs the workspace runtime packages into local tarballs, installs them into a clean staging extension with `npm install --omit=dev`, prunes non-runtime dependency artifacts from `node_modules`, runs `vsce`, and verifies that the VSIX contains the bundled Codepol runtime packages and Tree-sitter WASM assets.
+The packaging flow builds dedicated bundled `extension.js`, `lsp.js`, and `daemon.js` runtime entries into `dist-vsix/`, copies the required Tree-sitter WASM assets, stages that bundled payload into a clean extension, runs `vsce`, and verifies that the VSIX contains the bundled runtime files without `node_modules`.
 
 ## Smoke Test
 

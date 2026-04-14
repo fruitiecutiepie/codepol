@@ -10,6 +10,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import pluginBuiltinModule from '@codepol/plugin';
+import * as pluginVultureModule from '@codepol/plugin-vulture';
 import {
   langAdd,
   parserInit,
@@ -18,11 +20,16 @@ import {
 
 /** Resolved at runtime from compiled `dist/runtime.js` (CommonJS). */
 const nodeRequire = createRequire(path.join(__dirname, 'runtime.js'));
+const runtimeBundled = process.env.CODEPOL_BUNDLED_RUNTIME === '1';
 
 /**
  * Builtin rule packages registered into `@codepol/core` for `source = { kind = "builtin" }`.
  */
 const BUILTIN_PLUGIN_PACKAGES = ['@codepol/plugin', '@codepol/plugin-vulture'] as const;
+const BUILTIN_PLUGIN_BUNDLED_MODULES: Record<(typeof BUILTIN_PLUGIN_PACKAGES)[number], unknown> = {
+  '@codepol/plugin': pluginBuiltinModule,
+  '@codepol/plugin-vulture': pluginVultureModule,
+};
 
 let runtimeInitPromise: Promise<void> | undefined;
 
@@ -140,27 +147,60 @@ function pluginRuleExportsNormalize(moduleExports: unknown): unknown {
   return moduleExports;
 }
 
+function builtinPluginModuleLoad(
+  pkgName: (typeof BUILTIN_PLUGIN_PACKAGES)[number],
+): { default?: unknown } | unknown {
+  if (!runtimeBundled) {
+    try {
+      return nodeRequire(pkgName) as { default?: unknown };
+    } catch {
+      // Fall back to bundled modules when package resolution is unavailable.
+    }
+  }
+  return BUILTIN_PLUGIN_BUNDLED_MODULES[pkgName];
+}
+
 /**
  * Clears Node’s `require` cache for each builtin plugin package and re-registers rules in
  * core. Call before `policyPluginsGet` so long-lived processes see rebuilt package output.
  */
 export function builtinPluginsRefresh(): void {
   const roots: string[] = [];
-  for (const pkgName of BUILTIN_PLUGIN_PACKAGES) {
-    const entry = nodeRequire.resolve(pkgName);
-    roots.push(packageRootFindFromEntry(entry, pkgName));
+  if (!runtimeBundled) {
+    for (const pkgName of BUILTIN_PLUGIN_PACKAGES) {
+      const entry = nodeRequire.resolve(pkgName);
+      roots.push(packageRootFindFromEntry(entry, pkgName));
+    }
   }
   for (const root of roots) {
     packageCacheInvalidateUnderRoot(root);
   }
   for (const pkgName of BUILTIN_PLUGIN_PACKAGES) {
-    const mod = nodeRequire(pkgName) as { default?: unknown };
+    const mod = builtinPluginModuleLoad(pkgName) as { default?: unknown };
     const exported = pluginRuleExportsNormalize(mod.default ?? mod);
     pluginModuleRegister(pkgName, exported);
   }
 }
 
 export function builtinPluginArtifactPathsResolve(moduleSpecifier: string): string[] {
+  if (runtimeBundled) {
+    const candidates = [
+      path.resolve(__filename),
+      path.resolve(__dirname, 'tree-sitter.wasm'),
+      path.resolve(__dirname, 'tree-sitter-python.wasm'),
+      path.resolve(__dirname, 'tree-sitter-tsx.wasm'),
+      path.resolve(__dirname, 'tree-sitter-typescript.wasm'),
+    ];
+    return [...new Set(candidates)]
+      .filter((candidate) => {
+        try {
+          return fs.statSync(candidate).isFile();
+        } catch {
+          return false;
+        }
+      })
+      .sort();
+  }
   try {
     const entry = nodeRequire.resolve(moduleSpecifier);
     const root = packageRootFindFromEntry(entry, moduleSpecifier);

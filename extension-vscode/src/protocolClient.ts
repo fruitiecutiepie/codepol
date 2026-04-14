@@ -1,3 +1,5 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { createRequire } from 'node:module';
 import type {
   ExecuteCommandParams,
@@ -35,6 +37,11 @@ import {
 
 const nodeRequire = createRequire(__filename);
 
+function bundledServerModulePathResolve(): string | undefined {
+  const candidate = path.join(__dirname, 'lsp.js');
+  return fs.existsSync(candidate) ? candidate : undefined;
+}
+
 export type CodepolProtocolClient = {
   start(): Promise<void>;
   stop(): Promise<void>;
@@ -59,7 +66,7 @@ export class VscodeLanguageClientProtocol implements CodepolProtocolClient {
   private readonly client: LanguageClient;
 
   constructor() {
-    const serverModule = nodeRequire.resolve('@codepol/lsp');
+    const serverModule = bundledServerModulePathResolve() ?? nodeRequire.resolve('@codepol/lsp');
     const serverOptions: ServerOptions = {
       run: {
         module: serverModule,

@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 import { createRequire } from 'node:module';
 import {
   WorkspaceDaemonServiceClient,
@@ -31,6 +33,10 @@ export function lspWorkspaceServiceModeGet(
 }
 
 function daemonEntryPathResolve(): string {
+  const bundledDaemon = path.join(__dirname, 'daemon.js');
+  if (fs.existsSync(bundledDaemon)) {
+    return bundledDaemon;
+  }
   return nodeRequire.resolve('@codepol/daemon');
 }
 

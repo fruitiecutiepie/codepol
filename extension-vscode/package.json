@@ -105,6 +105,8 @@
   ],
   "scripts": {
     "build": "tsc -b tsconfig.json",
+    "bundle": "node ./scripts/build-bundle.mjs",
+    "bundle:prod": "node ./scripts/build-bundle.mjs --production",
     "watch": "tsc -b tsconfig.json --watch --preserveWatchOutput",
     "package:vsix": "pnpm --dir .. run build:extension-vscode-vsix-stack && node ./scripts/package-vsix.mjs",
     "typecheck": "pnpm --filter @codepol/core build && pnpm --filter @codepol/lsp build && tsc --noEmit",

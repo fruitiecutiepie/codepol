@@ -20,6 +20,7 @@ extension-vscode/.pack-test/
 extension-vscode/.vsix-stage/
 extension-vscode/.vsix-stage-materialized/
 extension-vscode/.vsix-tarballs/
+extension-vscode/dist-vsix/
 artifacts/*.vsix
 *.swp
 *.swo
