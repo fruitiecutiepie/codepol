@@ -11,6 +11,7 @@ import type { PolicyRule, PolicyCheckContext } from '@codepol/core';
 import { langAdd, parserInit } from '@codepol/core';
 
 beforeAll(async () => {
+  langAdd({ langId: 'typescript', fileExtensions: ['.ts', '.tsx', '.js', '.jsx'] });
   langAdd({ langId: 'python', fileExtensions: ['.py'] });
   await parserInit();
 });

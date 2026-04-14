@@ -1,8 +1,14 @@
-import { describe, it, expect } from 'vitest';
+import { beforeAll, describe, it, expect } from 'vitest';
 import { noInterfaceCheck } from './noInterfaceCheck';
 import { noInterfaceFix, interfaceToTypeAlias } from './noInterfaceFix';
-import type { PolicyRule, PolicyCheckContext } from '@codepol/core';
-import ts from 'typescript';
+import {
+  langAdd,
+  parserInit,
+  type PolicyRule,
+  type PolicyCheckContext,
+} from '@codepol/core';
+import type { SyntaxNode } from 'web-tree-sitter';
+import { parseJsTsSource } from './lib/jsTsTree';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -29,17 +35,24 @@ const createContext = (source: string, filePath = 'test.ts'): PolicyCheckContext
 
 /** Parse source and return the first InterfaceDeclaration node. */
 function firstInterfaceNode(source: string) {
-  const sf = ts.createSourceFile('temp.ts', source, ts.ScriptTarget.Latest, true);
-  let found: ts.InterfaceDeclaration | undefined;
-  function visit(node: ts.Node) {
-    if (!found && ts.isInterfaceDeclaration(node)) {
+  const { root } = parseJsTsSource('temp.ts', source);
+  let found: SyntaxNode | undefined;
+  function visit(node: SyntaxNode) {
+    if (!found && node.type === 'interface_declaration') {
       found = node;
     }
-    ts.forEachChild(node, visit);
+    for (const child of node.namedChildren) {
+      visit(child);
+    }
   }
-  visit(sf);
-  return { node: found!, sourceFile: sf, source };
+  visit(root);
+  return { node: found!, source };
 }
+
+beforeAll(async () => {
+  langAdd({ langId: 'typescript', fileExtensions: ['.ts', '.tsx', '.js', '.jsx'] });
+  await parserInit();
+});
 
 // ---------------------------------------------------------------------------
 // noInterfaceCheck
@@ -158,8 +171,8 @@ interface Late { v: string }`;
 describe('interfaceToTypeAlias', () => {
   it('converts a simple interface to a type alias', () => {
     const source = 'interface Foo { x: string }';
-    const { node, sourceFile } = firstInterfaceNode(source);
-    const result = interfaceToTypeAlias(node, sourceFile, source);
+    const { node } = firstInterfaceNode(source);
+    const result = interfaceToTypeAlias(node, source);
 
     expect(result).toMatch(/^type Foo = \{/);
     expect(result).toContain('x: string');
@@ -168,8 +181,8 @@ describe('interfaceToTypeAlias', () => {
 
   it('converts a generic interface preserving type parameters', () => {
     const source = 'interface Foo<T> { data: T }';
-    const { node, sourceFile } = firstInterfaceNode(source);
-    const result = interfaceToTypeAlias(node, sourceFile, source);
+    const { node } = firstInterfaceNode(source);
+    const result = interfaceToTypeAlias(node, source);
 
     expect(result).toMatch(/^type Foo<T> = \{/);
     expect(result).toContain('data: T');
@@ -177,16 +190,16 @@ describe('interfaceToTypeAlias', () => {
 
   it('converts a multi-param generic interface', () => {
     const source = 'interface Pair<A, B> { first: A; second: B }';
-    const { node, sourceFile } = firstInterfaceNode(source);
-    const result = interfaceToTypeAlias(node, sourceFile, source);
+    const { node } = firstInterfaceNode(source);
+    const result = interfaceToTypeAlias(node, source);
 
     expect(result).toMatch(/^type Pair<A, B> = \{/);
   });
 
   it('converts interface with single extends to intersection', () => {
     const source = 'interface Admin extends User { level: number }';
-    const { node, sourceFile } = firstInterfaceNode(source);
-    const result = interfaceToTypeAlias(node, sourceFile, source);
+    const { node } = firstInterfaceNode(source);
+    const result = interfaceToTypeAlias(node, source);
 
     expect(result).toMatch(/^type Admin = User & \{/);
     expect(result).toContain('level: number');
@@ -194,24 +207,24 @@ describe('interfaceToTypeAlias', () => {
 
   it('converts interface with multiple extends to chained intersection', () => {
     const source = 'interface Combined extends Foo, Bar, Baz { extra: boolean }';
-    const { node, sourceFile } = firstInterfaceNode(source);
-    const result = interfaceToTypeAlias(node, sourceFile, source);
+    const { node } = firstInterfaceNode(source);
+    const result = interfaceToTypeAlias(node, source);
 
     expect(result).toMatch(/^type Combined = Foo & Bar & Baz & \{/);
   });
 
   it('converts an empty-body interface', () => {
     const source = 'interface Empty {}';
-    const { node, sourceFile } = firstInterfaceNode(source);
-    const result = interfaceToTypeAlias(node, sourceFile, source);
+    const { node } = firstInterfaceNode(source);
+    const result = interfaceToTypeAlias(node, source);
 
     expect(result).toBe('type Empty = {};');
   });
 
   it('converts interface with extends and generics', () => {
     const source = 'interface Repo<T> extends Base<T> { items: T[] }';
-    const { node, sourceFile } = firstInterfaceNode(source);
-    const result = interfaceToTypeAlias(node, sourceFile, source);
+    const { node } = firstInterfaceNode(source);
+    const result = interfaceToTypeAlias(node, source);
 
     expect(result).toMatch(/^type Repo<T> = Base<T> & \{/);
     expect(result).toContain('items: T[]');
@@ -219,24 +232,24 @@ describe('interfaceToTypeAlias', () => {
 
   it('preserves export keyword', () => {
     const source = 'export interface Foo { x: string }';
-    const { node, sourceFile } = firstInterfaceNode(source);
-    const result = interfaceToTypeAlias(node, sourceFile, source);
+    const { node } = firstInterfaceNode(source);
+    const result = interfaceToTypeAlias(node, source);
 
     expect(result).toBe('export type Foo = { x: string };');
   });
 
   it('preserves declare keyword', () => {
     const source = 'declare interface Foo { x: string }';
-    const { node, sourceFile } = firstInterfaceNode(source);
-    const result = interfaceToTypeAlias(node, sourceFile, source);
+    const { node } = firstInterfaceNode(source);
+    const result = interfaceToTypeAlias(node, source);
 
     expect(result).toBe('declare type Foo = { x: string };');
   });
 
   it('preserves export + extends together', () => {
     const source = 'export interface Admin extends User { level: number }';
-    const { node, sourceFile } = firstInterfaceNode(source);
-    const result = interfaceToTypeAlias(node, sourceFile, source);
+    const { node } = firstInterfaceNode(source);
+    const result = interfaceToTypeAlias(node, source);
 
     expect(result).toBe('export type Admin = User & { level: number };');
   });

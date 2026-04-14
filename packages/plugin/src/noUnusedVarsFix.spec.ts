@@ -1,6 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { langAdd, parserInit } from '@codepol/core';
 import type { SymbolRecord } from '@codepol/core';
 import { noUnusedVarsViolationFixGet } from './noUnusedVarsFix';
+
+beforeAll(async () => {
+  langAdd({ langId: 'typescript', fileExtensions: ['.ts', '.tsx', '.js', '.jsx'] });
+  await parserInit();
+});
 
 function symbolStub(
   name: string,

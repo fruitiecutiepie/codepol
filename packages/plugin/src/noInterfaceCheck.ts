@@ -3,54 +3,55 @@ import type {
   PolicyCheckContext,
   PolicyViolation,
 } from '@codepol/core';
-import ts from 'typescript';
+import type { SyntaxNode } from 'web-tree-sitter';
+import {
+  keywordSpanInRange,
+  outerWrapperGet,
+  parseJsTsSource,
+  spanToLineColumns,
+} from './lib/jsTsTree';
 import { interfaceToTypeAlias } from './noInterfaceFix';
 
 export function noInterfaceCheck(
   rule: PolicyRule,
-  context: PolicyCheckContext
+  context: PolicyCheckContext,
 ): PolicyViolation[] {
   const violations: PolicyViolation[] = [];
-  const sourceFile = ts.createSourceFile(
-    'temp.ts',
-    context.source,
-    ts.ScriptTarget.Latest,
-    true
-  );
+  const { root } = parseJsTsSource(context.filePath, context.source);
 
-  function visit(node: ts.Node) {
-    if (ts.isInterfaceDeclaration(node)) {
-      // Find the 'interface' keyword token
-      const interfaceKeyword = node
-        .getChildren(sourceFile)
-        .find((child) => child.kind === ts.SyntaxKind.InterfaceKeyword);
-      const keywordPos = interfaceKeyword
-        ? interfaceKeyword.getStart(sourceFile)
-        : node.getStart(sourceFile);
-      const { line, character } =
-        sourceFile.getLineAndCharacterOfPosition(keywordPos);
-
-      // Generate the fix replacement text
-      const replacement = interfaceToTypeAlias(node, sourceFile, context.source);
+  function visit(node: SyntaxNode): void {
+    if (node.type === 'interface_declaration') {
+      const keywordSpan = keywordSpanInRange(
+        context.source,
+        node.startIndex,
+        node.endIndex,
+        'interface',
+      );
+      const location = spanToLineColumns(context.source, keywordSpan);
+      const nameNode = node.childForFieldName('name');
+      const container = outerWrapperGet(node);
 
       violations.push({
         ruleId: rule.id || rule.ruleId,
         filePath: context.filePath,
-        message: `Use 'type' instead of 'interface' for '${node.name.text}'`,
-        line: line + 1,
-        column: character + 1,
+        message: `Use 'type' instead of 'interface' for '${nameNode?.text ?? 'default'}'`,
+        line: location.line,
+        column: location.column,
         fix: {
           byteRange: {
-            start: node.getStart(sourceFile),
-            end: node.getEnd(),
+            start: container.startIndex,
+            end: container.endIndex,
           },
-          text: replacement,
+          text: interfaceToTypeAlias(node, context.source),
         },
       });
     }
-    ts.forEachChild(node, visit);
+
+    for (const child of node.namedChildren) {
+      visit(child);
+    }
   }
 
-  visit(sourceFile);
+  visit(root);
   return violations;
 }

@@ -8,7 +8,8 @@ import type {
   PolicyViolation,
   PolicyDiagnosticLocation,
 } from '@codepol/core';
-import ts from 'typescript';
+import type { SyntaxNode } from 'web-tree-sitter';
+import { parseJsTsSource } from './lib/jsTsTree';
 import { noMixedExportsFixPlan } from './noMixedExportsFix';
 import {
   export_statements_collect,
@@ -23,18 +24,13 @@ const MIXED_MESSAGE =
   'Do not mix default exports with named exports in the same module; use one style per file.';
 
 function spanFromStatement(
-  sourceFile: ts.SourceFile,
-  stmt: ts.Statement,
+  statement: SyntaxNode,
 ): { line: number; column: number; endLine: number; endColumn: number } {
-  const start = stmt.getStart(sourceFile);
-  const end = stmt.getEnd();
-  const s = sourceFile.getLineAndCharacterOfPosition(start);
-  const e = sourceFile.getLineAndCharacterOfPosition(end);
   return {
-    line: s.line + 1,
-    column: s.character + 1,
-    endLine: e.line + 1,
-    endColumn: e.character + 1,
+    line: statement.startPosition.row + 1,
+    column: statement.startPosition.column + 1,
+    endLine: statement.endPosition.row + 1,
+    endColumn: statement.endPosition.column + 1,
   };
 }
 
@@ -52,15 +48,9 @@ export function noMixedExportsCheck(
   rule: PolicyRule,
   context: PolicyCheckContext,
 ): PolicyViolation[] {
-  const sourceFile = ts.createSourceFile(
-    context.filePath,
-    context.source,
-    ts.ScriptTarget.Latest,
-    true,
-  );
-
+  const { root } = parseJsTsSource(context.filePath, context.source);
   const preferredStyle = preferred_style_get(context.ruleArgs);
-  const exportStatements = export_statements_collect(sourceFile);
+  const exportStatements = export_statements_collect(root, context.source);
   const primaryExportStatement = primary_export_statement_get(
     exportStatements,
     preferredStyle,
@@ -71,14 +61,14 @@ export function noMixedExportsCheck(
   }
 
   const primaryStmt = primaryExportStatement.stmt;
-  const primarySpan = spanFromStatement(sourceFile, primaryStmt);
+  const primarySpan = spanFromStatement(primaryStmt);
 
   const relatedLocations: PolicyDiagnosticLocation[] = [];
   const relatedStatements = preferredStyle
     ? exportStatements.filter((stmt) => stmt.index !== primaryExportStatement.index)
     : exportStatements.filter((stmt) => stmt.index > primaryExportStatement.index);
   for (const relatedStatement of relatedStatements) {
-    const span = spanFromStatement(sourceFile, relatedStatement.stmt);
+    const span = spanFromStatement(relatedStatement.stmt);
     relatedLocations.push({
       filePath: context.filePath,
       line: span.line,
@@ -91,7 +81,7 @@ export function noMixedExportsCheck(
 
   const fix =
     preferredStyle !== undefined
-      ? noMixedExportsFixPlan(context, sourceFile)
+      ? noMixedExportsFixPlan(context, root)
       : undefined;
 
   return [

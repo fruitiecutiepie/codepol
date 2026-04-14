@@ -5,7 +5,7 @@ import type {
 } from '@codepol/core';
 import { parserGetForFile, isErr } from '@codepol/core';
 import type { SyntaxNode } from 'web-tree-sitter';
-import ts from 'typescript';
+import { parseJsTsSource } from './lib/jsTsTree';
 import { identifierSplitByCasing } from './lib/identifierSplitByCasing';
 
 type NoVerbFunctionNameArgs = {
@@ -18,52 +18,60 @@ type FunctionMatch = {
   column: number;
 };
 
-export function functionMatchesTsGet(source: string): FunctionMatch[] {
-  const matches: FunctionMatch[] = [];
-  const sourceFile = ts.createSourceFile(
-    'temp.ts',
-    source,
-    ts.ScriptTarget.Latest,
-    true
-  );
+function functionMatchAdd(
+  matches: FunctionMatch[],
+  nameNode: SyntaxNode | null | undefined,
+): void {
+  if (!nameNode) {
+    return;
+  }
+  matches.push({
+    name: nameNode.text,
+    line: nameNode.startPosition.row + 1,
+    column: nameNode.startPosition.column + 1,
+  });
+}
 
-  function visit(node: ts.Node) {
-    // Function declaration: function foo() {}
-    if (ts.isFunctionDeclaration(node) && node.name) {
-      const { line, character } = sourceFile.getLineAndCharacterOfPosition(node.name.getStart());
-      matches.push({
-        name: node.name.text,
-        line: line + 1,
-        column: character + 1,
-      });
+export function functionMatchesTsGet(
+  source: string,
+  filePath = 'temp.ts',
+): FunctionMatch[] {
+  const { root } = parseJsTsSource(filePath, source);
+  const matches: FunctionMatch[] = [];
+
+  function visit(node: SyntaxNode): void {
+    if (
+      (node.type === 'function_declaration' ||
+        node.type === 'generator_function_declaration') &&
+      node.childForFieldName('name')
+    ) {
+      functionMatchAdd(matches, node.childForFieldName('name'));
     }
 
-    // Variable declaration with arrow/function expression: const foo = () => {} or const foo = function() {}
-    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
-      if (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer)) {
-        const { line, character } = sourceFile.getLineAndCharacterOfPosition(node.name.getStart());
-        matches.push({
-          name: node.name.text,
-          line: line + 1,
-          column: character + 1,
-        });
+    if (node.type === 'variable_declarator') {
+      const nameNode = node.childForFieldName('name');
+      const valueNode = node.childForFieldName('value');
+      if (
+        nameNode?.type === 'identifier' &&
+        valueNode &&
+        (valueNode.type === 'arrow_function' ||
+          valueNode.type === 'function_expression' ||
+          valueNode.type === 'generator_function')
+      ) {
+        functionMatchAdd(matches, nameNode);
       }
     }
 
-    // Method declaration: { foo() {} }
-    if (ts.isMethodDeclaration(node) && ts.isIdentifier(node.name)) {
-      const { line, character } = sourceFile.getLineAndCharacterOfPosition(node.name.getStart());
-      matches.push({
-        name: node.name.text,
-        line: line + 1,
-        column: character + 1,
-      });
+    if (node.type === 'method_definition') {
+      functionMatchAdd(matches, node.childForFieldName('name'));
     }
 
-    ts.forEachChild(node, visit);
+    for (const child of node.namedChildren) {
+      visit(child);
+    }
   }
 
-  visit(sourceFile);
+  visit(root);
   return matches;
 }
 
@@ -111,7 +119,10 @@ export function functionMatchesGet(source: string, filePath: string = 'temp.ts')
   if (filePath.endsWith('.py')) {
     return functionMatchesPyGet(source);
   }
-  return functionMatchesTsGet(source);
+  const tsFilePath = /\.(?:[cm]?ts|tsx|[cm]?js|jsx)$/u.test(filePath)
+    ? filePath
+    : 'temp.ts';
+  return functionMatchesTsGet(source, tsFilePath);
 }
 
 export function verbSetGet(args: NoVerbFunctionNameArgs | undefined): Set<string> {

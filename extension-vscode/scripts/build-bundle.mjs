@@ -33,6 +33,26 @@ function wasmAssetsCopy() {
   }
 }
 
+function daemonBundleValidate(metafile) {
+  const runtimeTypescriptInput = Object.keys(metafile.inputs).find((input) =>
+    input.replaceAll('\\', '/').endsWith('/typescript/lib/typescript.js') ||
+    input.replaceAll('\\', '/').endsWith('typescript/lib/typescript.js'),
+  );
+
+  if (runtimeTypescriptInput) {
+    throw new Error(
+      `Daemon bundle regression: runtime TypeScript compiler included via ${runtimeTypescriptInput}`,
+    );
+  }
+}
+
+function outputFilesWrite(outputFiles) {
+  for (const outputFile of outputFiles) {
+    fs.mkdirSync(path.dirname(outputFile.path), { recursive: true });
+    fs.writeFileSync(outputFile.path, outputFile.contents);
+  }
+}
+
 async function main() {
   bundleDirReset();
 
@@ -57,7 +77,7 @@ async function main() {
     target: 'node18',
   });
 
-  await esbuild.build({
+  const daemonBuild = await esbuild.build({
     absWorkingDir: repoRoot,
     bundle: true,
     define: {
@@ -69,13 +89,18 @@ async function main() {
     external: ['vscode'],
     format: 'cjs',
     logLevel: 'warning',
+    metafile: true,
     minify: production,
     outdir: bundleRoot,
     platform: 'node',
     sourcemap: !production,
     sourcesContent: false,
     target: 'node18',
+    write: false,
   });
+
+  daemonBundleValidate(daemonBuild.metafile);
+  outputFilesWrite(daemonBuild.outputFiles);
 
   wasmAssetsCopy();
 }

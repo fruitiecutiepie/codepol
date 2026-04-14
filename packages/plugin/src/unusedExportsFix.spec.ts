@@ -2,10 +2,16 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { langAdd, parserInit } from '@codepol/core';
 import { unusedExportsFix } from './unusedExportsFix';
 
 describe('unusedExportsFix', () => {
   let rootDir: string;
+
+  beforeAll(() => {
+    langAdd({ langId: 'typescript', fileExtensions: ['.ts', '.tsx', '.js', '.jsx'] });
+    return parserInit();
+  });
 
   beforeAll(() => {
     rootDir = fs.mkdtempSync(

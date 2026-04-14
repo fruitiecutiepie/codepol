@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest';
+import { beforeAll, describe, it, expect } from 'vitest';
+import { langAdd, parserInit } from '@codepol/core';
 import {
   exportMatchesGetFromTSSourceFile,
   identifierTypesToCheck,
@@ -7,6 +8,11 @@ import {
   type ExportMatch,
   type FileSource,
 } from './noDuplicateExportsCheck';
+
+beforeAll(async () => {
+  langAdd({ langId: 'typescript', fileExtensions: ['.ts', '.tsx', '.js', '.jsx'] });
+  await parserInit();
+});
 
 describe('exportMatchesGetFromTSSourceFile', () => {
   describe('function exports', () => {

@@ -1,9 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { langAdd, parserInit } from '@codepol/core';
 import {
   forbiddenDeclarationsCheck,
   type ForbiddenDeclarationsArgs,
 } from './forbiddenDeclarationsCheck';
 import type { PolicyCheckContext, PolicyRule } from '@codepol/core';
+
+beforeAll(async () => {
+  langAdd({ langId: 'typescript', fileExtensions: ['.ts', '.tsx', '.js', '.jsx'] });
+  await parserInit();
+});
 
 function createContext(
   source: string,

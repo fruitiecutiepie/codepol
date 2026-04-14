@@ -11,165 +11,111 @@ import type {
   PolicyWorkspaceEdit,
   ProjectIndex,
 } from '@codepol/core';
-import ts from 'typescript';
+import type { SyntaxNode } from 'web-tree-sitter';
 import { importBindingIsTypeOnly } from './lib/importBindingTypeOnly';
 import {
+  exportClauseGet,
+  exportSpecifiersGet,
+  exportStatementDeclarationGet,
   export_statements_collect,
-  preferred_style_get,
+  localNamedExportBindingCountGet,
+  localNamedExportStatementsGet,
+  singleLocalNamedExportNameGet,
   statement_export_style_get,
-} from './noMixedExportsShared';
+} from './lib/moduleSyntax';
+import {
+  importStatementAt,
+  lineStartGet,
+  parseJsTsSource,
+  statementTrailingNewlineExtend,
+} from './lib/jsTsTree';
+import { preferred_style_get } from './noMixedExportsShared';
 
 function workspace_edit_key(edit: PolicyWorkspaceEdit): string {
   return `${edit.filePath}:${edit.byteRange.start}:${edit.byteRange.end}:${edit.text}`;
 }
 
-function has_export_modifier(node: ts.Node): boolean {
-  if (!ts.canHaveModifiers(node)) return false;
-  const modifiers = ts.getModifiers(node);
-  return modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword) ?? false;
-}
-
-function has_default_modifier(node: ts.Node): boolean {
-  if (!ts.canHaveModifiers(node)) return false;
-  const modifiers = ts.getModifiers(node);
-  return modifiers?.some((m) => m.kind === ts.SyntaxKind.DefaultKeyword) ?? false;
-}
-
-/**
- * True if `name` is already exported as a named export (excluding default export forms).
- */
-function has_named_export_of_name(sourceFile: ts.SourceFile, name: string): boolean {
-  for (const stmt of sourceFile.statements) {
-    if (statement_export_style_get(stmt) !== 'named') continue;
-
-    if (ts.isVariableStatement(stmt)) {
-      for (const decl of stmt.declarationList.declarations) {
-        if (ts.isIdentifier(decl.name) && decl.name.text === name) {
+function has_named_export_of_name(
+  root: SyntaxNode,
+  source: string,
+  name: string,
+): boolean {
+  for (const statement of localNamedExportStatementsGet(root, source)) {
+    const exportClause = exportClauseGet(statement);
+    if (exportClause) {
+      for (const specifier of exportSpecifiersGet(exportClause)) {
+        if (specifier.exportedName === name) {
           return true;
         }
       }
+      continue;
     }
-    if (ts.isFunctionDeclaration(stmt) && stmt.name?.text === name) {
+
+    const exportedName = singleLocalNamedExportNameGet(statement);
+    if (exportedName === name) {
       return true;
-    }
-    if (ts.isClassDeclaration(stmt) && stmt.name?.text === name) {
-      return true;
-    }
-    if (ts.isInterfaceDeclaration(stmt) && stmt.name.text === name) {
-      return true;
-    }
-    if (ts.isTypeAliasDeclaration(stmt) && stmt.name.text === name) {
-      return true;
-    }
-    if (ts.isEnumDeclaration(stmt) && stmt.name.text === name) {
-      return true;
-    }
-    if (ts.isExportDeclaration(stmt) && stmt.exportClause && ts.isNamedExports(stmt.exportClause)) {
-      for (const el of stmt.exportClause.elements) {
-        if (el.name.text === name) {
-          return true;
-        }
-      }
     }
   }
+
   return false;
-}
-
-function statement_removal_end_get(source: string, end: number): number {
-  let cursor = end;
-  while (cursor < source.length && (source[cursor] === ' ' || source[cursor] === '\t')) {
-    cursor++;
-  }
-  if (source[cursor] === '\r') {
-    cursor++;
-  }
-  if (source[cursor] === '\n') {
-    cursor++;
-  }
-  return cursor;
-}
-
-/** Byte offset of the first character on the same line as `byteOffset` (start of file if none). */
-function line_start_get(source: string, byteOffset: number): number {
-  let i = byteOffset;
-  while (i > 0) {
-    const ch = source[i - 1];
-    if (ch === '\n' || ch === '\r') {
-      return i;
-    }
-    i--;
-  }
-  return 0;
 }
 
 function local_edits_named_preferred(
   filePath: string,
   source: string,
-  sourceFile: ts.SourceFile,
+  root: SyntaxNode,
 ): PolicyWorkspaceEdit[] | undefined {
-  const defaultStmt = sourceFile.statements.find(
-    (s) => statement_export_style_get(s) === 'default',
+  const defaultStmt = root.namedChildren.find(
+    (statement) => statement_export_style_get(statement, source) === 'default',
   );
   if (!defaultStmt) {
     return undefined;
   }
 
+  const declaration = exportStatementDeclarationGet(defaultStmt);
   if (
-    (ts.isFunctionDeclaration(defaultStmt) || ts.isClassDeclaration(defaultStmt)) &&
-    has_export_modifier(defaultStmt) &&
-    has_default_modifier(defaultStmt)
+    declaration &&
+    (declaration.type === 'function_declaration' ||
+      declaration.type === 'class_declaration')
   ) {
-    if (!defaultStmt.name) {
+    const nameNode = declaration.childForFieldName('name');
+    if (!nameNode) {
       return undefined;
     }
-    const start = defaultStmt.getStart(sourceFile);
-    const end = defaultStmt.getEnd();
-    const slice = source.slice(start, end);
-    const replaced = slice.replace(/\bexport\s+default\s+/, 'export ');
+    const slice = source.slice(defaultStmt.startIndex, defaultStmt.endIndex);
+    const replaced = slice.replace(/\bexport\s+default\s+/u, 'export ');
     if (replaced === slice) {
       return undefined;
     }
-    return [{ filePath, byteRange: { start, end }, text: replaced }];
-  }
-
-  if (ts.isExportAssignment(defaultStmt) && !defaultStmt.isExportEquals) {
-    const expr = defaultStmt.expression;
-    if (!ts.isIdentifier(expr)) {
-      return undefined;
-    }
-    const idText = expr.text;
-    const start = line_start_get(source, defaultStmt.getStart(sourceFile));
-    const end = statement_removal_end_get(source, defaultStmt.getEnd());
-
-    if (has_named_export_of_name(sourceFile, idText)) {
-      return [{ filePath, byteRange: { start, end }, text: '' }];
-    }
-
-    const insert = `\nexport { ${idText} };\n`;
     return [
-      { filePath, byteRange: { start, end }, text: '' },
-      { filePath, byteRange: { start: source.length, end: source.length }, text: insert },
+      {
+        filePath,
+        byteRange: { start: defaultStmt.startIndex, end: defaultStmt.endIndex },
+        text: replaced,
+      },
     ];
   }
 
-  return undefined;
-}
-
-function import_declaration_at(
-  sourceFile: ts.SourceFile,
-  byteOffset: number,
-): ts.ImportDeclaration | undefined {
-  function visit(node: ts.Node): ts.ImportDeclaration | undefined {
-    if (
-      ts.isImportDeclaration(node) &&
-      node.getStart(sourceFile) <= byteOffset &&
-      byteOffset < node.getEnd()
-    ) {
-      return node;
-    }
-    return ts.forEachChild(node, visit);
+  const expr = defaultStmt.namedChildren.find((child) => child.type === 'identifier');
+  if (!expr) {
+    return undefined;
   }
-  return visit(sourceFile);
+  const idText = expr.text;
+  const start = lineStartGet(source, defaultStmt.startIndex);
+  const end = statementTrailingNewlineExtend(source, defaultStmt.endIndex);
+
+  if (has_named_export_of_name(root, source, idText)) {
+    return [{ filePath, byteRange: { start, end }, text: '' }];
+  }
+
+  return [
+    { filePath, byteRange: { start, end }, text: '' },
+    {
+      filePath,
+      byteRange: { start: source.length, end: source.length },
+      text: `\nexport { ${idText} };\n`,
+    },
+  ];
 }
 
 function default_import_to_named_edit(
@@ -181,28 +127,28 @@ function default_import_to_named_edit(
   },
   exportedName: string,
 ): PolicyWorkspaceEdit | undefined {
-  const sf = ts.createSourceFile(importerPath, source, ts.ScriptTarget.Latest, true);
-  const decl = import_declaration_at(sf, binding.byteRange.start);
-  if (!decl || !decl.importClause?.name) {
+  const { root } = parseJsTsSource(importerPath, source);
+  const statement = importStatementAt(root, binding.byteRange.start);
+  const clause = statement?.namedChildren.find((child) => child.type === 'import_clause');
+  const defaultName = clause?.namedChildren.find((child) => child.type === 'identifier');
+  const moduleSpecifier = statement?.namedChildren.find((child) => child.type === 'string');
+  if (!statement || !clause || !defaultName || !moduleSpecifier) {
     return undefined;
   }
-  const localName = decl.importClause.name.text;
-  const moduleSpecifier = decl.moduleSpecifier.getText(sf);
-  const typeOnly = importBindingIsTypeOnly(source, binding.byteRange.start);
 
+  const localName = defaultName.text;
   const bindingText =
     exportedName === localName
       ? exportedName
       : `${exportedName} as ${localName}`;
-
-  const newText = typeOnly
-    ? `import type { ${bindingText} } from ${moduleSpecifier};`
-    : `import { ${bindingText} } from ${moduleSpecifier};`;
+  const typeOnly = importBindingIsTypeOnly(source, binding.byteRange.start);
 
   return {
     filePath: importerPath,
-    byteRange: { start: decl.getStart(sf), end: decl.getEnd() },
-    text: newText,
+    byteRange: { start: statement.startIndex, end: statement.endIndex },
+    text: typeOnly
+      ? `import type { ${bindingText} } from ${moduleSpecifier.text};`
+      : `import { ${bindingText} } from ${moduleSpecifier.text};`,
   };
 }
 
@@ -215,39 +161,41 @@ function named_import_to_default_edit(
   },
   defaultExportName: string,
 ): PolicyWorkspaceEdit | undefined {
-  const sf = ts.createSourceFile(importerPath, source, ts.ScriptTarget.Latest, true);
-  const decl = import_declaration_at(sf, binding.byteRange.start);
-  if (!decl || !decl.importClause?.namedBindings) {
+  const { root } = parseJsTsSource(importerPath, source);
+  const statement = importStatementAt(root, binding.byteRange.start);
+  const clause = statement?.namedChildren.find((child) => child.type === 'import_clause');
+  const namedImports = clause?.namedChildren.find((child) => child.type === 'named_imports');
+  const moduleSpecifier = statement?.namedChildren.find((child) => child.type === 'string');
+  if (!statement || !namedImports || !moduleSpecifier) {
     return undefined;
   }
-  const nb = decl.importClause.namedBindings;
-  if (!ts.isNamedImports(nb)) {
-    return undefined;
-  }
-  const elements = nb.elements;
+
+  const elements = namedImports.namedChildren.filter(
+    (child) => child.type === 'import_specifier',
+  );
   if (elements.length !== 1) {
     return undefined;
   }
-  const el = elements[0]!;
-  if (el.propertyName || el.name.text !== binding.importedName) {
+
+  const element = elements[0]!;
+  const importedNode = element.childForFieldName('name');
+  const aliasNode = element.childForFieldName('alias');
+  if (!importedNode || aliasNode || importedNode.text !== binding.importedName) {
     return undefined;
   }
-  const localName = el.name.text;
-  const moduleSpecifier = decl.moduleSpecifier.getText(sf);
-  const typeOnly = importBindingIsTypeOnly(source, binding.byteRange.start);
 
+  const localName = importedNode.text;
   if (localName !== defaultExportName) {
     return undefined;
   }
 
-  const newText = typeOnly
-    ? `import type ${localName} from ${moduleSpecifier};`
-    : `import ${localName} from ${moduleSpecifier};`;
-
+  const typeOnly = importBindingIsTypeOnly(source, binding.byteRange.start);
   return {
     filePath: importerPath,
-    byteRange: { start: decl.getStart(sf), end: decl.getEnd() },
-    text: newText,
+    byteRange: { start: statement.startIndex, end: statement.endIndex },
+    text: typeOnly
+      ? `import type ${localName} from ${moduleSpecifier.text};`
+      : `import ${localName} from ${moduleSpecifier.text};`,
   };
 }
 
@@ -294,114 +242,61 @@ function importer_edits_named_preferred(
 function strip_export_keyword_from_statement(
   filePath: string,
   source: string,
-  sourceFile: ts.SourceFile,
-  stmt: ts.Statement,
+  statement: SyntaxNode,
 ): PolicyWorkspaceEdit | undefined {
-  if (!has_export_modifier(stmt) || has_default_modifier(stmt)) {
+  const slice = source.slice(statement.startIndex, statement.endIndex);
+  const match = /^export\s+/u.exec(slice);
+  if (!match) {
     return undefined;
   }
-  const start = stmt.getStart(sourceFile);
-  const end = stmt.getEnd();
-  const slice = source.slice(start, end);
-  const replaced = slice.replace(/^\s*export\s+/, '');
-  if (replaced === slice) {
-    return undefined;
-  }
+
   return {
     filePath,
-    byteRange: { start, end },
-    text: replaced,
+    byteRange: {
+      start: statement.startIndex,
+      end: statement.startIndex + match[0].length,
+    },
+    text: '',
   };
-}
-
-function local_named_statements_non_reexport(
-  sourceFile: ts.SourceFile,
-): ts.Statement[] {
-  const out: ts.Statement[] = [];
-  for (const stmt of sourceFile.statements) {
-    if (statement_export_style_get(stmt) !== 'named') {
-      continue;
-    }
-    if (ts.isExportDeclaration(stmt) && stmt.moduleSpecifier) {
-      continue;
-    }
-    out.push(stmt);
-  }
-  return out;
-}
-
-function count_named_export_bindings(sourceFile: ts.SourceFile): number {
-  let n = 0;
-  for (const stmt of local_named_statements_non_reexport(sourceFile)) {
-    if (ts.isVariableStatement(stmt)) {
-      n += stmt.declarationList.declarations.length;
-    } else if (
-      ts.isFunctionDeclaration(stmt) ||
-      ts.isClassDeclaration(stmt) ||
-      ts.isInterfaceDeclaration(stmt) ||
-      ts.isTypeAliasDeclaration(stmt) ||
-      ts.isEnumDeclaration(stmt)
-    ) {
-      n += 1;
-    }
-  }
-  return n;
 }
 
 function default_preferred_local_edits(
   filePath: string,
   source: string,
-  sourceFile: ts.SourceFile,
+  root: SyntaxNode,
 ): PolicyWorkspaceEdit[] | undefined {
-  if (count_named_export_bindings(sourceFile) !== 1) {
+  if (localNamedExportBindingCountGet(root, source) !== 1) {
     return undefined;
   }
 
-  const defaultStmts = sourceFile.statements.filter(
-    (s) => statement_export_style_get(s) === 'default',
+  const defaultStatements = root.namedChildren.filter(
+    (statement) => statement_export_style_get(statement, source) === 'default',
   );
-  if (defaultStmts.length !== 1) {
+  if (defaultStatements.length !== 1) {
     return undefined;
   }
-  const defaultStmt = defaultStmts[0]!;
-  if (!ts.isExportAssignment(defaultStmt) || defaultStmt.isExportEquals) {
+  const defaultStmt = defaultStatements[0]!;
+  const defaultIdentifier = defaultStmt.namedChildren.find(
+    (child) => child.type === 'identifier',
+  );
+  if (!defaultIdentifier) {
     return undefined;
   }
-  if (!ts.isIdentifier(defaultStmt.expression)) {
-    return undefined;
-  }
-  const defaultId = defaultStmt.expression.text;
+  const defaultId = defaultIdentifier.text;
 
-  const namedStmts = local_named_statements_non_reexport(sourceFile);
-  if (namedStmts.length !== 1) {
+  const namedStatements = localNamedExportStatementsGet(root, source);
+  if (namedStatements.length !== 1) {
     return undefined;
   }
-  const namedStmt = namedStmts[0]!;
-  let exportedName: string | undefined;
-  if (ts.isVariableStatement(namedStmt)) {
-    if (namedStmt.declarationList.declarations.length !== 1) {
-      return undefined;
-    }
-    const d = namedStmt.declarationList.declarations[0]!;
-    if (!ts.isIdentifier(d.name)) {
-      return undefined;
-    }
-    exportedName = d.name.text;
-  } else if (ts.isFunctionDeclaration(namedStmt) || ts.isClassDeclaration(namedStmt)) {
-    exportedName = namedStmt.name?.text;
-  } else if (ts.isInterfaceDeclaration(namedStmt) || ts.isTypeAliasDeclaration(namedStmt) || ts.isEnumDeclaration(namedStmt)) {
-    exportedName = namedStmt.name.text;
-  }
+  const namedStmt = namedStatements[0]!;
+  const exportedName = singleLocalNamedExportNameGet(namedStmt);
 
   if (!exportedName || exportedName !== defaultId) {
     return undefined;
   }
 
-  const strip = strip_export_keyword_from_statement(filePath, source, sourceFile, namedStmt);
-  if (!strip) {
-    return undefined;
-  }
-  return [strip];
+  const strip = strip_export_keyword_from_statement(filePath, source, namedStmt);
+  return strip ? [strip] : undefined;
 }
 
 function importer_edits_default_preferred(
@@ -466,13 +361,13 @@ function default_export_symbol_name(projectIndex: ProjectIndex, filePath: string
 function dedupe_edits(edits: PolicyWorkspaceEdit[]): PolicyWorkspaceEdit[] {
   const seen = new Set<string>();
   const out: PolicyWorkspaceEdit[] = [];
-  for (const e of edits) {
-    const k = workspace_edit_key(e);
-    if (seen.has(k)) {
+  for (const edit of edits) {
+    const key = workspace_edit_key(edit);
+    if (seen.has(key)) {
       continue;
     }
-    seen.add(k);
-    out.push(e);
+    seen.add(key);
+    out.push(edit);
   }
   return out;
 }
@@ -483,7 +378,7 @@ function dedupe_edits(edits: PolicyWorkspaceEdit[]): PolicyWorkspaceEdit[] {
  */
 export function noMixedExportsFixPlan(
   context: PolicyCheckContext,
-  sourceFile: ts.SourceFile,
+  root: SyntaxNode,
 ): PolicyViolationFix | undefined {
   const preferred = preferred_style_get(context.ruleArgs);
   if (!preferred) {
@@ -496,9 +391,9 @@ export function noMixedExportsFixPlan(
 
   const filePath = context.filePath;
   const source = context.source;
-  const exportStmts = export_statements_collect(sourceFile);
-  const hasDefault = exportStmts.some((e) => e.style === 'default');
-  const hasNamed = exportStmts.some((e) => e.style === 'named');
+  const exportStatements = export_statements_collect(root, source);
+  const hasDefault = exportStatements.some((statement) => statement.style === 'default');
+  const hasNamed = exportStatements.some((statement) => statement.style === 'named');
   if (!hasDefault || !hasNamed) {
     return undefined;
   }
@@ -506,7 +401,7 @@ export function noMixedExportsFixPlan(
   const edits: PolicyWorkspaceEdit[] = [];
 
   if (preferred === 'named') {
-    const local = local_edits_named_preferred(filePath, source, sourceFile);
+    const local = local_edits_named_preferred(filePath, source, root);
     if (!local || local.length === 0) {
       return undefined;
     }
@@ -517,7 +412,7 @@ export function noMixedExportsFixPlan(
     edits.push(...local);
     edits.push(...importer_edits_named_preferred(projectIndex, filePath, exportedName));
   } else {
-    const local = default_preferred_local_edits(filePath, source, sourceFile);
+    const local = default_preferred_local_edits(filePath, source, root);
     if (!local || local.length === 0) {
       return undefined;
     }
@@ -534,7 +429,7 @@ export function noMixedExportsFixPlan(
     return undefined;
   }
 
-  const primary = merged.find((e) => e.filePath === filePath) ?? merged[0]!;
+  const primary = merged.find((edit) => edit.filePath === filePath) ?? merged[0]!;
   return {
     byteRange: primary.byteRange,
     text: primary.text,

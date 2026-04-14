@@ -1,92 +1,88 @@
-import { describe, it, expect } from 'vitest';
-import type { PolicyRule, PolicyCheckContext } from '@codepol/core';
-import ts from 'typescript';
+import { beforeAll, describe, it, expect } from 'vitest';
+import {
+  langAdd,
+  parserInit,
+  type PolicyRule,
+  type PolicyCheckContext,
+} from '@codepol/core';
 import { mixedExportsAnalyze, noMixedExportsCheck } from './noMixedExportsCheck';
 
 type NoMixedExportsArgs = {
   preferredStyle?: 'default' | 'named';
 };
 
-function sourceFileFrom(source: string, filePath = 'test.ts'): ts.SourceFile {
-  return ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true);
-}
+beforeAll(async () => {
+  langAdd({ langId: 'typescript', fileExtensions: ['.ts', '.tsx', '.js', '.jsx'] });
+  await parserInit();
+});
 
 describe('mixedExportsAnalyze', () => {
   it('detects named exports only', () => {
-    const sf = sourceFileFrom('export const x = 1;\n');
-    expect(mixedExportsAnalyze(sf)).toEqual({
+    expect(mixedExportsAnalyze('export const x = 1;\n')).toEqual({
       hasDefaultExport: false,
       hasNamedExport: true,
     });
   });
 
   it('detects default export only', () => {
-    const sf = sourceFileFrom('export default 42;\n');
-    expect(mixedExportsAnalyze(sf)).toEqual({
+    expect(mixedExportsAnalyze('export default 42;\n')).toEqual({
       hasDefaultExport: true,
       hasNamedExport: false,
     });
   });
 
   it('detects default export function with name', () => {
-    const sf = sourceFileFrom('export default function foo() {}\n');
-    expect(mixedExportsAnalyze(sf)).toEqual({
+    expect(mixedExportsAnalyze('export default function foo() {}\n')).toEqual({
       hasDefaultExport: true,
       hasNamedExport: false,
     });
   });
 
   it('detects anonymous default export function', () => {
-    const sf = sourceFileFrom('export default function() {}\n');
-    expect(mixedExportsAnalyze(sf)).toEqual({
+    expect(mixedExportsAnalyze('export default function() {}\n')).toEqual({
       hasDefaultExport: true,
       hasNamedExport: false,
     });
   });
 
   it('detects default plus named export const', () => {
-    const sf = sourceFileFrom(
+    expect(mixedExportsAnalyze(
       'export default 1;\nexport const x = 2;\n',
-    );
-    expect(mixedExportsAnalyze(sf)).toEqual({
+    )).toEqual({
       hasDefaultExport: true,
       hasNamedExport: true,
     });
   });
 
   it('detects default plus export list', () => {
-    const sf = sourceFileFrom(
+    expect(mixedExportsAnalyze(
       'const a = 1;\nexport default a;\nexport { a };\n',
-    );
-    expect(mixedExportsAnalyze(sf)).toEqual({
+    )).toEqual({
       hasDefaultExport: true,
       hasNamedExport: true,
     });
   });
 
   it('detects default plus re-export', () => {
-    const sf = sourceFileFrom(
+    expect(mixedExportsAnalyze(
       "export default 1;\nexport { foo } from './other';\n",
-    );
-    expect(mixedExportsAnalyze(sf)).toEqual({
+    )).toEqual({
       hasDefaultExport: true,
       hasNamedExport: true,
     });
   });
 
   it('detects default plus star re-export', () => {
-    const sf = sourceFileFrom(
+    expect(mixedExportsAnalyze(
       "export default 1;\nexport * from './other';\n",
-    );
-    expect(mixedExportsAnalyze(sf)).toEqual({
+    )).toEqual({
       hasDefaultExport: true,
       hasNamedExport: true,
     });
   });
 
   it('does not treat empty export list as named export', () => {
-    const sf = sourceFileFrom('export {};\n');
-    expect(mixedExportsAnalyze(sf)).toEqual({
+    expect(mixedExportsAnalyze('export {};\n')).toEqual({
       hasDefaultExport: false,
       hasNamedExport: false,
     });

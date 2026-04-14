@@ -3,7 +3,15 @@ import type {
   PolicyRule,
   PolicyViolation,
 } from '@codepol/core';
-import ts from 'typescript';
+import type { SyntaxNode } from 'web-tree-sitter';
+import {
+  bindingIdentifierNodesGet,
+  keywordSpanInRange,
+  parseJsTsSource,
+  propertyNameTextGet,
+  spanToLineColumns,
+  type ByteSpan,
+} from './lib/jsTsTree';
 
 export type ForbiddenDeclarationSymbolKind =
   | 'namespace'
@@ -36,11 +44,6 @@ export type ForbiddenDeclarationsArgs = {
   syntax?: ForbiddenDeclarationSyntaxKind[];
 };
 
-type ByteSpan = {
-  start: number;
-  end: number;
-};
-
 type DeclarationRecord = {
   name: string;
   symbolKind?: ForbiddenDeclarationSymbolKind;
@@ -51,29 +54,6 @@ type DeclarationRecord = {
   syntaxSpan?: ByteSpan;
 };
 
-function scriptKindFromPath(filePath: string): ts.ScriptKind {
-  if (filePath.endsWith('.tsx')) {
-    return ts.ScriptKind.TSX;
-  }
-  if (filePath.endsWith('.jsx')) {
-    return ts.ScriptKind.JSX;
-  }
-  if (filePath.endsWith('.js') || filePath.endsWith('.mjs') || filePath.endsWith('.cjs')) {
-    return ts.ScriptKind.JS;
-  }
-  return ts.ScriptKind.TS;
-}
-
-function createSourceFile(filePath: string, source: string): ts.SourceFile {
-  return ts.createSourceFile(
-    filePath,
-    source,
-    ts.ScriptTarget.Latest,
-    true,
-    scriptKindFromPath(filePath),
-  );
-}
-
 function argsHasWork(args: ForbiddenDeclarationsArgs | undefined): boolean {
   return Boolean(
     args?.symbols?.length ||
@@ -82,292 +62,259 @@ function argsHasWork(args: ForbiddenDeclarationsArgs | undefined): boolean {
   );
 }
 
-function propertyNameTextGet(
-  name: ts.PropertyName,
-  sourceFile: ts.SourceFile,
-): string {
-  if (ts.isIdentifier(name)) {
-    return name.text;
-  }
-  if (ts.isPrivateIdentifier(name)) {
-    return name.getText(sourceFile);
-  }
-  if (ts.isStringLiteral(name) || ts.isNumericLiteral(name)) {
-    return name.text;
-  }
-  return name.getText(sourceFile);
-}
-
-function moduleNameTextGet(
-  name: ts.ModuleName,
-): string {
-  return name.text;
-}
-
-function bindingIdentifiersGet(name: ts.BindingName): ts.Identifier[] {
-  if (ts.isIdentifier(name)) {
-    return [name];
-  }
-
-  const identifiers: ts.Identifier[] = [];
-  const patternElements = ts.isObjectBindingPattern(name)
-    ? name.elements
-    : name.elements.filter((element): element is ts.BindingElement => ts.isBindingElement(element));
-
-  for (const element of patternElements) {
-    identifiers.push(...bindingIdentifiersGet(element.name));
-  }
-
-  return identifiers;
-}
-
-function modifiersGet(node: ts.Node): readonly ts.Modifier[] {
-  return ts.canHaveModifiers(node) ? ts.getModifiers(node) ?? [] : [];
-}
-
-function modifierHas(node: ts.Node, kind: ts.SyntaxKind): boolean {
-  return modifiersGet(node).some((modifier) => modifier.kind === kind);
-}
-
-function variableDeclarationKindGet(
-  declarations: ts.VariableDeclarationList,
+function declarationKindGet(
+  source: string,
+  node: SyntaxNode,
 ): 'const' | 'let' | 'var' {
-  if ((declarations.flags & ts.NodeFlags.Const) !== 0) {
+  const slice = source.slice(node.startIndex, Math.min(node.endIndex, node.startIndex + 8));
+  if (/^const\b/u.test(slice)) {
     return 'const';
   }
-  if ((declarations.flags & ts.NodeFlags.Let) !== 0) {
+  if (/^let\b/u.test(slice)) {
     return 'let';
   }
   return 'var';
 }
 
-function defaultExportNameGet(node: ts.Node): string | undefined {
-  return modifierHas(node, ts.SyntaxKind.DefaultKeyword) ? 'default' : undefined;
-}
-
-function spanFromNode(sourceFile: ts.SourceFile, node: ts.Node): ByteSpan {
-  return {
-    start: node.getStart(sourceFile),
-    end: node.getEnd(),
-  };
-}
-
-/** First direct child with the given syntax kind (e.g. keyword token). */
-function tokenSpanFirstChildOfKind(
-  sourceFile: ts.SourceFile,
-  node: ts.Node,
-  kind: ts.SyntaxKind,
-): ByteSpan | undefined {
-  for (const child of node.getChildren(sourceFile)) {
-    if (child.kind === kind) {
-      return { start: child.getStart(sourceFile), end: child.getEnd() };
-    }
-  }
-  return undefined;
-}
-
-function variableDeclarationListKeywordSpan(
-  sourceFile: ts.SourceFile,
-  list: ts.VariableDeclarationList,
-): ByteSpan | undefined {
-  return (
-    tokenSpanFirstChildOfKind(sourceFile, list, ts.SyntaxKind.VarKeyword) ??
-    tokenSpanFirstChildOfKind(sourceFile, list, ts.SyntaxKind.LetKeyword) ??
-    tokenSpanFirstChildOfKind(sourceFile, list, ts.SyntaxKind.ConstKeyword)
-  );
-}
-
-function functionStarKeywordSpan(
-  sourceFile: ts.SourceFile,
-  node: ts.FunctionDeclaration | ts.FunctionExpression,
-): ByteSpan | undefined {
-  const fnKw = tokenSpanFirstChildOfKind(sourceFile, node, ts.SyntaxKind.FunctionKeyword);
-  if (!fnKw) {
-    return undefined;
-  }
-  if (node.asteriskToken) {
-    return {
-      start: fnKw.start,
-      end: node.asteriskToken.getEnd(),
-    };
-  }
-  return fnKw;
-}
-
-function propertyNameSpan(
-  sourceFile: ts.SourceFile,
-  name: ts.PropertyName,
-): ByteSpan {
-  return spanFromNode(sourceFile, name);
+function firstNonTypeChildGet(node: SyntaxNode): SyntaxNode | undefined {
+  return node.namedChildren.find((child) => child.type !== 'type_annotation');
 }
 
 function declarationRecordsGet(
-  sourceFile: ts.SourceFile,
+  source: string,
+  root: SyntaxNode,
 ): DeclarationRecord[] {
   const records: DeclarationRecord[] = [];
 
-  function visit(node: ts.Node): void {
-    if (ts.isModuleDeclaration(node)) {
-      const kw = tokenSpanFirstChildOfKind(sourceFile, node, ts.SyntaxKind.NamespaceKeyword) ??
-        tokenSpanFirstChildOfKind(sourceFile, node, ts.SyntaxKind.ModuleKeyword);
-      records.push({
-        name: moduleNameTextGet(node.name),
-        symbolKind: 'namespace',
-        symbolSpan: kw ?? spanFromNode(sourceFile, node),
-      });
-    } else if (ts.isClassDeclaration(node)) {
-      const name = node.name?.text ?? defaultExportNameGet(node);
-      if (name) {
-        const classKw = tokenSpanFirstChildOfKind(sourceFile, node, ts.SyntaxKind.ClassKeyword);
-        const abstractKw = tokenSpanFirstChildOfKind(
-          sourceFile,
-          node,
-          ts.SyntaxKind.AbstractKeyword,
-        );
+  function visit(node: SyntaxNode): void {
+    if (node.type === 'internal_module' || node.type === 'module') {
+      const nameNode = node.childForFieldName('name');
+      if (nameNode) {
+        const keyword = node.type === 'internal_module' ? 'namespace' : 'module';
         records.push({
-          name,
+          name: nameNode.text,
+          symbolKind: 'namespace',
+          symbolSpan: keywordSpanInRange(source, node.startIndex, node.endIndex, keyword),
+        });
+      }
+    } else if (node.type === 'class_declaration') {
+      const nameNode = node.childForFieldName('name');
+      if (nameNode) {
+        records.push({
+          name: nameNode.text,
           symbolKind: 'class',
-          syntaxKind: modifierHas(node, ts.SyntaxKind.AbstractKeyword)
-            ? 'abstract-class'
-            : undefined,
-          symbolSpan: classKw ?? spanFromNode(sourceFile, node),
-          syntaxSpan: abstractKw,
+          symbolSpan: keywordSpanInRange(source, node.startIndex, node.endIndex, 'class'),
         });
       }
-    } else if (ts.isInterfaceDeclaration(node)) {
-      const kw = tokenSpanFirstChildOfKind(sourceFile, node, ts.SyntaxKind.InterfaceKeyword);
-      records.push({
-        name: node.name.text,
-        symbolKind: 'interface',
-        symbolSpan: kw ?? spanFromNode(sourceFile, node),
-      });
-    } else if (ts.isTypeAliasDeclaration(node)) {
-      const kw = tokenSpanFirstChildOfKind(sourceFile, node, ts.SyntaxKind.TypeKeyword);
-      records.push({
-        name: node.name.text,
-        symbolKind: 'type',
-        symbolSpan: kw ?? spanFromNode(sourceFile, node),
-      });
-    } else if (ts.isFunctionDeclaration(node)) {
-      const name = node.name?.text ?? defaultExportNameGet(node);
-      if (name) {
-        const fnKw = tokenSpanFirstChildOfKind(sourceFile, node, ts.SyntaxKind.FunctionKeyword);
-        const genSpan = node.asteriskToken
-          ? functionStarKeywordSpan(sourceFile, node)
-          : undefined;
+    } else if (node.type === 'abstract_class_declaration') {
+      const nameNode = node.childForFieldName('name');
+      if (nameNode) {
         records.push({
-          name,
-          symbolKind: 'function',
-          syntaxKind: node.asteriskToken ? 'generator-function' : undefined,
-          symbolSpan: fnKw ?? spanFromNode(sourceFile, node),
-          syntaxSpan: genSpan,
+          name: nameNode.text,
+          symbolKind: 'class',
+          syntaxKind: 'abstract-class',
+          symbolSpan: keywordSpanInRange(source, node.startIndex, node.endIndex, 'class'),
+          syntaxSpan: keywordSpanInRange(source, node.startIndex, node.endIndex, 'abstract'),
         });
       }
-    } else if (ts.isMethodDeclaration(node)) {
-      records.push({
-        name: propertyNameTextGet(node.name, sourceFile),
-        symbolKind: 'method',
-        symbolSpan: propertyNameSpan(sourceFile, node.name),
-      });
-    } else if (ts.isPropertyDeclaration(node)) {
-      records.push({
-        name: propertyNameTextGet(node.name, sourceFile),
-        symbolKind: 'field',
-        symbolSpan: propertyNameSpan(sourceFile, node.name),
-      });
-    } else if (ts.isVariableDeclaration(node)) {
-      if (ts.isVariableDeclarationList(node.parent)) {
-        const list = node.parent;
-        const declarationKind = variableDeclarationKindGet(list);
-        const symbolKind = declarationKind === 'const' ? 'const' : 'variable';
-        const syntaxKind = declarationKind === 'const' ? undefined : declarationKind;
-        const keywordSpan = variableDeclarationListKeywordSpan(sourceFile, list);
-        const syntaxSpan =
-          syntaxKind === 'var' || syntaxKind === 'let' ? keywordSpan : undefined;
+    } else if (node.type === 'interface_declaration') {
+      const nameNode = node.childForFieldName('name');
+      if (nameNode) {
+        records.push({
+          name: nameNode.text,
+          symbolKind: 'interface',
+          symbolSpan: keywordSpanInRange(source, node.startIndex, node.endIndex, 'interface'),
+        });
+      }
+    } else if (node.type === 'type_alias_declaration') {
+      const nameNode = node.childForFieldName('name');
+      if (nameNode) {
+        records.push({
+          name: nameNode.text,
+          symbolKind: 'type',
+          symbolSpan: keywordSpanInRange(source, node.startIndex, node.endIndex, 'type'),
+        });
+      }
+    } else if (node.type === 'function_declaration') {
+      const nameNode = node.childForFieldName('name');
+      if (nameNode) {
+        records.push({
+          name: nameNode.text,
+          symbolKind: 'function',
+          symbolSpan: keywordSpanInRange(source, node.startIndex, node.endIndex, 'function'),
+        });
+      }
+    } else if (node.type === 'generator_function_declaration') {
+      const nameNode = node.childForFieldName('name');
+      if (nameNode) {
+        records.push({
+          name: nameNode.text,
+          symbolKind: 'function',
+          syntaxKind: 'generator-function',
+          symbolSpan: keywordSpanInRange(source, node.startIndex, node.endIndex, 'function'),
+          syntaxSpan: keywordSpanInRange(source, node.startIndex, node.endIndex, 'function'),
+        });
+      }
+    } else if (node.type === 'method_definition') {
+      const nameNode = node.childForFieldName('name');
+      if (nameNode && nameNode.text !== 'constructor') {
+        records.push({
+          name: propertyNameTextGet(nameNode),
+          symbolKind: 'method',
+          symbolSpan: { start: nameNode.startIndex, end: nameNode.endIndex },
+        });
+      }
+    } else if (node.type === 'public_field_definition') {
+      const nameNode = node.childForFieldName('name');
+      if (nameNode) {
+        records.push({
+          name: propertyNameTextGet(nameNode),
+          symbolKind: 'field',
+          symbolSpan: { start: nameNode.startIndex, end: nameNode.endIndex },
+        });
+      }
+    } else if (node.type === 'lexical_declaration' || node.type === 'variable_declaration') {
+      const declarationKind = declarationKindGet(source, node);
+      const symbolKind = declarationKind === 'const' ? 'const' : 'variable';
+      const syntaxKind = declarationKind === 'const' ? undefined : declarationKind;
+      const keywordSpan = keywordSpanInRange(
+        source,
+        node.startIndex,
+        node.endIndex,
+        declarationKind,
+      );
 
-        for (const _identifier of bindingIdentifiersGet(node.name)) {
+      for (const declarator of node.namedChildren.filter(
+        (child) => child.type === 'variable_declarator',
+      )) {
+        const nameNode = declarator.childForFieldName('name');
+        for (const identifier of bindingIdentifierNodesGet(nameNode)) {
           records.push({
-            name: _identifier.text,
+            name: identifier.text,
             symbolKind,
             syntaxKind,
-            symbolSpan: keywordSpan ?? spanFromNode(sourceFile, node),
-            syntaxSpan,
+            symbolSpan: keywordSpan,
+            syntaxSpan: syntaxKind ? keywordSpan : undefined,
           });
         }
       }
-    } else if (ts.isParameter(node)) {
-      for (const _identifier of bindingIdentifiersGet(node.name)) {
+    } else if (
+      node.type === 'required_parameter' ||
+      node.type === 'optional_parameter'
+    ) {
+      const bindingNode = firstNonTypeChildGet(node);
+      for (const identifier of bindingIdentifierNodesGet(bindingNode)) {
         records.push({
-          name: _identifier.text,
+          name: identifier.text,
           symbolKind: 'parameter',
-          symbolSpan: spanFromNode(sourceFile, _identifier),
+          symbolSpan: { start: identifier.startIndex, end: identifier.endIndex },
         });
       }
-    } else if (ts.isEnumDeclaration(node)) {
-      const kw = tokenSpanFirstChildOfKind(sourceFile, node, ts.SyntaxKind.EnumKeyword);
-      records.push({
-        name: node.name.text,
-        symbolKind: 'enum',
-        symbolSpan: kw ?? spanFromNode(sourceFile, node),
-      });
-    } else if (ts.isEnumMember(node)) {
-      records.push({
-        name: propertyNameTextGet(node.name, sourceFile),
-        symbolKind: 'enumMember',
-        symbolSpan: propertyNameSpan(sourceFile, node.name),
-      });
-    } else if (ts.isCatchClause(node) && node.variableDeclaration) {
-      const vd = node.variableDeclaration;
-      const catchKw = tokenSpanFirstChildOfKind(sourceFile, node, ts.SyntaxKind.CatchKeyword);
-      for (const _identifier of bindingIdentifiersGet(vd.name)) {
+    } else if (node.type === 'enum_declaration') {
+      const nameNode = node.childForFieldName('name');
+      if (nameNode) {
         records.push({
-          name: _identifier.text,
-          bindingKind: 'catch',
-          bindingSpan: catchKw ?? spanFromNode(sourceFile, vd),
+          name: nameNode.text,
+          symbolKind: 'enum',
+          symbolSpan: keywordSpanInRange(source, node.startIndex, node.endIndex, 'enum'),
         });
       }
-    } else if (ts.isImportDeclaration(node) && node.importClause) {
-      const { importClause } = node;
-      const importKw = tokenSpanFirstChildOfKind(sourceFile, node, ts.SyntaxKind.ImportKeyword);
-      const importSpan = importKw ?? spanFromNode(sourceFile, node);
-      if (importClause.name) {
-        records.push({
-          name: importClause.name.text,
-          bindingKind: 'import',
-          bindingSpan: importSpan,
-        });
-      }
-
-      if (importClause.namedBindings) {
-        if (ts.isNamespaceImport(importClause.namedBindings)) {
+    } else if (node.type === 'enum_body') {
+      for (const child of node.namedChildren) {
+        if (child.type === 'property_identifier') {
           records.push({
-            name: importClause.namedBindings.name.text,
-            bindingKind: 'import',
-            bindingSpan: importSpan,
+            name: propertyNameTextGet(child),
+            symbolKind: 'enumMember',
+            symbolSpan: { start: child.startIndex, end: child.endIndex },
           });
-        } else {
-          for (const element of importClause.namedBindings.elements) {
+        }
+      }
+    } else if (node.type === 'catch_clause') {
+      const bindingNode = node.namedChildren.find((child) => child.type !== 'statement_block');
+      const catchSpan = keywordSpanInRange(source, node.startIndex, node.endIndex, 'catch');
+      for (const identifier of bindingIdentifierNodesGet(bindingNode)) {
+        records.push({
+          name: identifier.text,
+          bindingKind: 'catch',
+          bindingSpan: catchSpan,
+        });
+      }
+    } else if (node.type === 'import_statement') {
+      const clause = node.namedChildren.find((child) => child.type === 'import_clause');
+      const importSpan = keywordSpanInRange(source, node.startIndex, node.endIndex, 'import');
+      if (clause) {
+        for (const child of clause.namedChildren) {
+          if (child.type === 'identifier') {
             records.push({
-              name: element.name.text,
+              name: child.text,
               bindingKind: 'import',
               bindingSpan: importSpan,
             });
+          } else if (child.type === 'namespace_import') {
+            const identifier = child.namedChildren.find((namedChild) => namedChild.type === 'identifier');
+            if (identifier) {
+              records.push({
+                name: identifier.text,
+                bindingKind: 'import',
+                bindingSpan: importSpan,
+              });
+            }
+          } else if (child.type === 'named_imports') {
+            for (const specifier of child.namedChildren.filter(
+              (namedChild) => namedChild.type === 'import_specifier',
+            )) {
+              const localNode =
+                specifier.childForFieldName('alias') ??
+                specifier.childForFieldName('name');
+              if (localNode) {
+                records.push({
+                  name: localNode.text,
+                  bindingKind: 'import',
+                  bindingSpan: importSpan,
+                });
+              }
+            }
           }
         }
       }
-    } else if (ts.isFunctionExpression(node) && node.name) {
-      const fnKw = tokenSpanFirstChildOfKind(sourceFile, node, ts.SyntaxKind.FunctionKeyword);
-      records.push({
-        name: node.name.text,
-        bindingKind: 'function-expression-name',
-        bindingSpan: fnKw ?? spanFromNode(sourceFile, node),
-      });
+    } else if (node.type === 'function_expression') {
+      const nameNode = node.childForFieldName('name');
+      if (nameNode) {
+        records.push({
+          name: nameNode.text,
+          bindingKind: 'function-expression-name',
+          bindingSpan: keywordSpanInRange(source, node.startIndex, node.endIndex, 'function'),
+        });
+      }
+    } else if (node.type === 'export_statement') {
+      const text = source.slice(node.startIndex, node.endIndex);
+      if (/^export\s+default\b/u.test(text)) {
+        const declaration = node.namedChildren.find(
+          (child) =>
+            child.type === 'class' ||
+            child.type === 'function_expression',
+        );
+        if (declaration) {
+          records.push({
+            name: 'default',
+            symbolKind: declaration.type === 'class' ? 'class' : 'function',
+            symbolSpan: keywordSpanInRange(
+              source,
+              declaration.startIndex,
+              declaration.endIndex,
+              declaration.type === 'class' ? 'class' : 'function',
+            ),
+          });
+        }
+      }
     }
 
-    ts.forEachChild(node, visit);
+    for (const child of node.namedChildren) {
+      visit(child);
+    }
   }
 
-  visit(sourceFile);
+  visit(root);
   return records;
 }
 
@@ -398,29 +345,10 @@ function syntaxLabelGet(kind: ForbiddenDeclarationSyntaxKind): string {
   return kind;
 }
 
-function spanToViolationColumns(
-  sourceFile: ts.SourceFile,
-  span: ByteSpan,
-): {
-  line: number;
-  column: number;
-  endLine: number;
-  endColumn: number;
-} {
-  const start = sourceFile.getLineAndCharacterOfPosition(span.start);
-  const end = sourceFile.getLineAndCharacterOfPosition(span.end);
-  return {
-    line: start.line + 1,
-    column: start.character + 1,
-    endLine: end.line + 1,
-    endColumn: end.character + 1,
-  };
-}
-
 function violationForRecordGet(
   rule: PolicyRule,
   context: PolicyCheckContext,
-  sourceFile: ts.SourceFile,
+  source: string,
   record: DeclarationRecord,
   args: ForbiddenDeclarationsArgs,
 ): PolicyViolation | undefined {
@@ -430,52 +358,43 @@ function violationForRecordGet(
         start: 0,
         end: 0,
       };
-    const { line, column, endLine, endColumn } = spanToViolationColumns(
-      sourceFile,
-      span,
-    );
+    const location = spanToLineColumns(source, span);
     return {
       ruleId: rule.id || rule.ruleId,
       filePath: context.filePath,
       message: `Forbidden declaration '${record.name}' (${syntaxLabelGet(record.syntaxKind)}).`,
-      line,
-      column,
-      endLine,
-      endColumn,
+      line: location.line,
+      column: location.column,
+      endLine: location.endLine,
+      endColumn: location.endColumn,
     };
   }
 
   if (record.bindingKind && args.bindings?.includes(record.bindingKind)) {
     const span = record.bindingSpan ?? { start: 0, end: 0 };
-    const { line, column, endLine, endColumn } = spanToViolationColumns(
-      sourceFile,
-      span,
-    );
+    const location = spanToLineColumns(source, span);
     return {
       ruleId: rule.id || rule.ruleId,
       filePath: context.filePath,
       message: `Forbidden declaration '${record.name}' (${bindingLabelGet(record.bindingKind)}).`,
-      line,
-      column,
-      endLine,
-      endColumn,
+      line: location.line,
+      column: location.column,
+      endLine: location.endLine,
+      endColumn: location.endColumn,
     };
   }
 
   if (record.symbolKind && args.symbols?.includes(record.symbolKind)) {
     const span = record.symbolSpan ?? { start: 0, end: 0 };
-    const { line, column, endLine, endColumn } = spanToViolationColumns(
-      sourceFile,
-      span,
-    );
+    const location = spanToLineColumns(source, span);
     return {
       ruleId: rule.id || rule.ruleId,
       filePath: context.filePath,
       message: `Forbidden declaration '${record.name}' (${symbolLabelGet(record.symbolKind)}).`,
-      line,
-      column,
-      endLine,
-      endColumn,
+      line: location.line,
+      column: location.column,
+      endLine: location.endLine,
+      endColumn: location.endColumn,
     };
   }
 
@@ -491,12 +410,18 @@ export function forbiddenDeclarationsCheck(
     return [];
   }
 
-  const sourceFile = createSourceFile(context.filePath, context.source);
-  const records = declarationRecordsGet(sourceFile);
+  const { root } = parseJsTsSource(context.filePath, context.source);
+  const records = declarationRecordsGet(context.source, root);
   const violations: PolicyViolation[] = [];
 
   for (const record of records) {
-    const violation = violationForRecordGet(rule, context, sourceFile, record, args);
+    const violation = violationForRecordGet(
+      rule,
+      context,
+      context.source,
+      record,
+      args,
+    );
     if (violation) {
       violations.push(violation);
     }

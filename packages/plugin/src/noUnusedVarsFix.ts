@@ -4,331 +4,298 @@
  */
 
 import type { PolicyViolationFix, SymbolRecord } from '@codepol/core';
-import ts from 'typescript';
-
-function scriptKindFromPath(filePath: string): ts.ScriptKind {
-  if (filePath.endsWith('.tsx')) {
-    return ts.ScriptKind.TSX;
-  }
-  if (filePath.endsWith('.jsx')) {
-    return ts.ScriptKind.JSX;
-  }
-  return ts.ScriptKind.TS;
-}
-
-function createSourceFile(filePath: string, source: string): ts.SourceFile {
-  return ts.createSourceFile(
-    filePath,
-    source,
-    ts.ScriptTarget.Latest,
-    true,
-    scriptKindFromPath(filePath),
-  );
-}
-
-function statementTrailingNewlineExtend(source: string, end: number): number {
-  let e = end;
-  while (e < source.length && (source[e] === ' ' || source[e] === '\t')) {
-    e++;
-  }
-  if (source[e] === '\r') {
-    e++;
-  }
-  if (source[e] === '\n') {
-    e++;
-  }
-  return e;
-}
+import type { SyntaxNode } from 'web-tree-sitter';
+import {
+  nodeMatches,
+  parseJsTsSource,
+  smallestMatchingNodeGet,
+  wholeStatementRangeGet,
+} from './lib/jsTsTree';
 
 function removeWholeStatement(
-  statement: ts.Statement,
-  sourceFile: ts.SourceFile,
+  statement: SyntaxNode,
   source: string,
 ): PolicyViolationFix {
-  const statementStart = statement.getStart(sourceFile);
-  const lineStart = source.lastIndexOf('\n', statementStart - 1) + 1;
-  const prefix = source.slice(lineStart, statementStart);
-  const start = /^[ \t]*$/u.test(prefix) ? lineStart : statementStart;
-  const end = statementTrailingNewlineExtend(source, statement.getEnd());
-  return { byteRange: { start, end }, text: '' };
+  const range = wholeStatementRangeGet(source, statement);
+  return { byteRange: range, text: '' };
 }
 
 function prefixUnderscoreFix(
-  id: ts.Identifier,
-  sourceFile: ts.SourceFile,
+  id: SyntaxNode,
 ): PolicyViolationFix | undefined {
   const name = id.text;
   if (name.startsWith('_')) {
     return undefined;
   }
   return {
-    byteRange: { start: id.getStart(sourceFile), end: id.getEnd() },
+    byteRange: { start: id.startIndex, end: id.endIndex },
     text: `_${name}`,
   };
 }
 
 function bindingIdentifierFind(
-  sourceFile: ts.SourceFile,
+  root: SyntaxNode,
   symbol: SymbolRecord,
-): ts.Identifier | undefined {
+): SyntaxNode | undefined {
   const pos = symbol.byteRange.start;
-  let best: ts.Identifier | undefined;
-  function visit(node: ts.Node) {
-    if (ts.isIdentifier(node) && node.text === symbol.name) {
-      const ns = node.getStart(sourceFile);
-      const ne = node.getEnd();
-      if (pos >= ns && pos < ne) {
-        if (
-          !best ||
-          ne - ns < best.getEnd() - best.getStart(sourceFile)
-        ) {
-          best = node;
-        }
-      }
-    }
-    ts.forEachChild(node, visit);
-  }
-  visit(sourceFile);
-  return best;
+  return smallestMatchingNodeGet(
+    root,
+    pos,
+    (node) =>
+      (node.type === 'identifier' ||
+        node.type === 'type_identifier' ||
+        node.type === 'shorthand_property_identifier_pattern') &&
+      node.text === symbol.name,
+  );
+}
+
+function variableDeclaratorsGet(node: SyntaxNode): SyntaxNode[] {
+  return node.namedChildren.filter((child) => child.type === 'variable_declarator');
 }
 
 function removeVariableDeclaration(
-  decl: ts.VariableDeclaration,
-  sourceFile: ts.SourceFile,
+  declarator: SyntaxNode,
   source: string,
 ): PolicyViolationFix | undefined {
-  const list = decl.parent;
-  if (!ts.isVariableDeclarationList(list)) {
+  const declaration = declarator.parent;
+  if (!declaration) {
     return undefined;
   }
 
-  const decls = list.declarations;
-  const idx = decls.indexOf(decl);
-  if (idx < 0) {
+  const declarators = variableDeclaratorsGet(declaration);
+  const index = declarators.findIndex((candidate) => nodeMatches(candidate, declarator));
+  if (index < 0) {
     return undefined;
   }
 
-  const parent = list.parent;
+  const parent = declaration.parent;
 
-  if (ts.isVariableStatement(parent)) {
-    if (decls.length === 1) {
-      return removeWholeStatement(parent, sourceFile, source);
-    }
-    if (idx === 0) {
-      const next = decls[1];
+  if (
+    parent?.type === 'for_statement' &&
+    nodeMatches(parent.childForFieldName('initializer'), declaration)
+  ) {
+    if (declarators.length === 1) {
       return {
-        byteRange: {
-          start: decl.getStart(sourceFile),
-          end: next.getStart(sourceFile),
-        },
+        byteRange: { start: declaration.startIndex, end: declaration.endIndex },
         text: '',
       };
     }
-    const prev = decls[idx - 1];
-    return {
-      byteRange: { start: prev.getEnd(), end: decl.getEnd() },
-      text: '',
-    };
-  }
-
-  if (
-    ts.isForStatement(parent) &&
-    parent.initializer === list &&
-    decls.length === 1
-  ) {
-    return {
-      byteRange: { start: list.getStart(sourceFile), end: list.getEnd() },
-      text: '',
-    };
-  }
-
-  if (ts.isForStatement(parent) && parent.initializer === list) {
-    if (idx === 0) {
-      const next = decls[1];
+    if (index === 0) {
+      const next = declarators[1]!;
       return {
-        byteRange: {
-          start: decl.getStart(sourceFile),
-          end: next.getStart(sourceFile),
-        },
+        byteRange: { start: declarator.startIndex, end: next.startIndex },
         text: '',
       };
     }
-    const prev = decls[idx - 1];
+    const prev = declarators[index - 1]!;
     return {
-      byteRange: { start: prev.getEnd(), end: decl.getEnd() },
+      byteRange: { start: prev.endIndex, end: declarator.endIndex },
       text: '',
     };
   }
 
-  if (
-    (ts.isForOfStatement(parent) || ts.isForInStatement(parent)) &&
-    parent.initializer === list &&
-    decls.length === 1
-  ) {
-    if (ts.isIdentifier(decl.name)) {
-      return prefixUnderscoreFix(decl.name, sourceFile);
+  if (declaration.type === 'lexical_declaration' || declaration.type === 'variable_declaration') {
+    if (declarators.length === 1) {
+      return removeWholeStatement(declaration, source);
     }
+    if (index === 0) {
+      const next = declarators[1]!;
+      return {
+        byteRange: { start: declarator.startIndex, end: next.startIndex },
+        text: '',
+      };
+    }
+    const prev = declarators[index - 1]!;
+    return {
+      byteRange: { start: prev.endIndex, end: declarator.endIndex },
+      text: '',
+    };
   }
 
   return undefined;
 }
 
 function removeBindingElement(
-  el: ts.BindingElement,
-  sourceFile: ts.SourceFile,
+  elementNode: SyntaxNode,
   source: string,
 ): PolicyViolationFix | undefined {
-  const nameNode = el.name;
-  if (!ts.isIdentifier(nameNode)) {
+  let pattern: SyntaxNode | undefined;
+  let element = elementNode;
+
+  if (elementNode.parent?.type === 'pair_pattern') {
+    pattern = elementNode.parent.parent ?? undefined;
+    element = elementNode.parent;
+  } else {
+    pattern = elementNode.parent ?? undefined;
+  }
+
+  if (!pattern || (pattern.type !== 'object_pattern' && pattern.type !== 'array_pattern')) {
     return undefined;
   }
 
-  const pattern = el.parent;
-  if (!ts.isObjectBindingPattern(pattern) && !ts.isArrayBindingPattern(pattern)) {
-    return undefined;
-  }
-
-  const elements = pattern.elements;
-  const idx = elements.indexOf(el);
-  if (idx < 0) {
+  const elements = pattern.namedChildren;
+  const index = elements.findIndex((candidate) => nodeMatches(candidate, element));
+  if (index < 0) {
     return undefined;
   }
 
   if (elements.length === 1) {
-    const list = pattern.parent;
-    if (ts.isVariableDeclaration(list) && ts.isVariableDeclarationList(list.parent)) {
-      return removeVariableDeclaration(list, sourceFile, source);
+    const declarator = pattern.parent;
+    if (
+      declarator?.type === 'variable_declarator' &&
+      declarator.parent &&
+      (declarator.parent.type === 'lexical_declaration' ||
+        declarator.parent.type === 'variable_declaration')
+    ) {
+      return removeVariableDeclaration(declarator, source);
     }
     return undefined;
   }
 
-  if (idx === 0) {
-    const next = elements[1];
+  if (index === 0) {
+    const next = elements[1]!;
     return {
-      byteRange: { start: el.getStart(sourceFile), end: next.getStart(sourceFile) },
+      byteRange: { start: element.startIndex, end: next.startIndex },
       text: '',
     };
   }
 
-  const prev = elements[idx - 1];
+  const prev = elements[index - 1]!;
   return {
-    byteRange: { start: prev.getEnd(), end: el.getEnd() },
+    byteRange: { start: prev.endIndex, end: element.endIndex },
     text: '',
   };
 }
 
 function removeImportSpecifier(
-  spec: ts.ImportSpecifier,
-  sourceFile: ts.SourceFile,
+  specifier: SyntaxNode,
   source: string,
 ): PolicyViolationFix | undefined {
-  const named = spec.parent;
-  if (!ts.isNamedImports(named)) {
-    return undefined;
-  }
-  const elements = named.elements;
-  const idx = elements.indexOf(spec);
-  if (idx < 0) {
+  const namedImports = specifier.parent;
+  const importStatement = namedImports?.parent?.parent;
+  if (!namedImports || !importStatement || namedImports.type !== 'named_imports' || importStatement.type !== 'import_statement') {
     return undefined;
   }
 
-  const decl = named.parent.parent;
-  if (!ts.isImportDeclaration(decl)) {
+  const elements = namedImports.namedChildren.filter(
+    (child) => child.type === 'import_specifier',
+  );
+  const index = elements.findIndex((candidate) => nodeMatches(candidate, specifier));
+  if (index < 0) {
     return undefined;
   }
 
   if (elements.length === 1) {
-    return removeWholeStatement(decl, sourceFile, source);
+    return removeWholeStatement(importStatement, source);
   }
 
-  if (idx === 0) {
-    const next = elements[1];
+  if (index === 0) {
+    const next = elements[1]!;
     return {
-      byteRange: { start: spec.getStart(sourceFile), end: next.getStart(sourceFile) },
+      byteRange: { start: specifier.startIndex, end: next.startIndex },
       text: '',
     };
   }
 
-  const prev = elements[idx - 1];
+  const prev = elements[index - 1]!;
   return {
-    byteRange: { start: prev.getEnd(), end: spec.getEnd() },
+    byteRange: { start: prev.endIndex, end: specifier.endIndex },
     text: '',
   };
 }
 
 function fixFromIdentifier(
-  id: ts.Identifier,
-  sourceFile: ts.SourceFile,
+  id: SyntaxNode,
   source: string,
 ): PolicyViolationFix | undefined {
   const parent = id.parent;
-
-  if (ts.isVariableDeclaration(parent) && parent.name === id) {
-    return removeVariableDeclaration(parent, sourceFile, source);
+  if (!parent) {
+    return undefined;
   }
 
-  if (ts.isBindingElement(parent) && parent.name === id) {
-    return removeBindingElement(parent, sourceFile, source);
+  if (parent.type === 'variable_declarator' && nodeMatches(parent.childForFieldName('name'), id)) {
+    return removeVariableDeclaration(parent, source);
   }
 
-  if (ts.isParameter(parent) && parent.name === id) {
-    return prefixUnderscoreFix(id, sourceFile);
+  if (parent.type === 'shorthand_property_identifier_pattern') {
+    return removeBindingElement(parent, source);
   }
 
-  if (ts.isImportSpecifier(parent) && parent.name === id) {
-    return removeImportSpecifier(parent, sourceFile, source);
+  if (parent.type === 'pair_pattern' && parent.childForFieldName('value') === id) {
+    return removeBindingElement(id, source);
   }
 
-  if (ts.isImportClause(parent) && parent.name === id && parent.parent) {
-    const decl = parent.parent;
-    if (!ts.isImportDeclaration(decl)) {
+  if (parent.type === 'array_pattern') {
+    return removeBindingElement(id, source);
+  }
+
+  if (
+    (parent.type === 'required_parameter' || parent.type === 'optional_parameter') &&
+    nodeMatches(
+      parent.namedChildren.find((child) => child.type !== 'type_annotation'),
+      id,
+    )
+  ) {
+    return prefixUnderscoreFix(id);
+  }
+
+  if (parent.type === 'import_specifier') {
+    const localNode = parent.childForFieldName('alias') ?? parent.childForFieldName('name');
+    if (nodeMatches(localNode, id)) {
+      return removeImportSpecifier(parent, source);
+    }
+  }
+
+  if (parent.type === 'import_clause' && parent.namedChildren[0] === id) {
+    const importStatement = parent.parent;
+    if (!importStatement || importStatement.type !== 'import_statement') {
       return undefined;
     }
-    if (!parent.namedBindings) {
-      return removeWholeStatement(decl, sourceFile, source);
+    const otherBinding = parent.namedChildren.some(
+      (child) => child !== id && (child.type === 'named_imports' || child.type === 'namespace_import'),
+    );
+    if (!otherBinding) {
+      return removeWholeStatement(importStatement, source);
     }
-    let end = parent.name.getEnd();
+
+    let end = id.endIndex;
     while (end < source.length && (source[end] === ' ' || source[end] === '\t')) {
       end++;
     }
     if (source[end] === ',') {
       end++;
+      while (end < source.length && (source[end] === ' ' || source[end] === '\t')) {
+        end++;
+      }
     }
-    return { byteRange: { start: id.getStart(sourceFile), end }, text: '' };
+    return { byteRange: { start: id.startIndex, end }, text: '' };
   }
 
-  if (ts.isNamespaceImport(parent) && parent.name === id) {
-    const decl = parent.parent?.parent;
-    if (decl && ts.isImportDeclaration(decl)) {
-      return removeWholeStatement(decl, sourceFile, source);
-    }
-  }
-
-  if (ts.isCatchClause(parent)) {
-    const vd = parent.variableDeclaration;
-    if (vd && ts.isIdentifier(vd.name) && vd.name === id) {
-      return prefixUnderscoreFix(id, sourceFile);
+  if (parent.type === 'namespace_import') {
+    const importStatement = parent.parent?.parent;
+    if (importStatement?.type === 'import_statement') {
+      return removeWholeStatement(importStatement, source);
     }
   }
 
-  if (ts.isFunctionDeclaration(parent) && parent.name === id) {
-    return removeWholeStatement(parent, sourceFile, source);
+  if (parent.type === 'catch_clause') {
+    const bindingNode = parent.namedChildren.find((child) => child.type !== 'statement_block');
+    if (nodeMatches(bindingNode, id)) {
+      return prefixUnderscoreFix(id);
+    }
   }
 
-  if (ts.isClassDeclaration(parent) && parent.name === id) {
-    return removeWholeStatement(parent, sourceFile, source);
-  }
-
-  if (ts.isTypeAliasDeclaration(parent) && parent.name === id) {
-    return removeWholeStatement(parent, sourceFile, source);
-  }
-
-  if (ts.isInterfaceDeclaration(parent) && parent.name === id) {
-    return removeWholeStatement(parent, sourceFile, source);
-  }
-
-  if (ts.isEnumDeclaration(parent) && parent.name === id) {
-    return removeWholeStatement(parent, sourceFile, source);
+  if (
+    (parent.type === 'function_declaration' ||
+      parent.type === 'generator_function_declaration' ||
+      parent.type === 'class_declaration' ||
+      parent.type === 'abstract_class_declaration' ||
+      parent.type === 'type_alias_declaration' ||
+      parent.type === 'interface_declaration' ||
+      parent.type === 'enum_declaration') &&
+    nodeMatches(parent.childForFieldName('name'), id)
+  ) {
+    return removeWholeStatement(parent, source);
   }
 
   return undefined;
@@ -343,10 +310,10 @@ export function noUnusedVarsViolationFixGet(
   filePath: string,
   symbol: SymbolRecord,
 ): PolicyViolationFix | undefined {
-  const sourceFile = createSourceFile(filePath, source);
-  const id = bindingIdentifierFind(sourceFile, symbol);
+  const { root } = parseJsTsSource(filePath, source);
+  const id = bindingIdentifierFind(root, symbol);
   if (!id) {
     return undefined;
   }
-  return fixFromIdentifier(id, sourceFile, source);
+  return fixFromIdentifier(id, source);
 }

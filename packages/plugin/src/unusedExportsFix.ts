@@ -1,6 +1,12 @@
 import path from 'node:path';
-import ts from 'typescript';
 import { workspacePackageMapDiscover } from '@codepol/core';
+import {
+  declarationBindingsGet,
+  exportClauseGet,
+  exportStatementDeclarationGet,
+  statement_export_style_get,
+} from './lib/moduleSyntax';
+import { parseJsTsSource } from './lib/jsTsTree';
 
 type FileSource = {
   filePath: string;
@@ -36,8 +42,8 @@ export function unusedExportsFix(
 
   for (const { filePath, source } of files) {
     const importedNames = namesPerFile.get(filePath) ?? new Set();
-    let fixed = unusedExportKeywordSingleFileFix(source, importedNames);
-    fixed = missingExportKeywordSingleFileFix(fixed, importedNames);
+    let fixed = unusedExportKeywordSingleFileFix(source, filePath, importedNames);
+    fixed = missingExportKeywordSingleFileFix(fixed, filePath, importedNames);
     if (fixed !== source) {
       result.set(filePath, fixed);
     }
@@ -50,12 +56,6 @@ export function unusedExportsFix(
 // Cross-file import analysis
 // ---------------------------------------------------------------------------
 
-/**
- * For each file in the set, collect the names that are imported by at least
- * one *other* file.  Returns a map: filePath → Set<imported names>.
- *
- * Resolves both relative specifiers and workspace package names.
- */
 function importedNamesByFilePath(
   files: FileSource[],
   workspacePackages?: Map<string, string>,
@@ -89,61 +89,49 @@ function importedNamesByFilePath(
 // Single-file export-keyword removal
 // ---------------------------------------------------------------------------
 
-/**
- * Remove `export` keyword from named declarations whose names are not
- * in `importedNames`.
- *
- * Skips `export default` (different semantics) and `export { … }` re-exports.
- * Uses the TypeScript compiler API so multi-line declarations, comments between
- * modifiers, and other edge cases are handled correctly.
- */
 function unusedExportKeywordSingleFileFix(
   source: string,
+  filePath: string,
   importedNames: Set<string>,
 ): string {
-  const sourceFile = ts.createSourceFile(
-    'temp.ts',
-    source,
-    ts.ScriptTarget.Latest,
-    true,
-  );
-
+  const { root } = parseJsTsSource(filePath, source);
   const removals: { start: number; end: number }[] = [];
 
-  for (const statement of sourceFile.statements) {
-    // Skip re-export statements (`export { X } from '...'`, `export type { X } from '...'`)
-    // Removing `export` from these produces invalid syntax.
-    if (ts.isExportDeclaration(statement)) continue;
-
-    if (!ts.canHaveModifiers(statement)) continue;
-    const modifiers = ts.getModifiers(statement);
-    if (!modifiers) continue;
-
-    const exportMod = modifiers.find(
-      m => m.kind === ts.SyntaxKind.ExportKeyword,
-    );
-    if (!exportMod) continue;
-
-    // Skip `export default` — removing it changes module semantics
-    if (modifiers.some(m => m.kind === ts.SyntaxKind.DefaultKeyword)) continue;
-
-    const names = declarationNames(statement);
-
-    // Keep the export when every declared name is imported externally
-    if (names.length > 0 && names.every(n => importedNames.has(n))) continue;
-
-    // Remove `export ` (keyword + trailing horizontal whitespace)
-    const start = exportMod.getStart(sourceFile);
-    let end = exportMod.getEnd();
-    while (end < source.length && (source[end] === ' ' || source[end] === '\t')) {
-      end++;
+  for (const statement of root.namedChildren) {
+    if (statement.type !== 'export_statement') {
+      continue;
     }
-    removals.push({ start, end });
+
+    if (statement_export_style_get(statement, source) === 'default') {
+      continue;
+    }
+
+    if (exportClauseGet(statement)) {
+      continue;
+    }
+
+    const declaration = exportStatementDeclarationGet(statement);
+    if (!declaration) {
+      continue;
+    }
+
+    const names = declarationBindingsGet(declaration).map((binding) => binding.name);
+    if (names.length > 0 && names.every((name) => importedNames.has(name))) {
+      continue;
+    }
+
+    const match = /^export\s+/u.exec(source.slice(statement.startIndex, statement.endIndex));
+    if (!match) {
+      continue;
+    }
+    removals.push({
+      start: statement.startIndex,
+      end: statement.startIndex + match[0].length,
+    });
   }
 
   if (removals.length === 0) return source;
 
-  // Apply in reverse order to preserve earlier positions
   removals.sort((a, b) => b.start - a.start);
 
   let result = source;
@@ -158,45 +146,29 @@ function unusedExportKeywordSingleFileFix(
 // Single-file missing-export-keyword addition
 // ---------------------------------------------------------------------------
 
-/**
- * Add `export` keyword to non-exported declarations whose names appear in
- * `importedNames` (i.e., another file imports them).
- *
- * Skips statements that already have `export` or `default` modifiers, and
- * skips `ExportDeclaration` nodes (re-exports).
- */
 function missingExportKeywordSingleFileFix(
   source: string,
+  filePath: string,
   importedNames: Set<string>,
 ): string {
   if (importedNames.size === 0) return source;
 
-  const sourceFile = ts.createSourceFile(
-    'temp.ts',
-    source,
-    ts.ScriptTarget.Latest,
-    true,
-  );
-
+  const { root } = parseJsTsSource(filePath, source);
   const insertions: { position: number; text: string }[] = [];
 
-  for (const statement of sourceFile.statements) {
-    if (ts.isExportDeclaration(statement)) continue;
+  for (const statement of root.namedChildren) {
+    if (statement.type === 'export_statement') {
+      continue;
+    }
 
-    const modifiers = ts.canHaveModifiers(statement)
-      ? ts.getModifiers(statement)
-      : undefined;
+    const names = declarationBindingsGet(statement).map((binding) => binding.name);
+    if (names.length === 0) {
+      continue;
+    }
 
-    const hasExport = modifiers?.some(m => m.kind === ts.SyntaxKind.ExportKeyword);
-    const hasDefault = modifiers?.some(m => m.kind === ts.SyntaxKind.DefaultKeyword);
-    if (hasExport || hasDefault) continue;
-
-    const names = declarationNames(statement);
-    if (names.length === 0) continue;
-
-    if (names.some(n => importedNames.has(n))) {
+    if (names.some((name) => importedNames.has(name))) {
       insertions.push({
-        position: statement.getStart(sourceFile),
+        position: statement.startIndex,
         text: 'export ',
       });
     }
@@ -230,7 +202,7 @@ function sourceImportBindings(source: string): ImportBinding[] {
       for (const part of names.split(',')) {
         const trimmed = part.trim();
         if (!trimmed) continue;
-        const asMatch = /^(\w+)\s+as\s+\w+$/.exec(trimmed);
+        const asMatch = /^(\w+)\s+as\s+\w+$/u.exec(trimmed);
         results.push({
           importedName: asMatch ? asMatch[1]! : trimmed,
           moduleSpec,
@@ -247,7 +219,6 @@ function moduleSpecAbsolutePath(
   fromFile: string,
   workspacePackages?: Map<string, string>,
 ): string | undefined {
-  // Workspace package name → source entry file
   if (workspacePackages) {
     const wsEntry = workspacePackages.get(spec);
     if (wsEntry) return wsEntry;
@@ -266,28 +237,4 @@ function absolutePathMatchesFile(resolved: string, target: string): boolean {
     if (resolved + idx === target) return true;
   }
   return false;
-}
-
-function declarationNames(node: ts.Node): string[] {
-  if (ts.isFunctionDeclaration(node) && node.name) {
-    return [node.name.text];
-  }
-  if (ts.isClassDeclaration(node) && node.name) {
-    return [node.name.text];
-  }
-  if (ts.isTypeAliasDeclaration(node)) {
-    return [node.name.text];
-  }
-  if (ts.isInterfaceDeclaration(node)) {
-    return [node.name.text];
-  }
-  if (ts.isEnumDeclaration(node)) {
-    return [node.name.text];
-  }
-  if (ts.isVariableStatement(node)) {
-    return node.declarationList.declarations
-      .map(d => (ts.isIdentifier(d.name) ? d.name.text : undefined))
-      .filter((n): n is string => n !== undefined);
-  }
-  return [];
 }
