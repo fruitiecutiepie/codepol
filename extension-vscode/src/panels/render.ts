@@ -393,11 +393,21 @@ export function codepolPanelHtmlRender(input: {
       <meta name="viewport" content="width=device-width, initial-scale=1.0" />
       <title>${htmlEscape(input.model.title)}</title>
       <style>
+        html, body {
+          margin: 0;
+          min-width: 0;
+          max-width: 100%;
+        }
+        *, *::before, *::after {
+          box-sizing: border-box;
+        }
         body {
           font-family: var(--vscode-font-family);
           color: var(--vscode-foreground);
           background: var(--vscode-editor-background);
           padding: 16px;
+          min-width: 0;
+          max-width: 100%;
         }
         .card {
           border: 1px solid var(--vscode-panel-border);
@@ -405,12 +415,15 @@ export function codepolPanelHtmlRender(input: {
           padding: 14px;
           margin-bottom: 14px;
           background: color-mix(in srgb, var(--vscode-editor-background) 90%, var(--vscode-editorInfo-foreground) 10%);
+          min-width: 0;
+          max-width: 100%;
         }
         .section {
           margin-top: 14px;
         }
         .subtitle, .detail, .summary, .status {
           color: var(--vscode-descriptionForeground);
+          overflow-wrap: anywhere;
         }
         .success {
           color: var(--vscode-testing-iconPassed);
@@ -420,18 +433,32 @@ export function codepolPanelHtmlRender(input: {
         }
         dl {
           margin: 0;
+          min-width: 0;
+          max-width: 100%;
+        }
+        dd {
+          margin: 0;
+          min-width: 0;
+          overflow-wrap: anywhere;
         }
         .field {
           display: grid;
-          grid-template-columns: 140px 1fr;
+          grid-template-columns: minmax(0, 140px) minmax(0, 1fr);
           gap: 8px;
           margin-top: 8px;
+          min-width: 0;
+          max-width: 100%;
+        }
+        .field > * {
+          min-width: 0;
         }
         .actions {
           display: flex;
           gap: 8px;
           margin-top: 12px;
           flex-wrap: wrap;
+          min-width: 0;
+          max-width: 100%;
         }
         button {
           border: 1px solid var(--vscode-button-border, transparent);
@@ -440,12 +467,18 @@ export function codepolPanelHtmlRender(input: {
           background: var(--vscode-button-secondaryBackground);
           color: var(--vscode-button-secondaryForeground);
           cursor: pointer;
+          min-width: 0;
+          max-width: 100%;
+          overflow-wrap: anywhere;
         }
         button:hover {
           background: var(--vscode-button-secondaryHoverBackground);
         }
         .location {
+          display: block;
           width: 100%;
+          min-width: 0;
+          max-width: 100%;
           text-align: left;
           background: var(--vscode-input-background);
         }
@@ -455,10 +488,13 @@ export function codepolPanelHtmlRender(input: {
           margin: 0;
           display: grid;
           gap: 8px;
+          min-width: 0;
+          max-width: 100%;
         }
         .label {
           display: block;
           font-weight: 600;
+          overflow-wrap: anywhere;
         }
         .count {
           color: var(--vscode-descriptionForeground);
@@ -470,6 +506,8 @@ export function codepolPanelHtmlRender(input: {
         }
         .graph-overview {
           margin-bottom: 12px;
+          min-width: 0;
+          max-width: 100%;
         }
         .metric-row {
           display: flex;
@@ -483,9 +521,13 @@ export function codepolPanelHtmlRender(input: {
           padding: 4px 10px;
           color: var(--vscode-descriptionForeground);
           background: color-mix(in srgb, var(--vscode-editor-background) 82%, var(--vscode-textLink-foreground) 18%);
+          overflow-wrap: anywhere;
         }
         .graph {
+          display: block;
           width: 100%;
+          min-width: 0;
+          max-width: 100%;
           height: auto;
           border: 1px solid var(--vscode-panel-border);
           border-radius: 12px;
@@ -528,6 +570,18 @@ export function codepolPanelHtmlRender(input: {
         .graph-detail {
           fill: var(--vscode-descriptionForeground);
           font: 400 11px var(--vscode-font-family);
+        }
+        @media (max-width: 420px) {
+          body {
+            padding: 12px;
+          }
+          .card {
+            padding: 12px;
+          }
+          .field {
+            grid-template-columns: minmax(0, 1fr);
+            gap: 4px;
+          }
         }
       </style>
     </head>
