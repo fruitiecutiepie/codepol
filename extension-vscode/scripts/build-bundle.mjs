@@ -10,6 +10,24 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const extensionRoot = path.resolve(scriptDir, '..');
 const repoRoot = path.resolve(extensionRoot, '..');
 const bundleRoot = path.join(extensionRoot, 'dist-vsix');
+const workspaceServiceIndex = path.join(repoRoot, 'packages/workspace-service/src/index.ts');
+const workspaceServiceDaemon = path.join(repoRoot, 'packages/workspace-service/src/daemon.ts');
+const workspaceServiceContracts = path.join(repoRoot, 'packages/workspace-service/src/contracts.ts');
+
+const workspaceServiceAliasPlugin = {
+  name: 'workspace-service-alias',
+  setup(build) {
+    build.onResolve({ filter: /^@codepol\/workspace-service$/ }, () => ({
+      path: workspaceServiceIndex,
+    }));
+    build.onResolve({ filter: /^@codepol\/workspace-service\/daemon$/ }, () => ({
+      path: workspaceServiceDaemon,
+    }));
+    build.onResolve({ filter: /^@codepol\/workspace-service\/contracts$/ }, () => ({
+      path: workspaceServiceContracts,
+    }));
+  },
+};
 
 function bundleDirReset() {
   fs.rmSync(bundleRoot, { recursive: true, force: true });
@@ -66,12 +84,13 @@ async function main() {
       extension: path.join(extensionRoot, 'src/extension.ts'),
       lsp: path.join(repoRoot, 'apps/lsp/src/indexBundled.ts'),
     },
-    external: ['vscode', '@codepol/workspace-service'],
+    external: ['vscode'],
     format: 'cjs',
     logLevel: 'warning',
     minify: production,
     outdir: bundleRoot,
     platform: 'node',
+    plugins: [workspaceServiceAliasPlugin],
     sourcemap: !production,
     sourcesContent: false,
     target: 'node18',

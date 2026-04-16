@@ -5,6 +5,7 @@ import {
   CODEPOL_EXTENSION_CONTEXT_WORKSPACE_PACKAGE_RENAME_ENABLED,
 } from './constants';
 import {
+  codepolConnectionDisposedErrorIs,
   codepolIndexBackedCommandsEnabledResolve,
   type CodepolReadinessSnapshot,
   codepolWorkspacePackageRenameEnabledResolve,
@@ -56,16 +57,24 @@ export class CodepolReadinessController
   async refresh(): Promise<void> {
     const requestId = ++this.refreshRequestId;
     let nextSnapshot: CodepolReadinessSnapshot;
+    let forcePoll = false;
 
     try {
       nextSnapshot = {
         status: await this.protocol.queryIndexStatus(),
       };
     } catch (error) {
-      nextSnapshot = {
-        status: null,
-        errorMessage: errorMessageResolve(error),
-      };
+      if (codepolConnectionDisposedErrorIs(error)) {
+        nextSnapshot = {
+          status: this.snapshot.status ?? null,
+        };
+        forcePoll = true;
+      } else {
+        nextSnapshot = {
+          status: null,
+          errorMessage: errorMessageResolve(error),
+        };
+      }
     }
 
     if (requestId !== this.refreshRequestId) {
@@ -75,23 +84,25 @@ export class CodepolReadinessController
     this.snapshot = nextSnapshot;
     this.contextKeysUpdate();
     this.emitter.fire(nextSnapshot);
-    this.pollSchedule();
+    this.pollSchedule(forcePoll);
   }
 
-  private pollSchedule(): void {
+  private pollSchedule(force = false): void {
     if (this.pollHandle) {
       clearTimeout(this.pollHandle);
       this.pollHandle = undefined;
     }
 
-    const status = this.snapshot.status;
-    if (
-      status &&
-      status.status !== 'cold' &&
-      status.status !== 'warming' &&
-      status.replayState !== 'pending'
-    ) {
-      return;
+    if (!force) {
+      const status = this.snapshot.status;
+      if (
+        status &&
+        status.status !== 'cold' &&
+        status.status !== 'warming' &&
+        status.replayState !== 'pending'
+      ) {
+        return;
+      }
     }
 
     this.pollHandle = setTimeout(() => {

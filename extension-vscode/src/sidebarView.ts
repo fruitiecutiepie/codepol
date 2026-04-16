@@ -7,6 +7,7 @@ import {
 } from './constants';
 import type { CodepolProtocolClient } from './protocolClient';
 import {
+  codepolConnectionDisposedErrorIs,
   codepolFeatureBlockedMessageResolve,
   codepolFeatureGateResolve,
   codepolFeatureUnavailableMessageResolve,
@@ -963,6 +964,21 @@ export class CodepolSidebarViewProvider
       if (requestId !== this.searchRequestId) {
         return;
       }
+      if (codepolConnectionDisposedErrorIs(error)) {
+        this.searchErrorMessage = undefined;
+        this.searchUnavailable = false;
+        this.state.search = {
+          query: normalizedQuery,
+          busy: false,
+          disabled: false,
+          disabledReason: undefined,
+          results: [],
+          message: 'Reconnecting to Codepol semantic search…',
+          tone: 'neutral',
+        };
+        this.statePush();
+        return;
+      }
       errorMessage = errorMessageResolve(error);
     }
 
@@ -1027,6 +1043,11 @@ export class CodepolSidebarViewProvider
         result: await this.protocol.querySemanticHover(uri),
       };
     } catch (error) {
+      if (codepolConnectionDisposedErrorIs(error)) {
+        return {
+          result: null,
+        };
+      }
       return {
         result: null,
         errorMessage: errorMessageResolve(error),
