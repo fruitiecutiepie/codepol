@@ -1,4 +1,5 @@
 import type {
+  WorkspaceLintRuleDetailsResult,
   WorkspacePrepareRenameResult,
   WorkspaceRenamePreviewResult,
   WorkspaceSearchResult,
@@ -15,12 +16,14 @@ import type {
 import {
   codepolFeatureGateResolve,
   codepolFeatureUnavailableMessageResolve,
+  codepolRequestSupersededErrorIs,
   codepolReadinessStateResolve,
 } from './readiness';
 import type {
   ArchitectureLinksPanelViewModel,
   ArchitectureSummaryPanelViewModel,
   DependencyGraphPanelViewModel,
+  LintRuleDetailsPanelViewModel,
   RenamePreviewPanelViewModel,
   SemanticDefinitionPanelViewModel,
 } from './viewModels';
@@ -28,6 +31,7 @@ import {
   architectureLinksPanelViewModelCreate,
   architectureSummaryPanelViewModelCreate,
   dependencyGraphPanelViewModelCreate,
+  lintRuleDetailsPanelViewModelCreate,
   renamePreviewPanelViewModelCreate,
   semanticDefinitionPanelViewModelCreate,
 } from './viewModels';
@@ -54,6 +58,7 @@ export type CodepolPanels = {
   showDependencyGraph(input: DependencyGraphPanelViewModel): void;
   showSemanticDefinition(input: SemanticDefinitionPanelViewModel): void;
   showArchitectureLinks(input: ArchitectureLinksPanelViewModel): void;
+  showLintRuleDetails(input: LintRuleDetailsPanelViewModel): void;
   showRenamePreview(input: RenamePreviewPanelViewModel): void;
 };
 
@@ -95,11 +100,33 @@ function namingRulesCreate(prepare: WorkspacePrepareRenameResult): string[] {
 }
 
 export class CodepolCommandController {
+  private static readonly REQUEST_SUPERSEDED = Symbol('request_superseded');
+
   constructor(
     private readonly protocol: CodepolProtocolClient,
     private readonly panels: CodepolPanels,
     private readonly host: CodepolCommandHost,
   ) {}
+
+  private async protocolRequestRun<TResult>(
+    request: Promise<TResult>,
+  ): Promise<TResult | typeof CodepolCommandController.REQUEST_SUPERSEDED> {
+    try {
+      return await request;
+    } catch (error) {
+      if (codepolRequestSupersededErrorIs(error)) {
+        return CodepolCommandController.REQUEST_SUPERSEDED;
+      }
+      throw error;
+    }
+  }
+
+  private async protocolOptionalRequestRun<TResult>(
+    request: Promise<TResult>,
+  ): Promise<TResult | null> {
+    const result = await this.protocolRequestRun(request);
+    return result === CodepolCommandController.REQUEST_SUPERSEDED ? null : result;
+  }
 
   private featureBlockedMessageResolve(
     feature: CodepolReadinessFeature,
@@ -135,7 +162,12 @@ export class CodepolCommandController {
       options.query ?? this.host.semanticSearchInitialQueryResolve() ?? '';
 
     if (options.autoOpenFirstResult === true) {
-      const results = await this.protocol.querySemanticSearch(initialQuery);
+      const results = await this.protocolRequestRun(
+        this.protocol.querySemanticSearch(initialQuery),
+      );
+      if (results === CodepolCommandController.REQUEST_SUPERSEDED) {
+        return null;
+      }
       if (!results) {
         await this.host.errorShow(
           this.featureUnavailableMessageResolve(
@@ -195,9 +227,12 @@ export class CodepolCommandController {
     }
 
     const [definition, hover] = await Promise.all([
-      this.protocol.querySemanticDefinition(targetUri),
-      this.protocol.querySemanticHover(targetUri),
+      this.protocolRequestRun(this.protocol.querySemanticDefinition(targetUri)),
+      this.protocolOptionalRequestRun(this.protocol.querySemanticHover(targetUri)),
     ]);
+    if (definition === CodepolCommandController.REQUEST_SUPERSEDED) {
+      return null;
+    }
     const model = semanticDefinitionPanelViewModelCreate({
       uri: targetUri,
       definition,
@@ -222,7 +257,12 @@ export class CodepolCommandController {
       return null;
     }
 
-    const summary = await this.protocol.queryArchitectureSummary();
+    const summary = await this.protocolRequestRun(
+      this.protocol.queryArchitectureSummary(),
+    );
+    if (summary === CodepolCommandController.REQUEST_SUPERSEDED) {
+      return null;
+    }
     if (!summary) {
       await this.host.errorShow(
         this.featureUnavailableMessageResolve(
@@ -249,9 +289,12 @@ export class CodepolCommandController {
 
     const focusUri = uri ?? this.host.activeUriGet();
     const [graph, summary] = await Promise.all([
-      this.protocol.queryDependencyGraph(),
-      this.protocol.queryArchitectureSummary(),
+      this.protocolRequestRun(this.protocol.queryDependencyGraph()),
+      this.protocolOptionalRequestRun(this.protocol.queryArchitectureSummary()),
     ]);
+    if (graph === CodepolCommandController.REQUEST_SUPERSEDED) {
+      return null;
+    }
     if (!graph) {
       await this.host.errorShow(
         this.featureUnavailableMessageResolve(
@@ -285,11 +328,14 @@ export class CodepolCommandController {
     }
 
     const [references, hover, graph, summary] = await Promise.all([
-      this.protocol.querySemanticReferences(targetUri),
-      this.protocol.querySemanticHover(targetUri),
-      this.protocol.queryDependencyGraph(),
-      this.protocol.queryArchitectureSummary(),
+      this.protocolRequestRun(this.protocol.querySemanticReferences(targetUri)),
+      this.protocolOptionalRequestRun(this.protocol.querySemanticHover(targetUri)),
+      this.protocolOptionalRequestRun(this.protocol.queryDependencyGraph()),
+      this.protocolOptionalRequestRun(this.protocol.queryArchitectureSummary()),
     ]);
+    if (references === CodepolCommandController.REQUEST_SUPERSEDED) {
+      return null;
+    }
     const model = architectureLinksPanelViewModelCreate({
       uri: targetUri,
       references,
@@ -301,6 +347,27 @@ export class CodepolCommandController {
     return model;
   }
 
+  async showLintRuleDetails(
+    ruleId: string,
+  ): Promise<WorkspaceLintRuleDetailsResult | null> {
+    const details = await this.protocolRequestRun(
+      this.protocol.queryLintRuleDetails(ruleId),
+    );
+    if (details === CodepolCommandController.REQUEST_SUPERSEDED) {
+      return null;
+    }
+    if (!details) {
+      await this.host.errorShow(`No Codepol lint rule details are available for ${ruleId}.`);
+      return null;
+    }
+
+    const model = lintRuleDetailsPanelViewModelCreate({
+      details,
+    });
+    this.panels.showLintRuleDetails(model);
+    return details;
+  }
+
   async renameCodepolEntity(
     options: RenameCommandOptions = {},
   ): Promise<WorkspacePrepareRenameResult | WorkspaceRenamePreviewResult | null> {
@@ -309,7 +376,12 @@ export class CodepolCommandController {
       return null;
     }
 
-    const prepare = await this.protocol.prepareRename(selection.target);
+    const prepare = await this.protocolRequestRun(
+      this.protocol.prepareRename(selection.target),
+    );
+    if (prepare === CodepolCommandController.REQUEST_SUPERSEDED) {
+      return null;
+    }
     if (!prepare) {
       await this.host.errorShow(
         selection.kind === 'workspace_package'
@@ -337,7 +409,12 @@ export class CodepolCommandController {
       return prepare;
     }
 
-    const preview = await this.protocol.previewRename(selection.target, newName);
+    const preview = await this.protocolRequestRun(
+      this.protocol.previewRename(selection.target, newName),
+    );
+    if (preview === CodepolCommandController.REQUEST_SUPERSEDED) {
+      return prepare;
+    }
     if (!preview) {
       await this.host.errorShow('Rename preview is not available for this workspace yet.');
       return null;

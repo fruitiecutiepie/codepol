@@ -258,6 +258,44 @@ function workspaceReadQueriesStubCreate(): Pick<
   };
 }
 
+function requestSupersededErrorCreate(
+  overrides: Partial<{
+    requestType: string;
+    requestKey: string;
+    requestId: string;
+    replacedByRequestId: string;
+  }> = {},
+): Error & {
+  code: string;
+  data: {
+    kind: 'request_superseded';
+    requestType: string;
+    requestKey: string;
+    requestId: string;
+    replacedByRequestId: string;
+  };
+} {
+  const error = new Error('Request superseded') as Error & {
+    code: string;
+    data: {
+      kind: 'request_superseded';
+      requestType: string;
+      requestKey: string;
+      requestId: string;
+      replacedByRequestId: string;
+    };
+  };
+  error.code = 'request_superseded';
+  error.data = {
+    kind: 'request_superseded',
+    requestType: overrides.requestType ?? 'query_semantic_search',
+    requestKey: overrides.requestKey ?? 'query_semantic_search:client-1:workspace-1',
+    requestId: overrides.requestId ?? 'semantic-search-request-1',
+    replacedByRequestId: overrides.replacedByRequestId ?? 'semantic-search-request-2',
+  };
+  return error;
+}
+
 function manualTimerQueueCreate(): {
   timers: {
     setTimeout: (callback: () => void, delayMs: number) => ManualTimeoutHandle;
@@ -310,8 +348,9 @@ function manualTimerQueueCreate(): {
       const callback = callbacks.get(handle);
       callbacks.delete(handle);
       callback?.();
-      await Promise.resolve();
-      await Promise.resolve();
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        await Promise.resolve();
+      }
     },
   };
 }
@@ -956,6 +995,110 @@ describe('CodepolLspServer', () => {
     });
   });
 
+  it('includes structured superseded metadata in custom LSP request errors', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');
+    createdDirs.push(workspaceRoot);
+    fs.writeFileSync(path.join(workspaceRoot, 'codepol.toml'), noInterfaceConfigContentCreate(), 'utf8');
+
+    const messages: any[] = [];
+    const service: WorkspaceService = {
+      ...workspaceReadQueriesStubCreate(),
+      async registerClientSession() {
+        return {
+          clientSessionId: 'client-1',
+          daemonSessionId: 'daemon-1',
+        };
+      },
+      async closeClientSession() {},
+      async attachWorkspace() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+        };
+      },
+      async subscribeDiagnostics() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          scope: 'workspace',
+          subscriptionState: 'active',
+        };
+      },
+      async completeReplay() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          replayEpoch: 1,
+          replayState: 'applied',
+        };
+      },
+      async openOverlay() {},
+      async updateOverlay() {},
+      async closeOverlay() {},
+      async queryDiagnostics() {
+        return [];
+      },
+      async queryCodeActions() {
+        return [];
+      },
+      async applyEditPlan() {
+        return { applied: false, failureReason: 'plan_not_found' };
+      },
+      async queryIndexStatus() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          status: 'ready',
+          replayState: 'applied',
+          workspaceReady: true,
+          indexedFileCount: 0,
+          openDocumentCount: 0,
+          overlayCount: 0,
+          analysisGeneration: 0,
+        };
+      },
+      async querySemanticSearch() {
+        throw requestSupersededErrorCreate();
+      },
+    };
+
+    const server = new CodepolLspServer({
+      service,
+      sendMessage: (message) => {
+        messages.push(message);
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        rootUri: pathToFileURL(workspaceRoot).href,
+      },
+    });
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'codepol/semanticSearch',
+      params: {
+        query: 'sharedValue',
+      },
+    });
+
+    expect(messages.find((message) => message.id === 2)?.error).toEqual({
+      code: -32603,
+      message: 'Request superseded',
+      data: {
+        kind: 'request_superseded',
+        requestType: 'query_semantic_search',
+        requestKey: 'query_semantic_search:client-1:workspace-1',
+        requestId: 'semantic-search-request-1',
+        replacedByRequestId: 'semantic-search-request-2',
+      },
+    });
+  });
+
   it('polls index status into work-done progress and reopens progress after invalidation', async () => {
     const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');
     createdDirs.push(workspaceRoot);
@@ -1359,7 +1502,7 @@ describe('CodepolLspServer', () => {
     expect(firstCalls).toContain('queryIndexStatus:1');
     for (
       let attempt = 0;
-      attempt < 20 && !secondCalls.includes('register:lsp-progress-reconnect-session');
+      attempt < 20 && !secondCalls.includes('completeReplay');
       attempt += 1
     ) {
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1388,6 +1531,223 @@ describe('CodepolLspServer', () => {
     ]);
     expect(progressUpdates[0]?.params.value.message).toBe('Preparing workspace index');
     expect(progressUpdates[1]?.params.value.message).toBe('Workspace ready (1 indexed files)');
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 9,
+      method: 'shutdown',
+    });
+    expect(timers.pendingCountGet()).toBe(0);
+  });
+
+  it('refreshes open-document diagnostics when status polling observes a newer analysis generation', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(workspaceRoot, 'codepol.toml'), noInterfaceConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = pathToFileURL(filePath).href;
+    const fileText = 'export interface User {\n  name: string;\n}\n';
+    fs.writeFileSync(filePath, fileText, 'utf8');
+
+    const messages: any[] = [];
+    const timers = manualTimerQueueCreate();
+    const queryDiagnosticsCalls: string[] = [];
+    const statusResults = [
+      {
+        workspaceId: 'workspace-1',
+        workspaceInstanceId: 'workspace-instance-1',
+        status: 'ready' as const,
+        replayState: 'applied' as const,
+        replayEpoch: 1,
+        workspaceReady: true,
+        indexedFileCount: 1,
+        openDocumentCount: 1,
+        overlayCount: 1,
+        analysisGeneration: 1,
+      },
+      {
+        workspaceId: 'workspace-1',
+        workspaceInstanceId: 'workspace-instance-1',
+        status: 'ready' as const,
+        replayState: 'applied' as const,
+        replayEpoch: 1,
+        workspaceReady: true,
+        indexedFileCount: 1,
+        openDocumentCount: 1,
+        overlayCount: 1,
+        analysisGeneration: 1,
+      },
+      {
+        workspaceId: 'workspace-1',
+        workspaceInstanceId: 'workspace-instance-1',
+        status: 'ready' as const,
+        replayState: 'applied' as const,
+        replayEpoch: 1,
+        workspaceReady: true,
+        indexedFileCount: 1,
+        openDocumentCount: 1,
+        overlayCount: 1,
+        analysisGeneration: 2,
+      },
+    ];
+    const diagnosticsByGeneration: Record<number, WorkspaceDiagnostic[]> = {
+      1: [
+        {
+          id: 'diag-1',
+          uri,
+          source: 'codepol',
+          code: 'no-interface',
+          severity: 'error',
+          message: 'Interfaces are not allowed.',
+          range: {
+            start: { line: 0, character: 7 },
+            end: { line: 0, character: 16 },
+          },
+        },
+      ],
+      2: [
+        {
+          id: 'diag-2',
+          uri,
+          source: 'codepol',
+          code: 'no-interface',
+          severity: 'error',
+          message: 'Interfaces are still not allowed.',
+          range: {
+            start: { line: 0, character: 7 },
+            end: { line: 0, character: 16 },
+          },
+        },
+      ],
+    };
+    let currentAnalysisGeneration = 0;
+    let queryIndexStatusCalls = 0;
+
+    const service: WorkspaceService = {
+      ...workspaceReadQueriesStubCreate(),
+      async registerClientSession() {
+        return {
+          clientSessionId: 'client-1',
+          daemonSessionId: 'daemon-1',
+        };
+      },
+      async closeClientSession() {},
+      async attachWorkspace() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+        };
+      },
+      async subscribeDiagnostics() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          scope: 'workspace',
+          subscriptionState: 'active',
+        };
+      },
+      async completeReplay() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          replayEpoch: 1,
+          replayState: 'applied',
+        };
+      },
+      async openOverlay() {},
+      async updateOverlay() {},
+      async closeOverlay() {},
+      async queryDiagnostics(input) {
+        queryDiagnosticsCalls.push(
+          `${input.uri ?? '*'}@${currentAnalysisGeneration}:${input.documentVersion ?? 0}`,
+        );
+        return diagnosticsByGeneration[currentAnalysisGeneration] ?? [];
+      },
+      async queryCodeActions() {
+        return [];
+      },
+      async applyEditPlan() {
+        return { applied: false, failureReason: 'plan_not_found' };
+      },
+      async queryIndexStatus() {
+        const result =
+          statusResults[Math.min(queryIndexStatusCalls, statusResults.length - 1)]!;
+        queryIndexStatusCalls += 1;
+        currentAnalysisGeneration = result.analysisGeneration;
+        return result;
+      },
+    };
+
+    const server = new CodepolLspServer({
+      service,
+      sendMessage: (message) => {
+        messages.push(message);
+      },
+      timers: timers.timers,
+      statusPollIntervalsMs: {
+        active: 0,
+        idle: 0,
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        rootUri: pathToFileURL(workspaceRoot).href,
+        capabilities: {
+          window: {
+            workDoneProgress: true,
+          },
+        },
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      method: 'textDocument/didOpen',
+      params: {
+        textDocument: {
+          uri,
+          version: 1,
+          text: fileText,
+        },
+      },
+    });
+
+    expect(
+      messages.filter((message) => message.method === 'textDocument/publishDiagnostics'),
+    ).toHaveLength(1);
+    expect(
+      messages.filter((message) => message.method === 'textDocument/publishDiagnostics')[0]?.params
+        .diagnostics,
+    ).toEqual([]);
+
+    await timers.runNext();
+    await timers.runNext();
+    await timers.runNext();
+
+    const publishMessages = messages.filter(
+      (message) => message.method === 'textDocument/publishDiagnostics',
+    );
+    expect(queryIndexStatusCalls).toBe(3);
+    expect(queryDiagnosticsCalls).toEqual([
+      `${uri}@0:1`,
+      `${uri}@1:1`,
+      `${uri}@2:1`,
+    ]);
+    expect(publishMessages).toHaveLength(3);
+    expect(publishMessages[1]?.params.diagnostics).toHaveLength(1);
+    expect(publishMessages[1]?.params.diagnostics[0]?.message).toBe(
+      'Interfaces are not allowed.',
+    );
+    expect(publishMessages[2]?.params.diagnostics).toHaveLength(1);
+    expect(publishMessages[2]?.params.diagnostics[0]?.message).toBe(
+      'Interfaces are still not allowed.',
+    );
 
     await server.handleMessage({
       jsonrpc: '2.0',
@@ -2185,6 +2545,17 @@ describe('CodepolLspServer', () => {
       rootPath: workspaceRoot,
       configPath: path.join(workspaceRoot, 'codepol.toml'),
     });
+    await service.subscribeDiagnostics({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+      scope: 'workspace',
+    });
+    await service.completeReplay({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+    });
     const diagnostics = await service.queryDiagnostics({
       clientSessionId: registered.clientSessionId,
       workspaceId: attached.workspaceId,
@@ -2237,6 +2608,17 @@ describe('CodepolLspServer', () => {
       rootPath: workspaceRoot,
       configPath: path.join(workspaceRoot, 'codepol.toml'),
     });
+    await service.subscribeDiagnostics({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+      scope: 'workspace',
+    });
+    await service.completeReplay({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+    });
     const diagnostics = await service.queryDiagnostics({
       clientSessionId: registered.clientSessionId,
       workspaceId: attached.workspaceId,
@@ -2253,15 +2635,16 @@ describe('CodepolLspServer', () => {
     expect(diagnostics).toHaveLength(1);
   });
 
-  it('falls back to an in-process workspace service when daemon install ids differ', async () => {
+  it('relaunches the daemon when install ids differ instead of falling back in-process', async () => {
     const runtimeDir = tempWorkspaceCreate('codepol-lsp-daemon-runtime-');
     createdDirs.push(runtimeDir);
 
-    const { descriptor } = workspaceDaemonDescriptorCreate({
+    let activeDescriptor = workspaceDaemonDescriptorCreate({
       runtimeDir,
       installId: 'stable',
-    });
-    workspaceDaemonDescriptorWrite(runtimeDir, descriptor);
+    }).descriptor;
+    let activeService = new WorkspaceServiceEngine();
+    workspaceDaemonDescriptorWrite(runtimeDir, activeDescriptor);
 
     const workspaceRoot = tempWorkspaceCreate('codepol-lsp-daemon-workspace-');
     createdDirs.push(workspaceRoot);
@@ -2281,12 +2664,37 @@ describe('CodepolLspServer', () => {
         CODEPOL_INSTALL_ID: 'insiders',
       },
       clientInstanceId: 'lsp-install-mismatch-test',
-      connect: daemonConnectCreate({
+      connect: async (
         descriptor,
-        service: new WorkspaceServiceEngine(),
-      }),
+      ): Promise<WorkspaceDaemonRequestClient> => {
+        if (descriptor.sessionNonce !== activeDescriptor.sessionNonce) {
+          throw new Error('daemon unavailable');
+        }
+        const session = new WorkspaceDaemonSession({
+          descriptor: activeDescriptor,
+          service: activeService,
+        });
+        return {
+          async request<TResponse extends Record<string, unknown>>(
+            message: Parameters<WorkspaceDaemonRequestClient['request']>[0],
+          ): Promise<TResponse> {
+            const response = await session.handleMessage(message);
+            if (response.type === 'error') {
+              throw new Error(response.message);
+            }
+            return response as unknown as TResponse;
+          },
+          async close(): Promise<void> {},
+        };
+      },
       startDaemon: async () => {
         startDaemonCalls += 1;
+        activeDescriptor = workspaceDaemonDescriptorCreate({
+          runtimeDir,
+          installId: 'insiders',
+        }).descriptor;
+        activeService = new WorkspaceServiceEngine();
+        workspaceDaemonDescriptorWrite(runtimeDir, activeDescriptor);
       },
       onResolved: (info) => {
         resolved.push({
@@ -2305,17 +2713,28 @@ describe('CodepolLspServer', () => {
       rootPath: workspaceRoot,
       configPath: path.join(workspaceRoot, 'codepol.toml'),
     });
+    await service.subscribeDiagnostics({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+      scope: 'workspace',
+    });
+    await service.completeReplay({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+    });
     const diagnostics = await service.queryDiagnostics({
       clientSessionId: registered.clientSessionId,
       workspaceId: attached.workspaceId,
       uri,
     });
 
-    expect(startDaemonCalls).toBe(0);
+    expect(startDaemonCalls).toBe(1);
     expect(resolved).toEqual([
       {
-        mode: 'in_process_fallback',
-        error: 'Daemon handshake failed: unexpected_install_id',
+        mode: 'daemon',
+        error: undefined,
       },
     ]);
     expect(registered.daemonSessionId).toBeDefined();

@@ -80,6 +80,11 @@ import {
   type WorkspaceSemanticReferencesResult,
   type WorkspaceSemanticTarget,
   type WorkspaceInstanceId,
+  type WorkspaceLintRuleDetailsResult,
+  type WorkspaceLintRuleDiagnosticGroup,
+  type WorkspaceLintRuleProviderSummary,
+  type WorkspaceLintRulesResult,
+  type WorkspaceLintRuleSummary,
   type WorkspaceSearchResult,
   type WorkspaceSymbolResult,
   type BiomeProviderConfig,
@@ -237,6 +242,16 @@ type WorkspaceAnalysis = {
   eslintHasErrors: boolean;
 };
 
+type WorkspaceLintRuleSummaryBuilderState = {
+  ruleId: string;
+  severities: Set<LintSeverity>;
+  targetPatterns: Set<string>;
+  providers: Map<string, WorkspaceLintRuleProviderSummary>;
+  languages: Set<string>;
+  hasNativeOwner: boolean;
+  fixSurfaceNotes: Set<string>;
+};
+
 type WorkspaceContextState = {
   rootPath: string;
   configPath: string;
@@ -387,6 +402,21 @@ export type WorkspaceService = {
     analysisGeneration?: number;
     signal?: AbortSignal;
   }) => Promise<IndexStatusResult>;
+  queryLintRules: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceLintRulesResult>;
+  queryLintRuleDetails: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    ruleId: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceLintRuleDetailsResult | null>;
   queryWorkspaceSymbols: (input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;
@@ -1235,6 +1265,295 @@ function workspaceAnalyzerInventoryBuild(input: {
   }
 
   return inventory.sort((left, right) => left.ruleId.localeCompare(right.ruleId));
+}
+
+function workspaceLintRuleProviderConfigSummaryCreate(
+  provider: LintProvider,
+): string | undefined {
+  if (provider.config === undefined) {
+    return undefined;
+  }
+  try {
+    const summary = JSON.stringify(provider.config);
+    if (!summary || summary === '{}') {
+      return undefined;
+    }
+    return summary;
+  } catch {
+    return '[unserializable config]';
+  }
+}
+
+function workspaceLintRuleProviderSummaryKeyCreate(
+  summary: WorkspaceLintRuleProviderSummary,
+): string {
+  return [
+    summary.platform,
+    ...workspaceAnalyzerRuleIdsNormalize(summary.languages),
+    summary.configSummary ?? '',
+  ].join('\0');
+}
+
+function workspaceLintRuleTreeProviderEnabled(rule: PolicyRule): boolean {
+  return !rule.providers || rule.providers.length === 0 || rule.providers.includes('tree-sitter');
+}
+
+function workspaceLintRuleSummaryBuilderStateGet(
+  states: Map<string, WorkspaceLintRuleSummaryBuilderState>,
+  ruleId: string,
+): WorkspaceLintRuleSummaryBuilderState {
+  let state = states.get(ruleId);
+  if (state) {
+    return state;
+  }
+  state = {
+    ruleId,
+    severities: new Set<LintSeverity>(),
+    targetPatterns: new Set<string>(),
+    providers: new Map<string, WorkspaceLintRuleProviderSummary>(),
+    languages: new Set<string>(),
+    hasNativeOwner: false,
+    fixSurfaceNotes: new Set<string>(),
+  };
+  states.set(ruleId, state);
+  return state;
+}
+
+function workspaceLintRuleRuleIssuesByRuleIdCreate(
+  analysis: WorkspaceAnalysis,
+): Map<string, string[]> {
+  const issuesByRuleId = new Map<string, Set<string>>();
+
+  for (const scorecard of analysis.analyzerScorecard) {
+    if (scorecard.issues.length === 0) {
+      continue;
+    }
+    for (const ruleId of [...scorecard.ownedRuleIds, ...scorecard.skippedRuleIds]) {
+      const ruleIssues = issuesByRuleId.get(ruleId) ?? new Set<string>();
+      for (const issue of scorecard.issues) {
+        ruleIssues.add(issue);
+      }
+      issuesByRuleId.set(ruleId, ruleIssues);
+    }
+  }
+
+  return new Map(
+    [...issuesByRuleId.entries()].map(([ruleId, issues]) => [
+      ruleId,
+      [...issues].sort(),
+    ]),
+  );
+}
+
+function workspaceLintRuleSummariesStaticBuild(input: {
+  policy: PolicyFile;
+  pluginRulesMap: Awaited<ReturnType<typeof policyPluginsGet>> extends Result<infer T, string>
+    ? T
+    : never;
+  ruleTargets: PolicyRuleTargetContext[];
+  analysisState: WorkspaceLintRuleSummary['analysisState'];
+  analyzerIssues?: string[];
+}): WorkspaceLintRuleSummary[] {
+  const states = new Map<string, WorkspaceLintRuleSummaryBuilderState>();
+
+  for (const rule of input.policy.rules) {
+    const lookup = pluginGetForRule(input.pluginRulesMap, rule.ruleId);
+    if (!lookup) {
+      continue;
+    }
+
+    const pluginRule = lookup.plugin.pluginRule;
+    const treeCheckProvider = pluginRule.capabilities.treeCheckProvider;
+    const treeCheckEnabled = workspaceLintRuleTreeProviderEnabled(rule);
+    const lintProviders = (pluginRule.capabilities.lintProviders ?? []).filter(
+      (provider) =>
+        !rule.providers ||
+        rule.providers.length === 0 ||
+        rule.providers.includes(provider.platform),
+    );
+
+    const state = workspaceLintRuleSummaryBuilderStateGet(states, lookup.resolvedId);
+    state.severities.add(rule.severity ?? 'error');
+
+    const targets = policyRuleTargetsResolve(rule, input.policy);
+    for (const target of targets) {
+      for (const pattern of target.files) {
+        state.targetPatterns.add(pattern);
+      }
+    }
+
+    const matchingLanguages = workspaceAnalyzerRuleIdsNormalize(
+      input.ruleTargets
+        .filter((targetContext) =>
+          policyRuleMatches(targetContext.ruleId, lookup.resolvedId),
+        )
+        .map((targetContext) => targetContext.target.language),
+    );
+    const treeLanguages =
+      treeCheckProvider && treeCheckEnabled
+        ? matchingLanguages.filter((language) =>
+            treeCheckProviderSupportsLanguage(treeCheckProvider, language),
+          )
+        : [];
+
+    const wrappedPlatforms = workspaceAnalyzerRuleIdsNormalize(
+      lintProviders.map((provider) => provider.platform),
+    );
+    for (const provider of lintProviders) {
+      const summary: WorkspaceLintRuleProviderSummary = {
+        platform: provider.platform,
+        languages: workspaceAnalyzerRuleIdsNormalize(provider.languages),
+        configSummary: workspaceLintRuleProviderConfigSummaryCreate(provider),
+      };
+      state.providers.set(
+        workspaceLintRuleProviderSummaryKeyCreate(summary),
+        summary,
+      );
+      for (const language of summary.languages) {
+        state.languages.add(language);
+      }
+    }
+
+    const hasNativeOwner =
+      Boolean(treeCheckProvider) &&
+      treeCheckEnabled &&
+      matchingLanguages.some(
+        (language) =>
+          workspaceLanguageIsNativeOwnershipCandidate(language) &&
+          treeCheckProviderSupportsLanguage(treeCheckProvider!, language),
+      );
+    if (state.providers.size === 0 && treeLanguages.length > 0) {
+      const summary: WorkspaceLintRuleProviderSummary = {
+        platform: 'tree-sitter',
+        languages: treeLanguages,
+      };
+      state.providers.set(
+        workspaceLintRuleProviderSummaryKeyCreate(summary),
+        summary,
+      );
+      for (const language of treeLanguages) {
+        state.languages.add(language);
+      }
+    }
+    if (state.languages.size === 0) {
+      for (const language of matchingLanguages) {
+        state.languages.add(language);
+      }
+    }
+    state.hasNativeOwner ||= hasNativeOwner;
+
+    for (const note of workspaceAnalyzerInventoryFixSurfaceNotesResolve({
+      hasNativeOwner,
+      pluginRule,
+      wrappedPlatforms,
+    })) {
+      state.fixSurfaceNotes.add(note);
+    }
+  }
+
+  const analyzerIssues = [...(input.analyzerIssues ?? [])].sort();
+  return [...states.values()]
+    .map((state) => {
+      const ownership: WorkspaceLintRuleSummary['ownership'] =
+        input.analysisState === 'ready'
+          ? state.hasNativeOwner
+            ? 'native_preferred'
+            : 'keep_wrapped'
+          : 'pending_analysis';
+      return {
+        ruleId: state.ruleId,
+        severities: workspaceAnalyzerRuleIdsNormalize(state.severities) as LintSeverity[],
+        targetPatterns: workspaceAnalyzerRuleIdsNormalize(state.targetPatterns),
+        providers: [...state.providers.values()].sort((left, right) =>
+          left.platform === right.platform
+            ? left.languages.join('\0').localeCompare(right.languages.join('\0'))
+            : left.platform.localeCompare(right.platform),
+        ),
+        languages: workspaceAnalyzerRuleIdsNormalize(state.languages),
+        ownership,
+        hasNativeOwner: state.hasNativeOwner,
+        recentNativeDiagnosticCount: 0,
+        recentWrappedDiagnosticCount: 0,
+        recentNativeLatencyMs: 0,
+        recentWrappedLatencyMs: 0,
+        fixSurfaceNotes: workspaceAnalyzerRuleIdsNormalize(state.fixSurfaceNotes),
+        analysisState: input.analysisState,
+        analyzerIssues,
+      };
+    })
+    .sort((left, right) => left.ruleId.localeCompare(right.ruleId));
+}
+
+function workspaceLintRuleSummariesMergeAnalysis(
+  summaries: WorkspaceLintRuleSummary[],
+  analysis: WorkspaceAnalysis,
+): WorkspaceLintRuleSummary[] {
+  const inventoryByRuleId = new Map(
+    analysis.analyzerInventory.map((entry) => [entry.ruleId, entry]),
+  );
+  const ruleIssuesByRuleId = workspaceLintRuleRuleIssuesByRuleIdCreate(analysis);
+  const treeScorecard = analysis.analyzerScorecard.find(
+    (scorecard) => scorecard.platform === 'codepol_tree',
+  );
+
+  return summaries
+    .map((summary) => {
+      const inventory = inventoryByRuleId.get(summary.ruleId);
+      const ruleIssues =
+        ruleIssuesByRuleId.get(summary.ruleId) ??
+        summary.analyzerIssues;
+      const matchingViolations = analysis.violations.filter((violation) =>
+        policyRuleMatches(violation.ruleId, summary.ruleId),
+      );
+      const matchingTreeViolations = analysis.treeViolations.filter((violation) =>
+        policyRuleMatches(violation.ruleId, summary.ruleId),
+      );
+      const wrappedLatencyMs = inventory
+        ? inventory.recentWrappedLatencyMs
+        : analysis.analyzerScorecard
+            .filter(
+              (scorecard) =>
+                scorecard.platform !== 'codepol_tree' &&
+                (scorecard.ownedRuleIds.includes(summary.ruleId) ||
+                  scorecard.skippedRuleIds.includes(summary.ruleId)),
+            )
+            .reduce((sum, scorecard) => sum + scorecard.latencyMs, 0);
+      const nativeLatencyMs = inventory
+        ? inventory.recentNativeLatencyMs
+        : summary.hasNativeOwner &&
+            treeScorecard?.ownedRuleIds.includes(summary.ruleId)
+          ? treeScorecard.latencyMs
+          : 0;
+      const ownership: WorkspaceLintRuleSummary['ownership'] =
+        inventory?.ownership ?? (summary.hasNativeOwner
+          ? 'native_preferred'
+          : 'keep_wrapped');
+      const analysisState: WorkspaceLintRuleSummary['analysisState'] =
+        ruleIssues.length > 0 ? 'error' : 'ready';
+
+      return {
+        ...summary,
+        ownership,
+        hasNativeOwner: inventory?.hasNativeOwner ?? summary.hasNativeOwner,
+        recentNativeDiagnosticCount:
+          inventory?.recentNativeDiagnosticCount ??
+          (summary.hasNativeOwner ? matchingTreeViolations.length : 0),
+        recentWrappedDiagnosticCount:
+          inventory?.recentWrappedDiagnosticCount ??
+          (summary.hasNativeOwner
+            ? Math.max(0, matchingViolations.length - matchingTreeViolations.length)
+            : matchingViolations.length),
+        recentNativeLatencyMs: nativeLatencyMs,
+        recentWrappedLatencyMs: wrappedLatencyMs,
+        fixSurfaceNotes: workspaceAnalyzerRuleIdsNormalize([
+          ...summary.fixSurfaceNotes,
+          ...(inventory?.fixSurfaceNotes ?? []),
+        ]),
+        analysisState,
+        analyzerIssues: ruleIssues,
+      };
+    })
+    .sort((left, right) => left.ruleId.localeCompare(right.ruleId));
 }
 
 function lintProviderEntriesCollect(
@@ -4770,6 +5089,90 @@ async function workspaceAnalysisRun(
   return analysis;
 }
 
+async function workspaceLintRulesResultCreate(input: {
+  workspace: WorkspaceState;
+  workspaceSession: WorkspaceSessionState;
+  analysis?: WorkspaceAnalysis;
+  signal?: AbortSignal;
+}): Promise<WorkspaceLintRulesResult> {
+  workspaceAbortSignalThrowIfAborted(input.signal);
+  await workspaceContextRefreshFromDisk(input.workspace);
+
+  const policy = input.workspace.config as PolicyFile;
+  const pluginRulesResult = await policyPluginsGet(policy, input.workspace.rootPath, {
+    configPath: input.workspace.configPath,
+  });
+  if (isErr(pluginRulesResult)) {
+    throw new Error(pluginRulesResult.Err);
+  }
+
+  const analysisAvailable =
+    input.analysis !== undefined && input.workspaceSession.status !== 'error';
+  const summaries = workspaceLintRuleSummariesStaticBuild({
+    policy,
+    pluginRulesMap: pluginRulesResult.Ok,
+    ruleTargets: policyRuleTargetsGet(policy),
+    analysisState:
+      input.workspaceSession.status === 'error'
+        ? 'error'
+        : analysisAvailable
+          ? 'ready'
+          : 'pending',
+    analyzerIssues:
+      input.workspaceSession.status === 'error' && input.workspaceSession.lastError
+        ? [input.workspaceSession.lastError]
+        : [],
+  });
+
+  return {
+    analysisGeneration: input.workspaceSession.analysisGeneration,
+    workspaceReady:
+      input.workspaceSession.replayState === 'applied' &&
+      input.workspaceSession.status === 'ready',
+    rules:
+      analysisAvailable && input.analysis
+        ? workspaceLintRuleSummariesMergeAnalysis(summaries, input.analysis)
+        : summaries,
+  };
+}
+
+function workspaceLintRuleDetailsGroupsCreate(input: {
+  rootPath: string;
+  diagnostics: WorkspaceDiagnostic[];
+}): WorkspaceLintRuleDiagnosticGroup[] {
+  const groupsByUri = new Map<string, WorkspaceLintRuleDiagnosticGroup>();
+
+  for (const diagnostic of input.diagnostics) {
+    const filePath = workspaceUriToPath(diagnostic.uri);
+    const workspaceRelativePath =
+      path.relative(input.rootPath, filePath) || path.basename(filePath);
+    const group = groupsByUri.get(diagnostic.uri) ?? {
+      uri: diagnostic.uri,
+      workspaceRelativePath,
+      diagnostics: [],
+    };
+    group.diagnostics.push({
+      severity: diagnostic.severity,
+      message: diagnostic.message,
+      range: diagnostic.range,
+    });
+    groupsByUri.set(diagnostic.uri, group);
+  }
+
+  return [...groupsByUri.values()]
+    .map((group) => ({
+      ...group,
+      diagnostics: group.diagnostics.sort((left, right) =>
+        left.range.start.line !== right.range.start.line
+          ? left.range.start.line - right.range.start.line
+          : left.range.start.character - right.range.start.character,
+      ),
+    }))
+    .sort((left, right) =>
+      left.workspaceRelativePath.localeCompare(right.workspaceRelativePath),
+    );
+}
+
 async function workspaceSessionAnalysisGet(
   workspace: WorkspaceState,
   state: WorkspaceSessionState,
@@ -5427,6 +5830,75 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     };
   }
 
+  async queryLintRules(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceLintRulesResult> {
+    const { workspace, workspaceSession } = workspaceSessionGet(
+      this.workspaces,
+      this.clientSessions,
+      input.clientSessionId,
+      input.workspaceId,
+    );
+    workspaceAnalysisGenerationValidate(workspaceSession, input);
+    return workspaceLintRulesResultCreate({
+      workspace,
+      workspaceSession,
+      analysis:
+        workspaceSession.status === 'error'
+          ? undefined
+          : workspaceSession.lastAnalysis,
+      signal: input.signal,
+    });
+  }
+
+  async queryLintRuleDetails(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    ruleId: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceLintRuleDetailsResult | null> {
+    const { workspace, workspaceSession } = workspaceSessionGet(
+      this.workspaces,
+      this.clientSessions,
+      input.clientSessionId,
+      input.workspaceId,
+    );
+    workspaceAnalysisGenerationValidate(workspaceSession, input);
+    const analysis = await this.workspaceSessionAnalysisEnsure(workspace, workspaceSession, {
+      signal: input.signal,
+    });
+    const rulesResult = await workspaceLintRulesResultCreate({
+      workspace,
+      workspaceSession,
+      analysis,
+      signal: input.signal,
+    });
+    const rule = rulesResult.rules.find((candidate) =>
+      policyRuleMatches(candidate.ruleId, input.ruleId),
+    );
+    if (!rule) {
+      return null;
+    }
+
+    const diagnostics = analysis.diagnostics.filter((diagnostic) =>
+      policyRuleMatches(diagnostic.code, rule.ruleId),
+    );
+    return {
+      rule,
+      groups: workspaceLintRuleDetailsGroupsCreate({
+        rootPath: workspace.rootPath,
+        diagnostics,
+      }),
+      totalDiagnosticCount: diagnostics.length,
+    };
+  }
+
   async queryWorkspaceSymbols(input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;
@@ -5810,6 +6282,27 @@ class InProcessWorkspaceService implements WorkspaceService {
     signal?: AbortSignal;
   }): Promise<IndexStatusResult> {
     return this.engine.queryIndexStatus(input);
+  }
+
+  queryLintRules(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceLintRulesResult> {
+    return this.engine.queryLintRules(input);
+  }
+
+  queryLintRuleDetails(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    ruleId: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceLintRuleDetailsResult | null> {
+    return this.engine.queryLintRuleDetails(input);
   }
 
   queryWorkspaceSymbols(input: {

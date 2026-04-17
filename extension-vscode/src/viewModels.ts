@@ -2,6 +2,7 @@ import * as path from 'node:path';
 import type {
   WorkspaceArchitectureSummaryResult,
   WorkspaceDependencyGraphResult,
+  WorkspaceLintRuleDetailsResult,
   WorkspacePrepareRenameResult,
   WorkspaceRenamePreviewResult,
   WorkspaceSemanticDefinitionResult,
@@ -115,6 +116,27 @@ export type ArchitectureLinksPanelViewModel = {
   totalAvailableItems: number;
   truncated: boolean;
   groups: SemanticReferencesPanelGroupViewModel[];
+};
+
+export type LintRuleDetailsPanelGroupViewModel = {
+  title: string;
+  items: PanelLocationViewModel[];
+};
+
+export type LintRuleDetailsPanelViewModel = {
+  ruleId: string;
+  ownershipLabel: string;
+  analysisStateLabel: string;
+  totalDiagnosticCount: number;
+  recentNativeDiagnosticCount: number;
+  recentWrappedDiagnosticCount: number;
+  severities: string[];
+  targetPatterns: string[];
+  languages: string[];
+  providerSummaries: Array<{ label: string; detail?: string }>;
+  fixSurfaceNotes: string[];
+  analyzerIssues: string[];
+  groups: LintRuleDetailsPanelGroupViewModel[];
 };
 
 export type RenamePreviewPanelGroupViewModel = {
@@ -697,6 +719,68 @@ function renameGroupTitleResolve(group: string): string {
     default:
       return group;
   }
+}
+
+function lintRuleOwnershipLabelResolve(
+  ownership: WorkspaceLintRuleDetailsResult['rule']['ownership'],
+): string {
+  switch (ownership) {
+    case 'native_preferred':
+      return 'Native Preferred';
+    case 'keep_wrapped':
+      return 'Keep Wrapped';
+    default:
+      return 'Pending Analysis';
+  }
+}
+
+function lintRuleAnalysisStateLabelResolve(
+  state: WorkspaceLintRuleDetailsResult['rule']['analysisState'],
+): string {
+  switch (state) {
+    case 'ready':
+      return 'Ready';
+    case 'error':
+      return 'Error';
+    default:
+      return 'Pending';
+  }
+}
+
+export function lintRuleDetailsPanelViewModelCreate(input: {
+  details: WorkspaceLintRuleDetailsResult;
+}): LintRuleDetailsPanelViewModel {
+  return {
+    ruleId: input.details.rule.ruleId,
+    ownershipLabel: lintRuleOwnershipLabelResolve(input.details.rule.ownership),
+    analysisStateLabel: lintRuleAnalysisStateLabelResolve(
+      input.details.rule.analysisState,
+    ),
+    totalDiagnosticCount: input.details.totalDiagnosticCount,
+    recentNativeDiagnosticCount: input.details.rule.recentNativeDiagnosticCount,
+    recentWrappedDiagnosticCount: input.details.rule.recentWrappedDiagnosticCount,
+    severities: input.details.rule.severities,
+    targetPatterns: input.details.rule.targetPatterns,
+    languages: input.details.rule.languages,
+    providerSummaries: input.details.rule.providers.map((provider) => ({
+      label: `${provider.platform} (${provider.languages.join(', ') || 'all'})`,
+      detail: provider.configSummary,
+    })),
+    fixSurfaceNotes: input.details.rule.fixSurfaceNotes,
+    analyzerIssues: input.details.rule.analyzerIssues,
+    groups: input.details.groups.map((group) => ({
+      title: group.workspaceRelativePath,
+      items: group.diagnostics.map((diagnostic) =>
+        locationViewModelCreate({
+          uri: group.uri,
+          line: diagnostic.range.start.line,
+          character: diagnostic.range.start.character,
+          label: diagnostic.message,
+          detail: `${diagnostic.severity} • ${diagnostic.range.start.line + 1}:${diagnostic.range.start.character + 1}`,
+        }),
+      ),
+    })),
+  };
 }
 
 export function renamePreviewPanelViewModelCreate(input: {

@@ -11,6 +11,7 @@ import {
   codepolFeatureBlockedMessageResolve,
   codepolFeatureGateResolve,
   codepolFeatureUnavailableMessageResolve,
+  codepolRequestSupersededErrorIs,
   type CodepolReadinessSnapshot,
 } from './readiness';
 import type { CodepolReadinessSource } from './readinessController';
@@ -964,6 +965,14 @@ export class CodepolSidebarViewProvider
       if (requestId !== this.searchRequestId) {
         return;
       }
+      if (codepolRequestSupersededErrorIs(error)) {
+        this.state.search = {
+          ...this.state.search,
+          busy: false,
+        };
+        this.statePush();
+        return;
+      }
       if (codepolConnectionDisposedErrorIs(error)) {
         this.searchErrorMessage = undefined;
         this.searchUnavailable = false;
@@ -1043,6 +1052,11 @@ export class CodepolSidebarViewProvider
         result: await this.protocol.querySemanticHover(uri),
       };
     } catch (error) {
+      if (codepolRequestSupersededErrorIs(error)) {
+        return {
+          result: null,
+        };
+      }
       if (codepolConnectionDisposedErrorIs(error)) {
         return {
           result: null,

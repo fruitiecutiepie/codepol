@@ -214,6 +214,25 @@ args.preferredStyle = "named"
 `;
 }
 
+function configuredRulesSummaryConfigContentCreate(): string {
+  return `[[plugins]]
+id = "@codepol/plugin"
+source = { kind = "builtin" }
+
+[targets.src]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[[rules]]
+ruleId = "@codepol/plugin/no-interface"
+targets = ["src"]
+
+[[rules]]
+ruleId = "@codepol/plugin/no-duplicate-exports"
+targets = ["src"]
+`;
+}
+
 function biomeFailureConfigContentCreate(pluginId: string): string {
   return `[[plugins]]
 id = "${pluginId}"
@@ -1265,6 +1284,66 @@ demo();
         ]),
       }),
     );
+  });
+
+  it('includes configured native-only and fix-only builtin rules in lint rule summaries', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = workspacePathToUri(filePath);
+    fs.writeFileSync(filePath, 'export const value = 1;\n', 'utf8');
+
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(
+      configPath,
+      configuredRulesSummaryConfigContentCreate(),
+      'utf8',
+    );
+
+    const service = workspaceServiceCreate();
+    const attached = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'configured-rules-summary-client',
+    });
+
+    await service.queryDiagnostics({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      uri,
+    });
+
+    await expect(
+      service.queryLintRules({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+      }),
+    ).resolves.toMatchObject({
+      rules: expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: '@codepol/plugin/no-interface',
+          ownership: 'native_preferred',
+          analysisState: 'ready',
+          providers: [
+            expect.objectContaining({
+              platform: 'tree-sitter',
+              languages: ['typescript'],
+            }),
+          ],
+          languages: ['typescript'],
+        }),
+        expect.objectContaining({
+          ruleId: '@codepol/plugin/no-duplicate-exports',
+          ownership: 'keep_wrapped',
+          analysisState: 'ready',
+          providers: [],
+          languages: ['typescript'],
+          fixSurfaceNotes: ['fix_provider'],
+        }),
+      ]),
+    });
   });
 
   it('keeps wrapped-only JS/TS analyzers active when no native owner exists', async () => {

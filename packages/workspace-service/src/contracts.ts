@@ -11,6 +11,8 @@ import type {
   WorkspaceDependencyGraphResult,
   WorkspaceDiagnostic,
   WorkspaceInstanceId,
+  WorkspaceLintRuleDetailsResult,
+  WorkspaceLintRulesResult,
   WorkspacePrepareRenameResult,
   WorkspaceRenamePreviewResult,
   WorkspaceRenameTarget,
@@ -131,6 +133,21 @@ export type WorkspaceService = {
     analysisGeneration?: number;
     signal?: AbortSignal;
   }) => Promise<IndexStatusResult>;
+  queryLintRules: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceLintRulesResult>;
+  queryLintRuleDetails: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    ruleId: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceLintRuleDetailsResult | null>;
   queryWorkspaceSymbols: (input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;

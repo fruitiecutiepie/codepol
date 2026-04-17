@@ -10,6 +10,12 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const extensionRoot = path.resolve(scriptDir, '..');
 const repoRoot = path.resolve(extensionRoot, '..');
 const bundleRoot = path.join(extensionRoot, 'dist-vsix');
+const coreIndex = path.join(repoRoot, 'packages/core/src/index.ts');
+const pluginIndex = path.join(repoRoot, 'packages/plugin/src/index.ts');
+const pluginBiomeIndex = path.join(repoRoot, 'packages/plugin-biome/src/index.ts');
+const pluginEslintIndex = path.join(repoRoot, 'packages/plugin-eslint/src/index.ts');
+const pluginRuffIndex = path.join(repoRoot, 'packages/plugin-ruff/src/index.ts');
+const pluginVultureIndex = path.join(repoRoot, 'packages/plugin-vulture/src/index.ts');
 const workspaceServiceIndex = path.join(repoRoot, 'packages/workspace-service/src/index.ts');
 const workspaceServiceDaemon = path.join(repoRoot, 'packages/workspace-service/src/daemon.ts');
 const workspaceServiceContracts = path.join(repoRoot, 'packages/workspace-service/src/contracts.ts');
@@ -17,6 +23,24 @@ const workspaceServiceContracts = path.join(repoRoot, 'packages/workspace-servic
 const workspaceServiceAliasPlugin = {
   name: 'workspace-service-alias',
   setup(build) {
+    build.onResolve({ filter: /^@codepol\/core$/ }, () => ({
+      path: coreIndex,
+    }));
+    build.onResolve({ filter: /^@codepol\/plugin$/ }, () => ({
+      path: pluginIndex,
+    }));
+    build.onResolve({ filter: /^@codepol\/plugin-biome$/ }, () => ({
+      path: pluginBiomeIndex,
+    }));
+    build.onResolve({ filter: /^@codepol\/plugin-eslint$/ }, () => ({
+      path: pluginEslintIndex,
+    }));
+    build.onResolve({ filter: /^@codepol\/plugin-ruff$/ }, () => ({
+      path: pluginRuffIndex,
+    }));
+    build.onResolve({ filter: /^@codepol\/plugin-vulture$/ }, () => ({
+      path: pluginVultureIndex,
+    }));
     build.onResolve({ filter: /^@codepol\/workspace-service$/ }, () => ({
       path: workspaceServiceIndex,
     }));
@@ -112,6 +136,7 @@ async function main() {
     minify: production,
     outdir: bundleRoot,
     platform: 'node',
+    plugins: [workspaceServiceAliasPlugin],
     sourcemap: !production,
     sourcesContent: false,
     target: 'node18',

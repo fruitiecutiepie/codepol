@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { IndexStatusResult } from '@codepol/core';
+import type {
+  IndexStatusResult,
+  WorkspaceLintRuleDetailsResult,
+} from '@codepol/core';
 import { CodepolCommandController } from '../extension-vscode/src/commands';
 import type { RenameTargetCandidate } from '../extension-vscode/src/discovery';
 import type { WorkspaceSearchResult } from '@codepol/core';
@@ -67,6 +70,7 @@ function hostCreate(overrides: Partial<{
 function protocolCreate() {
   return {
     queryIndexStatus: vi.fn(),
+    queryLintRuleDetails: vi.fn(),
     queryArchitectureSummary: vi.fn(),
     queryDependencyGraph: vi.fn(),
     querySemanticSearch: vi.fn(),
@@ -79,12 +83,44 @@ function protocolCreate() {
   };
 }
 
+function requestSupersededErrorCreate(): Error & {
+  code: string;
+  data: {
+    kind: 'request_superseded';
+    requestType: string;
+    requestKey: string;
+    requestId: string;
+    replacedByRequestId: string;
+  };
+} {
+  const error = new Error('Request superseded') as Error & {
+    code: string;
+    data: {
+      kind: 'request_superseded';
+      requestType: string;
+      requestKey: string;
+      requestId: string;
+      replacedByRequestId: string;
+    };
+  };
+  error.code = 'request_superseded';
+  error.data = {
+    kind: 'request_superseded',
+    requestType: 'query_semantic_search',
+    requestKey: 'query_semantic_search:client-1:workspace-1',
+    requestId: 'semantic-search-request-1',
+    replacedByRequestId: 'semantic-search-request-2',
+  };
+  return error;
+}
+
 function panelsCreate() {
   return {
     showArchitectureSummary: vi.fn(),
     showDependencyGraph: vi.fn(),
     showSemanticDefinition: vi.fn(),
     showArchitectureLinks: vi.fn(),
+    showLintRuleDetails: vi.fn(),
     showRenamePreview: vi.fn(),
   };
 }
@@ -172,6 +208,47 @@ const architectureSummaryResult = {
   ],
 };
 
+const lintRuleDetailsResult: WorkspaceLintRuleDetailsResult = {
+  rule: {
+    ruleId: '@codepol/plugin/no-interface',
+    severities: ['error'],
+    targetPatterns: ['src/**/*.ts'],
+    providers: [
+      {
+        platform: 'tree-sitter',
+        languages: ['typescript'],
+      },
+    ],
+    languages: ['typescript'],
+    ownership: 'native_preferred',
+    hasNativeOwner: true,
+    recentNativeDiagnosticCount: 1,
+    recentWrappedDiagnosticCount: 0,
+    recentNativeLatencyMs: 5,
+    recentWrappedLatencyMs: 0,
+    fixSurfaceNotes: ['tree_check'],
+    analysisState: 'ready',
+    analyzerIssues: [],
+  },
+  totalDiagnosticCount: 1,
+  groups: [
+    {
+      uri: 'file:///workspace/packages/lib/src/index.ts',
+      workspaceRelativePath: 'packages/lib/src/index.ts',
+      diagnostics: [
+        {
+          severity: 'error',
+          message: 'Interfaces are not allowed.',
+          range: {
+            start: { line: 0, character: 7 },
+            end: { line: 0, character: 16 },
+          },
+        },
+      ],
+    },
+  ],
+};
+
 describe('CodepolCommandController', () => {
   it('blocks semantic search while the workspace index is warming', async () => {
     const protocol = protocolCreate();
@@ -210,6 +287,23 @@ describe('CodepolCommandController', () => {
     expect(host.errorShow).toHaveBeenCalledWith(
       'Codepol semantic search is not available for this workspace yet.',
     );
+    expect(host.openLocation).not.toHaveBeenCalled();
+  });
+
+  it('silently drops superseded semantic search requests', async () => {
+    const protocol = protocolCreate();
+    protocol.querySemanticSearch.mockRejectedValue(requestSupersededErrorCreate());
+    const panels = panelsCreate();
+    const host = hostCreate({
+      semanticSearchInitialQueryResolve: () => 'sharedValue',
+    });
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    await expect(
+      controller.showSemanticSearch({ autoOpenFirstResult: true }),
+    ).resolves.toBeNull();
+    expect(host.errorShow).not.toHaveBeenCalled();
+    expect(host.infoShow).not.toHaveBeenCalled();
     expect(host.openLocation).not.toHaveBeenCalled();
   });
 
@@ -258,6 +352,41 @@ describe('CodepolCommandController', () => {
       'Open a workspace file before requesting a semantic definition.',
     );
     expect(protocol.querySemanticDefinition).not.toHaveBeenCalled();
+  });
+
+  it('keeps semantic definition rendering when only hover is superseded', async () => {
+    const protocol = protocolCreate();
+    protocol.querySemanticDefinition.mockResolvedValue({
+      kind: 'single_location',
+      target: {
+        uri: 'file:///workspace/packages/lib/src/index.ts',
+        semanticClass: 'exported_symbol',
+      },
+      location: {
+        uri: 'file:///workspace/packages/lib/src/index.ts',
+        range: {
+          start: { line: 0, character: 13 },
+          end: { line: 0, character: 24 },
+        },
+      },
+      source: 'codepol',
+      semanticClass: 'exported_symbol',
+    });
+    protocol.querySemanticHover.mockRejectedValue(requestSupersededErrorCreate());
+    const panels = panelsCreate();
+    const host = hostCreate();
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    const result = await controller.showSemanticDefinition();
+
+    expect(result).not.toBeNull();
+    expect(host.errorShow).not.toHaveBeenCalled();
+    expect(host.openLocation).toHaveBeenCalledWith({
+      uri: 'file:///workspace/packages/lib/src/index.ts',
+      line: 0,
+      character: 13,
+    });
+    expect(panels.showSemanticDefinition).toHaveBeenCalledWith(result);
   });
 
   it('opens semantic definition results and renders the structured panel', async () => {
@@ -309,6 +438,30 @@ describe('CodepolCommandController', () => {
       character: 0,
     });
     expect(panels.showSemanticDefinition).toHaveBeenCalledWith(result);
+  });
+
+  it('keeps lint rule detail rendering available through the explicit panel command', async () => {
+    const protocol = protocolCreate();
+    protocol.queryLintRuleDetails.mockResolvedValue(lintRuleDetailsResult);
+    const panels = panelsCreate();
+    const host = hostCreate();
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    const result = await controller.showLintRuleDetails(
+      '@codepol/plugin/no-interface',
+    );
+
+    expect(protocol.queryLintRuleDetails).toHaveBeenCalledWith(
+      '@codepol/plugin/no-interface',
+    );
+    expect(host.errorShow).not.toHaveBeenCalled();
+    expect(result).toEqual(lintRuleDetailsResult);
+    expect(panels.showLintRuleDetails).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ruleId: '@codepol/plugin/no-interface',
+        totalDiagnosticCount: 1,
+      }),
+    );
   });
 
   it('shows the workspace architecture summary without requiring an active file', async () => {

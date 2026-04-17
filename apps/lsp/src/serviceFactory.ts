@@ -12,6 +12,20 @@ import type { WorkspaceService } from '@codepol/workspace-service/contracts';
 
 const nodeRequire = createRequire(__filename);
 const runtimeBundled = process.env.CODEPOL_BUNDLED_RUNTIME === '1';
+const daemonRequiredCapabilities = [
+  'query_lint_rules',
+  'query_lint_rule_details',
+];
+const daemonRuntimePackageIds = [
+  '@codepol/daemon',
+  '@codepol/workspace-service',
+  '@codepol/core',
+  '@codepol/plugin',
+  '@codepol/plugin-biome',
+  '@codepol/plugin-eslint',
+  '@codepol/plugin-ruff',
+  '@codepol/plugin-vulture',
+];
 
 export type LspWorkspaceServiceMode = 'in_process' | 'daemon';
 export type LspWorkspaceServiceResolvedMode =
@@ -46,6 +60,84 @@ function daemonProcessStart(env: NodeJS.ProcessEnv = process.env): void {
     env: { ...process.env, ...env, NODE_NO_WARNINGS: '1' },
   });
   child.unref();
+}
+
+function packageRootFindFromEntry(moduleEntryPath: string, expectedName: string): string {
+  let dir = path.dirname(moduleEntryPath);
+  while (true) {
+    const packageJsonPath = path.join(dir, 'package.json');
+    if (fs.existsSync(packageJsonPath)) {
+      try {
+        const pkg = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8')) as { name?: string };
+        if (pkg.name === expectedName) {
+          return dir;
+        }
+      } catch {
+        // ignore invalid package metadata
+      }
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) {
+      throw new Error(`Could not find package root for ${expectedName}`);
+    }
+    dir = parent;
+  }
+}
+
+function packageFilesCollect(rootPath: string): string[] {
+  const entries = fs.readdirSync(rootPath, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    const entryPath = path.join(rootPath, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...packageFilesCollect(entryPath));
+      continue;
+    }
+    if (entry.isFile()) {
+      files.push(entryPath);
+    }
+  }
+  return files;
+}
+
+function packageArtifactPathsResolve(moduleSpecifier: string): string[] {
+  try {
+    const entry = nodeRequire.resolve(moduleSpecifier);
+    const root = packageRootFindFromEntry(entry, moduleSpecifier);
+    const candidates = [
+      path.join(root, 'package.json'),
+      ...(fs.existsSync(path.join(root, 'dist'))
+        ? packageFilesCollect(path.join(root, 'dist'))
+        : [entry]),
+      ...(fs.existsSync(path.join(root, 'wasm'))
+        ? packageFilesCollect(path.join(root, 'wasm'))
+        : []),
+    ];
+    return [...new Set(candidates.map((candidate) => path.resolve(candidate)))]
+      .filter((candidate) => {
+        try {
+          return fs.statSync(candidate).isFile();
+        } catch {
+          return false;
+        }
+      })
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+function daemonMinStartedAtUnixMsResolve(): number | undefined {
+  const artifactPaths = daemonRuntimePackageIds.flatMap(packageArtifactPathsResolve);
+  let newestMtimeMs = 0;
+  for (const artifactPath of artifactPaths) {
+    try {
+      newestMtimeMs = Math.max(newestMtimeMs, fs.statSync(artifactPath).mtimeMs);
+    } catch {
+      // ignore raced fs reads
+    }
+  }
+  return newestMtimeMs > 0 ? Math.ceil(newestMtimeMs) : undefined;
 }
 
 function errorAsError(error: unknown): Error {
@@ -83,6 +175,7 @@ export async function lspWorkspaceServiceResolve(options: {
 
   const clientInstanceId = options.clientInstanceId ?? `codepol-lsp-${process.pid}`;
   try {
+    const minStartedAtUnixMs = daemonMinStartedAtUnixMsResolve();
     const launched = await workspaceDaemonLaunchOrConnect({
       client: {
         kind: 'lsp',
@@ -93,6 +186,8 @@ export async function lspWorkspaceServiceResolve(options: {
       },
       runtimeDir: env.CODEPOL_DAEMON_RUNTIME_DIR,
       expectedInstallId: env.CODEPOL_INSTALL_ID,
+      requiredCapabilities: daemonRequiredCapabilities,
+      minStartedAtUnixMs,
       connect: options.connect,
       startDaemon: options.startDaemon ?? (() => daemonProcessStart(env)),
     });

@@ -48,6 +48,20 @@ describe('parserInit', () => {
       }
     });
 
+    it('re-initializes safely after module reloads using shared language registrations', async () => {
+      vi.resetModules();
+      const reloaded = await import('./parserInit');
+      await reloaded.parserInit();
+
+      const result = reloaded.parserGetForFile('example.ts');
+
+      expect(isOk(result)).toBe(true);
+      if (isOk(result)) {
+        const tree = result.Ok.parse('const y = 2;');
+        expect(tree.rootNode.type).toBe('program');
+      }
+    });
+
     it('should return Err for an unknown file extension', () => {
       const result = parserGetForFile('file.unknown');
 

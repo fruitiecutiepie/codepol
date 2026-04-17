@@ -1,6 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { Language } from 'web-tree-sitter';
+import {
+  parserRuntimeStateGet,
+  type RegisteredLang,
+} from './parserRuntimeState';
 
 export type Lang = {
   langId: string;
@@ -8,10 +12,6 @@ export type Lang = {
   wasmPath?: string;
   fileExtensions: string[];
 };
-
-const langMap = new Map<string, Required<Lang>>();
-const fileExtensionsMap = new Map<string, string>();
-const langsMap = new Map<string, Language>();
 
 /**
  * Resolves the path to a bundled WASM grammar file.
@@ -37,6 +37,7 @@ export function wasmPathGet(grammarName: string): string {
 }
 
 function fileExtensionsSetForLang(langId: string, extensions: string[]): string[] {
+  const state = parserRuntimeStateGet();
   const merged = new Set<string>();
   for (const extension of extensions) {
     const trimmed = extension.trim();
@@ -44,19 +45,20 @@ function fileExtensionsSetForLang(langId: string, extensions: string[]): string[
       continue;
     }
     const normalised = (trimmed.startsWith('.') ? trimmed : `.${trimmed}`).toLowerCase();
-    const existing = fileExtensionsMap.get(normalised);
+    const existing = state.fileExtensionsToLangId.get(normalised);
     if (existing && existing !== langId) {
       throw new Error(
         `File extension "${normalised}" is already registered for language "${existing}".`
       );
     }
-    fileExtensionsMap.set(normalised, langId);
+    state.fileExtensionsToLangId.set(normalised, langId);
     merged.add(normalised);
   }
   return [...merged];
 }
 
 export function langAdd(lang: Lang): void {
+  const state = parserRuntimeStateGet();
   const langId = lang.langId.trim();
   if (!langId) {
     throw new Error('Language lang must include a non-empty langId.');
@@ -70,7 +72,7 @@ export function langAdd(lang: Lang): void {
     wasmPath = lang.wasmPath;
   }
 
-  const existing = langMap.get(langId);
+  const existing = state.registeredLangs.get(langId);
   if (existing) {
     if (existing.wasmPath !== wasmPath) {
       throw new Error(
@@ -82,7 +84,7 @@ export function langAdd(lang: Lang): void {
     for (const extension of addedExtensions) {
       mergedExtensions.add(extension);
     }
-    langMap.set(langId, {
+    state.registeredLangs.set(langId, {
       ...existing,
       fileExtensions: [...mergedExtensions],
     });
@@ -93,37 +95,39 @@ export function langAdd(lang: Lang): void {
   if (normalisedExtensions.length === 0) {
     throw new Error(`Language "${langId}" must include valid file extensions.`);
   }
-  langMap.set(langId, {
+  const registeredLang: RegisteredLang = {
     langId,
     wasmPath,
     fileExtensions: normalisedExtensions,
-  });
+  };
+  state.registeredLangs.set(langId, registeredLang);
 }
 
 export function langsGet(): Required<Lang>[] {
-  return [...langMap.values()];
+  return [...parserRuntimeStateGet().registeredLangs.values()];
 }
 
 export function langSet(langId: string, language: Language): void {
-  langsMap.set(langId, language);
+  parserRuntimeStateGet().loadedLanguages.set(langId, language);
 }
 
 export function langExists(langId: string): boolean {
-  return langsMap.has(langId);
+  return parserRuntimeStateGet().loadedLanguages.has(langId);
 }
 
 export function langGetForFile(filePath: string): Language | null {
+  const state = parserRuntimeStateGet();
   const extension = path.extname(filePath).toLowerCase();
   if (!extension) {
     return null;
   }
-  const langId = fileExtensionsMap.get(extension);
+  const langId = state.fileExtensionsToLangId.get(extension);
   if (!langId) {
     return null;
   }
   let result: Language | null = null;
-  if (langsMap.get(langId) != null) {
-    result = langsMap.get(langId)!;
+  if (state.loadedLanguages.get(langId) != null) {
+    result = state.loadedLanguages.get(langId)!;
   }
   return result;
 }
@@ -138,5 +142,5 @@ export function langIdGetForFile(filePath: string): string | null {
   if (!extension) {
     return null;
   }
-  return fileExtensionsMap.get(extension) ?? null;
+  return parserRuntimeStateGet().fileExtensionsToLangId.get(extension) ?? null;
 }

@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createRequire } from 'node:module';
+import * as vscode from 'vscode';
 import type {
   ExecuteCommandParams,
   LanguageClientOptions,
@@ -15,6 +16,8 @@ import type {
   IndexStatusResult,
   WorkspaceArchitectureSummaryResult,
   WorkspaceDependencyGraphResult,
+  WorkspaceLintRuleDetailsResult,
+  WorkspaceLintRulesResult,
   WorkspacePrepareRenameResult,
   WorkspaceRenamePreviewResult,
   WorkspaceRenameTarget,
@@ -28,6 +31,8 @@ import {
   CODEPOL_LSP_REQUEST_ARCHITECTURE_SUMMARY,
   CODEPOL_LSP_REQUEST_DEPENDENCY_GRAPH,
   CODEPOL_LSP_REQUEST_INDEX_STATUS,
+  CODEPOL_LSP_REQUEST_LINT_RULE_DETAILS,
+  CODEPOL_LSP_REQUEST_LINT_RULES,
   CODEPOL_LSP_REQUEST_PREPARE_RENAME,
   CODEPOL_LSP_REQUEST_PREVIEW_RENAME,
   CODEPOL_LSP_REQUEST_SEMANTIC_DEFINITION,
@@ -38,20 +43,41 @@ import {
 import {
   codepolConnectionDisposedErrorIs,
   codepolProtocolStartNeededResolve,
+  codepolRequestSupersededErrorDataResolve,
+  codepolRequestSupersededErrorIs,
   type CodepolProtocolConnectionState,
 } from './readiness';
 
 const nodeRequire = createRequire(__filename);
+const CODEPOL_LSP_TRACE_OUTPUT_NAME = 'Codepol LSP';
+const CODEPOL_LSP_VERBOSE_DIAGNOSTICS_SETTING = 'lsp.verboseDiagnostics';
+let traceOutputChannel: vscode.LogOutputChannel | undefined;
 
 function bundledServerModulePathResolve(): string | undefined {
   const candidate = path.join(__dirname, 'lsp.js');
   return fs.existsSync(candidate) ? candidate : undefined;
 }
 
+function verboseDiagnosticsEnabledResolve(): boolean {
+  return vscode.workspace
+    .getConfiguration('codepol')
+    .get<boolean>(CODEPOL_LSP_VERBOSE_DIAGNOSTICS_SETTING, false);
+}
+
+function traceOutputChannelGet(): vscode.LogOutputChannel {
+  traceOutputChannel ??= vscode.window.createOutputChannel(
+    CODEPOL_LSP_TRACE_OUTPUT_NAME,
+    { log: true },
+  );
+  return traceOutputChannel;
+}
+
 export type CodepolProtocolClient = {
   start(): Promise<void>;
   stop(): Promise<void>;
   queryIndexStatus(): Promise<IndexStatusResult | null>;
+  queryLintRules(): Promise<WorkspaceLintRulesResult | null>;
+  queryLintRuleDetails(ruleId: string): Promise<WorkspaceLintRuleDetailsResult | null>;
   queryArchitectureSummary(): Promise<WorkspaceArchitectureSummaryResult | null>;
   queryDependencyGraph(): Promise<WorkspaceDependencyGraphResult | null>;
   querySemanticSearch(query: string): Promise<WorkspaceSearchResult[] | null>;
@@ -169,6 +195,42 @@ export class VscodeLanguageClientProtocol implements CodepolProtocolClient {
     return this.client.sendRequest<TResult>(method, params);
   }
 
+  private requestSupersededTraceWrite(method: string, error: unknown): void {
+    if (!verboseDiagnosticsEnabledResolve()) {
+      return;
+    }
+
+    const data = codepolRequestSupersededErrorDataResolve(error);
+    const parts = [`method=${method}`];
+    if (data?.requestType) {
+      parts.push(`requestType=${data.requestType}`);
+    }
+    if (data?.requestKey) {
+      parts.push(`requestKey=${data.requestKey}`);
+    }
+    if (data?.requestId) {
+      parts.push(`requestId=${data.requestId}`);
+    }
+    if (data?.replacedByRequestId) {
+      parts.push(`replacedByRequestId=${data.replacedByRequestId}`);
+    }
+    traceOutputChannelGet().trace(`Request superseded ${parts.join(' ')}`);
+  }
+
+  private async requestSendWithSupersededTrace<TResult>(
+    method: string,
+    params?: unknown,
+  ): Promise<TResult> {
+    try {
+      return await this.requestSend<TResult>(method, params);
+    } catch (error) {
+      if (codepolRequestSupersededErrorIs(error)) {
+        this.requestSupersededTraceWrite(method, error);
+      }
+      throw error;
+    }
+  }
+
   private async requestRun<TResult>(
     method: string,
     params?: unknown,
@@ -176,20 +238,35 @@ export class VscodeLanguageClientProtocol implements CodepolProtocolClient {
     await this.ensureStarted();
 
     try {
-      return await this.requestSend<TResult>(method, params);
+      return await this.requestSendWithSupersededTrace<TResult>(method, params);
     } catch (error) {
       if (!codepolConnectionDisposedErrorIs(error)) {
         throw error;
       }
 
       await this.start();
-      return this.requestSend<TResult>(method, params);
+      return this.requestSendWithSupersededTrace<TResult>(method, params);
     }
   }
 
   async queryIndexStatus(): Promise<IndexStatusResult | null> {
     return this.requestRun<IndexStatusResult | null>(
       CODEPOL_LSP_REQUEST_INDEX_STATUS,
+    );
+  }
+
+  async queryLintRules(): Promise<WorkspaceLintRulesResult | null> {
+    return this.requestRun<WorkspaceLintRulesResult | null>(
+      CODEPOL_LSP_REQUEST_LINT_RULES,
+    );
+  }
+
+  async queryLintRuleDetails(
+    ruleId: string,
+  ): Promise<WorkspaceLintRuleDetailsResult | null> {
+    return this.requestRun<WorkspaceLintRuleDetailsResult | null>(
+      CODEPOL_LSP_REQUEST_LINT_RULE_DETAILS,
+      { ruleId },
     );
   }
 

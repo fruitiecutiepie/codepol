@@ -25,6 +25,13 @@ export type CodepolReadinessFeature =
   | 'workspacePackageRename';
 
 export type CodepolProtocolConnectionState = 'stopped' | 'starting' | 'running';
+export type CodepolSupersededRequestData = {
+  kind: 'request_superseded';
+  requestType?: string;
+  requestKey?: string;
+  requestId?: string;
+  replacedByRequestId?: string;
+};
 
 export type CodepolFeatureGate = {
   blocked: boolean;
@@ -51,6 +58,13 @@ function errorMessageResolve(error: unknown): string | undefined {
     return error.message;
   }
   return undefined;
+}
+
+function errorDataResolve(error: unknown): unknown {
+  if (typeof error !== 'object' || error === null || !('data' in error)) {
+    return undefined;
+  }
+  return error.data;
 }
 
 function featureLabelResolve(feature: CodepolReadinessFeature): string {
@@ -183,6 +197,37 @@ export function codepolConnectionDisposedErrorIs(error: unknown): boolean {
     message.includes('Connection is disposed.') ||
     message.includes('Client is not running')
   );
+}
+
+export function codepolRequestSupersededErrorDataResolve(
+  error: unknown,
+): CodepolSupersededRequestData | undefined {
+  const data = errorDataResolve(error);
+  if (
+    typeof data !== 'object' ||
+    data === null ||
+    !('kind' in data) ||
+    data.kind !== 'request_superseded'
+  ) {
+    return undefined;
+  }
+  return data as CodepolSupersededRequestData;
+}
+
+export function codepolRequestSupersededErrorIs(error: unknown): boolean {
+  if (codepolRequestSupersededErrorDataResolve(error)) {
+    return true;
+  }
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    error.code === 'request_superseded'
+  ) {
+    return true;
+  }
+  const message = errorMessageResolve(error);
+  return message?.includes('Request superseded') ?? false;
 }
 
 export function codepolProtocolStartNeededResolve(input: {

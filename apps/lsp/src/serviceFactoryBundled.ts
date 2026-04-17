@@ -11,6 +11,10 @@ import {
 import type { WorkspaceService } from '@codepol/workspace-service/contracts';
 
 const nodeRequire = createRequire(__filename);
+const daemonRequiredCapabilities = [
+  'query_lint_rules',
+  'query_lint_rule_details',
+];
 
 export type LspWorkspaceServiceResolvedInfo =
   | { mode: 'daemon'; launched: boolean };
@@ -32,6 +36,15 @@ function daemonProcessStart(env: NodeJS.ProcessEnv = process.env): void {
   child.unref();
 }
 
+function daemonMinStartedAtUnixMsResolve(): number | undefined {
+  const daemonEntryPath = daemonEntryPathResolve();
+  try {
+    return Math.ceil(fs.statSync(daemonEntryPath).mtimeMs);
+  } catch {
+    return undefined;
+  }
+}
+
 export async function lspWorkspaceServiceResolve(options: {
   env?: NodeJS.ProcessEnv;
   clientInstanceId?: string;
@@ -41,6 +54,7 @@ export async function lspWorkspaceServiceResolve(options: {
 } = {}): Promise<WorkspaceService> {
   const env = options.env ?? process.env;
   const clientInstanceId = options.clientInstanceId ?? `codepol-lsp-${process.pid}`;
+  const minStartedAtUnixMs = daemonMinStartedAtUnixMsResolve();
   const launched = await workspaceDaemonLaunchOrConnect({
     client: {
       kind: 'lsp',
@@ -51,6 +65,8 @@ export async function lspWorkspaceServiceResolve(options: {
     },
     runtimeDir: env.CODEPOL_DAEMON_RUNTIME_DIR,
     expectedInstallId: env.CODEPOL_INSTALL_ID,
+    requiredCapabilities: daemonRequiredCapabilities,
+    minStartedAtUnixMs,
     connect: options.connect,
     startDaemon: options.startDaemon ?? (() => daemonProcessStart(env)),
   });

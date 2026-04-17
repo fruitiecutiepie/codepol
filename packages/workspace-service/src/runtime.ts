@@ -40,6 +40,9 @@ type CoreRuntimeApi = {
 
 function runtimeCoreModulesGet(): CoreRuntimeApi[] {
   const runtimes: CoreRuntimeApi[] = [{ langAdd, parserInit }];
+  if (runtimeBundled) {
+    return runtimes;
+  }
   try {
     const packagedCore = nodeRequire('@codepol/core') as Partial<CoreRuntimeApi>;
     if (

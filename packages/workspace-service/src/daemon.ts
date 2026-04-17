@@ -12,6 +12,8 @@ import type {
   WorkspaceCodeAction,
   WorkspaceDependencyGraphResult,
   WorkspaceDiagnostic,
+  WorkspaceLintRuleDetailsResult,
+  WorkspaceLintRulesResult,
   WorkspacePrepareRenameResult,
   WorkspaceRenamePreviewResult,
   WorkspaceRenameTarget,
@@ -38,6 +40,10 @@ export const WORKSPACE_DAEMON_ENGINE_VERSION =
 export const WORKSPACE_DAEMON_BUILD_ID = process.env.CODEPOL_BUILD_ID ?? 'dev';
 export const WORKSPACE_DAEMON_INSTALL_ID =
   process.env.CODEPOL_INSTALL_ID ?? 'default';
+export const WORKSPACE_DAEMON_SERVICE_CAPABILITIES = {
+  query_lint_rules: true,
+  query_lint_rule_details: true,
+} as const;
 
 type JsonObject = Record<string, unknown>;
 
@@ -116,6 +122,7 @@ export type WorkspaceDaemonErrorResponse = {
   type: 'error';
   code: string;
   message: string;
+  data?: JsonObject;
 };
 
 export type WorkspaceDaemonEnvelope = {
@@ -165,12 +172,15 @@ type WorkspaceDaemonHelloOptions = {
   connection: WorkspaceDaemonRequestClient;
   client: WorkspaceDaemonClientHello['client'];
   expectedInstallId?: string;
+  requiredCapabilities?: string[];
 };
 
 export type WorkspaceDaemonLaunchOptions = {
   runtimeDir?: string;
   client: WorkspaceDaemonClientHello['client'];
   expectedInstallId?: string;
+  requiredCapabilities?: string[];
+  minStartedAtUnixMs?: number;
   startDaemon: () => Promise<void> | void;
   connectTimeoutMs?: number;
   lockTimeoutMs?: number;
@@ -185,6 +195,13 @@ export type WorkspaceDaemonLaunchResult = {
 };
 
 type WorkspaceDaemonMessage = Omit<WorkspaceDaemonEnvelope, 'id'>;
+type WorkspaceDaemonSupersededErrorData = {
+  kind: 'request_superseded';
+  requestType: string;
+  requestKey: string;
+  requestId?: string;
+  replacedByRequestId?: string;
+};
 
 type WorkspaceDaemonWorkspaceFreshness = {
   workspaceInstanceId?: WorkspaceInstanceId;
@@ -301,6 +318,25 @@ type WorkspaceDaemonQueryIndexStatusRequest = WorkspaceDaemonMessage &
   WorkspaceDaemonWorkspaceFreshness & {
   type: 'query_index_status';
   workspaceId: string;
+  analysisGeneration?: number;
+};
+
+type WorkspaceDaemonQueryLintRulesRequest = WorkspaceDaemonMessage &
+  WorkspaceDaemonClientSessionFreshness &
+  WorkspaceDaemonRequestFreshness &
+  WorkspaceDaemonWorkspaceFreshness & {
+  type: 'query_lint_rules';
+  workspaceId: string;
+  analysisGeneration?: number;
+};
+
+type WorkspaceDaemonQueryLintRuleDetailsRequest = WorkspaceDaemonMessage &
+  WorkspaceDaemonClientSessionFreshness &
+  WorkspaceDaemonRequestFreshness &
+  WorkspaceDaemonWorkspaceFreshness & {
+  type: 'query_lint_rule_details';
+  workspaceId: string;
+  ruleId: string;
   analysisGeneration?: number;
 };
 
@@ -448,6 +484,16 @@ type WorkspaceDaemonQueryIndexStatusAck = {
   indexStatus: IndexStatusResult;
 };
 
+type WorkspaceDaemonQueryLintRulesAck = {
+  type: 'query_lint_rules_ack';
+  result: WorkspaceLintRulesResult;
+};
+
+type WorkspaceDaemonQueryLintRuleDetailsAck = {
+  type: 'query_lint_rule_details_ack';
+  result: WorkspaceLintRuleDetailsResult | null;
+};
+
 type WorkspaceDaemonQueryWorkspaceSymbolsAck = {
   type: 'query_workspace_symbols_ack';
   symbols: WorkspaceSymbolResult[];
@@ -519,6 +565,8 @@ type WorkspaceDaemonServiceResponse =
   | WorkspaceDaemonQueryCodeActionsAck
   | WorkspaceDaemonApplyEditPlanAck
   | WorkspaceDaemonQueryIndexStatusAck
+  | WorkspaceDaemonQueryLintRulesAck
+  | WorkspaceDaemonQueryLintRuleDetailsAck
   | WorkspaceDaemonQueryWorkspaceSymbolsAck
   | WorkspaceDaemonQueryDependencyGraphAck
   | WorkspaceDaemonQuerySemanticSearchAck
@@ -539,6 +587,78 @@ function workspaceDaemonOwnerUidGet(): string | undefined {
     return undefined;
   }
   return String(process.getuid());
+}
+
+function workspaceDaemonDescriptorMatchesHello(
+  descriptor: WorkspaceDaemonDescriptor,
+  hello: Pick<WorkspaceDaemonHelloAck, 'daemon'>,
+): boolean {
+  return (
+    hello.daemon.pid === descriptor.pid &&
+    hello.daemon.sessionNonce === descriptor.sessionNonce
+  );
+}
+
+function workspaceDaemonDescriptorOwnerMatchesCurrentUser(
+  descriptor: WorkspaceDaemonDescriptor,
+): boolean {
+  const currentOwnerUid = workspaceDaemonOwnerUidGet();
+  if (currentOwnerUid === undefined || descriptor.ownerUid === undefined) {
+    return true;
+  }
+  return descriptor.ownerUid === currentOwnerUid;
+}
+
+function workspaceDaemonProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function workspaceDaemonProcessWaitForExit(
+  pid: number,
+  timeoutMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!workspaceDaemonProcessAlive(pid)) {
+      return true;
+    }
+    await sleep(25);
+  }
+  return !workspaceDaemonProcessAlive(pid);
+}
+
+async function workspaceDaemonTerminateMatchedProcess(
+  descriptor: WorkspaceDaemonDescriptor,
+): Promise<boolean> {
+  if (
+    descriptor.pid === process.pid ||
+    !workspaceDaemonDescriptorOwnerMatchesCurrentUser(descriptor) ||
+    !workspaceDaemonProcessAlive(descriptor.pid)
+  ) {
+    return false;
+  }
+  try {
+    process.kill(descriptor.pid, 'SIGTERM');
+  } catch {
+    return false;
+  }
+  if (await workspaceDaemonProcessWaitForExit(descriptor.pid, 500)) {
+    return true;
+  }
+  try {
+    process.kill(descriptor.pid, 'SIGKILL');
+  } catch {
+    return false;
+  }
+  return workspaceDaemonProcessWaitForExit(descriptor.pid, 500);
 }
 
 function workspaceDaemonDefaultRuntimeDirResolve(): string {
@@ -583,16 +703,33 @@ function envelopeWrite(socket: net.Socket, message: WorkspaceDaemonEnvelope): vo
   socket.write(`${JSON.stringify(message)}\n`);
 }
 
-function messageErrorCreate(code: string, message: string): WorkspaceDaemonErrorResponse {
+function messageErrorCreate(
+  code: string,
+  message: string,
+  data?: JsonObject,
+): WorkspaceDaemonErrorResponse {
   return {
     type: 'error',
     code,
     message,
+    data,
   };
 }
 
 function requestCancelledErrorCreate(): Error {
   return new Error('Request cancelled');
+}
+
+class WorkspaceDaemonResponseError extends Error {
+  readonly code: string;
+  readonly data?: JsonObject;
+
+  constructor(response: WorkspaceDaemonErrorResponse) {
+    super(response.message);
+    this.name = 'WorkspaceDaemonResponseError';
+    this.code = response.code;
+    this.data = response.data;
+  }
 }
 
 function workspaceRenameTargetKeyCreate(target: WorkspaceRenameTarget): string {
@@ -717,7 +854,17 @@ export class WorkspaceDaemonConnection implements WorkspaceDaemonRequestClient {
         }
         this.pending.delete(id);
         if (parsed.type === 'error') {
-          pending.reject(new Error(String(parsed.message ?? 'Daemon error')));
+          pending.reject(
+            new WorkspaceDaemonResponseError({
+              type: 'error',
+              code: String(parsed.code ?? 'daemon_error'),
+              message: String(parsed.message ?? 'Daemon error'),
+              data:
+                parsed.data && typeof parsed.data === 'object' && !Array.isArray(parsed.data)
+                  ? (parsed.data as JsonObject)
+                  : undefined,
+            }),
+          );
           return;
         }
         pending.resolve(parsed);
@@ -851,17 +998,31 @@ export async function workspaceDaemonHello(
       response as WorkspaceDaemonHelloIncompatibleAck,
     );
   }
+  const missingCapabilities = (options.requiredCapabilities ?? []).filter(
+    (capability) => response.capabilities[capability] !== true,
+  );
+  if (missingCapabilities.length > 0) {
+    throw new Error(
+      `Daemon missing required capabilities: ${missingCapabilities.join(', ')}`,
+    );
+  }
   return response;
 }
 
 export function workspaceDaemonRequestHandle(options: {
   descriptor: WorkspaceDaemonDescriptor;
+  service?: WorkspaceService;
+  policyCheck?: (
+    options: WorkspacePolicyCheckOptions,
+  ) => Promise<WorkspacePolicyCheckResult>;
   capabilities?: Record<string, boolean>;
   message: WorkspaceDaemonMessage;
 }): WorkspaceDaemonHelloAck | WorkspaceDaemonErrorResponse {
   const capabilities = {
     hello: true,
     sessionized_workspace_service: true,
+    ...(options.service ? WORKSPACE_DAEMON_SERVICE_CAPABILITIES : {}),
+    ...(options.policyCheck ? { policy_check: true } : {}),
     ...options.capabilities,
   };
 
@@ -1138,8 +1299,34 @@ export class WorkspaceDaemonSession {
     return messageErrorCreate('request_cancelled', 'Request cancelled');
   }
 
-  private requestSupersededResponseCreate(): WorkspaceDaemonErrorResponse {
-    return messageErrorCreate('request_superseded', 'Request superseded');
+  private requestSupersededDataCreate(
+    message: WorkspaceDaemonMessage,
+  ): WorkspaceDaemonSupersededErrorData | undefined {
+    const requestKey = this.requestSupersessionKeyResolve(message);
+    if (!requestKey) {
+      return undefined;
+    }
+    const requestId =
+      'requestId' in message && typeof message.requestId === 'string'
+        ? message.requestId
+        : undefined;
+    return {
+      kind: 'request_superseded',
+      requestType: String(message.type),
+      requestKey,
+      requestId,
+      replacedByRequestId: this.latestRequestIds.get(requestKey),
+    };
+  }
+
+  private requestSupersededResponseCreate(
+    message: WorkspaceDaemonMessage,
+  ): WorkspaceDaemonErrorResponse {
+    return messageErrorCreate(
+      'request_superseded',
+      'Request superseded',
+      this.requestSupersededDataCreate(message),
+    );
   }
 
   private requestSupersessionKeyResolve(
@@ -1157,6 +1344,14 @@ export class WorkspaceDaemonSession {
       case 'query_index_status': {
         const input = message as WorkspaceDaemonQueryIndexStatusRequest;
         return `query_index_status:${input.clientSessionId}:${input.workspaceId}`;
+      }
+      case 'query_lint_rules': {
+        const input = message as WorkspaceDaemonQueryLintRulesRequest;
+        return `query_lint_rules:${input.clientSessionId}:${input.workspaceId}`;
+      }
+      case 'query_lint_rule_details': {
+        const input = message as WorkspaceDaemonQueryLintRuleDetailsRequest;
+        return `query_lint_rule_details:${input.clientSessionId}:${input.workspaceId}:${input.ruleId}`;
       }
       case 'query_workspace_symbols': {
         const input = message as WorkspaceDaemonQueryWorkspaceSymbolsRequest;
@@ -1233,6 +1428,8 @@ export class WorkspaceDaemonSession {
       case 'query_code_actions':
       case 'apply_edit_plan':
       case 'query_index_status':
+      case 'query_lint_rules':
+      case 'query_lint_rule_details':
       case 'query_workspace_symbols':
       case 'query_dependency_graph':
       case 'query_semantic_search':
@@ -1252,6 +1449,8 @@ export class WorkspaceDaemonSession {
           | WorkspaceDaemonQueryCodeActionsRequest
           | WorkspaceDaemonApplyEditPlanRequest
           | WorkspaceDaemonQueryIndexStatusRequest
+          | WorkspaceDaemonQueryLintRulesRequest
+          | WorkspaceDaemonQueryLintRuleDetailsRequest
           | WorkspaceDaemonQueryWorkspaceSymbolsRequest
           | WorkspaceDaemonQueryDependencyGraphRequest
           | WorkspaceDaemonQuerySemanticSearchRequest
@@ -1283,6 +1482,7 @@ export class WorkspaceDaemonSession {
       case 'close_overlay':
       case 'query_diagnostics':
       case 'query_workspace_symbols':
+      case 'query_lint_rules':
       case 'query_semantic_search':
       case 'query_semantic_definition':
       case 'query_semantic_hover':
@@ -1290,6 +1490,7 @@ export class WorkspaceDaemonSession {
         return 'high';
       case 'query_code_actions':
       case 'apply_edit_plan':
+      case 'query_lint_rule_details':
       case 'query_dependency_graph':
       case 'query_semantic_references':
       case 'preview_rename':
@@ -1407,7 +1608,7 @@ export class WorkspaceDaemonSession {
           return this.requestCancelledResponseCreate();
         }
         if (this.requestSupersededIs(envelope)) {
-          return this.requestSupersededResponseCreate();
+          return this.requestSupersededResponseCreate(envelope);
         }
         const response = await this.handleMessage(envelope, {
           signal: controller.signal,
@@ -1420,7 +1621,7 @@ export class WorkspaceDaemonSession {
           return this.requestCancelledResponseCreate();
         }
         if (this.requestSupersededIs(envelope)) {
-          return this.requestSupersededResponseCreate();
+          return this.requestSupersededResponseCreate(envelope);
         }
         return response;
       });
@@ -1436,6 +1637,8 @@ export class WorkspaceDaemonSession {
     if (message.type === 'hello') {
       const response = workspaceDaemonRequestHandle({
         descriptor: this.options.descriptor,
+        service: this.options.service,
+        policyCheck: this.options.policyCheck,
         capabilities: this.options.capabilities,
         message,
       });
@@ -1857,6 +2060,86 @@ export class WorkspaceDaemonSession {
           return {
             type: 'query_index_status_ack',
             indexStatus,
+          };
+        }
+        case 'query_lint_rules': {
+          if (!this.options.service) {
+            return messageErrorCreate(
+              'unsupported_request',
+              `Unsupported daemon request: ${message.type}`,
+            );
+          }
+          const input = message as WorkspaceDaemonQueryLintRulesRequest;
+          const daemonSessionError = this.daemonSessionValidate(input);
+          if (daemonSessionError) {
+            return daemonSessionError;
+          }
+          const replayGate = this.replayGateEnsure(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          if (replayGate) {
+            return replayGate;
+          }
+          const state = this.workspaceReplayStateGet(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          const workspaceInstanceError = this.workspaceInstanceValidate(state, input);
+          if (workspaceInstanceError) {
+            return workspaceInstanceError;
+          }
+          const replayEpochError = this.replayEpochValidate(state, input);
+          if (replayEpochError) {
+            return replayEpochError;
+          }
+          const result = await this.options.service.queryLintRules({
+            ...input,
+            signal: options.signal,
+          });
+          return {
+            type: 'query_lint_rules_ack',
+            result,
+          };
+        }
+        case 'query_lint_rule_details': {
+          if (!this.options.service) {
+            return messageErrorCreate(
+              'unsupported_request',
+              `Unsupported daemon request: ${message.type}`,
+            );
+          }
+          const input = message as WorkspaceDaemonQueryLintRuleDetailsRequest;
+          const daemonSessionError = this.daemonSessionValidate(input);
+          if (daemonSessionError) {
+            return daemonSessionError;
+          }
+          const replayGate = this.replayGateEnsure(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          if (replayGate) {
+            return replayGate;
+          }
+          const state = this.workspaceReplayStateGet(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          const workspaceInstanceError = this.workspaceInstanceValidate(state, input);
+          if (workspaceInstanceError) {
+            return workspaceInstanceError;
+          }
+          const replayEpochError = this.replayEpochValidate(state, input);
+          if (replayEpochError) {
+            return replayEpochError;
+          }
+          const result = await this.options.service.queryLintRuleDetails({
+            ...input,
+            signal: options.signal,
+          });
+          return {
+            type: 'query_lint_rule_details_ack',
+            result,
           };
         }
         case 'query_workspace_symbols': {
@@ -2557,6 +2840,54 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
     }).then((response) => response.indexStatus);
   }
 
+  queryLintRules(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceLintRulesResult> {
+    const freshness = this.workspaceFreshnessGet(input);
+    const daemonSessionId = this.daemonSessionIdGet(input.clientSessionId);
+    return this.connection.request<WorkspaceDaemonQueryLintRulesAck>({
+      type: 'query_lint_rules',
+      clientSessionId: input.clientSessionId,
+      daemonSessionId,
+      requestId: input.requestId,
+      workspaceId: input.workspaceId,
+      workspaceInstanceId: freshness?.workspaceInstanceId,
+      replayEpoch: freshness?.replayEpoch,
+      analysisGeneration: input.analysisGeneration,
+    }, {
+      signal: input.signal,
+    }).then((response) => response.result);
+  }
+
+  queryLintRuleDetails(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    ruleId: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceLintRuleDetailsResult | null> {
+    const freshness = this.workspaceFreshnessGet(input);
+    const daemonSessionId = this.daemonSessionIdGet(input.clientSessionId);
+    return this.connection.request<WorkspaceDaemonQueryLintRuleDetailsAck>({
+      type: 'query_lint_rule_details',
+      clientSessionId: input.clientSessionId,
+      daemonSessionId,
+      requestId: input.requestId,
+      workspaceId: input.workspaceId,
+      workspaceInstanceId: freshness?.workspaceInstanceId,
+      replayEpoch: freshness?.replayEpoch,
+      ruleId: input.ruleId,
+      analysisGeneration: input.analysisGeneration,
+    }, {
+      signal: input.signal,
+    }).then((response) => response.result);
+  }
+
   queryWorkspaceSymbols(input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;
@@ -2823,6 +3154,8 @@ async function workspaceDaemonConnectHealthy(
     runtimeDir?: string;
     client: WorkspaceDaemonClientHello['client'];
     expectedInstallId?: string;
+    requiredCapabilities?: string[];
+    minStartedAtUnixMs?: number;
     connect?: WorkspaceDaemonConnectFn;
   },
 ): Promise<
@@ -2847,8 +3180,24 @@ async function workspaceDaemonConnectHealthy(
       client: options.client,
       expectedInstallId: options.expectedInstallId,
     });
-    if (hello.daemon.sessionNonce !== descriptor.sessionNonce) {
+    if (!workspaceDaemonDescriptorMatchesHello(descriptor, hello)) {
       await connection.close();
+      return undefined;
+    }
+    if (
+      options.minStartedAtUnixMs !== undefined &&
+      descriptor.startedAtUnixMs < options.minStartedAtUnixMs
+    ) {
+      await connection.close();
+      await workspaceDaemonTerminateMatchedProcess(descriptor);
+      return undefined;
+    }
+    const missingCapabilities = (options.requiredCapabilities ?? []).filter(
+      (capability) => hello.capabilities[capability] !== true,
+    );
+    if (missingCapabilities.length > 0) {
+      await connection.close();
+      await workspaceDaemonTerminateMatchedProcess(descriptor);
       return undefined;
     }
     return {
@@ -2858,6 +3207,19 @@ async function workspaceDaemonConnectHealthy(
     };
   } catch (error) {
     if (error instanceof WorkspaceDaemonHelloError) {
+      if (
+        workspaceDaemonDescriptorMatchesHello(descriptor, error.hello) &&
+        (error.compatibility === 'unexpected_install_id' ||
+          (error.compatibility === 'unsupported_protocol' &&
+            options.minStartedAtUnixMs !== undefined &&
+            descriptor.startedAtUnixMs < options.minStartedAtUnixMs))
+      ) {
+        if (connection) {
+          await connection.close().catch(() => {});
+        }
+        await workspaceDaemonTerminateMatchedProcess(descriptor);
+        return undefined;
+      }
       throw error;
     }
     if (connection) {
@@ -2923,6 +3285,8 @@ async function workspaceDaemonWaitForHealthy(
       runtimeDir: options.runtimeDir,
       client: options.client,
       expectedInstallId: options.expectedInstallId,
+      requiredCapabilities: options.requiredCapabilities,
+      minStartedAtUnixMs: options.minStartedAtUnixMs,
       connect: options.connect,
     });
     if (connected) {
@@ -2943,6 +3307,8 @@ export async function workspaceDaemonLaunchOrConnect(
     runtimeDir: options.runtimeDir,
     client: options.client,
     expectedInstallId: options.expectedInstallId,
+    requiredCapabilities: options.requiredCapabilities,
+    minStartedAtUnixMs: options.minStartedAtUnixMs,
     connect: options.connect,
   });
   if (existing) {
@@ -2961,6 +3327,8 @@ export async function workspaceDaemonLaunchOrConnect(
       runtimeDir: options.runtimeDir,
       client: options.client,
       expectedInstallId: options.expectedInstallId,
+      requiredCapabilities: options.requiredCapabilities,
+      minStartedAtUnixMs: options.minStartedAtUnixMs,
       connect: options.connect,
     });
     if (secondCheck) {
@@ -2995,9 +3363,8 @@ export async function workspaceDaemonServerStart(
 
   const { descriptor } = workspaceDaemonDescriptorCreate(options);
   const capabilities = {
-    hello: true,
-    sessionized_workspace_service: true,
-    policy_check: Boolean(options.policyCheck),
+    ...(options.service ? WORKSPACE_DAEMON_SERVICE_CAPABILITIES : {}),
+    ...(options.policyCheck ? { policy_check: true } : {}),
     ...options.capabilities,
   };
 

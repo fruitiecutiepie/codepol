@@ -5,6 +5,7 @@ import {
   CODEPOL_EXTENSION_PANEL_ARCHITECTURE_SUMMARY,
   CODEPOL_EXTENSION_PANEL_ARCHITECTURE_LINKS,
   CODEPOL_EXTENSION_PANEL_DEPENDENCY_GRAPH,
+  CODEPOL_EXTENSION_PANEL_LINT_RULE_DETAILS,
   CODEPOL_EXTENSION_PANEL_RENAME_PREVIEW,
   CODEPOL_EXTENSION_PANEL_SEMANTIC_DEFINITION,
 } from '../constants';
@@ -12,6 +13,7 @@ import type {
   ArchitectureLinksPanelViewModel,
   ArchitectureSummaryPanelViewModel,
   DependencyGraphPanelViewModel,
+  LintRuleDetailsPanelViewModel,
   RenamePreviewPanelViewModel,
   SemanticDefinitionPanelViewModel,
 } from '../viewModels';
@@ -40,6 +42,7 @@ type PanelKind =
   | 'architectureSummary'
   | 'dependencyGraph'
   | 'architectureLinks'
+  | 'lintRuleDetails'
   | 'renamePreview';
 
 export type CodepolPanelActions = {
@@ -103,6 +106,14 @@ export class CodepolPanelManager implements vscode.Disposable {
     });
   }
 
+  showLintRuleDetails(model: LintRuleDetailsPanelViewModel): void {
+    this.panelShow('lintRuleDetails', {
+      kind: 'lintRuleDetails',
+      title: 'Codepol: Lint Rule Details',
+      data: model,
+    });
+  }
+
   showRenamePreview(model: RenamePreviewPanelViewModel): void {
     this.panelShow('renamePreview', {
       kind: 'renamePreview',
@@ -133,6 +144,8 @@ export class CodepolPanelManager implements vscode.Disposable {
             ? CODEPOL_EXTENSION_PANEL_DEPENDENCY_GRAPH
         : kind === 'architectureLinks'
           ? CODEPOL_EXTENSION_PANEL_ARCHITECTURE_LINKS
+        : kind === 'lintRuleDetails'
+          ? CODEPOL_EXTENSION_PANEL_LINT_RULE_DETAILS
           : CODEPOL_EXTENSION_PANEL_RENAME_PREVIEW;
     const panel = vscode.window.createWebviewPanel(
       panelId,

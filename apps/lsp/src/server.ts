@@ -8,6 +8,8 @@ import {
   type WorkspaceDependencyGraphResult,
   type WorkspaceDiagnostic,
   type WorkspaceEditPlan,
+  type WorkspaceLintRuleDetailsResult,
+  type WorkspaceLintRulesResult,
   type WorkspacePrepareRenameResult,
   type WorkspaceRenamePreviewResult,
   type WorkspaceRenameTarget,
@@ -25,6 +27,8 @@ import {
   CODEPOL_LSP_REQUEST_ARCHITECTURE_SUMMARY,
   CODEPOL_LSP_REQUEST_DEPENDENCY_GRAPH,
   CODEPOL_LSP_REQUEST_INDEX_STATUS,
+  CODEPOL_LSP_REQUEST_LINT_RULE_DETAILS,
+  CODEPOL_LSP_REQUEST_LINT_RULES,
   CODEPOL_LSP_REQUEST_PREPARE_RENAME,
   CODEPOL_LSP_REQUEST_PREVIEW_RENAME,
   CODEPOL_LSP_REQUEST_SEMANTIC_DEFINITION,
@@ -64,6 +68,7 @@ type JsonRpcResponse = {
   error?: {
     code: number;
     message: string;
+    data?: unknown;
   };
 };
 
@@ -304,11 +309,32 @@ function requestCancelledErrorCreate(): Error {
   return new Error('Request cancelled');
 }
 
+function errorDataResolve(error: unknown): unknown {
+  if (typeof error !== 'object' || error === null || !('data' in error)) {
+    return undefined;
+  }
+  return error.data;
+}
+
 function staleDocumentVersionErrorIs(error: unknown): boolean {
   return error instanceof Error && error.message.includes('Document version mismatch');
 }
 
 function requestSupersededErrorIs(error: unknown): boolean {
+  if (typeof error === 'object' && error !== null) {
+    if ('code' in error && error.code === 'request_superseded') {
+      return true;
+    }
+    const data = errorDataResolve(error);
+    if (
+      typeof data === 'object' &&
+      data !== null &&
+      'kind' in data &&
+      data.kind === 'request_superseded'
+    ) {
+      return true;
+    }
+  }
   return error instanceof Error && error.message.includes('Request superseded');
 }
 
@@ -332,6 +358,7 @@ export class CodepolLspServer {
     AbortController
   >();
   private readonly diagnosticsStateVersions = new Map<string, number>();
+  private diagnosticsPublishedAnalysisGeneration: number | undefined;
   private registeredClientSessionId: string | undefined;
   private workspaceId: string | undefined;
   private workspaceRootPath: string | undefined;
@@ -413,6 +440,7 @@ export class CodepolLspServer {
 
   private workspaceEpochBump(): void {
     this.workspaceEpoch += 1;
+    this.diagnosticsPublishedAnalysisGeneration = undefined;
   }
 
   private diagnosticsStateVersionBump(uri: string): number {
@@ -647,13 +675,24 @@ export class CodepolLspServer {
     }
 
     try {
-      const indexStatus = await this.serviceCall((service) =>
-        service.queryIndexStatus({
+      const indexStatus = await this.serviceCall(async (service) => {
+        const nextIndexStatus = await service.queryIndexStatus({
           clientSessionId: this.registeredClientSessionId!,
           workspaceId: this.workspaceId!,
           requestId: `lsp-status-poll:${generation}:${this.workspaceEpoch}`,
-        }),
-      );
+        });
+        if (
+          nextIndexStatus.status === 'ready' &&
+          nextIndexStatus.analysisGeneration !==
+            this.diagnosticsPublishedAnalysisGeneration
+        ) {
+          await this.publishOpenDocumentDiagnostics({
+            service,
+            analysisGeneration: nextIndexStatus.analysisGeneration,
+          });
+        }
+        return nextIndexStatus;
+      });
       if (generation !== this.statusPollGeneration) {
         return;
       }
@@ -818,6 +857,7 @@ export class CodepolLspServer {
         error: {
           code: -32603,
           message: error instanceof Error ? error.message : String(error),
+          data: errorDataResolve(error),
         },
       });
     } finally {
@@ -897,6 +937,12 @@ export class CodepolLspServer {
         }, context);
       case CODEPOL_LSP_REQUEST_INDEX_STATUS:
         return this.indexStatusHandle(context);
+      case CODEPOL_LSP_REQUEST_LINT_RULES:
+        return this.lintRulesHandle(context);
+      case CODEPOL_LSP_REQUEST_LINT_RULE_DETAILS:
+        return this.lintRuleDetailsHandle(params as {
+          ruleId?: string;
+        }, context);
       case CODEPOL_LSP_REQUEST_DEPENDENCY_GRAPH:
         return this.dependencyGraphHandle(context);
       case CODEPOL_LSP_REQUEST_SEMANTIC_SEARCH:
@@ -1034,6 +1080,25 @@ export class CodepolLspServer {
       workspaceId: input.workspaceId,
       workspaceInstanceId: input.workspaceInstanceId,
     });
+  }
+
+  private async publishOpenDocumentDiagnostics(input: {
+    service: WorkspaceService;
+    analysisGeneration?: number;
+  }): Promise<void> {
+    if (!this.registeredClientSessionId || !this.workspaceId) {
+      return;
+    }
+
+    for (const document of this.documents.values()) {
+      const expectedStateVersion = this.diagnosticsStateVersionBump(document.uri);
+      await this.publishDiagnostics(document.uri, {
+        service: input.service,
+        expectedStateVersion,
+      });
+    }
+
+    this.diagnosticsPublishedAnalysisGeneration = input.analysisGeneration;
   }
 
   private async shutdownHandle(): Promise<void> {
@@ -1338,6 +1403,53 @@ export class CodepolLspServer {
           context.requestId === undefined || context.requestId === null
             ? undefined
             : `lsp-codepol-index-status:${String(context.requestId)}`,
+        signal: context.signal,
+      }), {
+      signal: context.signal,
+    });
+  }
+
+  private async lintRulesHandle(
+    context: { requestId?: JsonRpcId; signal?: AbortSignal } = {},
+  ): Promise<WorkspaceLintRulesResult | null> {
+    if (!this.registeredClientSessionId || !this.workspaceId) {
+      return null;
+    }
+
+    return this.serviceCall((service) =>
+      service.queryLintRules({
+        clientSessionId: this.registeredClientSessionId!,
+        workspaceId: this.workspaceId!,
+        requestId:
+          context.requestId === undefined || context.requestId === null
+            ? undefined
+            : `lsp-codepol-lint-rules:${String(context.requestId)}`,
+        signal: context.signal,
+      }), {
+      signal: context.signal,
+    });
+  }
+
+  private async lintRuleDetailsHandle(
+    params: {
+      ruleId?: string;
+    },
+    context: { requestId?: JsonRpcId; signal?: AbortSignal } = {},
+  ): Promise<WorkspaceLintRuleDetailsResult | null> {
+    if (!this.registeredClientSessionId || !this.workspaceId || !params.ruleId) {
+      return null;
+    }
+    const ruleId = params.ruleId;
+
+    return this.serviceCall((service) =>
+      service.queryLintRuleDetails({
+        clientSessionId: this.registeredClientSessionId!,
+        workspaceId: this.workspaceId!,
+        ruleId,
+        requestId:
+          context.requestId === undefined || context.requestId === null
+            ? undefined
+            : `lsp-codepol-lint-rule-details:${String(context.requestId)}`,
         signal: context.signal,
       }), {
       signal: context.signal,

@@ -1,6 +1,10 @@
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import type { WorkspaceSearchResult } from '@codepol/core';
+import type {
+  WorkspaceLintRuleDetailsResult,
+  WorkspaceLintRuleSummary,
+  WorkspaceSearchResult,
+} from '@codepol/core';
 import { configFileDiscover } from '@codepol/core';
 import {
   CodepolCommandController,
@@ -9,14 +13,18 @@ import {
 } from './commands';
 import {
   CODEPOL_EXTENSION_COMMAND_REFRESH_RENAME_TARGETS,
+  CODEPOL_EXTENSION_COMMAND_REFRESH_LINT_RULES,
+  CODEPOL_EXTENSION_COMMAND_OPEN_LINT_RULE_LOCATION,
   CODEPOL_EXTENSION_COMMAND_RENAME_CODEPOL_ENTITY,
   CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_SUMMARY,
   CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_LINKS,
   CODEPOL_EXTENSION_COMMAND_SHOW_DEPENDENCY_GRAPH,
+  CODEPOL_EXTENSION_COMMAND_SHOW_LINT_RULE_DETAILS,
   CODEPOL_EXTENSION_COMMAND_SHOW_SEMANTIC_DEFINITION,
   CODEPOL_EXTENSION_COMMAND_SHOW_SEMANTIC_SEARCH,
   CODEPOL_EXTENSION_VIEW_CONTAINER_ID,
   CODEPOL_EXTENSION_VIEW_CURRENT_CONTEXT_ID,
+  CODEPOL_EXTENSION_VIEW_LINT_RULES_ID,
   CODEPOL_EXTENSION_VIEW_RENAME_TARGETS_ID,
 } from './constants';
 import {
@@ -34,8 +42,12 @@ import {
   semanticSearchQuickPickItemsCreate,
 } from './semanticSearch';
 import { codepolStatusBarPresentationCreate } from './readiness';
+import { codepolRequestSupersededErrorIs } from './readiness';
 import { CodepolReadinessController } from './readinessController';
-import { RenameTargetsTreeProvider } from './treeProviders';
+import {
+  LintRulesTreeProvider,
+  RenameTargetsTreeProvider,
+} from './treeProviders';
 
 let protocolClient: CodepolProtocolClient | undefined;
 let sidebarProvider: CodepolSidebarViewProvider | undefined;
@@ -117,6 +129,20 @@ function renameTargetsLoad(): Promise<RenameTargetCandidate[]> {
     return Promise.resolve([]);
   }
   return Promise.resolve(renameTargetCandidatesDiscover(rootPath));
+}
+
+async function lintRulesLoad(
+  protocol: CodepolProtocolClient,
+): Promise<WorkspaceLintRuleSummary[]> {
+  const result = await protocol.queryLintRules();
+  return result?.rules ?? [];
+}
+
+async function lintRuleDetailsLoad(
+  protocol: CodepolProtocolClient,
+  ruleId: string,
+): Promise<WorkspaceLintRuleDetailsResult | null> {
+  return protocol.queryLintRuleDetails(ruleId);
 }
 
 async function renameTargetPick(
@@ -245,6 +271,10 @@ async function semanticSearchPick(input: {
           if (settled || currentRequestVersion !== requestVersion) {
             return;
           }
+          if (codepolRequestSupersededErrorIs(error)) {
+            quickPick.busy = false;
+            return;
+          }
           quickPick.busy = false;
           quickPick.items = [
             {
@@ -340,6 +370,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     renameTargetsLoad,
     readiness,
   );
+  const lintRulesProvider = new LintRulesTreeProvider(
+    () => lintRulesLoad(protocol),
+    (ruleId: string) => lintRuleDetailsLoad(protocol, ruleId),
+  );
 
   controller = new CodepolCommandController(protocol, panels, {
     activeUriGet: activeEditorUriGet,
@@ -373,6 +407,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       },
     ),
     vscode.window.registerTreeDataProvider(
+      CODEPOL_EXTENSION_VIEW_LINT_RULES_ID,
+      lintRulesProvider,
+    ),
+    vscode.window.registerTreeDataProvider(
       CODEPOL_EXTENSION_VIEW_RENAME_TARGETS_ID,
       renameTargetsProvider,
     ),
@@ -398,14 +436,44 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       async (uri?: string) => controller?.showArchitectureLinks(uri),
     ),
     vscode.commands.registerCommand(
+      CODEPOL_EXTENSION_COMMAND_SHOW_LINT_RULE_DETAILS,
+      async (ruleId?: string) =>
+        typeof ruleId === 'string' ? controller?.showLintRuleDetails(ruleId) : undefined,
+    ),
+    vscode.commands.registerCommand(
+      CODEPOL_EXTENSION_COMMAND_OPEN_LINT_RULE_LOCATION,
+      async (input?: {
+        uri?: string;
+        line?: number;
+        character?: number;
+      }) => {
+        if (!input?.uri) {
+          return;
+        }
+        await locationOpen({
+          uri: input.uri,
+          line: input.line ?? 0,
+          character: input.character ?? 0,
+        });
+      },
+    ),
+    vscode.commands.registerCommand(
       CODEPOL_EXTENSION_COMMAND_RENAME_CODEPOL_ENTITY,
       async (options?: RenameCommandOptions) =>
         controller?.renameCodepolEntity(options),
     ),
     vscode.commands.registerCommand(
+      CODEPOL_EXTENSION_COMMAND_REFRESH_LINT_RULES,
+      () => {
+        void readiness.refresh();
+        lintRulesProvider.refresh();
+      },
+    ),
+    vscode.commands.registerCommand(
       CODEPOL_EXTENSION_COMMAND_REFRESH_RENAME_TARGETS,
       () => {
         void readiness.refresh();
+        lintRulesProvider.refresh();
         renameTargetsProvider.refresh();
         void sidebarProvider?.refresh();
       },
@@ -416,6 +484,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
     readiness.onDidChange((snapshot) => {
       statusBarApply(statusBarItem, codepolStatusBarPresentationCreate(snapshot));
+      lintRulesProvider.refresh();
       renameTargetsProvider.refresh();
     }),
   );
@@ -430,6 +499,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const configWatcher = vscode.workspace.createFileSystemWatcher('**/codepol.toml');
   const refreshTargets = () => {
     void readiness.refresh();
+    lintRulesProvider.refresh();
     renameTargetsProvider.refresh();
     void sidebarProvider?.refresh();
   };

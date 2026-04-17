@@ -5,6 +5,8 @@ export const CODEPOL_LSP_COMMAND_SHOW_ARCHITECTURE_LINKS =
   'codepol.showArchitectureLinks';
 
 export const CODEPOL_LSP_REQUEST_INDEX_STATUS = 'codepol/indexStatus';
+export const CODEPOL_LSP_REQUEST_LINT_RULES = 'codepol/lintRules';
+export const CODEPOL_LSP_REQUEST_LINT_RULE_DETAILS = 'codepol/lintRuleDetails';
 export const CODEPOL_LSP_REQUEST_DEPENDENCY_GRAPH = 'codepol/dependencyGraph';
 export const CODEPOL_LSP_REQUEST_SEMANTIC_SEARCH = 'codepol/semanticSearch';
 export const CODEPOL_LSP_REQUEST_SEMANTIC_DEFINITION =

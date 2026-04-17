@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { IndexStatusResult } from '@codepol/core';
+import type {
+  IndexStatusResult,
+  WorkspaceLintRuleDetailsResult,
+  WorkspaceLintRuleSummary,
+} from '@codepol/core';
 
 vi.mock('vscode', () => {
   class TreeItem {
@@ -38,8 +42,14 @@ vi.mock('vscode', () => {
   };
 });
 
+import {
+  CODEPOL_EXTENSION_COMMAND_OPEN_LINT_RULE_LOCATION,
+} from '../extension-vscode/src/constants';
 import type { RenameTargetCandidate } from '../extension-vscode/src/discovery';
-import { RenameTargetsTreeProvider } from '../extension-vscode/src/treeProviders';
+import {
+  LintRulesTreeProvider,
+  RenameTargetsTreeProvider,
+} from '../extension-vscode/src/treeProviders';
 
 function readinessStatusCreate(
   overrides: Partial<IndexStatusResult> = {},
@@ -56,6 +66,29 @@ function readinessStatusCreate(
     analysisGeneration: 3,
     ...overrides,
   };
+}
+
+function deferredCreate<T>(): {
+  promise: Promise<T>;
+  resolve(value: T): void;
+  reject(error: unknown): void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return {
+    promise,
+    resolve,
+    reject,
+  };
+}
+
+async function microtasksFlush(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
 }
 
 const workspacePackageCandidate: RenameTargetCandidate = {
@@ -79,6 +112,71 @@ const configTargetCandidate: RenameTargetCandidate = {
     targetId: 'target:web',
   },
 };
+
+const lintRuleSummary: WorkspaceLintRuleSummary = {
+  ruleId: '@codepol/plugin/no-interface',
+  severities: ['error'],
+  targetPatterns: ['src/**/*.ts'],
+  providers: [
+    {
+      platform: 'tree-sitter',
+      languages: ['typescript'],
+    },
+  ],
+  languages: ['typescript'],
+  ownership: 'native_preferred',
+  hasNativeOwner: true,
+  recentNativeDiagnosticCount: 1,
+  recentWrappedDiagnosticCount: 0,
+  recentNativeLatencyMs: 5,
+  recentWrappedLatencyMs: 0,
+  fixSurfaceNotes: ['tree_check'],
+  analysisState: 'ready',
+  analyzerIssues: [],
+};
+
+const lintRuleDetailsResult: WorkspaceLintRuleDetailsResult = {
+  rule: {
+    ...lintRuleSummary,
+    recentNativeDiagnosticCount: 2,
+    recentWrappedDiagnosticCount: 10,
+    fixSurfaceNotes: ['tree_check', 'tree_only_code_actions'],
+    analyzerIssues: ['Native analysis lagged behind wrapped diagnostics.'],
+  },
+  totalDiagnosticCount: 12,
+  groups: [
+    {
+      uri: 'file:///workspace/src/app.ts',
+      workspaceRelativePath: 'src/app.ts',
+      diagnostics: [
+        {
+          severity: 'error',
+          message: 'Unused symbol "value".',
+          range: {
+            start: { line: 2, character: 4 },
+            end: { line: 2, character: 9 },
+          },
+        },
+      ],
+    },
+  ],
+};
+
+function requestSupersededErrorCreate(): Error & {
+  data: {
+    kind: 'request_superseded';
+  };
+} {
+  const error = new Error('Request superseded') as Error & {
+    data: {
+      kind: 'request_superseded';
+    };
+  };
+  error.data = {
+    kind: 'request_superseded',
+  };
+  return error;
+}
 
 describe('extension-vscode tree providers', () => {
   it('renders workspace package rename targets as blocked while the index warms', async () => {
@@ -121,5 +219,169 @@ describe('extension-vscode tree providers', () => {
         arguments: [{ target: configTargetCandidate.target }],
       },
     });
+  });
+
+  it('keeps the last lint rules result when a refresh is superseded', async () => {
+    let loads = 0;
+    const provider = new LintRulesTreeProvider(
+      async () => {
+        loads += 1;
+        if (loads === 1) {
+          return [lintRuleSummary];
+        }
+        throw requestSupersededErrorCreate();
+      },
+      async () => lintRuleDetailsResult,
+    );
+
+    const firstGroups = await provider.getChildren();
+    expect(firstGroups).toHaveLength(1);
+
+    provider.refresh();
+    const secondGroups = await provider.getChildren();
+    expect(secondGroups).toHaveLength(1);
+    expect(secondGroups[0]).toMatchObject({
+      label: 'Native Preferred',
+      description: '1',
+    });
+  });
+
+  it('lazy-loads inline lint rule details and renders grouped children', async () => {
+    const detailsDeferred = deferredCreate<WorkspaceLintRuleDetailsResult | null>();
+    const detailsLoad = vi.fn(async () => detailsDeferred.promise);
+    const provider = new LintRulesTreeProvider(
+      async () => [lintRuleSummary],
+      detailsLoad,
+    );
+
+    const groups = await provider.getChildren();
+    const group = groups[0]!;
+    const rules = await provider.getChildren(group);
+    const rule = rules[0]!;
+
+    expect(rule).toMatchObject({
+      id: `codepol.lintRule.rule:${lintRuleSummary.ruleId}`,
+      label: lintRuleSummary.ruleId,
+      contextValue: 'codepol.lintRule',
+      collapsibleState: 1,
+      command: undefined,
+    });
+
+    const loadingChildren = await provider.getChildren(rule);
+    expect(detailsLoad).toHaveBeenCalledTimes(1);
+    expect(loadingChildren).toMatchObject([
+      {
+        label: 'Loading details...',
+      },
+    ]);
+
+    detailsDeferred.resolve(lintRuleDetailsResult);
+    await microtasksFlush();
+
+    const children = await provider.getChildren(rule);
+    expect(children.map((item) => item.label)).toEqual([
+      'Overview',
+      'Providers',
+      'Targets',
+      'Fix Surface',
+      'Analyzer Issues (1)',
+      'src/app.ts',
+    ]);
+
+    const issueGroup = children[4]!;
+    expect(issueGroup).toMatchObject({
+      collapsibleState: 1,
+      iconPath: { id: 'warning' },
+    });
+    const issueChildren = await provider.getChildren(issueGroup);
+    expect(issueChildren).toMatchObject([
+      {
+        label: 'Native analysis lagged behind wrapped diagnostics.',
+      },
+    ]);
+
+    const fileGroup = children[5]!;
+    expect(fileGroup).toMatchObject({
+      label: 'src/app.ts',
+      description: '1',
+      collapsibleState: 1,
+    });
+
+    const fileChildren = await provider.getChildren(fileGroup);
+    expect(fileChildren).toMatchObject([
+      {
+        label: 'Unused symbol "value".',
+        description: 'error • 3:5',
+        command: {
+          command: CODEPOL_EXTENSION_COMMAND_OPEN_LINT_RULE_LOCATION,
+          arguments: [
+            {
+              uri: 'file:///workspace/src/app.ts',
+              line: 2,
+              character: 4,
+            },
+          ],
+        },
+      },
+    ]);
+  });
+
+  it('renders passive placeholders when lint rule details are unavailable or superseded', async () => {
+    const unavailableProvider = new LintRulesTreeProvider(
+      async () => [lintRuleSummary],
+      async () => null,
+    );
+    const unavailableGroups = await unavailableProvider.getChildren();
+    const unavailableRule = (await unavailableProvider.getChildren(unavailableGroups[0]!))[0]!;
+    await unavailableProvider.getChildren(unavailableRule);
+    await microtasksFlush();
+    await expect(unavailableProvider.getChildren(unavailableRule)).resolves.toMatchObject([
+      {
+        label: 'Details unavailable right now',
+      },
+    ]);
+
+    const supersededProvider = new LintRulesTreeProvider(
+      async () => [lintRuleSummary],
+      async () => {
+        throw requestSupersededErrorCreate();
+      },
+    );
+    const supersededGroups = await supersededProvider.getChildren();
+    const supersededRule = (await supersededProvider.getChildren(supersededGroups[0]!))[0]!;
+    await supersededProvider.getChildren(supersededRule);
+    await microtasksFlush();
+    await expect(supersededProvider.getChildren(supersededRule)).resolves.toMatchObject([
+      {
+        label: 'Details unavailable right now',
+      },
+    ]);
+  });
+
+  it('clears cached lint rule details on refresh and loads them again', async () => {
+    const detailsLoad = vi.fn(async () => lintRuleDetailsResult);
+    const provider = new LintRulesTreeProvider(
+      async () => [lintRuleSummary],
+      detailsLoad,
+    );
+
+    const firstGroups = await provider.getChildren();
+    const firstRule = (await provider.getChildren(firstGroups[0]!))[0]!;
+    await provider.getChildren(firstRule);
+    await microtasksFlush();
+    await provider.getChildren(firstRule);
+    expect(detailsLoad).toHaveBeenCalledTimes(1);
+
+    provider.refresh();
+
+    const secondGroups = await provider.getChildren();
+    const secondRule = (await provider.getChildren(secondGroups[0]!))[0]!;
+    const loadingChildren = await provider.getChildren(secondRule);
+    expect(loadingChildren).toMatchObject([
+      {
+        label: 'Loading details...',
+      },
+    ]);
+    expect(detailsLoad).toHaveBeenCalledTimes(2);
   });
 });

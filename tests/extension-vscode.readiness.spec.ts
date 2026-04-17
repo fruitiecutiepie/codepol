@@ -5,6 +5,8 @@ import {
   codepolFeatureUnavailableMessageResolve,
   codepolIndexBackedCommandsEnabledResolve,
   codepolReadinessStateResolve,
+  codepolRequestSupersededErrorDataResolve,
+  codepolRequestSupersededErrorIs,
   codepolStatusBarPresentationCreate,
   codepolWorkspacePackageRenameEnabledResolve,
 } from '../extension-vscode/src/readiness';
@@ -24,6 +26,37 @@ function readinessStatusCreate(
     analysisGeneration: 3,
     ...overrides,
   };
+}
+
+function requestSupersededErrorCreate(): Error & {
+  code: string;
+  data: {
+    kind: 'request_superseded';
+    requestType: string;
+    requestKey: string;
+    requestId: string;
+    replacedByRequestId: string;
+  };
+} {
+  const error = new Error('Request superseded') as Error & {
+    code: string;
+    data: {
+      kind: 'request_superseded';
+      requestType: string;
+      requestKey: string;
+      requestId: string;
+      replacedByRequestId: string;
+    };
+  };
+  error.code = 'request_superseded';
+  error.data = {
+    kind: 'request_superseded',
+    requestType: 'query_semantic_search',
+    requestKey: 'query_semantic_search:client-1:workspace-1',
+    requestId: 'semantic-search-request-1',
+    replacedByRequestId: 'semantic-search-request-2',
+  };
+  return error;
 }
 
 describe('extension-vscode readiness helpers', () => {
@@ -153,5 +186,17 @@ describe('extension-vscode readiness helpers', () => {
     expect(presentation.tooltip).toContain(
       'Last error: One background worker restarted.',
     );
+  });
+
+  it('recognizes structured superseded errors', () => {
+    const error = requestSupersededErrorCreate();
+
+    expect(codepolRequestSupersededErrorIs(error)).toBe(true);
+    expect(codepolRequestSupersededErrorDataResolve(error)).toEqual(error.data);
+  });
+
+  it('falls back to the legacy superseded message check', () => {
+    expect(codepolRequestSupersededErrorIs(new Error('Request superseded'))).toBe(true);
+    expect(codepolRequestSupersededErrorDataResolve(new Error('Request superseded'))).toBeUndefined();
   });
 });

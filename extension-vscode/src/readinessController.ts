@@ -7,6 +7,7 @@ import {
 import {
   codepolConnectionDisposedErrorIs,
   codepolIndexBackedCommandsEnabledResolve,
+  codepolRequestSupersededErrorIs,
   type CodepolReadinessSnapshot,
   codepolWorkspacePackageRenameEnabledResolve,
 } from './readiness';
@@ -64,6 +65,9 @@ export class CodepolReadinessController
         status: await this.protocol.queryIndexStatus(),
       };
     } catch (error) {
+      if (codepolRequestSupersededErrorIs(error)) {
+        return;
+      }
       if (codepolConnectionDisposedErrorIs(error)) {
         nextSnapshot = {
           status: this.snapshot.status ?? null,

@@ -350,6 +350,8 @@ function backgroundTaskQueueCreate(): {
 
 function workspaceReadQueriesStubCreate(): Pick<
   WorkspaceService,
+  | 'queryLintRules'
+  | 'queryLintRuleDetails'
   | 'queryWorkspaceSymbols'
   | 'queryDependencyGraph'
   | 'querySemanticSearch'
@@ -361,6 +363,16 @@ function workspaceReadQueriesStubCreate(): Pick<
   | 'queryArchitectureSummary'
 > {
   return {
+    async queryLintRules() {
+      return {
+        analysisGeneration: 0,
+        workspaceReady: false,
+        rules: [],
+      };
+    },
+    async queryLintRuleDetails() {
+      return null;
+    },
     async queryWorkspaceSymbols() {
       return [];
     },
@@ -421,6 +433,7 @@ describe('workspace daemon control plane', () => {
   >();
 
   afterEach(() => {
+    vi.restoreAllMocks();
     liveDaemons.clear();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -588,30 +601,42 @@ describe('workspace daemon control plane', () => {
     expect(startDaemonCalls).toBe(0);
   });
 
-  it('fails fast on install mismatch without attempting relaunch', async () => {
+  it('relaunches when the existing daemon has an unexpected install id', async () => {
     const runtimeDir = tempRuntimeDirCreate();
     tempDirs.push(runtimeDir);
 
-    const { descriptor } = workspaceDaemonDescriptorCreate({
+    const staleDescriptor = workspaceDaemonDescriptorCreate({
       runtimeDir,
       installId: 'stable',
-    });
-    workspaceDaemonDescriptorWrite(runtimeDir, descriptor);
-    liveDaemons.set(descriptor.transport.path, { descriptor });
+    }).descriptor;
+    workspaceDaemonDescriptorWrite(runtimeDir, staleDescriptor);
+    liveDaemons.set(staleDescriptor.transport.path, { descriptor: staleDescriptor });
 
-    let startDaemonCalls = 0;
-    await expect(
-      workspaceDaemonLaunchOrConnect({
-        runtimeDir,
-        client: clientIdentityCreate('unexpected-install-client'),
-        expectedInstallId: 'insiders',
-        connect,
-        startDaemon: async () => {
-          startDaemonCalls += 1;
-        },
-      }),
-    ).rejects.toThrow('Daemon handshake failed: unexpected_install_id');
-    expect(startDaemonCalls).toBe(0);
+    let startedDescriptor: WorkspaceDaemonDescriptor | undefined;
+    const launched = await workspaceDaemonLaunchOrConnect({
+      runtimeDir,
+      client: clientIdentityCreate('unexpected-install-client'),
+      expectedInstallId: 'insiders',
+      connect,
+      startDaemon: async () => {
+        const created = workspaceDaemonDescriptorCreate({
+          runtimeDir,
+          installId: 'insiders',
+        });
+        startedDescriptor = created.descriptor;
+        workspaceDaemonDescriptorWrite(runtimeDir, created.descriptor);
+        liveDaemons.set(created.descriptor.transport.path, {
+          descriptor: created.descriptor,
+        });
+      },
+    });
+
+    expect(launched.launched).toBe(true);
+    expect(startedDescriptor).toBeDefined();
+    expect(launched.descriptor.installId).toBe('insiders');
+    expect(launched.descriptor.sessionNonce).toBe(startedDescriptor?.sessionNonce);
+    expect(launched.descriptor.sessionNonce).not.toBe(staleDescriptor.sessionNonce);
+    await launched.connection.close();
   });
 
   it('requires hello before service RPC and serves the current workspace-service surface after handshake', async () => {
@@ -1560,6 +1585,28 @@ describe('workspace daemon control plane', () => {
       workspaceId: secondAttached.workspaceId,
       workspaceInstanceId: secondAttached.workspaceInstanceId,
     });
+    await expect(
+      secondService.queryLintRules({
+        clientSessionId: secondRegistered.clientSessionId,
+        workspaceId: secondAttached.workspaceId,
+      }),
+    ).resolves.toMatchObject({
+      workspaceReady: true,
+      rules: [
+        expect.objectContaining({
+          ruleId: resolvedRuleId,
+          ownership: 'native_preferred',
+          analysisState: 'ready',
+          targetPatterns: ['src/**/*.ts'],
+          providers: [
+            expect.objectContaining({
+              platform: 'biome',
+              languages: ['typescript'],
+            }),
+          ],
+        }),
+      ],
+    });
     expect(
       await secondService.queryDiagnostics({
         clientSessionId: secondRegistered.clientSessionId,
@@ -1573,6 +1620,30 @@ describe('workspace daemon control plane', () => {
         message: 'daemon native diagnostic',
       }),
     ]);
+    await expect(
+      secondService.queryLintRuleDetails({
+        clientSessionId: secondRegistered.clientSessionId,
+        workspaceId: secondAttached.workspaceId,
+        ruleId: resolvedRuleId,
+      }),
+    ).resolves.toMatchObject({
+      totalDiagnosticCount: 1,
+      rule: expect.objectContaining({
+        ruleId: resolvedRuleId,
+        ownership: 'native_preferred',
+      }),
+      groups: [
+        expect.objectContaining({
+          uri,
+          workspaceRelativePath: 'src/app.ts',
+          diagnostics: [
+            expect.objectContaining({
+              message: 'daemon native diagnostic',
+            }),
+          ],
+        }),
+      ],
+    });
     await secondService.close();
   });
 
@@ -2829,6 +2900,13 @@ describe('workspace daemon control plane', () => {
       type: 'error',
       code: 'request_superseded',
       message: 'Request superseded',
+      data: {
+        kind: 'request_superseded',
+        requestType: 'query_diagnostics',
+        requestKey: `query_diagnostics:supersede-diagnostics-session:${attachResponse.workspaceId}:*`,
+        requestId: 'diagnostics-request-1',
+        replacedByRequestId: 'diagnostics-request-2',
+      },
     });
     await expect(secondPromise).resolves.toEqual({
       type: 'query_diagnostics_ack',
@@ -3008,6 +3086,13 @@ describe('workspace daemon control plane', () => {
       type: 'error',
       code: 'request_superseded',
       message: 'Request superseded',
+      data: {
+        kind: 'request_superseded',
+        requestType: 'query_workspace_symbols',
+        requestKey: `query_workspace_symbols:supersede-symbol-session:${attachResponse.workspaceId}`,
+        requestId: 'workspace-symbols-request-1',
+        replacedByRequestId: 'workspace-symbols-request-2',
+      },
     });
     await expect(secondPromise).resolves.toEqual({
       type: 'query_workspace_symbols_ack',
@@ -3215,6 +3300,13 @@ describe('workspace daemon control plane', () => {
       type: 'error',
       code: 'request_superseded',
       message: 'Request superseded',
+      data: {
+        kind: 'request_superseded',
+        requestType: 'query_semantic_search',
+        requestKey: `query_semantic_search:supersede-search-session:${attachResponse.workspaceId}`,
+        requestId: 'semantic-search-request-1',
+        replacedByRequestId: 'semantic-search-request-2',
+      },
     });
     await expect(secondPromise).resolves.toEqual({
       type: 'query_semantic_search_ack',
@@ -4106,6 +4198,147 @@ describe('workspace daemon control plane', () => {
     expect(startedDescriptor).toBeDefined();
     expect(launched.descriptor.sessionNonce).toBe(startedDescriptor?.sessionNonce);
     expect(launched.descriptor.sessionNonce).not.toBe('stale');
+    await launched.connection.close();
+  });
+
+  it('relaunches when the existing daemon is missing required capabilities', async () => {
+    const runtimeDir = tempRuntimeDirCreate();
+    tempDirs.push(runtimeDir);
+
+    const staleDescriptor = workspaceDaemonDescriptorCreate({ runtimeDir }).descriptor;
+    workspaceDaemonDescriptorWrite(runtimeDir, staleDescriptor);
+    liveDaemons.set(staleDescriptor.transport.path, {
+      descriptor: staleDescriptor,
+    });
+
+    let startedDescriptor: WorkspaceDaemonDescriptor | undefined;
+    const launched = await workspaceDaemonLaunchOrConnect({
+      runtimeDir,
+      client: clientIdentityCreate('client-required-capabilities'),
+      requiredCapabilities: ['query_lint_rules', 'query_lint_rule_details'],
+      connect,
+      startDaemon: async () => {
+        const created = workspaceDaemonDescriptorCreate({ runtimeDir });
+        startedDescriptor = created.descriptor;
+        workspaceDaemonDescriptorWrite(runtimeDir, created.descriptor);
+        liveDaemons.set(created.descriptor.transport.path, {
+          descriptor: created.descriptor,
+          service: new WorkspaceServiceEngine(),
+        });
+      },
+    });
+
+    expect(launched.launched).toBe(true);
+    expect(startedDescriptor).toBeDefined();
+    expect(launched.descriptor.sessionNonce).toBe(startedDescriptor?.sessionNonce);
+    expect(launched.descriptor.sessionNonce).not.toBe(staleDescriptor.sessionNonce);
+    await launched.connection.close();
+  });
+
+  it('relaunches when the existing daemon predates the required runtime freshness', async () => {
+    const runtimeDir = tempRuntimeDirCreate();
+    tempDirs.push(runtimeDir);
+
+    const staleDescriptor = workspaceDaemonDescriptorCreate({ runtimeDir }).descriptor;
+    workspaceDaemonDescriptorWrite(runtimeDir, {
+      ...staleDescriptor,
+      startedAtUnixMs: Date.now() - 60_000,
+    });
+    liveDaemons.set(staleDescriptor.transport.path, {
+      descriptor: {
+        ...staleDescriptor,
+        startedAtUnixMs: Date.now() - 60_000,
+      },
+      service: new WorkspaceServiceEngine(),
+    });
+
+    let startedDescriptor: WorkspaceDaemonDescriptor | undefined;
+    const launched = await workspaceDaemonLaunchOrConnect({
+      runtimeDir,
+      client: clientIdentityCreate('client-fresh-runtime'),
+      minStartedAtUnixMs: Date.now(),
+      connect,
+      startDaemon: async () => {
+        const created = workspaceDaemonDescriptorCreate({ runtimeDir });
+        startedDescriptor = created.descriptor;
+        workspaceDaemonDescriptorWrite(runtimeDir, created.descriptor);
+        liveDaemons.set(created.descriptor.transport.path, {
+          descriptor: created.descriptor,
+          service: new WorkspaceServiceEngine(),
+        });
+      },
+    });
+
+    expect(launched.launched).toBe(true);
+    expect(startedDescriptor).toBeDefined();
+    expect(launched.descriptor.sessionNonce).toBe(startedDescriptor?.sessionNonce);
+    expect(launched.descriptor.sessionNonce).not.toBe(staleDescriptor.sessionNonce);
+    expect(launched.descriptor.startedAtUnixMs).toBeGreaterThanOrEqual(
+      startedDescriptor?.startedAtUnixMs ?? 0,
+    );
+    await launched.connection.close();
+  });
+
+  it('terminates the matched stale daemon before relaunching', async () => {
+    const runtimeDir = tempRuntimeDirCreate();
+    tempDirs.push(runtimeDir);
+
+    const staleDescriptor = {
+      ...workspaceDaemonDescriptorCreate({ runtimeDir }).descriptor,
+      pid: 424_242,
+      startedAtUnixMs: Date.now() - 60_000,
+    };
+    workspaceDaemonDescriptorWrite(runtimeDir, staleDescriptor);
+    liveDaemons.set(staleDescriptor.transport.path, {
+      descriptor: staleDescriptor,
+      service: new WorkspaceServiceEngine(),
+    });
+
+    const livePids = new Set([staleDescriptor.pid]);
+    const killSpy = vi
+      .spyOn(process, 'kill')
+      .mockImplementation(((pid: number, signal?: number | NodeJS.Signals) => {
+        if (!livePids.has(pid)) {
+          const error = new Error(`kill ESRCH ${pid}`) as NodeJS.ErrnoException;
+          error.code = 'ESRCH';
+          throw error;
+        }
+        if (signal === 0) {
+          return true;
+        }
+        if (signal === undefined || signal === 'SIGTERM' || signal === 'SIGKILL') {
+          livePids.delete(pid);
+          liveDaemons.delete(staleDescriptor.transport.path);
+          return true;
+        }
+        return true;
+      }) as typeof process.kill);
+
+    let startedDescriptor: WorkspaceDaemonDescriptor | undefined;
+    const launched = await workspaceDaemonLaunchOrConnect({
+      runtimeDir,
+      client: clientIdentityCreate('client-terminate-stale-daemon'),
+      minStartedAtUnixMs: Date.now(),
+      connect,
+      startDaemon: async () => {
+        const created = workspaceDaemonDescriptorCreate({ runtimeDir });
+        startedDescriptor = created.descriptor;
+        workspaceDaemonDescriptorWrite(runtimeDir, created.descriptor);
+        liveDaemons.set(created.descriptor.transport.path, {
+          descriptor: created.descriptor,
+          service: new WorkspaceServiceEngine(),
+        });
+      },
+    });
+
+    expect(launched.launched).toBe(true);
+    expect(startedDescriptor).toBeDefined();
+    expect(
+      killSpy.mock.calls.some(
+        ([pid, signal]) => pid === staleDescriptor.pid && signal === 'SIGTERM',
+      ),
+    ).toBe(true);
+    expect(livePids.has(staleDescriptor.pid)).toBe(false);
     await launched.connection.close();
   });
 });

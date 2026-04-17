@@ -8,8 +8,10 @@ import {
   langExists,
   langSet,
 } from './parserLangs';
-
-let parserInitialized = false;
+import {
+  parserRuntimeStateForOwnerGet,
+  parserRuntimeStateGet,
+} from './parserRuntimeState';
 
 /**
  * Resolves the web-tree-sitter core WASM file.
@@ -27,10 +29,22 @@ function treeSitterWasmLocate(filename: string, scriptDir: string): string {
  * Must be called before any scanning operations.
  */
 export async function parserInit(): Promise<void> {
-  if (!parserInitialized) {
-    await Parser.init({ locateFile: treeSitterWasmLocate });
-    parserInitialized = true;
+  const state = parserRuntimeStateForOwnerGet(Parser);
+  if (!state.parserInitPromise) {
+    state.parserInitPromise = Parser.init({ locateFile: treeSitterWasmLocate })
+      .then(() => {
+        if (parserRuntimeStateGet().parserOwner === Parser) {
+          state.parserInitialized = true;
+        }
+      })
+      .catch((error) => {
+        if (parserRuntimeStateGet().parserOwner === Parser) {
+          state.parserInitPromise = undefined;
+        }
+        throw error;
+      });
   }
+  await state.parserInitPromise;
 
   const langs = langsGet();
   await Promise.all(
@@ -49,7 +63,8 @@ export async function parserInit(): Promise<void> {
  * @returns Result containing the parser or an error message
  */
 export function parserGetForFile(filePath: string): Result<Parser, string> {
-  if (!parserInitialized) {
+  const state = parserRuntimeStateForOwnerGet(Parser);
+  if (!state.parserInitialized) {
     const error = 'Parser not initialized. Call parserInit() before scanning files.';
     console.error(error);
     return Err(error);

@@ -3,6 +3,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { ByteRange } from '../index/indexTypes';
 import type {
   LintDiagnostic,
+  LintProvider,
   LintSeverity,
   PolicyDiagnosticLocation,
   PolicyViolation,
@@ -127,6 +128,63 @@ export type WorkspaceDiagnostic = {
   message: string;
   range: WorkspaceRange;
   relatedLocations?: WorkspaceDiagnosticRelatedLocation[];
+};
+
+export type WorkspaceLintRuleOwnership =
+  | 'pending_analysis'
+  | 'native_preferred'
+  | 'keep_wrapped';
+
+export type WorkspaceLintRuleAnalysisState =
+  | 'pending'
+  | 'ready'
+  | 'error';
+
+export type WorkspaceLintRuleProviderSummary = {
+  platform: LintProvider['platform'];
+  languages: string[];
+  configSummary?: string;
+};
+
+export type WorkspaceLintRuleSummary = {
+  ruleId: string;
+  severities: LintSeverity[];
+  targetPatterns: string[];
+  providers: WorkspaceLintRuleProviderSummary[];
+  languages: string[];
+  ownership: WorkspaceLintRuleOwnership;
+  hasNativeOwner: boolean;
+  recentNativeDiagnosticCount: number;
+  recentWrappedDiagnosticCount: number;
+  recentNativeLatencyMs: number;
+  recentWrappedLatencyMs: number;
+  fixSurfaceNotes: string[];
+  analysisState: WorkspaceLintRuleAnalysisState;
+  analyzerIssues: string[];
+};
+
+export type WorkspaceLintRulesResult = {
+  analysisGeneration: number;
+  workspaceReady: boolean;
+  rules: WorkspaceLintRuleSummary[];
+};
+
+export type WorkspaceLintRuleDiagnosticItem = {
+  severity: WorkspaceDiagnosticSeverity;
+  message: string;
+  range: WorkspaceRange;
+};
+
+export type WorkspaceLintRuleDiagnosticGroup = {
+  uri: string;
+  workspaceRelativePath: string;
+  diagnostics: WorkspaceLintRuleDiagnosticItem[];
+};
+
+export type WorkspaceLintRuleDetailsResult = {
+  rule: WorkspaceLintRuleSummary;
+  groups: WorkspaceLintRuleDiagnosticGroup[];
+  totalDiagnosticCount: number;
 };
 
 export type WorkspaceSymbolKind = 'file' | 'module';

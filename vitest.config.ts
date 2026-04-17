@@ -11,6 +11,8 @@ const workspaceSourceEntries = {
   '@codepol/plugin-esbuild': 'packages/plugin-esbuild/src/index.ts',
   '@codepol/plugin-ruff': 'packages/plugin-ruff/src/index.ts',
   '@codepol/plugin-vulture': 'packages/plugin-vulture/src/index.ts',
+  '@codepol/workspace-service/daemon': 'packages/workspace-service/src/daemon.ts',
+  '@codepol/workspace-service/contracts': 'packages/workspace-service/src/contracts.ts',
   '@codepol/workspace-service': 'packages/workspace-service/src/index.ts',
 };
 
