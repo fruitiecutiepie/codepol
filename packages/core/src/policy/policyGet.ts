@@ -5,6 +5,20 @@ import { minimatch } from 'minimatch';
 import type { PolicyFile, PolicyRule, PolicyRuleTarget, RuleMatch } from './policyTypes';
 
 const policyCacheStore = new Map<string, PolicyFile>();
+const RULE_MATCH_GLOB_CONCURRENCY = 8;
+
+function ruleMatchCacheKeyCreate(input: {
+  cwd: string;
+  target: PolicyRuleTarget;
+  globalExclude: string[];
+}): string {
+  return JSON.stringify({
+    cwd: path.resolve(input.cwd),
+    language: input.target.language,
+    files: [...input.target.files],
+    ignore: [...input.globalExclude, ...(input.target.exclude ?? [])],
+  });
+}
 
 /**
  * Loads and parses a JSON policy file from the filesystem.
@@ -169,20 +183,31 @@ export function ruleTargetMatchesLanguage(target: PolicyRuleTarget, filePath: st
 export async function ruleMatchesGet(policy: PolicyFile, cwd: string): Promise<RuleMatch[]> {
   const matches: RuleMatch[] = [];
   let globalExclude: string[] = [];
+  const fileMatchCache = new Map<string, string[]>();
   if (policy.exclude != null) {
     globalExclude = policy.exclude;
   }
   for (const rule of policy.rules) {
     const targets = policyRuleTargetsResolve(rule, policy);
     for (const target of targets) {
-      const ignore = [...globalExclude, ...(target.exclude ?? [])];
-      const files = await fg(target.files, {
-        cwd: cwd,
-        absolute: true,
-        ignore: ignore,
-        onlyFiles: true,
+      const cacheKey = ruleMatchCacheKeyCreate({
+        cwd,
+        target,
+        globalExclude,
       });
-      const filtered = files.filter(file => ruleTargetMatchesLanguage(target, file));
+      let filtered = fileMatchCache.get(cacheKey);
+      if (!filtered) {
+        const ignore = [...globalExclude, ...(target.exclude ?? [])];
+        const files = await fg(target.files, {
+          cwd,
+          absolute: true,
+          ignore,
+          onlyFiles: true,
+          concurrency: RULE_MATCH_GLOB_CONCURRENCY,
+        });
+        filtered = files.filter(file => ruleTargetMatchesLanguage(target, file));
+        fileMatchCache.set(cacheKey, filtered);
+      }
       matches.push({ rule: rule, target: target, files: filtered });
     }
   }

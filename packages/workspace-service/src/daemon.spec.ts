@@ -296,11 +296,20 @@ function analyzerInventoryGet(
 function workspaceWatcherStubCreate(): {
   watcherCreate: WorkspaceWatcherCreate;
   trigger: (eventName: string, filePath: string) => void;
+  triggerError: (error: Error) => void;
 } {
   let listener: ((eventName: string, filePath: string) => void) | undefined;
+  let errorListener: ((error: Error) => void) | undefined;
   const watcher = {
-    on(_event: 'all', nextListener: (eventName: string, filePath: string) => void) {
-      listener = nextListener;
+    on(
+      event: 'all' | 'error',
+      nextListener: ((eventName: string, filePath: string) => void) | ((error: Error) => void),
+    ) {
+      if (event === 'all') {
+        listener = nextListener as (eventName: string, filePath: string) => void;
+      } else {
+        errorListener = nextListener as (error: Error) => void;
+      }
       return watcher;
     },
     async close() {},
@@ -309,6 +318,9 @@ function workspaceWatcherStubCreate(): {
     watcherCreate: () => watcher,
     trigger(eventName: string, filePath: string) {
       listener?.(eventName, filePath);
+    },
+    triggerError(error: Error) {
+      errorListener?.(error);
     },
   };
 }
@@ -1014,6 +1026,63 @@ describe('workspace daemon control plane', () => {
 
     await writer.close();
     await reader.close();
+  });
+
+  it('keeps the daemon session alive when the workspace watcher emits an error', async () => {
+    const runtimeDir = tempRuntimeDirCreate();
+    tempDirs.push(runtimeDir);
+
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-daemon-watcher-error-'));
+    tempDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    fs.writeFileSync(filePath, 'export const ready = true;\n', 'utf8');
+
+    const watcher = workspaceWatcherStubCreate();
+    const engine = new WorkspaceServiceEngine({
+      watcherCreate: watcher.watcherCreate,
+    });
+    const { descriptor } = workspaceDaemonDescriptorCreate({ runtimeDir });
+    workspaceDaemonDescriptorWrite(runtimeDir, descriptor);
+    liveDaemons.set(descriptor.transport.path, { descriptor, service: engine });
+
+    const client = await daemonServiceClientCreate({
+      descriptor,
+      clientInstanceId: 'daemon-watch-error-client',
+    });
+    const registered = await client.registerClientSession({
+      clientKind: 'test',
+      clientInstanceId: 'daemon-watch-error-client',
+      clientSessionId: 'daemon-watch-error-session',
+    });
+    const attached = await client.attachWorkspace({
+      clientSessionId: registered.clientSessionId,
+      rootPath: workspaceRoot,
+      configPath,
+    });
+    await client.completeReplay({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+    });
+
+    watcher.triggerError(new Error('watch backend dropped'));
+
+    await expect(
+      client.queryIndexStatus({
+        clientSessionId: registered.clientSessionId,
+        workspaceId: attached.workspaceId,
+      }),
+    ).resolves.toMatchObject({
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+      replayState: 'applied',
+    });
+
+    await client.close();
   });
 
   it('reports replay pending and background warm-up status through the daemon workspace lifecycle', async () => {

@@ -261,8 +261,8 @@ export type WorkspaceClientKind = 'lsp' | 'cli' | 'test';
 
 export type WorkspaceWatcher = {
   on: (
-    event: 'all',
-    listener: (eventName: string, filePath: string) => void,
+    event: 'all' | 'error',
+    listener: ((eventName: string, filePath: string) => void) | ((error: Error) => void),
   ) => WorkspaceWatcher;
   close: () => Promise<void> | void;
 };
@@ -723,6 +723,11 @@ export function workspaceWatcherCreate(input: {
   return chokidar.watch(workspaceWatchItemsResolve(input), {
     ignoreInitial: true,
     ignored: WORKSPACE_WATCH_IGNORED,
+    // Recursive chokidar scans can exhaust file descriptors on remote Linux
+    // workspaces before the daemon finishes warming up. Keep the daemon watch
+    // surface shallow and rely on open-document overlays for active editor
+    // changes instead of walking the entire repository tree.
+    depth: 0,
   }) as unknown as WorkspaceWatcher;
 }
 
@@ -770,6 +775,9 @@ async function workspaceWatcherEnsure(input: {
   watcher.on('all', (_eventName, filePath) => {
     input.onInvalidate(filePath);
   });
+  // Chokidar emits EventEmitter "error" events. Without a listener those
+  // errors terminate the long-lived daemon process and force endless reconnects.
+  watcher.on('error', () => {});
   input.workspace.watcher = watcher;
   input.workspace.watchItemsKey = watchItemsKey;
 }

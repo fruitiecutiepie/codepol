@@ -645,13 +645,22 @@ async function fileContentsWaitFor(
 function workspaceWatcherStubCreate(): {
   watcherCreate: WorkspaceWatcherCreate;
   trigger: (eventName: string, filePath: string) => void;
+  triggerError: (error: Error) => void;
   closeCallsGet: () => number;
 } {
   let listener: ((eventName: string, filePath: string) => void) | undefined;
+  let errorListener: ((error: Error) => void) | undefined;
   let closeCalls = 0;
   const watcher = {
-    on(_event: 'all', nextListener: (eventName: string, filePath: string) => void) {
-      listener = nextListener;
+    on(
+      event: 'all' | 'error',
+      nextListener: ((eventName: string, filePath: string) => void) | ((error: Error) => void),
+    ) {
+      if (event === 'all') {
+        listener = nextListener as (eventName: string, filePath: string) => void;
+      } else {
+        errorListener = nextListener as (error: Error) => void;
+      }
       return watcher;
     },
     async close() {
@@ -662,6 +671,9 @@ function workspaceWatcherStubCreate(): {
     watcherCreate: () => watcher,
     trigger(eventName: string, filePath: string) {
       listener?.(eventName, filePath);
+    },
+    triggerError(error: Error) {
+      errorListener?.(error);
     },
     closeCallsGet() {
       return closeCalls;
