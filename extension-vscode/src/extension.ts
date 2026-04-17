@@ -16,6 +16,7 @@ import {
   CODEPOL_EXTENSION_COMMAND_REFRESH_LINT_RULES,
   CODEPOL_EXTENSION_COMMAND_OPEN_LINT_RULE_LOCATION,
   CODEPOL_EXTENSION_COMMAND_RENAME_CODEPOL_ENTITY,
+  CODEPOL_EXTENSION_COMMAND_SHOW_LINT_RULE_DIAGNOSTIC_FIXES,
   CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_SUMMARY,
   CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_LINKS,
   CODEPOL_EXTENSION_COMMAND_SHOW_DEPENDENCY_GRAPH,
@@ -226,6 +227,89 @@ function semanticSearchItemsMap(
   }));
 }
 
+async function quickPick<T>(input: {
+  title: string;
+  placeholder?: string;
+  items: Array<vscode.QuickPickItem & { value: T }>;
+}): Promise<T | undefined> {
+  const picked = await vscode.window.showQuickPick(input.items, {
+    title: input.title,
+    placeHolder: input.placeholder,
+    matchOnDescription: true,
+    matchOnDetail: true,
+    ignoreFocusOut: true,
+  });
+  return picked?.value;
+}
+
+function lintRuleIdResolve(input: unknown): string | undefined {
+  if (typeof input === 'string') {
+    return input;
+  }
+  if (
+    typeof input === 'object' &&
+    input !== null &&
+    'ruleId' in input &&
+    typeof (input as { ruleId?: unknown }).ruleId === 'string'
+  ) {
+    return (input as { ruleId: string }).ruleId;
+  }
+  return undefined;
+}
+
+function lintRuleDiagnosticQuickFixInputResolve(input: unknown):
+  | {
+      ruleId: string;
+      uri: string;
+      message: string;
+      range: {
+        start: { line: number; character: number };
+        end: { line: number; character: number };
+      };
+    }
+  | undefined {
+  if (typeof input !== 'object' || input === null) {
+    return undefined;
+  }
+
+  const record = input as {
+    ruleId?: unknown;
+    uri?: unknown;
+    message?: unknown;
+    range?: {
+      start?: { line?: unknown; character?: unknown };
+      end?: { line?: unknown; character?: unknown };
+    };
+  };
+  if (
+    typeof record.ruleId !== 'string' ||
+    typeof record.uri !== 'string' ||
+    typeof record.message !== 'string' ||
+    typeof record.range?.start?.line !== 'number' ||
+    typeof record.range.start.character !== 'number' ||
+    typeof record.range.end?.line !== 'number' ||
+    typeof record.range.end.character !== 'number'
+  ) {
+    return undefined;
+  }
+
+  return {
+    ruleId: record.ruleId,
+    uri: record.uri,
+    message: record.message,
+    range: {
+      start: {
+        line: record.range.start.line,
+        character: record.range.start.character,
+      },
+      end: {
+        line: record.range.end.line,
+        character: record.range.end.character,
+      },
+    },
+  };
+}
+
 async function semanticSearchPick(input: {
   initialQuery: string;
   queryResults(query: string): Promise<WorkspaceSearchResult[] | null>;
@@ -383,6 +467,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     renameTargetsLoad,
     renameTargetPick,
     renamePrompt,
+    quickPick,
     infoShow: (message: string) => {
       void vscode.window.showInformationMessage(message);
     },
@@ -437,8 +522,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ),
     vscode.commands.registerCommand(
       CODEPOL_EXTENSION_COMMAND_SHOW_LINT_RULE_DETAILS,
-      async (ruleId?: string) =>
-        typeof ruleId === 'string' ? controller?.showLintRuleDetails(ruleId) : undefined,
+      async (input?: unknown) => {
+        const ruleId = lintRuleIdResolve(input);
+        return ruleId ? controller?.showLintRuleDetails(ruleId) : undefined;
+      },
+    ),
+    vscode.commands.registerCommand(
+      CODEPOL_EXTENSION_COMMAND_SHOW_LINT_RULE_DIAGNOSTIC_FIXES,
+      async (input?: unknown) => {
+        const quickFixInput = lintRuleDiagnosticQuickFixInputResolve(input);
+        return quickFixInput
+          ? controller?.showLintRuleDiagnosticFixes(quickFixInput)
+          : undefined;
+      },
     ),
     vscode.commands.registerCommand(
       CODEPOL_EXTENSION_COMMAND_OPEN_LINT_RULE_LOCATION,

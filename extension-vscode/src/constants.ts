@@ -23,6 +23,8 @@ export const CODEPOL_EXTENSION_COMMAND_REFRESH_RENAME_TARGETS =
   'codepol.extension.refreshRenameTargets';
 export const CODEPOL_EXTENSION_COMMAND_SHOW_LINT_RULE_DETAILS =
   'codepol.extension.showLintRuleDetails';
+export const CODEPOL_EXTENSION_COMMAND_SHOW_LINT_RULE_DIAGNOSTIC_FIXES =
+  'codepol.extension.showLintRuleDiagnosticFixes';
 export const CODEPOL_EXTENSION_COMMAND_OPEN_LINT_RULE_LOCATION =
   'codepol.extension.openLintRuleLocation';
 export const CODEPOL_EXTENSION_COMMAND_REFRESH_LINT_RULES =

@@ -21,6 +21,7 @@
     "onCommand:codepol.extension.showSemanticSearch",
     "onCommand:codepol.extension.showArchitectureLinks",
     "onCommand:codepol.extension.showLintRuleDetails",
+    "onCommand:codepol.extension.showLintRuleDiagnosticFixes",
     "onCommand:codepol.extension.renameCodepolEntity",
     "onCommand:codepol.extension.refreshLintRules",
     "onCommand:codepol.extension.refreshRenameTargets",
@@ -64,6 +65,10 @@
       {
         "command": "codepol.extension.showLintRuleDetails",
         "title": "Codepol: Open Lint Rule Details Panel"
+      },
+      {
+        "command": "codepol.extension.showLintRuleDiagnosticFixes",
+        "title": "Codepol: Quick Fix..."
       },
       {
         "command": "codepol.extension.refreshLintRules",
@@ -122,6 +127,11 @@
         {
           "command": "codepol.extension.showLintRuleDetails",
           "when": "view == codepol.lintRules && viewItem == codepol.lintRule",
+          "group": "inline"
+        },
+        {
+          "command": "codepol.extension.showLintRuleDiagnosticFixes",
+          "when": "view == codepol.lintRules && viewItem == codepol.lintRuleDiagnostic.fixable",
           "group": "inline"
         }
       ]

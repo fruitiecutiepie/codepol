@@ -19,6 +19,7 @@ import type {
   WorkspaceLintRuleDetailsResult,
   WorkspaceLintRulesResult,
   WorkspacePrepareRenameResult,
+  WorkspaceRange,
   WorkspaceRenamePreviewResult,
   WorkspaceRenameTarget,
   WorkspaceSemanticDefinitionResult,
@@ -53,6 +54,49 @@ const CODEPOL_LSP_TRACE_OUTPUT_NAME = 'Codepol LSP';
 const CODEPOL_LSP_VERBOSE_DIAGNOSTICS_SETTING = 'lsp.verboseDiagnostics';
 let traceOutputChannel: vscode.LogOutputChannel | undefined;
 
+export type CodepolProtocolQuickFixAction = {
+  title: string;
+  kind: 'quickfix';
+  isPreferred?: boolean;
+  planId: string;
+};
+
+function protocolQuickFixActionResolve(
+  value: unknown,
+): CodepolProtocolQuickFixAction | undefined {
+  if (typeof value !== 'object' || value === null) {
+    return undefined;
+  }
+
+  const record = value as {
+    title?: unknown;
+    kind?: unknown;
+    isPreferred?: unknown;
+    command?: {
+      command?: unknown;
+      arguments?: Array<{
+        planId?: unknown;
+      }>;
+    };
+  };
+  const planId = record.command?.arguments?.[0]?.planId;
+  if (
+    typeof record.title !== 'string' ||
+    record.kind !== 'quickfix' ||
+    record.command?.command !== CODEPOL_LSP_COMMAND_APPLY_EDIT_PLAN ||
+    typeof planId !== 'string'
+  ) {
+    return undefined;
+  }
+
+  return {
+    title: record.title,
+    kind: 'quickfix',
+    isPreferred: record.isPreferred === true,
+    planId,
+  };
+}
+
 function bundledServerModulePathResolve(): string | undefined {
   const candidate = path.join(__dirname, 'lsp.js');
   return fs.existsSync(candidate) ? candidate : undefined;
@@ -78,6 +122,11 @@ export type CodepolProtocolClient = {
   queryIndexStatus(): Promise<IndexStatusResult | null>;
   queryLintRules(): Promise<WorkspaceLintRulesResult | null>;
   queryLintRuleDetails(ruleId: string): Promise<WorkspaceLintRuleDetailsResult | null>;
+  queryCodeActions(input: {
+    uri: string;
+    range: WorkspaceRange;
+    diagnosticIds?: string[];
+  }): Promise<CodepolProtocolQuickFixAction[]>;
   queryArchitectureSummary(): Promise<WorkspaceArchitectureSummaryResult | null>;
   queryDependencyGraph(): Promise<WorkspaceDependencyGraphResult | null>;
   querySemanticSearch(query: string): Promise<WorkspaceSearchResult[] | null>;
@@ -268,6 +317,34 @@ export class VscodeLanguageClientProtocol implements CodepolProtocolClient {
       CODEPOL_LSP_REQUEST_LINT_RULE_DETAILS,
       { ruleId },
     );
+  }
+
+  async queryCodeActions(input: {
+    uri: string;
+    range: WorkspaceRange;
+    diagnosticIds?: string[];
+  }): Promise<CodepolProtocolQuickFixAction[]> {
+    const result = await this.requestRun<unknown[]>('textDocument/codeAction', {
+      textDocument: {
+        uri: input.uri,
+      },
+      range: input.range,
+      context: {
+        diagnostics: (input.diagnosticIds ?? []).map((diagnosticId) => ({
+          data: {
+            id: diagnosticId,
+          },
+        })),
+      },
+    });
+    if (!Array.isArray(result)) {
+      return [];
+    }
+    return result
+      .map((action) => protocolQuickFixActionResolve(action))
+      .filter(
+        (action): action is CodepolProtocolQuickFixAction => action !== undefined,
+      );
   }
 
   async queryArchitectureSummary(): Promise<WorkspaceArchitectureSummaryResult | null> {

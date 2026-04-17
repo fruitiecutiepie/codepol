@@ -35,4 +35,18 @@ describe('extension-vscode manifest', () => {
       group: 'inline',
     });
   });
+
+  it('contributes the lint rule diagnostic quick-fix command for fixable diagnostic tree items', () => {
+    const manifest = extensionManifestGet();
+
+    expect(manifest.contributes.commands).toContainEqual({
+      command: 'codepol.extension.showLintRuleDiagnosticFixes',
+      title: 'Codepol: Quick Fix...',
+    });
+    expect(manifest.contributes.menus['view/item/context']).toContainEqual({
+      command: 'codepol.extension.showLintRuleDiagnosticFixes',
+      when: 'view == codepol.lintRules && viewItem == codepol.lintRuleDiagnostic.fixable',
+      group: 'inline',
+    });
+  });
 });

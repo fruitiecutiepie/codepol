@@ -1,12 +1,14 @@
 import type {
   WorkspaceLintRuleDetailsResult,
   WorkspacePrepareRenameResult,
+  WorkspaceRange,
   WorkspaceRenamePreviewResult,
   WorkspaceSearchResult,
   WorkspaceSupportedRenameTarget,
 } from '@codepol/core';
 import type { RenameTargetCandidate } from './discovery';
 import type {
+  CodepolProtocolQuickFixAction,
   CodepolProtocolClient,
 } from './protocolClient';
 import type {
@@ -53,6 +55,13 @@ type OpenLocationInput = {
   character: number;
 };
 
+export type LintRuleDiagnosticQuickFixCommandInput = {
+  ruleId: string;
+  uri: string;
+  message: string;
+  range: WorkspaceRange;
+};
+
 export type CodepolPanels = {
   showArchitectureSummary(input: ArchitectureSummaryPanelViewModel): void;
   showDependencyGraph(input: DependencyGraphPanelViewModel): void;
@@ -79,6 +88,16 @@ export type CodepolCommandHost = {
     value: string;
     namingRules: string[];
   }): Promise<string | undefined>;
+  quickPick<T>(input: {
+    title: string;
+    placeholder?: string;
+    items: Array<{
+      label: string;
+      description?: string;
+      detail?: string;
+      value: T;
+    }>;
+  }): Promise<T | undefined>;
   infoShow(message: string): void | Promise<void>;
   errorShow(message: string): void | Promise<void>;
   openLocation(input: OpenLocationInput): Promise<void>;
@@ -97,6 +116,18 @@ function namingRulesCreate(prepare: WorkspacePrepareRenameResult): string[] {
     rules.push(`Case: ${prepare.namingRules.casePolicy}`);
   }
   return rules;
+}
+
+function lintRuleQuickFixesSort(
+  left: CodepolProtocolQuickFixAction,
+  right: CodepolProtocolQuickFixAction,
+): number {
+  const preferredDelta =
+    Number(Boolean(right.isPreferred)) - Number(Boolean(left.isPreferred));
+  if (preferredDelta !== 0) {
+    return preferredDelta;
+  }
+  return left.title.localeCompare(right.title);
 }
 
 export class CodepolCommandController {
@@ -366,6 +397,48 @@ export class CodepolCommandController {
     });
     this.panels.showLintRuleDetails(model);
     return details;
+  }
+
+  async showLintRuleDiagnosticFixes(
+    input: LintRuleDiagnosticQuickFixCommandInput,
+  ): Promise<CodepolProtocolQuickFixAction | null> {
+    const actions = await this.protocolRequestRun(
+      this.protocol.queryCodeActions({
+        uri: input.uri,
+        range: input.range,
+      }),
+    );
+    if (actions === CodepolCommandController.REQUEST_SUPERSEDED) {
+      return null;
+    }
+
+    const sortedActions = [...actions].sort(lintRuleQuickFixesSort);
+    if (sortedActions.length === 0) {
+      await this.host.infoShow(
+        `No Codepol quick fixes are available for ${input.ruleId} at this diagnostic.`,
+      );
+      return null;
+    }
+
+    const selectedAction =
+      sortedActions.length === 1
+        ? sortedActions[0]
+        : await this.host.quickPick({
+            title: `Quick Fix: ${input.ruleId}`,
+            placeholder: 'Select a Codepol quick fix to apply',
+            items: sortedActions.map((action) => ({
+              label: action.title,
+              description: action.isPreferred ? 'Preferred quick fix' : 'Quick fix',
+              detail: input.message,
+              value: action,
+            })),
+          });
+    if (!selectedAction) {
+      return null;
+    }
+
+    await this.protocol.applyEditPlan(selectedAction.planId);
+    return selectedAction;
   }
 
   async renameCodepolEntity(

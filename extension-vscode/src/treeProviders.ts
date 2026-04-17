@@ -70,6 +70,15 @@ type LintRuleDiagnosticFileItem = vscode.TreeItem & {
   kind: 'lint_rule_diagnostic_file';
   ruleId: string;
   diagnosticGroup: WorkspaceLintRuleDiagnosticGroup;
+  fixSupported: boolean;
+};
+
+type LintRuleDiagnosticItem = vscode.TreeItem & {
+  kind: 'lint_rule_diagnostic';
+  ruleId: string;
+  uri: string;
+  message: string;
+  range: WorkspaceLintRuleDiagnosticGroup['diagnostics'][number]['range'];
 };
 
 export class RenameTargetsTreeProvider
@@ -330,6 +339,10 @@ function lintRuleDiagnosticIconResolve(severity: string): vscode.ThemeIcon {
   }
 }
 
+function lintRuleHasFixProvider(rule: WorkspaceLintRuleSummary): boolean {
+  return rule.fixSurfaceNotes.includes('fix_provider');
+}
+
 export class LintRulesTreeProvider
   implements vscode.TreeDataProvider<vscode.TreeItem>
 {
@@ -403,7 +416,8 @@ export class LintRulesTreeProvider
       | LintRulesGroupItem
       | LintRuleItem
       | LintRuleAnalyzerIssuesItem
-      | LintRuleDiagnosticFileItem;
+      | LintRuleDiagnosticFileItem
+      | LintRuleDiagnosticItem;
     if (item.kind === 'lint_rule_group') {
       return rules
         .filter((rule) => rule.ownership === item.groupKind)
@@ -424,36 +438,48 @@ export class LintRulesTreeProvider
     }
     if (item.kind === 'lint_rule_diagnostic_file') {
       return item.diagnosticGroup.diagnostics.map((diagnostic, index) =>
-        new StaticTreeItem(diagnostic.message, {
-          id: [
-            'codepol.lintRule.diagnostic',
-            item.ruleId,
-            item.diagnosticGroup.uri,
-            diagnostic.range.start.line,
-            diagnostic.range.start.character,
-            index,
-          ].join(':'),
-          description:
-            `${diagnostic.severity} • ` +
-            `${diagnostic.range.start.line + 1}:${diagnostic.range.start.character + 1}`,
-          tooltip: [
-            diagnostic.message,
-            item.diagnosticGroup.workspaceRelativePath,
-            `${diagnostic.severity} • ${diagnostic.range.start.line + 1}:${diagnostic.range.start.character + 1}`,
-          ].join('\n'),
-          iconPath: lintRuleDiagnosticIconResolve(diagnostic.severity),
-          command: {
-            command: CODEPOL_EXTENSION_COMMAND_OPEN_LINT_RULE_LOCATION,
-            title: 'Open Lint Rule Location',
-            arguments: [
-              {
-                uri: item.diagnosticGroup.uri,
-                line: diagnostic.range.start.line,
-                character: diagnostic.range.start.character,
-              },
-            ],
+        Object.assign(
+          new StaticTreeItem(diagnostic.message, {
+            id: [
+              'codepol.lintRule.diagnostic',
+              item.ruleId,
+              item.diagnosticGroup.uri,
+              diagnostic.range.start.line,
+              diagnostic.range.start.character,
+              index,
+            ].join(':'),
+            description:
+              `${diagnostic.severity} • ` +
+              `${diagnostic.range.start.line + 1}:${diagnostic.range.start.character + 1}`,
+            tooltip: [
+              diagnostic.message,
+              item.diagnosticGroup.workspaceRelativePath,
+              `${diagnostic.severity} • ${diagnostic.range.start.line + 1}:${diagnostic.range.start.character + 1}`,
+            ].join('\n'),
+            iconPath: lintRuleDiagnosticIconResolve(diagnostic.severity),
+            contextValue: item.fixSupported
+              ? 'codepol.lintRuleDiagnostic.fixable'
+              : 'codepol.lintRuleDiagnostic',
+            command: {
+              command: CODEPOL_EXTENSION_COMMAND_OPEN_LINT_RULE_LOCATION,
+              title: 'Open Lint Rule Location',
+              arguments: [
+                {
+                  uri: item.diagnosticGroup.uri,
+                  line: diagnostic.range.start.line,
+                  character: diagnostic.range.start.character,
+                },
+              ],
+            },
+          }),
+          {
+            kind: 'lint_rule_diagnostic' as const,
+            ruleId: item.ruleId,
+            uri: item.diagnosticGroup.uri,
+            message: diagnostic.message,
+            range: diagnostic.range,
           },
-        }),
+        ),
       );
     }
 
@@ -711,6 +737,7 @@ export class LintRulesTreeProvider
             kind: 'lint_rule_diagnostic_file' as const,
             ruleId,
             diagnosticGroup: group,
+            fixSupported: lintRuleHasFixProvider(details.rule),
           },
         ),
       ),

@@ -2,10 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import type {
   IndexStatusResult,
   WorkspaceLintRuleDetailsResult,
+  WorkspaceSearchResult,
 } from '@codepol/core';
 import { CodepolCommandController } from '../extension-vscode/src/commands';
+import type { CodepolProtocolQuickFixAction } from '../extension-vscode/src/protocolClient';
 import type { RenameTargetCandidate } from '../extension-vscode/src/discovery';
-import type { WorkspaceSearchResult } from '@codepol/core';
 
 function readinessStatusCreate(
   overrides: Partial<IndexStatusResult> = {},
@@ -41,6 +42,16 @@ function hostCreate(overrides: Partial<{
     value: string;
     namingRules: string[];
   }) => Promise<string | undefined>;
+  quickPick: <T>(input: {
+    title: string;
+    placeholder?: string;
+    items: Array<{
+      label: string;
+      description?: string;
+      detail?: string;
+      value: T;
+    }>;
+  }) => Promise<T | undefined>;
 }> = {}) {
   return {
     activeUriGet: overrides.activeUriGet ?? (() => 'file:///workspace/packages/lib/src/index.ts'),
@@ -61,6 +72,13 @@ function hostCreate(overrides: Partial<{
     renamePrompt:
       overrides.renamePrompt ??
       (async () => undefined),
+    quickPick:
+      overrides.quickPick ??
+      (async <T>(input: {
+        items: Array<{
+          value: T;
+        }>;
+      }) => input.items[0]?.value),
     infoShow: vi.fn(async () => {}),
     errorShow: vi.fn(async () => {}),
     openLocation: vi.fn(async () => {}),
@@ -71,6 +89,7 @@ function protocolCreate() {
   return {
     queryIndexStatus: vi.fn(),
     queryLintRuleDetails: vi.fn(),
+    queryCodeActions: vi.fn(),
     queryArchitectureSummary: vi.fn(),
     queryDependencyGraph: vi.fn(),
     querySemanticSearch: vi.fn(),
@@ -247,6 +266,19 @@ const lintRuleDetailsResult: WorkspaceLintRuleDetailsResult = {
       ],
     },
   ],
+};
+
+const quickFixAction: CodepolProtocolQuickFixAction = {
+  title: 'Remove interface declaration',
+  kind: 'quickfix',
+  isPreferred: true,
+  planId: 'plan-1',
+};
+
+const alternateQuickFixAction: CodepolProtocolQuickFixAction = {
+  title: 'Convert interface to type alias',
+  kind: 'quickfix',
+  planId: 'plan-2',
 };
 
 describe('CodepolCommandController', () => {
@@ -461,6 +493,115 @@ describe('CodepolCommandController', () => {
         ruleId: '@codepol/plugin/no-interface',
         totalDiagnosticCount: 1,
       }),
+    );
+  });
+
+  it('applies a single lint-rule diagnostic quick fix without prompting', async () => {
+    const protocol = protocolCreate();
+    protocol.queryCodeActions.mockResolvedValue([quickFixAction]);
+    const panels = panelsCreate();
+    const host = hostCreate();
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    const result = await controller.showLintRuleDiagnosticFixes({
+      ruleId: '@codepol/plugin/no-interface',
+      uri: 'file:///workspace/packages/lib/src/index.ts',
+      message: 'Interfaces are not allowed.',
+      range: {
+        start: { line: 0, character: 7 },
+        end: { line: 0, character: 16 },
+      },
+    });
+
+    expect(protocol.queryCodeActions).toHaveBeenCalledWith({
+      uri: 'file:///workspace/packages/lib/src/index.ts',
+      range: {
+        start: { line: 0, character: 7 },
+        end: { line: 0, character: 16 },
+      },
+    });
+    expect(protocol.applyEditPlan).toHaveBeenCalledWith('plan-1');
+    expect(result).toEqual(quickFixAction);
+  });
+
+  it('prompts when multiple lint-rule diagnostic quick fixes are available', async () => {
+    const protocol = protocolCreate();
+    protocol.queryCodeActions.mockResolvedValue([
+      alternateQuickFixAction,
+      quickFixAction,
+    ]);
+    const panels = panelsCreate();
+    const quickPick = vi.fn(async <T>(input: {
+      items: Array<{
+        label: string;
+        value: T;
+      }>;
+    }) => {
+      expect(input.items.map((item) => item.label)).toEqual([
+        'Remove interface declaration',
+        'Convert interface to type alias',
+      ]);
+      return input.items[1]?.value;
+    });
+    const host = hostCreate({
+      quickPick,
+    });
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    const result = await controller.showLintRuleDiagnosticFixes({
+      ruleId: '@codepol/plugin/no-interface',
+      uri: 'file:///workspace/packages/lib/src/index.ts',
+      message: 'Interfaces are not allowed.',
+      range: {
+        start: { line: 0, character: 7 },
+        end: { line: 0, character: 16 },
+      },
+    });
+
+    expect(quickPick).toHaveBeenCalledWith({
+      title: 'Quick Fix: @codepol/plugin/no-interface',
+      placeholder: 'Select a Codepol quick fix to apply',
+      items: [
+        {
+          label: 'Remove interface declaration',
+          description: 'Preferred quick fix',
+          detail: 'Interfaces are not allowed.',
+          value: quickFixAction,
+        },
+        {
+          label: 'Convert interface to type alias',
+          description: 'Quick fix',
+          detail: 'Interfaces are not allowed.',
+          value: alternateQuickFixAction,
+        },
+      ],
+    });
+    expect(protocol.applyEditPlan).toHaveBeenCalledWith('plan-2');
+    expect(result).toEqual(alternateQuickFixAction);
+  });
+
+  it('reports when a lint-rule diagnostic has no quick fixes', async () => {
+    const protocol = protocolCreate();
+    protocol.queryCodeActions.mockResolvedValue([]);
+    const panels = panelsCreate();
+    const host = hostCreate();
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    await expect(
+      controller.showLintRuleDiagnosticFixes({
+        ruleId: '@codepol/plugin/no-interface',
+        uri: 'file:///workspace/packages/lib/src/index.ts',
+        message: 'Interfaces are not allowed.',
+        range: {
+          start: { line: 0, character: 7 },
+          end: { line: 0, character: 16 },
+        },
+      }),
+    ).resolves.toBeNull();
+
+    expect(protocol.applyEditPlan).not.toHaveBeenCalled();
+    expect(host.infoShow).toHaveBeenCalledWith(
+      'No Codepol quick fixes are available for @codepol/plugin/no-interface at this diagnostic.',
     );
   });
 

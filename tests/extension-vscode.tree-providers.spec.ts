@@ -140,7 +140,7 @@ const lintRuleDetailsResult: WorkspaceLintRuleDetailsResult = {
     ...lintRuleSummary,
     recentNativeDiagnosticCount: 2,
     recentWrappedDiagnosticCount: 10,
-    fixSurfaceNotes: ['tree_check', 'tree_only_code_actions'],
+    fixSurfaceNotes: ['tree_check', 'tree_only_code_actions', 'fix_provider'],
     analyzerIssues: ['Native analysis lagged behind wrapped diagnostics.'],
   },
   totalDiagnosticCount: 12,
@@ -312,6 +312,7 @@ describe('extension-vscode tree providers', () => {
       {
         label: 'Unused symbol "value".',
         description: 'error • 3:5',
+        contextValue: 'codepol.lintRuleDiagnostic.fixable',
         command: {
           command: CODEPOL_EXTENSION_COMMAND_OPEN_LINT_RULE_LOCATION,
           arguments: [
@@ -324,6 +325,31 @@ describe('extension-vscode tree providers', () => {
         },
       },
     ]);
+  });
+
+  it('does not advertise quick fixes on diagnostic items when the rule has no fix provider', async () => {
+    const provider = new LintRulesTreeProvider(
+      async () => [lintRuleSummary],
+      async () => ({
+        ...lintRuleDetailsResult,
+        rule: {
+          ...lintRuleDetailsResult.rule,
+          fixSurfaceNotes: ['tree_check'],
+        },
+      }),
+    );
+
+    const groups = await provider.getChildren();
+    const rule = (await provider.getChildren(groups[0]!))[0]!;
+    await provider.getChildren(rule);
+    await microtasksFlush();
+    const children = await provider.getChildren(rule);
+    const fileGroup = children[5]!;
+    const diagnostics = await provider.getChildren(fileGroup);
+
+    expect(diagnostics[0]).toMatchObject({
+      contextValue: 'codepol.lintRuleDiagnostic',
+    });
   });
 
   it('renders passive placeholders when lint rule details are unavailable or superseded', async () => {
