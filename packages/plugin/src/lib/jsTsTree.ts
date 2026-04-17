@@ -1,4 +1,4 @@
-import { isErr, parserGetForFile } from '@codepol/core';
+import { isErr, parserGetForFile, parserParseDebug } from '@codepol/core';
 import type { SyntaxNode, Tree } from 'web-tree-sitter';
 
 export type ByteSpan = {
@@ -35,7 +35,10 @@ export function parseJsTsSource(
     throw new Error(`Parser not available for "${filePath}": ${parserResult.Err}`);
   }
 
-  const tree = parserResult.Ok.parse(source);
+  const tree = parserParseDebug(parserResult.Ok, source, {
+    filePath,
+    callSite: 'jsTsTree.parseJsTsSource',
+  });
   return {
     tree,
     root: tree.rootNode,

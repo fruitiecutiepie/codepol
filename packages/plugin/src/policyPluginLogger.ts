@@ -2,6 +2,7 @@ import type { SyntaxNode } from 'web-tree-sitter';
 import type { LoggerConfig, PolicyCheckContext, PolicyRule, PolicyViolation, TreeCheckProvider } from '@codepol/core';
 import {
   parserGetForFile,
+  parserParseDebug,
   Result,
   Ok,
   Err,
@@ -183,7 +184,11 @@ function loggerRuleCheck(
     return Err(parserResult.Err);
   }
   const parser = parserResult.Ok;
-  const tree = parser.parse(context.source);
+  const tree = parserParseDebug(parser, context.source, {
+    filePath: context.filePath,
+    ruleId: rule.ruleId,
+    callSite: 'policyPluginLogger.loggerRuleCheck',
+  });
   const violations: PolicyViolation[] = [];
   
   const args = context.ruleArgs as { logger?: LoggerConfig } | undefined;

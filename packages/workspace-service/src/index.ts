@@ -135,6 +135,15 @@ function workspaceRequestCancelledErrorCreate(): Error {
   return new Error('Request cancelled');
 }
 
+function treeCheckDebugIsEnabled(): boolean {
+  const raw = process.env.CODEPOL_DEBUG_PARSE;
+  if (!raw) {
+    return false;
+  }
+  const trimmed = raw.trim().toLowerCase();
+  return trimmed !== '' && trimmed !== '0' && trimmed !== 'false';
+}
+
 function workspaceAbortSignalThrowIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw workspaceRequestCancelledErrorCreate();
@@ -4351,6 +4360,8 @@ function workspaceTreeAnalyzerRun(
   const violations: PolicyViolation[] = [];
   const issues: string[] = [];
   const startedAt = Date.now();
+  const treeCheckDebugEnabled = treeCheckDebugIsEnabled();
+  let firstTreeCheckFailure: { ruleId: string; filePath: string; error: string } | undefined;
 
   for (const match of treeMatches) {
     for (const filePath of match.files) {
@@ -4369,9 +4380,33 @@ function workspaceTreeAnalyzerRun(
         if (input.strictErrors) {
           throw new Error(result.Err);
         }
+        const relativePath = workspaceRelativePathCreate(input.rootPath, filePath);
+        if (!firstTreeCheckFailure) {
+          firstTreeCheckFailure = {
+            ruleId: match.rule.ruleId,
+            filePath: relativePath,
+            error: result.Err,
+          };
+          if (treeCheckDebugEnabled) {
+            console.error(
+              '[codepol-parse-debug] workspace analyzer: FIRST tree-check failure',
+              JSON.stringify(firstTreeCheckFailure),
+            );
+          }
+        } else if (treeCheckDebugEnabled) {
+          console.error(
+            '[codepol-parse-debug] workspace analyzer: subsequent tree-check failure',
+            JSON.stringify({
+              ruleId: match.rule.ruleId,
+              filePath: relativePath,
+              error: result.Err,
+              firstFailure: firstTreeCheckFailure,
+            }),
+          );
+        }
         const issue =
           `Tree check failed for ${match.rule.ruleId} in ` +
-          `${workspaceRelativePathCreate(input.rootPath, filePath)}: ${result.Err}`;
+          `${relativePath}: ${result.Err}`;
         console.warn(issue);
         issues.push(issue);
         continue;

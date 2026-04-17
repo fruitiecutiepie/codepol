@@ -4,7 +4,7 @@
  */
 
 import type { SyntaxNode } from 'web-tree-sitter';
-import { isErr, parserGetForFile } from '@codepol/core';
+import { isErr, parserGetForFile, parserParseDebug } from '@codepol/core';
 import { vultureFindingsGet } from './vultureRunner';
 import type { VultureFinding, VultureProviderConfig } from './vultureTypes';
 import { vultureFindingMatchesFile } from './vulturePathMatch';
@@ -267,7 +267,10 @@ export function pythonDeadCodeFixApply(
   if (isErr(parserResult)) {
     return source;
   }
-  const tree = parserResult.Ok.parse(source);
+  const tree = parserParseDebug(parserResult.Ok, source, {
+    filePath,
+    callSite: 'pythonDeadCodeFix',
+  });
   const ranges: { start: number; end: number }[] = [];
   for (const f of findings) {
     const r = computeRemovalRange(source, tree.rootNode, f);

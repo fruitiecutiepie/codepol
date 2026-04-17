@@ -419,6 +419,7 @@ export {
 
 // Tree-sitter checking
 export { parserInit, parserGetForFile } from './parser/parserInit';
+export { parserParseDebug } from './parser/parserParseDebug';
 export {
   policyViolationsGetForFile,
   policyViolationsGetFromDir,

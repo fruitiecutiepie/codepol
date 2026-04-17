@@ -3,7 +3,7 @@ import type {
   PolicyCheckContext,
   PolicyViolation,
 } from '@codepol/core';
-import { parserGetForFile, isErr } from '@codepol/core';
+import { parserGetForFile, isErr, parserParseDebug } from '@codepol/core';
 import type { SyntaxNode } from 'web-tree-sitter';
 import { parseJsTsSource } from './lib/jsTsTree';
 import { identifierSplitByCasing } from './lib/identifierSplitByCasing';
@@ -98,7 +98,10 @@ export function functionMatchesPyGet(source: string): FunctionMatch[] {
   }
 
   const parser = parserResult.Ok;
-  const tree = parser.parse(source);
+  const tree = parserParseDebug(parser, source, {
+    filePath: 'temp.py',
+    callSite: 'noVerbFunctionNameCheck.functionMatchesPyGet',
+  });
   const matches: FunctionMatch[] = [];
 
   functionDefinitionsVisit(tree.rootNode, (fnNode) => {

@@ -9,6 +9,7 @@
 
 import Parser from 'web-tree-sitter';
 import { createHash } from 'node:crypto';
+import { parserParseDebug } from '../../parser/parserParseDebug';
 import type {
   SymbolId,
   ScopeId,
@@ -1879,7 +1880,10 @@ function indexFileWithTreeSitter(
   // are character offsets into this string, NOT UTF-8 byte offsets. All extraction
   // functions receive the string so sliceText can use string.slice() correctly.
   const sourceText = Buffer.from(bytes).toString('utf8');
-  const tree = parser.parse(sourceText);
+  const tree = parserParseDebug(parser, sourceText, {
+    filePath: file,
+    callSite: 'adapterCore.indexFileWithTreeSitter',
+  });
   const diags: AdapterDiagnostic[] = [];
 
   // Build scopes first
