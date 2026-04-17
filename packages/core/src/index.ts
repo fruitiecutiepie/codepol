@@ -454,6 +454,12 @@ export {
   violationsToLintDiagnostics,
 } from './adapter/treeCheckAdapter';
 
+// Workspace edit helpers (shared with workspace-service and policy plugins)
+export {
+  fileWorkspaceEditsNormalize,
+  fileWorkspaceEditsApply,
+} from './policy/policyWorkspaceEdits';
+
 // Result
 export {
   Result,

@@ -287,6 +287,12 @@ export type FixProviderContext = {
   files: string[];
   /** Rule targets resolved from the policy */
   ruleTargets?: PolicyRuleTargetContext[];
+  /**
+   * Optional project-wide semantic index for cross-file analysis.
+   * Only available when at least one matched rule declares `requiresProjectIndex: true`.
+   * Providers should check for existence before using.
+   */
+  projectIndex?: ProjectIndex;
 };
 
 /**

@@ -1635,6 +1635,7 @@ async function fixProvidersApply(
     cwd: string;
     files: string[];
     ruleTargets: PolicyRuleTargetContext[];
+    projectIndex?: ProjectIndex;
   },
 ): Promise<void> {
   for (const provider of providers) {
@@ -4947,17 +4948,24 @@ async function workspaceAnalysisRun(
   });
 
   workspaceAbortSignalThrowIfAborted(options.signal);
+  let projectIndex: ProjectIndex | undefined;
+
   if (options.fix && fixProviders.length > 0) {
+    if (workspaceIndexRequired) {
+      projectIndex = workspaceIndexGetOrBuild(workspace, state, files);
+    }
     await fixProvidersApply(fixProviders, {
       policy,
       configPath: workspace.configPath,
       cwd: workspace.rootPath,
       files,
       ruleTargets,
+      projectIndex,
     });
+    state.indexState = undefined;
+    projectIndex = undefined;
   }
 
-  let projectIndex: ProjectIndex | undefined;
   if (workspaceIndexRequired) {
     workspaceAbortSignalThrowIfAborted(options.signal);
     projectIndex = workspaceIndexGetOrBuild(workspace, state, files);

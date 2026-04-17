@@ -1,9 +1,24 @@
-import type { CodepolPluginRule } from '@codepol/core';
+import type {
+  CodepolPluginRule,
+  FixProvider,
+  FixProviderContext,
+} from '@codepol/core';
 import { eslintProviderCreate, pluginRuleNew, treeCheckProviderNew } from '@codepol/core';
 import { eslintAdapter } from '@codepol/plugin-eslint';
 import { noUnusedVarsCheck } from './noUnusedVarsCheck';
+import { policyFixApplyFromCheck } from './lib/checkBasedFixProvider';
 
 const noUnusedVarsLanguages = ['typescript', 'tsx', 'javascript', 'jsx'] as const;
+
+const noUnusedVarsFixProvider: FixProvider = {
+  apply: (context: FixProviderContext) => {
+    policyFixApplyFromCheck(context, {
+      ruleIdSuffix: 'no-unused-vars',
+      supportedLanguages: noUnusedVarsLanguages,
+      check: noUnusedVarsCheck,
+    });
+  },
+};
 
 const noUnusedVarsRuleNativeBase: CodepolPluginRule = pluginRuleNew({
   id: 'no-unused-vars',
@@ -13,6 +28,7 @@ const noUnusedVarsRuleNativeBase: CodepolPluginRule = pluginRuleNew({
       check: noUnusedVarsCheck,
     }),
     requiresProjectIndex: true,
+    fixProvider: noUnusedVarsFixProvider,
   },
 });
 
