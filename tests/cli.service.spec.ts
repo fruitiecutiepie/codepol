@@ -486,15 +486,15 @@ demo();
     expect(result.violations[0]?.ruleId).toBe('@codepol/plugin/no-interface');
   });
 
-  it('falls back to in-process policy checks when daemon install ids differ', async () => {
+  it('relaunches the daemon when install ids differ instead of falling back in-process', async () => {
     const runtimeDir = tempWorkspaceCreate('codepol-cli-daemon-runtime-');
     createdDirs.push(runtimeDir);
 
-    const { descriptor } = workspaceDaemonDescriptorCreate({
+    let activeDescriptor = workspaceDaemonDescriptorCreate({
       runtimeDir,
       installId: 'stable',
-    });
-    workspaceDaemonDescriptorWrite(runtimeDir, descriptor);
+    }).descriptor;
+    workspaceDaemonDescriptorWrite(runtimeDir, activeDescriptor);
 
     const workspaceRoot = tempWorkspaceCreate('codepol-cli-daemon-workspace-');
     createdDirs.push(workspaceRoot);
@@ -515,8 +515,32 @@ demo();
       'utf8',
     );
 
+    const expectedResult: WorkspacePolicyCheckResult = {
+      policy: {
+        exclude: [],
+        plugins: [],
+        targets: {},
+        rules: [],
+      } as WorkspacePolicyCheckResult['policy'],
+      files: ['src/app.ts'],
+      violations: [
+        {
+          ruleId: '@codepol/plugin/no-interface',
+          severity: 'error',
+          message: 'interfaces are not allowed',
+          file: 'src/app.ts',
+          line: 1,
+          column: 1,
+        } as WorkspacePolicyCheckResult['violations'][number],
+      ],
+      treeViolations: [],
+      workspaceDiagnostics: [],
+      eslintOutput: '',
+      eslintHasErrors: false,
+    };
+
     let startDaemonCalls = 0;
-    const resolved: Array<{ mode: string; error?: string }> = [];
+    const resolved: Array<{ mode: string; launched?: boolean; error?: string }> = [];
     const result = await policyCheck({
       configPath: path.join(workspaceRoot, 'codepol.toml'),
       fix: false,
@@ -526,25 +550,50 @@ demo();
         CODEPOL_DAEMON_RUNTIME_DIR: runtimeDir,
         CODEPOL_INSTALL_ID: 'insiders',
       },
-      connect: daemonConnectCreate({
-        descriptor,
-      }),
+      connect: async (descriptor): Promise<WorkspaceDaemonRequestClient> => {
+        if (descriptor.sessionNonce !== activeDescriptor.sessionNonce) {
+          throw new Error('daemon unavailable');
+        }
+        const session = new WorkspaceDaemonSession({
+          descriptor: activeDescriptor,
+          policyCheck: async () => expectedResult,
+        });
+        return {
+          async request<TResponse extends Record<string, unknown>>(
+            message: Parameters<WorkspaceDaemonRequestClient['request']>[0],
+          ): Promise<TResponse> {
+            const response = await session.handleMessage(message);
+            if (response.type === 'error') {
+              throw new Error(response.message);
+            }
+            return response as unknown as TResponse;
+          },
+          async close(): Promise<void> {},
+        };
+      },
       startDaemon: async () => {
         startDaemonCalls += 1;
+        activeDescriptor = workspaceDaemonDescriptorCreate({
+          runtimeDir,
+          installId: 'insiders',
+        }).descriptor;
+        workspaceDaemonDescriptorWrite(runtimeDir, activeDescriptor);
       },
       onResolved: (info) => {
         resolved.push({
           mode: info.mode,
+          launched: 'launched' in info ? info.launched : undefined,
           error: 'error' in info ? info.error.message : undefined,
         });
       },
     });
 
-    expect(startDaemonCalls).toBe(0);
+    expect(startDaemonCalls).toBe(1);
     expect(resolved).toEqual([
       {
-        mode: 'in_process_fallback',
-        error: 'Daemon handshake failed: unexpected_install_id',
+        mode: 'daemon',
+        launched: true,
+        error: undefined,
       },
     ]);
     expect(result.violations).toHaveLength(1);

@@ -546,6 +546,9 @@ describe('CodepolLspServer', () => {
       'codepol.applyEditPlan',
       'codepol.goToSemanticDefinition',
       'codepol.showArchitectureLinks',
+      'codepol.diagnostics.configure',
+      'codepol.diagnostics.escalate',
+      'codepol.diagnostics.revokeEscalation',
     ]);
     expect(
       messages.find((message) => message.id === 1 && 'result' in message)?.result.capabilities

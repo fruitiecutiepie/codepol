@@ -64,9 +64,11 @@ const diagnostics = files
   .filter(() => true);
 
 process.stdout.write(JSON.stringify(diagnostics));
-// Mock always exits 0 to avoid exercising async ruff runner exit-code paths
-// unrelated to args plumbing validation.
-process.exit(0);
+// Mirror real ruff: exit 1 when violations are reported, 0 otherwise.
+// Regression test for execFileAsyncErrorNormalize in ruffRunner: the async
+// execFile callback surfaces the exit code on error.code, not error.status,
+// so the runner must normalize the two before its downstream checks.
+process.exit(diagnostics.length > 0 ? 1 : 0);
 `,
     'utf8',
   );

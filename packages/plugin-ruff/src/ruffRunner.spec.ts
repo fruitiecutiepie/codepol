@@ -135,6 +135,89 @@ describe('ruffCheck', () => {
       code: 'ABORT_ERR',
     });
   });
+
+  it('ruffCheckAsync parses diagnostics when Ruff exits with code 1 via the async `.code` field', async () => {
+    // Node's `execFile` callback error carries the exit code on `.code`
+    // (whereas `execFileSync` carries it on `.status`). The runner must
+    // recognise both so real ruff's "found violations" exit isn't dropped.
+    const error = Object.assign(new Error('ruff found violations'), {
+      code: 1,
+      stdout: JSON.stringify([
+        {
+          code: 'F401',
+          filename: '/workspace/src/app.py',
+          message: '`os` imported but unused',
+          location: { row: 1, column: 1 },
+          end_location: { row: 1, column: 3 },
+        },
+      ]),
+      stderr: '',
+    });
+
+    mockExecFile.mockImplementationOnce((_file, _args, _options, callback) => {
+      callback?.(error as unknown as NodeJS.ErrnoException, error.stdout, error.stderr);
+      return {} as never;
+    });
+
+    const result = await ruffCheckAsync(['/workspace/src/app.py'], {
+      ruffBin: '/tmp/ruff',
+      select: ['F401'],
+    });
+
+    expect(isOk(result)).toBe(true);
+    if (isOk(result)) {
+      expect(result.Ok).toEqual([
+        expect.objectContaining({
+          ruleId: 'F401',
+          filePath: '/workspace/src/app.py',
+        }),
+      ]);
+    }
+  });
+
+  it('ruffCheckAsync reports configuration errors when Ruff exits with code 2 via the async `.code` field', async () => {
+    const error = Object.assign(new Error('ruff usage error'), {
+      code: 2,
+      stdout: '',
+      stderr: 'error: unrecognized arguments: --bogus',
+    });
+
+    mockExecFile.mockImplementationOnce((_file, _args, _options, callback) => {
+      callback?.(error as unknown as NodeJS.ErrnoException, error.stdout, error.stderr);
+      return {} as never;
+    });
+
+    const result = await ruffCheckAsync(['/workspace/src/app.py']);
+
+    expect(isErr(result)).toBe(true);
+    if (isErr(result)) {
+      expect(result.Err).toContain('ruff configuration or usage error');
+      expect(result.Err).toContain('--bogus');
+    }
+  });
+
+  it('ruffCheckAsync leaves non-numeric `.code` (e.g. ENOENT) on the "failed to execute" path', async () => {
+    const error = Object.assign(new Error('spawn /tmp/missing ENOENT'), {
+      code: 'ENOENT',
+      stdout: '',
+      stderr: '',
+    });
+
+    mockExecFile.mockImplementationOnce((_file, _args, _options, callback) => {
+      callback?.(error as unknown as NodeJS.ErrnoException, error.stdout, error.stderr);
+      return {} as never;
+    });
+
+    const result = await ruffCheckAsync(['/workspace/src/app.py'], {
+      ruffBin: '/tmp/missing',
+    });
+
+    expect(isErr(result)).toBe(true);
+    if (isErr(result)) {
+      expect(result.Err).toContain('Failed to execute ruff');
+      expect(result.Err).toContain('ENOENT');
+    }
+  });
 });
 
 describe('ruffFix', () => {
@@ -206,5 +289,47 @@ describe('ruffFix', () => {
       name: 'AbortError',
       code: 'ABORT_ERR',
     });
+  });
+
+  it('ruffFixAsync treats exit code 1 via the async `.code` field as a non-fatal fix run', async () => {
+    const error = Object.assign(new Error('remaining diagnostics after fix'), {
+      code: 1,
+      stdout: '',
+      stderr: '',
+    });
+
+    mockExecFile.mockImplementationOnce((_file, _args, _options, callback) => {
+      callback?.(error as unknown as NodeJS.ErrnoException, error.stdout, error.stderr);
+      return {} as never;
+    });
+
+    const result = await ruffFixAsync(['/workspace/src/app.py'], {
+      ruffBin: '/tmp/ruff',
+    });
+
+    expect(isOk(result)).toBe(true);
+    if (isOk(result)) {
+      expect(result.Ok).toBe(true);
+    }
+  });
+
+  it('ruffFixAsync reports configuration errors when code 2 arrives via the async `.code` field', async () => {
+    const error = Object.assign(new Error('ruff usage error'), {
+      code: 2,
+      stdout: '',
+      stderr: 'error: unknown rule code',
+    });
+
+    mockExecFile.mockImplementationOnce((_file, _args, _options, callback) => {
+      callback?.(error as unknown as NodeJS.ErrnoException, error.stdout, error.stderr);
+      return {} as never;
+    });
+
+    const result = await ruffFixAsync(['/workspace/src/app.py']);
+
+    expect(isErr(result)).toBe(true);
+    if (isErr(result)) {
+      expect(result.Err).toContain('ruff configuration or usage error');
+    }
   });
 });

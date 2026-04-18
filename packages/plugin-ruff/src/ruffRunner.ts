@@ -40,6 +40,27 @@ function execFileAbortedIs(error: unknown): boolean {
       (error as ExecFileError).code === 'ABORT_ERR');
 }
 
+/**
+ * Normalizes a Node `execFile` (async) error so its shape matches `execFileSync`'s.
+ *
+ * Node's `execFile` callback sets the exit code on `error.code` (as a number).
+ * Node's `execFileSync` throws an error with the exit code on `error.status`.
+ * All downstream checks in this module read `.status`, so we copy numeric
+ * `.code` values onto `.status` here. Non-numeric `.code` (e.g. 'ENOENT',
+ * 'ABORT_ERR') is preserved as-is so the spawn-failure and abort paths still
+ * behave correctly.
+ */
+function execFileAsyncErrorNormalize(error: ExecFileException): ExecFileError {
+  const execErr = error as ExecFileError;
+  if (execErr.status === undefined) {
+    const codeValue = (error as { code?: unknown }).code;
+    if (typeof codeValue === 'number') {
+      execErr.status = codeValue;
+    }
+  }
+  return execErr;
+}
+
 function execFileTextRun(
   file: string,
   args: string[],
@@ -63,7 +84,7 @@ function execFileTextRun(
           stderr: string,
         ) => {
           if (error) {
-            const execErr = error as ExecFileError;
+            const execErr = execFileAsyncErrorNormalize(error);
             execErr.stdout = stdout;
             execErr.stderr = stderr;
             reject(execErr);

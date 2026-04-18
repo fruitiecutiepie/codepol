@@ -255,4 +255,74 @@ describe('biomeFix', () => {
       code: 'ABORT_ERR',
     });
   });
+
+  it('biomeFixAsync treats exit code 1 via the async `.code` field as a non-fatal fix run', async () => {
+    // Node's execFile callback error carries the exit code on `.code`
+    // (whereas execFileSync carries it on `.status`). The runner must
+    // recognise both so real biome's "remaining diagnostics after --write"
+    // exit isn't mistaken for a spawn failure.
+    const error = Object.assign(new Error('remaining diagnostics after fix'), {
+      code: 1,
+      stdout: '',
+      stderr: '',
+    });
+
+    mockExecFile.mockImplementationOnce((_file, _args, _options, callback) => {
+      callback?.(error as unknown as NodeJS.ErrnoException, error.stdout, error.stderr);
+      return {} as never;
+    });
+
+    const result = await biomeFixAsync(['/workspace/src/app.ts'], {
+      biomeBin: '/tmp/biome',
+    });
+
+    expect(isOk(result)).toBe(true);
+    if (isOk(result)) {
+      expect(result.Ok).toBe(true);
+    }
+  });
+
+  it('biomeFixAsync reports execution failures when a non-1 exit code arrives via the async `.code` field', async () => {
+    const error = Object.assign(new Error('biome usage error'), {
+      code: 2,
+      stdout: '',
+      stderr: 'unknown subcommand',
+    });
+
+    mockExecFile.mockImplementationOnce((_file, _args, _options, callback) => {
+      callback?.(error as unknown as NodeJS.ErrnoException, error.stdout, error.stderr);
+      return {} as never;
+    });
+
+    const result = await biomeFixAsync(['/workspace/src/app.ts']);
+
+    expect(isErr(result)).toBe(true);
+    if (isErr(result)) {
+      expect(result.Err).toContain('Failed to execute biome --write');
+      expect(result.Err).toContain('unknown subcommand');
+    }
+  });
+
+  it('biomeFixAsync leaves non-numeric `.code` (e.g. ENOENT) on the "failed to execute" path', async () => {
+    const error = Object.assign(new Error('spawn /tmp/missing ENOENT'), {
+      code: 'ENOENT',
+      stdout: '',
+      stderr: '',
+    });
+
+    mockExecFile.mockImplementationOnce((_file, _args, _options, callback) => {
+      callback?.(error as unknown as NodeJS.ErrnoException, error.stdout, error.stderr);
+      return {} as never;
+    });
+
+    const result = await biomeFixAsync(['/workspace/src/app.ts'], {
+      biomeBin: '/tmp/missing',
+    });
+
+    expect(isErr(result)).toBe(true);
+    if (isErr(result)) {
+      expect(result.Err).toContain('Failed to execute biome --write');
+      expect(result.Err).toContain('ENOENT');
+    }
+  });
 });
