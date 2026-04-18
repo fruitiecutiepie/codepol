@@ -313,4 +313,100 @@ describe('CLI graph subcommands', () => {
       .sort();
     expect(nodeUris).toEqual([fileUris.entry, fileUris.leaf, fileUris.mid].sort());
   });
+
+  it('graph snapshot writes a sidecar file under .codepol/graph-snapshots/', async () => {
+    const { projectDir } = linearProjectCreate('codepol-e2e-graph-snapshot-');
+    createdDirs.push(projectDir);
+
+    const result = await runCli(['graph', 'snapshot', '--label', 'base'], projectDir);
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout);
+    expect(payload.label).toBe('base');
+    expect(payload.fileLabel).toBe('base');
+    expect(typeof payload.workspaceRootId).toBe('string');
+    expect(payload.nodeCount).toBeGreaterThan(0);
+
+    const snapshotPath = path.join(
+      projectDir,
+      '.codepol',
+      'graph-snapshots',
+      'base.json',
+    );
+    expect(fs.existsSync(snapshotPath)).toBe(true);
+    const onDisk = JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
+    expect(onDisk.schemaVersion).toBe(1);
+    expect(onDisk.label).toBe('base');
+  });
+
+  it('graph diff emits an empty diff when current matches the labeled baseline', async () => {
+    const { projectDir } = linearProjectCreate('codepol-e2e-graph-diff-empty-');
+    createdDirs.push(projectDir);
+
+    const snapshotResult = await runCli(['graph', 'snapshot', '--label', 'base'], projectDir);
+    expect(snapshotResult.exitCode).toBe(0);
+
+    const diffResult = await runCli(['graph', 'diff', 'base'], projectDir);
+    expect(diffResult.exitCode).toBe(0);
+    const payload = JSON.parse(diffResult.stdout);
+    expect(payload.baselineLabel).toBe('base');
+    expect(payload.addedNodes).toEqual([]);
+    expect(payload.removedNodes).toEqual([]);
+    expect(payload.addedEdges).toEqual([]);
+    expect(payload.removedEdges).toEqual([]);
+    expect(payload.newCycles).toEqual([]);
+  });
+
+  it('graph diff --fail-on-new-cycle exits 1 when the diff introduces a cycle', async () => {
+    // Capture a baseline of a clean linear graph, then mutate the
+    // workspace to introduce a cycle and re-run the diff.
+    const { projectDir, fileUris } = linearProjectCreate('codepol-e2e-graph-diff-cycle-');
+    createdDirs.push(projectDir);
+
+    const snapshotResult = await runCli(['graph', 'snapshot', '--label', 'base'], projectDir);
+    expect(snapshotResult.exitCode).toBe(0);
+
+    // Close the cycle: leaf imports entry.
+    const leafPath = path.join(projectDir, 'src', 'leaf.ts');
+    fs.writeFileSync(
+      leafPath,
+      `import { entry } from './entry';\nexport const leaf = Number(entry) + 1;\n`,
+      'utf8',
+    );
+
+    const diffResult = await runCli(
+      ['graph', 'diff', 'base', '--fail-on-new-cycle'],
+      projectDir,
+    );
+    expect(diffResult.exitCode).toBe(1);
+    const payload = JSON.parse(diffResult.stdout);
+    expect(payload.newCycles.length).toBeGreaterThanOrEqual(1);
+    const cycleSet = new Set<string>(payload.newCycles[0] as string[]);
+    expect(cycleSet.has(fileUris.entry)).toBe(true);
+    expect(cycleSet.has(fileUris.leaf)).toBe(true);
+  });
+
+  it('graph diff --baseline-file accepts a raw graph export payload', async () => {
+    const { projectDir, fileUris } = linearProjectCreate('codepol-e2e-graph-diff-file-');
+    createdDirs.push(projectDir);
+
+    const exportResult = await runCli(['graph', 'export'], projectDir);
+    expect(exportResult.exitCode).toBe(0);
+    const baselineFile = path.join(projectDir, 'baseline.json');
+    fs.writeFileSync(baselineFile, exportResult.stdout, 'utf8');
+
+    // Add a new file post-baseline.
+    const newFilePath = path.join(projectDir, 'src', 'extra.ts');
+    fs.writeFileSync(newFilePath, `export const extra = 42;\n`, 'utf8');
+
+    const diffResult = await runCli(
+      ['graph', 'diff', '--baseline-file', baselineFile],
+      projectDir,
+    );
+    expect(diffResult.exitCode).toBe(0);
+    const payload = JSON.parse(diffResult.stdout);
+    const addedUris = (payload.addedNodes as { uri: string }[]).map((node) => node.uri);
+    expect(addedUris).toContain(pathToFileURL(newFilePath).href);
+    // Existing entry/orphan/etc. must not appear as added.
+    expect(addedUris).not.toContain(fileUris.entry);
+  });
 });

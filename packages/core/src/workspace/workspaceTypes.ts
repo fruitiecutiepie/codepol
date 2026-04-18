@@ -589,6 +589,57 @@ export type WorkspaceDeadModulesResult = {
   unreachable: string[];
 };
 
+/**
+ * Diff between two captured workspace dependency graphs. Used by
+ * `queryDependencyDiff` to power the panel's diff mode and the CI
+ * `codepol graph diff` flow.
+ *
+ * All arrays are deterministically sorted so two consecutive runs with
+ * identical inputs produce byte-identical JSON.
+ *
+ * - `addedNodes` / `removedNodes` sorted by `uri`
+ * - `addedEdges` / `removedEdges` sorted by `(fromUri, toUri)`
+ * - `newCycles` / `removedCycles` each cycle sorted by URI internally;
+ *   the outer array sorted by first member
+ */
+export type WorkspaceDependencyDiffNode = {
+  uri: string;
+  workspaceRelativePath: string;
+};
+
+export type WorkspaceDependencyDiffEdge = {
+  fromUri: string;
+  toUri: string;
+};
+
+export type WorkspaceDependencyDiffResult = {
+  /** Workspace identifier of the comparison source (the "current" graph). */
+  workspaceId: string;
+  /**
+   * Optional baseline label echoed back from the snapshot store. Absent
+   * when the baseline came from an inline payload rather than a labeled
+   * snapshot.
+   */
+  baselineLabel?: string;
+  /**
+   * Generation of the live index when the current graph was sampled.
+   * Mirrors `analysisGeneration` on `IndexStatusResult`.
+   */
+  currentAnalysisGeneration: number;
+  /**
+   * Generation captured into the baseline snapshot when it was written.
+   * Absent when the baseline was produced by an external tool (e.g. a
+   * raw `graph export` payload) and never carried a generation.
+   */
+  baselineAnalysisGeneration?: number;
+  addedNodes: WorkspaceDependencyDiffNode[];
+  removedNodes: WorkspaceDependencyDiffNode[];
+  addedEdges: WorkspaceDependencyDiffEdge[];
+  removedEdges: WorkspaceDependencyDiffEdge[];
+  newCycles: string[][];
+  removedCycles: string[][];
+};
+
 export type WorkspaceArchitectureSummaryHotspot = {
   uri: string;
   workspaceRelativePath: string;

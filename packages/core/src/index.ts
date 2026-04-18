@@ -140,6 +140,9 @@ export type {
   WorkspaceImpactRadiusDirection,
   WorkspaceDependencyPathResult,
   WorkspaceDeadModulesResult,
+  WorkspaceDependencyDiffNode,
+  WorkspaceDependencyDiffEdge,
+  WorkspaceDependencyDiffResult,
   WorkspaceArchitectureSummaryHotspot,
   WorkspaceArchitectureSummaryResult,
   WorkspaceApplyFailureReason,
@@ -682,6 +685,14 @@ export {
   moduleDependencyPathCompute,
   moduleDeadModulesCompute,
 } from './index/moduleGraphQueries';
+export type {
+  GraphSnapshot,
+  GraphSnapshotNode,
+  GraphSnapshotEdge,
+  ModuleDependencyDiffInput,
+  ModuleDependencyDiffResult,
+} from './index/moduleGraphDiff';
+export { moduleDependencyDiffCompute } from './index/moduleGraphDiff';
 
 // Index builder
 export type { IndexBuildOptions, IndexBuildResult } from './index/indexBuilder';

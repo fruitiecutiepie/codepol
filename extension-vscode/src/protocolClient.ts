@@ -20,6 +20,7 @@ import type {
   IndexStatusResult,
   WorkspaceArchitectureSummaryResult,
   WorkspaceDeadModulesResult,
+  WorkspaceDependencyDiffResult,
   WorkspaceDependencyGraphResult,
   WorkspaceDependencyPathResult,
   WorkspaceImpactRadiusDirection,
@@ -41,6 +42,7 @@ import {
   CODEPOL_LSP_COMMAND_REVOKE_DIAGNOSTICS_ESCALATION,
   CODEPOL_LSP_REQUEST_ARCHITECTURE_SUMMARY,
   CODEPOL_LSP_REQUEST_DEAD_MODULES,
+  CODEPOL_LSP_REQUEST_DEPENDENCY_DIFF,
   CODEPOL_LSP_REQUEST_DEPENDENCY_GRAPH,
   CODEPOL_LSP_REQUEST_DEPENDENCY_PATH,
   CODEPOL_LSP_REQUEST_DIAGNOSTICS_CONFIG,
@@ -157,6 +159,10 @@ export type CodepolProtocolClient = {
   queryDeadModules(input: {
     entryPointUris?: string[];
   }): Promise<WorkspaceDeadModulesResult | null>;
+  queryDependencyDiff(input: {
+    baselineLabel?: string;
+    baselineGraph?: WorkspaceDependencyGraphResult;
+  }): Promise<WorkspaceDependencyDiffResult | null>;
   querySemanticSearch(query: string): Promise<WorkspaceSearchResult[] | null>;
   querySemanticDefinition(uri: string): Promise<WorkspaceSemanticDefinitionResult | null>;
   querySemanticReferences(uri: string): Promise<WorkspaceSemanticReferencesResult | null>;
@@ -423,6 +429,16 @@ export class VscodeLanguageClientProtocol implements CodepolProtocolClient {
   }): Promise<WorkspaceDeadModulesResult | null> {
     return this.requestRun<WorkspaceDeadModulesResult | null>(
       CODEPOL_LSP_REQUEST_DEAD_MODULES,
+      input,
+    );
+  }
+
+  async queryDependencyDiff(input: {
+    baselineLabel?: string;
+    baselineGraph?: WorkspaceDependencyGraphResult;
+  }): Promise<WorkspaceDependencyDiffResult | null> {
+    return this.requestRun<WorkspaceDependencyDiffResult | null>(
+      CODEPOL_LSP_REQUEST_DEPENDENCY_DIFF,
       input,
     );
   }

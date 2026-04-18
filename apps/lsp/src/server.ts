@@ -11,6 +11,7 @@ import {
   type WorkspaceArchitectureSummaryResult,
   type WorkspaceCodeAction,
   type WorkspaceDeadModulesResult,
+  type WorkspaceDependencyDiffResult,
   type WorkspaceDependencyGraphResult,
   type WorkspaceDependencyPathResult,
   type WorkspaceDiagnostic,
@@ -37,6 +38,7 @@ import {
   CODEPOL_LSP_COMMAND_SHOW_ARCHITECTURE_LINKS,
   CODEPOL_LSP_REQUEST_ARCHITECTURE_SUMMARY,
   CODEPOL_LSP_REQUEST_DEAD_MODULES,
+  CODEPOL_LSP_REQUEST_DEPENDENCY_DIFF,
   CODEPOL_LSP_REQUEST_DEPENDENCY_GRAPH,
   CODEPOL_LSP_REQUEST_DEPENDENCY_PATH,
   CODEPOL_LSP_REQUEST_IMPACT_RADIUS,
@@ -1075,6 +1077,11 @@ export class CodepolLspServer {
         return this.deadModulesHandle(params as {
           entryPointUris?: string[];
         }, context);
+      case CODEPOL_LSP_REQUEST_DEPENDENCY_DIFF:
+        return this.dependencyDiffHandle(params as {
+          baselineLabel?: string;
+          baselineGraph?: WorkspaceDependencyGraphResult;
+        }, context);
       case CODEPOL_LSP_REQUEST_SEMANTIC_SEARCH:
         return this.semanticSearchHandle(params as {
           query?: string;
@@ -1840,6 +1847,38 @@ export class CodepolLspServer {
           context.requestId === undefined || context.requestId === null
             ? undefined
             : `lsp-codepol-dead-modules:${String(context.requestId)}`,
+        signal: context.signal,
+      }), {
+      signal: context.signal,
+    });
+  }
+
+  private async dependencyDiffHandle(
+    params: {
+      baselineLabel?: string;
+      baselineGraph?: WorkspaceDependencyGraphResult;
+    },
+    context: { requestId?: JsonRpcId; signal?: AbortSignal } = {},
+  ): Promise<WorkspaceDependencyDiffResult | null> {
+    if (!this.registeredClientSessionId || !this.workspaceId) {
+      return null;
+    }
+    const hasLabel = params.baselineLabel !== undefined;
+    const hasGraph = params.baselineGraph !== undefined;
+    if (hasLabel === hasGraph) {
+      return null;
+    }
+
+    return this.serviceCall((service) =>
+      service.queryDependencyDiff({
+        clientSessionId: this.registeredClientSessionId!,
+        workspaceId: this.workspaceId!,
+        baselineLabel: params.baselineLabel,
+        baselineGraph: params.baselineGraph,
+        requestId:
+          context.requestId === undefined || context.requestId === null
+            ? undefined
+            : `lsp-codepol-dependency-diff:${String(context.requestId)}`,
         signal: context.signal,
       }), {
       signal: context.signal,

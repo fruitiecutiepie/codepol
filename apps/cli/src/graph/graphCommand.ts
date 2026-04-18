@@ -10,11 +10,16 @@ import { configGet, configGetFromPath } from '@codepol/core';
 import type { WorkspaceImpactRadiusDirection } from '@codepol/core';
 import { graphCyclesRun } from './graphCycles';
 import { graphDeadRun } from './graphDead';
+import {
+  GRAPH_DIFF_DEFAULT_BASELINE_LABEL,
+  graphDiffRun,
+} from './graphDiff';
 import { graphExportRun } from './graphExport';
 import { graphFanInRun } from './graphFanIn';
 import { graphFanOutRun } from './graphFanOut';
 import { graphImpactRun } from './graphImpact';
 import { graphPathRun } from './graphPath';
+import { graphSnapshotRun } from './graphSnapshot';
 
 type GraphCommonArgs = {
   config?: string;
@@ -259,6 +264,95 @@ const graphImpactCommand: CommandModule<
   },
 };
 
+const graphSnapshotCommand: CommandModule<
+  GraphCommonArgs,
+  GraphCommonArgs & { label: string; format: string }
+> = {
+  command: 'snapshot',
+  describe:
+    'Capture the live workspace dependency graph to a labeled sidecar file',
+  builder: (yargs) =>
+    graphFormatOption(yargs).option('label', {
+      type: 'string',
+      default: GRAPH_DIFF_DEFAULT_BASELINE_LABEL,
+      describe:
+        'Label for the snapshot (sanitized into a filename). Default: "base".',
+    }) as unknown as Argv<GraphCommonArgs & { label: string; format: string }>,
+  handler: async (args) => {
+    const resolved = await graphConfigResolve(args);
+    const exitCode = await graphSnapshotRun({
+      cwd: resolved.cwd,
+      configPath: resolved.configPath,
+      label: args.label,
+      format: args.format,
+    });
+    if (exitCode !== 0) process.exitCode = exitCode;
+  },
+};
+
+const graphDiffCommand: CommandModule<
+  GraphCommonArgs,
+  GraphCommonArgs & {
+    'baseline-label'?: string;
+    'baseline-file'?: string;
+    'fail-on-new-cycle': boolean;
+    format: string;
+  }
+> = {
+  command: 'diff [baselineLabel]',
+  describe:
+    'Diff the live workspace dependency graph against a baseline snapshot',
+  builder: (yargs) =>
+    graphFormatOption(yargs)
+      .positional('baselineLabel', {
+        type: 'string',
+        describe:
+          'Snapshot label to compare against. Equivalent to --baseline-label. Default: "base".',
+      })
+      .option('baseline-label', {
+        type: 'string',
+        describe:
+          'Snapshot label to read from .codepol/graph-snapshots/. Default: "base" when neither --baseline-label nor --baseline-file is supplied.',
+      })
+      .option('baseline-file', {
+        type: 'string',
+        describe:
+          'Path to a baseline JSON file (GraphSnapshot or WorkspaceDependencyGraphResult).',
+      })
+      .option('fail-on-new-cycle', {
+        type: 'boolean',
+        default: false,
+        describe: 'Exit with code 1 when the diff introduces a new cycle',
+      })
+      .conflicts('baseline-label', 'baseline-file')
+      .conflicts('baselineLabel', 'baseline-file') as unknown as Argv<
+      GraphCommonArgs & {
+        baselineLabel?: string;
+        'baseline-label'?: string;
+        'baseline-file'?: string;
+        'fail-on-new-cycle': boolean;
+        format: string;
+      }
+    >,
+  handler: async (args) => {
+    const resolved = await graphConfigResolve(args);
+    const positionalLabel = (args as { baselineLabel?: string }).baselineLabel;
+    const baselineLabel =
+      args['baseline-file'] !== undefined
+        ? undefined
+        : (positionalLabel ?? args['baseline-label'] ?? undefined);
+    const exitCode = await graphDiffRun({
+      cwd: resolved.cwd,
+      configPath: resolved.configPath,
+      baselineLabel,
+      baselineFile: args['baseline-file'],
+      failOnNewCycle: args['fail-on-new-cycle'],
+      format: args.format,
+    });
+    if (exitCode !== 0) process.exitCode = exitCode;
+  },
+};
+
 export const graphCommand: CommandModule<unknown, GraphCommonArgs> = {
   command: 'graph <subcommand>',
   describe: 'Run workspace dependency-graph queries',
@@ -271,6 +365,8 @@ export const graphCommand: CommandModule<unknown, GraphCommonArgs> = {
       .command(graphFanInCommand)
       .command(graphFanOutCommand)
       .command(graphImpactCommand)
+      .command(graphSnapshotCommand)
+      .command(graphDiffCommand)
       .demandCommand(1, 'Specify a graph subcommand')
       .strict(),
   handler: () => {

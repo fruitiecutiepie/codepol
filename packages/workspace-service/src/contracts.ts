@@ -9,6 +9,7 @@ import type {
   WorkspaceArchitectureSummaryResult,
   WorkspaceCodeAction,
   WorkspaceDeadModulesResult,
+  WorkspaceDependencyDiffResult,
   WorkspaceDependencyGraphResult,
   WorkspaceDependencyPathResult,
   WorkspaceDiagnostic,
@@ -211,6 +212,29 @@ export type WorkspaceService = {
     analysisGeneration?: number;
     signal?: AbortSignal;
   }) => Promise<WorkspaceDeadModulesResult>;
+  /**
+   * Diff the live workspace dependency graph against a baseline.
+   *
+   * The baseline is identified by either:
+   *
+   * - a `baselineLabel` previously written to the workspace's snapshot
+   *   store (sidecar at `<rootPath>/.codepol/graph-snapshots/`), or
+   * - an inline `baselineGraph` payload (a captured
+   *   {@link WorkspaceDependencyGraphResult}, e.g. from
+   *   `codepol graph export` on another git ref). The inline form lets
+   *   CI compare without writing to the snapshot store.
+   *
+   * Exactly one of the two must be supplied; passing both is rejected.
+   */
+  queryDependencyDiff: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    baselineLabel?: string;
+    baselineGraph?: WorkspaceDependencyGraphResult;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceDependencyDiffResult>;
   querySemanticSearch: (input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;

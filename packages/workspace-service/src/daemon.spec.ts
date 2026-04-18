@@ -357,6 +357,7 @@ function workspaceReadQueriesStubCreate(): Pick<
   | 'queryImpactRadius'
   | 'queryDependencyPath'
   | 'queryDeadModules'
+  | 'queryDependencyDiff'
   | 'querySemanticSearch'
   | 'querySemanticDefinition'
   | 'querySemanticReferences'
@@ -407,6 +408,18 @@ function workspaceReadQueriesStubCreate(): Pick<
     async queryDeadModules() {
       return {
         unreachable: [],
+      };
+    },
+    async queryDependencyDiff(input) {
+      return {
+        workspaceId: input.workspaceId,
+        currentAnalysisGeneration: 0,
+        addedNodes: [],
+        removedNodes: [],
+        addedEdges: [],
+        removedEdges: [],
+        newCycles: [],
+        removedCycles: [],
       };
     },
     async querySemanticSearch() {

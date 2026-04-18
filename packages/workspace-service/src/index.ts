@@ -16,8 +16,11 @@ import {
   diagnosticsRuntimeGet,
   lintDiagnosticToWorkspaceDiagnostic,
   moduleDeadModulesCompute,
+  moduleDependencyDiffCompute,
   moduleDependencyPathCompute,
   moduleImpactRadiusCompute,
+  policyArchitectureViolationsGetFromDir,
+  pluginsMapHasArchitectureProvider,
   pluginGetForRule,
   policyPluginsGet,
   policyViolationsGetForFile,
@@ -68,6 +71,7 @@ import {
   type WorkspaceArchitectureSummaryResult,
   type WorkspaceCodeAction,
   type WorkspaceDeadModulesResult,
+  type WorkspaceDependencyDiffResult,
   type WorkspaceDependencyGraphEdge,
   type WorkspaceDependencyGraphEdgeKind,
   type WorkspaceDependencyGraphNode,
@@ -132,6 +136,11 @@ import {
   type WorkspaceWarmCacheSnapshot,
   type WorkspaceWarmCacheStore,
 } from './warmCache';
+import {
+  fileSystemGraphSnapshotStoreCreate as graphSnapshotStoreCreateInternal,
+  graphSnapshotFromDependencyGraphResult as graphSnapshotFromGraphInternal,
+  graphSnapshotWorkspaceRootIdCompute as graphSnapshotWorkspaceRootIdComputeInternal,
+} from './graphSnapshotStore';
 
 export * from './daemon';
 export {
@@ -143,6 +152,13 @@ export {
 } from './daemonSelfWatch';
 export { builtinPluginsRefresh, ensureWorkspaceRuntimeReady } from './runtime';
 export * from './warmCache';
+export {
+  fileSystemGraphSnapshotStoreCreate,
+  graphSnapshotFromDependencyGraphResult,
+  graphSnapshotLabelSanitize,
+  graphSnapshotWorkspaceRootIdCompute,
+  type GraphSnapshotStore,
+} from './graphSnapshotStore';
 
 const BIOME_FILE_EXTENSIONS = ['.js', '.mjs', '.cjs', '.jsx', '.ts', '.mts', '.cts', '.tsx'];
 const ESLINT_BRIDGE_RULE_ID = '@codepol/plugin/eslint';
@@ -643,6 +659,22 @@ export type WorkspaceService = {
     analysisGeneration?: number;
     signal?: AbortSignal;
   }) => Promise<WorkspaceDeadModulesResult>;
+  /**
+   * Diff the live dependency graph against a baseline. Caller chooses
+   * the baseline source: either a `baselineLabel` previously written to
+   * the per-workspace snapshot store, or an inline `baselineGraph`
+   * payload (e.g. captured from `codepol graph export` on another git
+   * ref). Exactly one of the two must be supplied.
+   */
+  queryDependencyDiff: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    baselineLabel?: string;
+    baselineGraph?: WorkspaceDependencyGraphResult;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceDependencyDiffResult>;
   querySemanticSearch: (input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;
@@ -2340,7 +2372,11 @@ function matchedRulesRequireProjectIndex(
       continue;
     }
     const lookup = pluginGetForRule(pluginRulesMap, match.rule.ruleId);
-    if (lookup?.plugin.pluginRule.capabilities.requiresProjectIndex) {
+    const capabilities = lookup?.plugin.pluginRule.capabilities;
+    if (!capabilities) continue;
+    // Architecture providers always need the project index (Phase 3 wired
+    // the implicit dependency through `pluginCapabilitiesRequireProjectIndex`).
+    if (capabilities.requiresProjectIndex || capabilities.architectureCheckProvider) {
       return true;
     }
   }
@@ -4477,6 +4513,120 @@ function workspaceDeadModulesResultCreate(
   };
 }
 
+/**
+ * Reconstruct a {@link WorkspaceDependencyGraphResult} from a
+ * persisted {@link GraphSnapshot}. The snapshot only carries the
+ * structural primitives the diff depends on; node metrics and edge
+ * kinds are intentionally absent.
+ */
+function workspaceDependencyGraphResultFromSnapshot(
+  snapshot: import('@codepol/core').GraphSnapshot,
+): WorkspaceDependencyGraphResult {
+  return {
+    nodes: snapshot.nodes.map((node) => ({
+      uri: node.uri,
+      workspaceRelativePath: node.workspaceRelativePath,
+    })),
+    edges: snapshot.edges.map((edge) => ({
+      fromUri: edge.fromUri,
+      toUri: edge.toUri,
+    })),
+    entryPoints: [...snapshot.entryPoints],
+    cycles: snapshot.cycles.map((cycle) => [...cycle]),
+  };
+}
+
+/**
+ * Resolve the workspace-relative path for a node URI by consulting the
+ * baseline snapshot first (so deletions still carry a path) and then
+ * the live graph. Falls back to the URI when neither side knows.
+ */
+function workspaceDependencyDiffNodePathResolve(input: {
+  uri: string;
+  baselinePathByUri: Map<string, string>;
+  currentPathByUri: Map<string, string>;
+}): string {
+  return (
+    input.currentPathByUri.get(input.uri) ??
+    input.baselinePathByUri.get(input.uri) ??
+    input.uri
+  );
+}
+
+/**
+ * Compose the diff result for {@link queryDependencyDiff}. Both inputs
+ * are already-built workspace dependency graphs; the underlying
+ * computation is delegated to `moduleDependencyDiffCompute` so the
+ * pure / deterministic semantics live in core.
+ */
+function workspaceDependencyDiffResultCreate(input: {
+  workspace: WorkspaceContextState;
+  workspaceId: string;
+  baseline: WorkspaceDependencyGraphResult;
+  current: WorkspaceDependencyGraphResult;
+  baselineLabel: string | undefined;
+  currentAnalysisGeneration: number;
+  baselineAnalysisGeneration: number | undefined;
+}): WorkspaceDependencyDiffResult {
+  const workspaceRootId = graphSnapshotWorkspaceRootIdComputeInternal(
+    input.workspace.rootPath,
+  );
+  const baselineSnapshot = graphSnapshotFromGraphInternal({
+    graph: input.baseline,
+    workspaceRootId,
+  });
+  const currentSnapshot = graphSnapshotFromGraphInternal({
+    graph: input.current,
+    workspaceRootId,
+  });
+  const diff = moduleDependencyDiffCompute({
+    baseline: baselineSnapshot,
+    current: currentSnapshot,
+  });
+
+  const baselinePathByUri = new Map(
+    input.baseline.nodes.map((node) => [node.uri, node.workspaceRelativePath]),
+  );
+  const currentPathByUri = new Map(
+    input.current.nodes.map((node) => [node.uri, node.workspaceRelativePath]),
+  );
+
+  return {
+    workspaceId: input.workspaceId,
+    ...(input.baselineLabel !== undefined ? { baselineLabel: input.baselineLabel } : {}),
+    currentAnalysisGeneration: input.currentAnalysisGeneration,
+    ...(input.baselineAnalysisGeneration !== undefined
+      ? { baselineAnalysisGeneration: input.baselineAnalysisGeneration }
+      : {}),
+    addedNodes: diff.addedNodes.map((node) => ({
+      uri: node.uri,
+      workspaceRelativePath: workspaceDependencyDiffNodePathResolve({
+        uri: node.uri,
+        baselinePathByUri,
+        currentPathByUri,
+      }),
+    })),
+    removedNodes: diff.removedNodes.map((node) => ({
+      uri: node.uri,
+      workspaceRelativePath: workspaceDependencyDiffNodePathResolve({
+        uri: node.uri,
+        baselinePathByUri,
+        currentPathByUri,
+      }),
+    })),
+    addedEdges: diff.addedEdges.map((edge) => ({
+      fromUri: edge.fromUri,
+      toUri: edge.toUri,
+    })),
+    removedEdges: diff.removedEdges.map((edge) => ({
+      fromUri: edge.fromUri,
+      toUri: edge.toUri,
+    })),
+    newCycles: diff.newCycles.map((cycle) => [...cycle]),
+    removedCycles: diff.removedCycles.map((cycle) => [...cycle]),
+  };
+}
+
 function workspaceArchitectureSummaryResultCreate(
   workspace: WorkspaceContextState,
   index: ProjectIndex,
@@ -6208,6 +6358,136 @@ function workspaceTreeAnalyzerRun(
   );
 }
 
+/**
+ * Diagnostic source emitted by architecture rules (cycles, dead
+ * modules, layer violations). Kept as a published constant so other
+ * packages — VS Code extension settings, future mute-source UI — can
+ * gate on a single string.
+ */
+export const WORKSPACE_ARCHITECTURE_DIAGNOSTIC_SOURCE = 'codepol/architecture';
+
+/**
+ * Map architecture-rule violations to workspace diagnostics tagged with
+ * the dedicated architecture source.
+ *
+ * Severity rules:
+ *
+ * - explicit policy `severity` (`warn` / `error`) maps through
+ *   {@link severityFromLintSeverity}
+ * - missing severity defaults to `info` so cycles / dead modules
+ *   participate in the Problems panel without dominating it; this
+ *   matches the Phase 8 / Q6 default decision in
+ *   `TODO_CODEPOL_LSP_ARCHITECTURE_GRAPH_MODEL.md`
+ */
+function workspaceArchitectureDiagnosticSeverityResolve(
+  policy: PolicyFile,
+  ruleId: string,
+): WorkspaceDiagnosticSeverity {
+  const rule = policyRuleGet(policy, ruleId);
+  if (rule?.severity) {
+    return severityFromLintSeverity(rule.severity);
+  }
+  return 'info';
+}
+
+/**
+ * Run the architecture-check pipeline against the already-built
+ * project index and return the resulting diagnostics under the
+ * dedicated `codepol/architecture` source.
+ *
+ * Returns an empty array when:
+ *
+ * - no plugin in the policy declares an `architectureCheckProvider`
+ * - the project index is unavailable (e.g. workspace index not required)
+ *
+ * Errors from individual architecture rules are reported as analyzer
+ * issues rather than propagated, so a single mis-configured rule does
+ * not blank out the entire diagnostic stream.
+ */
+/**
+ * Synchronous predicate that decides whether to invoke the async
+ * architecture analyzer. Kept separate from
+ * {@link workspaceArchitectureDiagnosticsRun} so callers can avoid the
+ * extra microtask transition entirely on the (very common) hot path
+ * where no policy rule declares an architecture provider. The hot path
+ * stays synchronous, which preserves the diagnostic-publish ordering
+ * the manual-timer LSP tests assume.
+ *
+ * The check is scoped to **matched** rules (i.e. rules listed in
+ * `policy.rules` whose target globs hit at least one file). This is
+ * stricter than `pluginsMapHasArchitectureProvider`, which returns true
+ * whenever any plugin in the loaded plugin pack ships an architecture
+ * rule — even when the policy never references that rule.
+ */
+function workspaceArchitectureDiagnosticsShouldRun(input: {
+  matches: RuleMatch[];
+  pluginRulesMap: Awaited<ReturnType<typeof policyPluginsGet>> extends Result<infer T, string>
+    ? T
+    : never;
+  projectIndex: ProjectIndex | undefined;
+}): boolean {
+  if (!input.projectIndex) return false;
+  for (const match of input.matches) {
+    const lookup = pluginGetForRule(input.pluginRulesMap, match.rule.ruleId);
+    if (lookup?.plugin.pluginRule.capabilities.architectureCheckProvider) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function workspaceArchitectureDiagnosticsRun(input: {
+  policy: PolicyFile;
+  rootPath: string;
+  configPath: string;
+  pluginRulesMap: Awaited<ReturnType<typeof policyPluginsGet>> extends Result<infer T, string>
+    ? T
+    : never;
+  projectIndex: ProjectIndex | undefined;
+  signal?: AbortSignal;
+}): Promise<{
+  diagnostics: WorkspaceDiagnostic[];
+  violations: PolicyViolation[];
+  issues: string[];
+}> {
+  if (!input.projectIndex) {
+    return { diagnostics: [], violations: [], issues: [] };
+  }
+  if (!pluginsMapHasArchitectureProvider(input.pluginRulesMap)) {
+    return { diagnostics: [], violations: [], issues: [] };
+  }
+  workspaceAbortSignalThrowIfAborted(input.signal);
+
+  const result = await policyArchitectureViolationsGetFromDir(
+    input.policy,
+    input.rootPath,
+    {
+      configPath: input.configPath,
+      projectIndex: input.projectIndex,
+      pluginsMap: input.pluginRulesMap,
+    },
+  );
+  if (isErr(result)) {
+    return {
+      diagnostics: [],
+      violations: [],
+      issues: [`Architecture check failed: ${result.Err}`],
+    };
+  }
+
+  const violations = result.Ok;
+  const diagnostics: WorkspaceDiagnostic[] = violations.map((violation) =>
+    policyViolationToWorkspaceDiagnostic(violation, {
+      severity: workspaceArchitectureDiagnosticSeverityResolve(
+        input.policy,
+        violation.ruleId,
+      ),
+      source: WORKSPACE_ARCHITECTURE_DIAGNOSTIC_SOURCE,
+    }),
+  );
+  return { diagnostics, violations, issues: [] };
+}
+
 async function eslintAnalyzerRun(
   input: {
     files: string[];
@@ -6813,10 +7093,25 @@ function workspaceAnalysisCompose(input: {
   ruleTargets: PolicyRuleTargetContext[];
   projectIndex: ProjectIndex | undefined;
   workspaceIndexRequired: boolean;
+  /**
+   * Optional architecture-rule output. When present, its diagnostics
+   * are appended to `analysis.diagnostics` and its violations to
+   * `analysis.violations`. Architecture rules are project-wide; they
+   * never produce per-file fixable violations, so they do not flow
+   * into `treeViolations` or `fixableTreeViolationsByDiagnosticId`.
+   */
+  architectureResult?: {
+    diagnostics: WorkspaceDiagnostic[];
+    violations: PolicyViolation[];
+    issues: string[];
+  };
 }): WorkspaceAnalysis {
   const { treeResult, eslintResult, biomeResult, ruffResult } = input;
   const analyzerResults = [treeResult, eslintResult, biomeResult, ruffResult];
   const analyzerIssues = analyzerResults.flatMap((result) => result.issues);
+  if (input.architectureResult) {
+    analyzerIssues.push(...input.architectureResult.issues);
+  }
   return {
     analyzerInventory: workspaceAnalyzerInventoryBuild({
       analyzerResults,
@@ -6828,9 +7123,15 @@ function workspaceAnalysisCompose(input: {
     analyzerScorecard: analyzerResults.map((result) => result.scorecard),
     policy: input.policy,
     files: input.files,
-    violations: analyzerResults.flatMap((result) => result.violations),
+    violations: [
+      ...analyzerResults.flatMap((result) => result.violations),
+      ...(input.architectureResult?.violations ?? []),
+    ],
     treeViolations: [...treeResult.treeViolations],
-    diagnostics: analyzerResults.flatMap((result) => result.diagnostics),
+    diagnostics: [
+      ...analyzerResults.flatMap((result) => result.diagnostics),
+      ...(input.architectureResult?.diagnostics ?? []),
+    ],
     featureStatus: {
       diagnostics: workspaceFeatureStatusReadyOrDegraded(analyzerIssues),
       codeActions: workspaceFeatureStatusCreate({
@@ -7268,6 +7569,21 @@ async function workspaceAnalysisRunFullPath(
     projectIndex = workspaceIndexGetOrBuild(workspace, state, files);
   }
 
+  const architectureResult = workspaceArchitectureDiagnosticsShouldRun({
+    matches,
+    pluginRulesMap,
+    projectIndex,
+  })
+    ? await workspaceArchitectureDiagnosticsRun({
+        policy,
+        rootPath: workspace.rootPath,
+        configPath: workspace.configPath,
+        pluginRulesMap,
+        projectIndex,
+        signal: options.signal,
+      })
+    : undefined;
+
   const analysis = workspaceAnalysisCompose({
     treeResult,
     eslintResult,
@@ -7280,6 +7596,7 @@ async function workspaceAnalysisRunFullPath(
     ruleTargets,
     projectIndex,
     workspaceIndexRequired,
+    architectureResult,
   });
 
   // Refresh per-(analyzer, file) cache so the next non-fix run can hit. Use
@@ -7527,6 +7844,21 @@ async function workspaceAnalysisRunIncremental(
 
   state.analyzerCache = cacheNext;
 
+  const architectureResult = workspaceArchitectureDiagnosticsShouldRun({
+    matches,
+    pluginRulesMap,
+    projectIndex,
+  })
+    ? await workspaceArchitectureDiagnosticsRun({
+        policy,
+        rootPath: workspace.rootPath,
+        configPath: workspace.configPath,
+        pluginRulesMap,
+        projectIndex,
+        signal: options.signal,
+      })
+    : undefined;
+
   const analysis = workspaceAnalysisCompose({
     treeResult,
     eslintResult,
@@ -7539,6 +7871,7 @@ async function workspaceAnalysisRunIncremental(
     ruleTargets,
     projectIndex,
     workspaceIndexRequired,
+    architectureResult,
   });
   state.analysisGeneration += 1;
   state.lastAnalysis = analysis;
@@ -8772,6 +9105,72 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     });
   }
 
+  async queryDependencyDiff(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    baselineLabel?: string;
+    baselineGraph?: WorkspaceDependencyGraphResult;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceDependencyDiffResult> {
+    if (
+      (input.baselineLabel === undefined && input.baselineGraph === undefined) ||
+      (input.baselineLabel !== undefined && input.baselineGraph !== undefined)
+    ) {
+      throw new Error(
+        'queryDependencyDiff requires exactly one of baselineLabel or baselineGraph',
+      );
+    }
+
+    const { workspace, workspaceSession } = workspaceSessionGet(
+      this.workspaces,
+      this.clientSessions,
+      input.clientSessionId,
+      input.workspaceId,
+    );
+    const index = await this.workspaceSessionIndexEnsure(workspace, workspaceSession, {
+      signal: input.signal,
+    });
+    workspaceAnalysisGenerationValidate(workspaceSession, input);
+
+    const current = workspaceDependencyGraphResultCreate(workspace, index);
+
+    let baseline: WorkspaceDependencyGraphResult;
+    let baselineAnalysisGeneration: number | undefined;
+    if (input.baselineGraph !== undefined) {
+      baseline = input.baselineGraph;
+    } else {
+      const store = graphSnapshotStoreCreateInternal({ rootPath: workspace.rootPath });
+      const snapshot = await store.graphSnapshotRead({ label: input.baselineLabel! });
+      if (!snapshot) {
+        throw new Error(
+          `No graph snapshot found for label "${input.baselineLabel}". ` +
+            `Capture one with \`codepol graph snapshot --label ${input.baselineLabel}\`.`,
+        );
+      }
+      const expectedRootId = graphSnapshotWorkspaceRootIdComputeInternal(workspace.rootPath);
+      if (snapshot.workspaceRootId !== expectedRootId) {
+        throw new Error(
+          `Graph snapshot for label "${input.baselineLabel}" was captured in a different workspace ` +
+            `(snapshot rootId ${snapshot.workspaceRootId}, current rootId ${expectedRootId}).`,
+        );
+      }
+      baselineAnalysisGeneration = snapshot.analysisGeneration;
+      baseline = workspaceDependencyGraphResultFromSnapshot(snapshot);
+    }
+
+    return workspaceDependencyDiffResultCreate({
+      workspace,
+      workspaceId: input.workspaceId,
+      baseline,
+      current,
+      baselineLabel: input.baselineLabel,
+      currentAnalysisGeneration: workspaceSession.analysisGeneration,
+      baselineAnalysisGeneration,
+    });
+  }
+
   async querySemanticSearch(input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;
@@ -9216,6 +9615,18 @@ class InProcessWorkspaceService implements WorkspaceService {
     signal?: AbortSignal;
   }): Promise<WorkspaceDeadModulesResult> {
     return this.engine.queryDeadModules(input);
+  }
+
+  queryDependencyDiff(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    baselineLabel?: string;
+    baselineGraph?: WorkspaceDependencyGraphResult;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceDependencyDiffResult> {
+    return this.engine.queryDependencyDiff(input);
   }
 
   querySemanticSearch(input: {
