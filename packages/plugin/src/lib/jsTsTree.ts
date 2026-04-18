@@ -1,4 +1,10 @@
-import { isErr, parserGetForFile, parserParseDebug } from '@codepol/core';
+import {
+  diagnosticsRuntimeGet,
+  isErr,
+  parserGetForFile,
+  parserParseTrace,
+} from '@codepol/core';
+import type { Diagnostics } from '@codepol/core';
 import type { SyntaxNode, Tree } from 'web-tree-sitter';
 
 export type ByteSpan = {
@@ -29,13 +35,16 @@ const IMPORT_STATEMENT = 'import_statement';
 export function parseJsTsSource(
   filePath: string,
   source: string,
+  diag?: Diagnostics,
 ): ParsedJsTsSource {
   const parserResult = parserGetForFile(filePath);
   if (isErr(parserResult)) {
     throw new Error(`Parser not available for "${filePath}": ${parserResult.Err}`);
   }
 
-  const tree = parserParseDebug(parserResult.Ok, source, {
+  const parseDiag = diag
+    ?? diagnosticsRuntimeGet().getDiagnostics('plugin.jsTsTree');
+  const tree = parserParseTrace(parserResult.Ok, source, parseDiag, {
     filePath,
     callSite: 'jsTsTree.parseJsTsSource',
   });

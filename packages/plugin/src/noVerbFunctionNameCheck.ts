@@ -3,7 +3,12 @@ import type {
   PolicyCheckContext,
   PolicyViolation,
 } from '@codepol/core';
-import { parserGetForFile, isErr, parserParseDebug } from '@codepol/core';
+import {
+  diagnosticsRuntimeGet,
+  isErr,
+  parserGetForFile,
+  parserParseTrace,
+} from '@codepol/core';
 import type { SyntaxNode } from 'web-tree-sitter';
 import { parseJsTsSource } from './lib/jsTsTree';
 import { identifierSplitByCasing } from './lib/identifierSplitByCasing';
@@ -98,7 +103,8 @@ export function functionMatchesPyGet(source: string): FunctionMatch[] {
   }
 
   const parser = parserResult.Ok;
-  const tree = parserParseDebug(parser, source, {
+  const diag = diagnosticsRuntimeGet().getDiagnostics('plugin.noVerbFunctionName');
+  const tree = parserParseTrace(parser, source, diag, {
     filePath: 'temp.py',
     callSite: 'noVerbFunctionNameCheck.functionMatchesPyGet',
   });

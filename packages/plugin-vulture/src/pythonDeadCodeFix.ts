@@ -4,7 +4,13 @@
  */
 
 import type { SyntaxNode } from 'web-tree-sitter';
-import { isErr, parserGetForFile, parserParseDebug } from '@codepol/core';
+import {
+  diagnosticsRuntimeGet,
+  isErr,
+  parserGetForFile,
+  parserParseTrace,
+} from '@codepol/core';
+import type { Diagnostics } from '@codepol/core';
 import { vultureFindingsGet } from './vultureRunner';
 import type { VultureFinding, VultureProviderConfig } from './vultureTypes';
 import { vultureFindingMatchesFile } from './vulturePathMatch';
@@ -253,6 +259,7 @@ export function pythonDeadCodeFixApply(
   filePath: string,
   source: string,
   config?: VultureProviderConfig,
+  diag?: Diagnostics,
 ): string {
   const findingsResult = vultureFindingsGet([filePath], config);
   if (isErr(findingsResult)) {
@@ -267,7 +274,9 @@ export function pythonDeadCodeFixApply(
   if (isErr(parserResult)) {
     return source;
   }
-  const tree = parserParseDebug(parserResult.Ok, source, {
+  const parseDiag = diag
+    ?? diagnosticsRuntimeGet().getDiagnostics('plugin.vulture.pythonDeadCodeFix');
+  const tree = parserParseTrace(parserResult.Ok, source, parseDiag, {
     filePath,
     callSite: 'pythonDeadCodeFix',
   });

@@ -8,13 +8,15 @@
     "paths": {
       "@codepol/core": ["./packages/core/src/index.ts"],
       "@codepol/lsp": ["./apps/lsp/src/index.ts"],
-      "@codepol/lsp/protocol": ["./apps/lsp/src/protocol.ts"]
+      "@codepol/lsp/protocol": ["./apps/lsp/src/protocol.ts"],
+      "@codepol/workspace-service": ["./packages/workspace-service/src/index.ts"]
     }
   },
   "include": ["src/**/*.ts"],
   "exclude": ["dist", "node_modules"],
   "references": [
     { "path": "../packages/core" },
-    { "path": "../apps/lsp" }
+    { "path": "../apps/lsp" },
+    { "path": "../packages/workspace-service" }
   ]
 }

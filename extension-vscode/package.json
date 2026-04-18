@@ -77,6 +77,26 @@
       {
         "command": "codepol.extension.refreshRenameTargets",
         "title": "Codepol: Refresh Rename Targets"
+      },
+      {
+        "command": "codepol.extension.setDiagnosticsLevel",
+        "title": "Codepol: Set Diagnostics Level"
+      },
+      {
+        "command": "codepol.extension.setDiagnosticsLogFile",
+        "title": "Codepol: Set Diagnostics Log File"
+      },
+      {
+        "command": "codepol.extension.setDiagnosticsScope",
+        "title": "Codepol: Set Diagnostics Scope Level"
+      },
+      {
+        "command": "codepol.extension.showDiagnosticsConfig",
+        "title": "Codepol: Show Current Diagnostics Config"
+      },
+      {
+        "command": "codepol.extension.restartDaemon",
+        "title": "Codepol: Restart Daemon"
       }
     ],
     "viewsContainers": {
@@ -143,6 +163,36 @@
           "type": "boolean",
           "default": false,
           "markdownDescription": "Enable verbose Codepol LSP diagnostics in the `Codepol LSP` output channel. Superseded stale requests are logged at trace level only when this setting is enabled."
+        },
+        "codepol.diagnostics.level": {
+          "type": "string",
+          "enum": ["error", "warn", "info", "debug", "trace"],
+          "default": "warn",
+          "markdownDescription": "Default log level for the Codepol diagnostics runtime. Applies to all scopes unless overridden by `codepol.diagnostics.scopes`."
+        },
+        "codepol.diagnostics.scopes": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "string",
+            "enum": ["error", "warn", "info", "debug", "trace"]
+          },
+          "markdownDescription": "Per-scope log level overrides. Keys are dotted scopes (e.g. `parser`, `workspace.analyzer`, `plugin.logger`)."
+        },
+        "codepol.diagnostics.logFilePath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Optional file path for Codepol diagnostics output. Events are appended in addition to the console sink. Leave blank to disable file logging."
+        },
+        "codepol.diagnostics.includeTiming": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Emit span begin/end events with durations."
+        },
+        "codepol.diagnostics.includePayloads": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Include structured payload fields on events. Disable to reduce log volume."
         }
       }
     }
@@ -163,6 +213,7 @@
   "dependencies": {
     "@codepol/core": "workspace:*",
     "@codepol/lsp": "workspace:*",
+    "@codepol/workspace-service": "workspace:*",
     "vscode-languageclient": "^9.0.1"
   },
   "devDependencies": {

@@ -179,6 +179,13 @@ export type PolicyCheckContext = {
    * Plugins should check for existence before using.
    */
   projectIndex?: ProjectIndex;
+  /**
+   * Diagnostics handle scoped to this check invocation. Optional for
+   * backwards compatibility — callers that omit it will have plugins fall
+   * back to the process-wide runtime diagnostics. Plugins should always
+   * prefer this field over reading env vars directly.
+   */
+  diag?: import('../diagnostics/diagnosticsTypes').Diagnostics;
 };
 
 /**

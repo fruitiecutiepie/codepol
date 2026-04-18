@@ -13,6 +13,8 @@ import {
   TransportKind,
 } from 'vscode-languageclient/node';
 import type {
+  DiagnosticsConfig,
+  DiagnosticsConfigPatch,
   IndexStatusResult,
   WorkspaceArchitectureSummaryResult,
   WorkspaceDependencyGraphResult,
@@ -29,8 +31,10 @@ import type {
 } from '@codepol/core';
 import {
   CODEPOL_LSP_COMMAND_APPLY_EDIT_PLAN,
+  CODEPOL_LSP_COMMAND_CONFIGURE_DIAGNOSTICS,
   CODEPOL_LSP_REQUEST_ARCHITECTURE_SUMMARY,
   CODEPOL_LSP_REQUEST_DEPENDENCY_GRAPH,
+  CODEPOL_LSP_REQUEST_DIAGNOSTICS_CONFIG,
   CODEPOL_LSP_REQUEST_INDEX_STATUS,
   CODEPOL_LSP_REQUEST_LINT_RULE_DETAILS,
   CODEPOL_LSP_REQUEST_LINT_RULES,
@@ -141,6 +145,10 @@ export type CodepolProtocolClient = {
     newName: string,
   ): Promise<WorkspaceRenamePreviewResult | null>;
   applyEditPlan(planId: string): Promise<void>;
+  configureDiagnostics(
+    patch: DiagnosticsConfigPatch,
+  ): Promise<DiagnosticsConfig | null>;
+  getDiagnosticsConfig(): Promise<DiagnosticsConfig | null>;
 };
 
 export class VscodeLanguageClientProtocol implements CodepolProtocolClient {
@@ -420,5 +428,26 @@ export class VscodeLanguageClientProtocol implements CodepolProtocolClient {
       arguments: [{ planId }],
     };
     await this.requestRun('workspace/executeCommand', params);
+  }
+
+  async configureDiagnostics(
+    patch: DiagnosticsConfigPatch,
+  ): Promise<DiagnosticsConfig | null> {
+    const params: ExecuteCommandParams = {
+      command: CODEPOL_LSP_COMMAND_CONFIGURE_DIAGNOSTICS,
+      arguments: [patch],
+    };
+    const result = await this.requestRun<DiagnosticsConfig | null>(
+      'workspace/executeCommand',
+      params,
+    );
+    return result ?? null;
+  }
+
+  async getDiagnosticsConfig(): Promise<DiagnosticsConfig | null> {
+    return this.requestRun<DiagnosticsConfig | null>(
+      CODEPOL_LSP_REQUEST_DIAGNOSTICS_CONFIG,
+      {},
+    );
   }
 }

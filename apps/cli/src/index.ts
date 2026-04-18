@@ -11,11 +11,14 @@ import { hideBin } from 'yargs/helpers';
 import {
   configGet,
   configGetFromPath,
+  diagnosticsRuntimeSetConfig,
   policyPluginsGet,
   policyRuleTargetsResolve,
   policyViolationsGetOutputPretty,
   ruleMatchesGet,
   type CodepolConfig,
+  type DiagnosticsConfigPatch,
+  type LogLevel,
   type PolicyFile,
 } from '@codepol/core';
 import {
@@ -39,7 +42,62 @@ type CliOptions = {
   configPath: string;
   eslintConfig: string;
   config: CodepolConfig;
+  diagnosticsPatch?: DiagnosticsConfigPatch;
 };
+
+const CLI_LOG_LEVELS: readonly LogLevel[] = [
+  'error',
+  'warn',
+  'info',
+  'debug',
+  'trace',
+];
+
+function logLevelParse(value: string | undefined): LogLevel | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim().toLowerCase();
+  if ((CLI_LOG_LEVELS as readonly string[]).includes(trimmed)) {
+    return trimmed as LogLevel;
+  }
+  return undefined;
+}
+
+function diagnosticsScopesParse(
+  raw: string[] | undefined,
+): Record<string, LogLevel | null> | undefined {
+  if (!raw || raw.length === 0) return undefined;
+  const scopes: Record<string, LogLevel | null> = {};
+  for (const entry of raw) {
+    const [scopeRaw, levelRaw] = entry.split('=', 2);
+    const scope = scopeRaw?.trim();
+    if (!scope) continue;
+    const level = logLevelParse(levelRaw);
+    scopes[scope] = level ?? null;
+  }
+  return Object.keys(scopes).length > 0 ? scopes : undefined;
+}
+
+function diagnosticsPatchBuild(args: {
+  debug?: string;
+  debugScopes?: string[];
+  debugLog?: string;
+  debugTiming?: boolean;
+}): DiagnosticsConfigPatch | undefined {
+  const level = logLevelParse(args.debug);
+  const scopes = diagnosticsScopesParse(args.debugScopes);
+  const logFilePath = args.debugLog?.trim();
+  const includeTiming = args.debugTiming;
+
+  if (!level && !scopes && !logFilePath && includeTiming === undefined) {
+    return undefined;
+  }
+  const patch: DiagnosticsConfigPatch = {};
+  if (level) patch.level = level;
+  if (scopes) patch.scopes = scopes;
+  if (logFilePath) patch.sink = { logFilePath };
+  if (includeTiming !== undefined) patch.policy = { includeTiming };
+  return patch;
+}
 
 function errorAsError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
@@ -68,6 +126,7 @@ export async function policyCheck(options: {
   startDaemon?: () => Promise<void> | void;
   allowInProcessFallback?: boolean;
   onResolved?: (info: CliWorkspaceServiceResolvedInfo) => void;
+  diagnosticsPatch?: DiagnosticsConfigPatch;
 }): Promise<WorkspacePolicyCheckResult> {
   const checker = await cliPolicyCheckerResolve({
     env: options.env,
@@ -77,6 +136,18 @@ export async function policyCheck(options: {
     allowInProcessFallback: options.allowInProcessFallback,
     onResolved: options.onResolved,
   });
+
+  if (options.diagnosticsPatch && checker.setDiagnosticsConfig) {
+    try {
+      await checker.setDiagnosticsConfig(options.diagnosticsPatch);
+    } catch (err) {
+      console.warn(
+        `Failed to forward diagnostics config to daemon: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
 
   const policyCheckOptions: WorkspacePolicyCheckOptions = {
     config: options.config,
@@ -106,6 +177,7 @@ async function policyCheckAndPrintOutput(options: CliOptions): Promise<boolean> 
     eslintConfigPath: options.eslintConfig,
     fix: options.fix,
     cwd,
+    diagnosticsPatch: options.diagnosticsPatch,
   });
 
   const output = policyViolationsGetOutputPretty(result.violations, cwd);
@@ -204,6 +276,27 @@ async function main(): Promise<void> {
       default: false,
       describe: 'Validate policy and rule plugins, then exit',
     })
+    .option('debug', {
+      type: 'string',
+      describe:
+        'Set diagnostics log level (error|warn|info|debug|trace). Applies to this process and forwards to the daemon when applicable.',
+    })
+    .option('debug-scope', {
+      type: 'array',
+      string: true,
+      describe:
+        'Override log level for a scope. Format: scope=level. Repeatable. Example: --debug-scope parser=trace --debug-scope workspace.analyzer=debug',
+    })
+    .option('debug-log', {
+      type: 'string',
+      describe:
+        'Append diagnostics output to this file path. Creates parent directories if missing.',
+    })
+    .option('debug-timing', {
+      type: 'boolean',
+      describe:
+        'Include span begin/end timing events in diagnostics output.',
+    })
     .example('$0', 'Run policy checks once (auto-discovers config)')
     .example('$0 --fix', 'Run checks and apply fixes')
     .example('$0 --watch', 'Watch for changes and re-run checks')
@@ -224,6 +317,16 @@ async function main(): Promise<void> {
       ? path.resolve(path.dirname(configPath), config.eslintConfigPath)
       : eslintConfigPathDetect(cwd);
 
+  const diagnosticsPatch = diagnosticsPatchBuild({
+    debug: argv.debug as string | undefined,
+    debugScopes: argv['debug-scope'] as string[] | undefined,
+    debugLog: argv['debug-log'] as string | undefined,
+    debugTiming: argv['debug-timing'] as boolean | undefined,
+  });
+  if (diagnosticsPatch) {
+    diagnosticsRuntimeSetConfig(diagnosticsPatch);
+  }
+
   const options: CliOptions = {
     fix: argv.fix ?? false,
     watch: argv.watch ?? false,
@@ -231,6 +334,7 @@ async function main(): Promise<void> {
     configPath,
     eslintConfig: eslintConfigPath,
     config,
+    diagnosticsPatch,
   };
 
   if (options.checkPlugins) {

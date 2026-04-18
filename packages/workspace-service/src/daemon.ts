@@ -6,6 +6,8 @@ import { randomUUID } from 'node:crypto';
 import type {
   ClientSessionId,
   DaemonSessionId,
+  DiagnosticsConfig,
+  DiagnosticsConfigPatch,
   IndexStatusResult,
   WorkspaceApplyResult,
   WorkspaceArchitectureSummaryResult,
@@ -24,6 +26,7 @@ import type {
   WorkspaceInstanceId,
   WorkspaceSymbolResult,
 } from '@codepol/core';
+import { diagnosticsRuntimeGet } from '@codepol/core';
 import type {
   WorkspaceDiagnosticsSubscriptionResult,
   WorkspaceDiagnosticsSubscriptionScope,
@@ -71,6 +74,11 @@ export type WorkspaceDaemonRuntimePaths = {
   lockPath: string;
 };
 
+export type WorkspaceDaemonClientHelloExpected = {
+  installChannel?: string;
+  buildId?: string;
+};
+
 export type WorkspaceDaemonClientHello = {
   type: 'hello';
   protocolVersion: string;
@@ -81,9 +89,7 @@ export type WorkspaceDaemonClientHello = {
     supportedProtocols: string[];
     supportsFallbackModes: string[];
   };
-  expected?: {
-    installChannel?: string;
-  };
+  expected?: WorkspaceDaemonClientHelloExpected;
 };
 
 type WorkspaceDaemonClientHelloMessage = Omit<WorkspaceDaemonEnvelope, 'id'> &
@@ -172,6 +178,14 @@ type WorkspaceDaemonHelloOptions = {
   connection: WorkspaceDaemonRequestClient;
   client: WorkspaceDaemonClientHello['client'];
   expectedInstallId?: string;
+  /**
+   * Identity the client expects the daemon to report. When provided and
+   * the running daemon's `buildId` differs, the handshake resolves to
+   * `unexpected_install_id` compatibility so the client supersedes and
+   * relaunches. Mismatches happen when the VSIX has been reinstalled
+   * but the old daemon survived the reload.
+   */
+  expectedBuildId?: string;
   requiredCapabilities?: string[];
 };
 
@@ -179,6 +193,7 @@ export type WorkspaceDaemonLaunchOptions = {
   runtimeDir?: string;
   client: WorkspaceDaemonClientHello['client'];
   expectedInstallId?: string;
+  expectedBuildId?: string;
   requiredCapabilities?: string[];
   minStartedAtUnixMs?: number;
   startDaemon: () => Promise<void> | void;
@@ -436,6 +451,15 @@ type WorkspaceDaemonPolicyCheckRequest = WorkspaceDaemonMessage & {
   options: WorkspacePolicyCheckOptions;
 };
 
+type WorkspaceDaemonSetDiagnosticsConfigRequest = WorkspaceDaemonMessage & {
+  type: 'set_diagnostics_config';
+  patch: DiagnosticsConfigPatch;
+};
+
+type WorkspaceDaemonGetDiagnosticsConfigRequest = WorkspaceDaemonMessage & {
+  type: 'get_diagnostics_config';
+};
+
 type WorkspaceDaemonQueuePriority =
   | 'highest'
   | 'high'
@@ -544,6 +568,16 @@ type WorkspaceDaemonPolicyCheckAck = {
   result: WorkspacePolicyCheckResult;
 };
 
+type WorkspaceDaemonSetDiagnosticsConfigAck = {
+  type: 'set_diagnostics_config_ack';
+  config: DiagnosticsConfig;
+};
+
+type WorkspaceDaemonGetDiagnosticsConfigAck = {
+  type: 'get_diagnostics_config_ack';
+  config: DiagnosticsConfig;
+};
+
 type WorkspaceDaemonCancelRequestAck = {
   type: 'cancel_request_ack';
   targetId: number;
@@ -577,6 +611,8 @@ type WorkspaceDaemonServiceResponse =
   | WorkspaceDaemonPreviewRenameAck
   | WorkspaceDaemonQueryArchitectureSummaryAck
   | WorkspaceDaemonPolicyCheckAck
+  | WorkspaceDaemonSetDiagnosticsConfigAck
+  | WorkspaceDaemonGetDiagnosticsConfigAck
   | WorkspaceDaemonCancelRequestAck
   | WorkspaceDaemonVoidAck
   | WorkspaceDaemonHelloAck
@@ -821,6 +857,41 @@ export function workspaceDaemonDescriptorWrite(
   return paths;
 }
 
+export type WorkspaceDaemonTerminateResult = {
+  /** True when the descriptor existed AND its PID was successfully terminated. */
+  terminated: boolean;
+  /** Descriptor snapshot at the time of termination (undefined if none found). */
+  descriptor?: WorkspaceDaemonDescriptor;
+};
+
+/**
+ * Terminate the daemon currently registered at `runtimeDir`, if any, and
+ * clean up the descriptor + socket. Safe to call when no daemon is
+ * running. Does NOT spawn a replacement — the next `workspaceDaemon
+ * LaunchOrConnect` call does that on demand. Intended for extension /
+ * developer commands (e.g. "Codepol: Restart Daemon").
+ */
+export async function workspaceDaemonTerminateExternal(
+  runtimeDir?: string,
+): Promise<WorkspaceDaemonTerminateResult> {
+  const paths = workspaceDaemonRuntimePathsResolve(runtimeDir);
+  const descriptor = workspaceDaemonDescriptorRead(runtimeDir);
+  let terminated = false;
+  if (descriptor) {
+    terminated = await workspaceDaemonTerminateMatchedProcess(descriptor);
+  }
+  try {
+    if (fs.existsSync(paths.descriptorPath)) {
+      fs.unlinkSync(paths.descriptorPath);
+    }
+  } catch {
+    // Best-effort: a surviving descriptor only means the next launcher
+    // will do its own freshness check and recover.
+  }
+  socketFileRemove(paths.socketPath);
+  return { terminated, descriptor };
+}
+
 export class WorkspaceDaemonConnection implements WorkspaceDaemonRequestClient {
   private readonly pending = new Map<
     number,
@@ -986,9 +1057,13 @@ export async function workspaceDaemonHello(
       supportedProtocols: options.client.supportedProtocols,
       supportsFallbackModes: options.client.supportsFallbackModes,
     },
-    expected: options.expectedInstallId
-      ? { installChannel: options.expectedInstallId }
-      : undefined,
+    expected:
+      options.expectedInstallId !== undefined || options.expectedBuildId !== undefined
+        ? {
+            installChannel: options.expectedInstallId,
+            buildId: options.expectedBuildId,
+          }
+        : undefined,
   });
   if (response.type !== 'hello_ack') {
     throw new Error(`Unexpected daemon hello response: ${String(response.type)}`);
@@ -1032,14 +1107,22 @@ export function workspaceDaemonRequestHandle(options: {
       ? (helloMessage.client.supportedProtocols as unknown[])
       : [];
     const installChannel = helloMessage.expected?.installChannel;
+    const expectedBuildId = helloMessage.expected?.buildId;
     const protocolSupported = supportedProtocols.some(
       (value) => value === WORKSPACE_DAEMON_PROTOCOL_VERSION,
     );
     const installSupported =
       installChannel === undefined || installChannel === options.descriptor.installId;
+    const buildIdSupported =
+      expectedBuildId === undefined || expectedBuildId === options.descriptor.buildId;
+    // `buildId` and `installChannel` mismatches are reported with the
+    // same `unexpected_install_id` compatibility tag so the existing
+    // supersede path (terminate + relaunch) handles both identically.
+    // The daemon still returns its actual `buildId` + `engineVersion`
+    // so the client can log the mismatch.
     const compatibility = !protocolSupported
       ? 'unsupported_protocol'
-      : !installSupported
+      : !installSupported || !buildIdSupported
         ? 'unexpected_install_id'
         : 'ok';
     return {
@@ -1669,6 +1752,22 @@ export class WorkspaceDaemonSession {
           return {
             type: 'policy_check_ack',
             result,
+          };
+        }
+        case 'set_diagnostics_config': {
+          const input = message as WorkspaceDaemonSetDiagnosticsConfigRequest;
+          const runtime = diagnosticsRuntimeGet();
+          runtime.setConfig(input.patch);
+          return {
+            type: 'set_diagnostics_config_ack',
+            config: runtime.getConfig(),
+          };
+        }
+        case 'get_diagnostics_config': {
+          void (message as WorkspaceDaemonGetDiagnosticsConfigRequest);
+          return {
+            type: 'get_diagnostics_config_ack',
+            config: diagnosticsRuntimeGet().getConfig(),
           };
         }
         case 'register_client_session': {
@@ -3115,6 +3214,21 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
     }).then((response) => response.result);
   }
 
+  setDiagnosticsConfig(
+    patch: DiagnosticsConfigPatch,
+  ): Promise<DiagnosticsConfig> {
+    return this.connection.request<WorkspaceDaemonSetDiagnosticsConfigAck>({
+      type: 'set_diagnostics_config',
+      patch,
+    }).then((response) => response.config);
+  }
+
+  getDiagnosticsConfig(): Promise<DiagnosticsConfig> {
+    return this.connection.request<WorkspaceDaemonGetDiagnosticsConfigAck>({
+      type: 'get_diagnostics_config',
+    }).then((response) => response.config);
+  }
+
   close(): Promise<void> {
     return this.connection.close();
   }
@@ -3130,6 +3244,19 @@ export class WorkspaceDaemonPolicyCheckClient {
       type: 'policy_check',
       options,
     }).then((response) => response.result);
+  }
+
+  setDiagnosticsConfig(patch: DiagnosticsConfigPatch): Promise<DiagnosticsConfig> {
+    return this.connection.request<WorkspaceDaemonSetDiagnosticsConfigAck>({
+      type: 'set_diagnostics_config',
+      patch,
+    }).then((response) => response.config);
+  }
+
+  getDiagnosticsConfig(): Promise<DiagnosticsConfig> {
+    return this.connection.request<WorkspaceDaemonGetDiagnosticsConfigAck>({
+      type: 'get_diagnostics_config',
+    }).then((response) => response.config);
   }
 
   close(): Promise<void> {
@@ -3154,6 +3281,7 @@ async function workspaceDaemonConnectHealthy(
     runtimeDir?: string;
     client: WorkspaceDaemonClientHello['client'];
     expectedInstallId?: string;
+    expectedBuildId?: string;
     requiredCapabilities?: string[];
     minStartedAtUnixMs?: number;
     connect?: WorkspaceDaemonConnectFn;
@@ -3179,6 +3307,7 @@ async function workspaceDaemonConnectHealthy(
       connection,
       client: options.client,
       expectedInstallId: options.expectedInstallId,
+      expectedBuildId: options.expectedBuildId,
     });
     if (!workspaceDaemonDescriptorMatchesHello(descriptor, hello)) {
       await connection.close();
@@ -3285,6 +3414,7 @@ async function workspaceDaemonWaitForHealthy(
       runtimeDir: options.runtimeDir,
       client: options.client,
       expectedInstallId: options.expectedInstallId,
+      expectedBuildId: options.expectedBuildId,
       requiredCapabilities: options.requiredCapabilities,
       minStartedAtUnixMs: options.minStartedAtUnixMs,
       connect: options.connect,
@@ -3307,6 +3437,7 @@ export async function workspaceDaemonLaunchOrConnect(
     runtimeDir: options.runtimeDir,
     client: options.client,
     expectedInstallId: options.expectedInstallId,
+    expectedBuildId: options.expectedBuildId,
     requiredCapabilities: options.requiredCapabilities,
     minStartedAtUnixMs: options.minStartedAtUnixMs,
     connect: options.connect,
@@ -3327,6 +3458,7 @@ export async function workspaceDaemonLaunchOrConnect(
       runtimeDir: options.runtimeDir,
       client: options.client,
       expectedInstallId: options.expectedInstallId,
+      expectedBuildId: options.expectedBuildId,
       requiredCapabilities: options.requiredCapabilities,
       minStartedAtUnixMs: options.minStartedAtUnixMs,
       connect: options.connect,

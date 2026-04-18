@@ -1,7 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import {
   configFileDiscover,
+  diagnosticsRuntimeGet,
   workspaceUriToPath,
+  type DiagnosticsConfig,
+  type DiagnosticsConfigPatch,
   type IndexStatusResult,
   type WorkspaceArchitectureSummaryResult,
   type WorkspaceCodeAction,
@@ -22,10 +25,12 @@ import {
 import type { WorkspaceService } from '@codepol/workspace-service/contracts';
 import {
   CODEPOL_LSP_COMMAND_APPLY_EDIT_PLAN,
+  CODEPOL_LSP_COMMAND_CONFIGURE_DIAGNOSTICS,
   CODEPOL_LSP_COMMAND_GO_TO_SEMANTIC_DEFINITION,
   CODEPOL_LSP_COMMAND_SHOW_ARCHITECTURE_LINKS,
   CODEPOL_LSP_REQUEST_ARCHITECTURE_SUMMARY,
   CODEPOL_LSP_REQUEST_DEPENDENCY_GRAPH,
+  CODEPOL_LSP_REQUEST_DIAGNOSTICS_CONFIG,
   CODEPOL_LSP_REQUEST_INDEX_STATUS,
   CODEPOL_LSP_REQUEST_LINT_RULE_DETAILS,
   CODEPOL_LSP_REQUEST_LINT_RULES,
@@ -929,8 +934,10 @@ export class CodepolLspServer {
       case 'workspace/executeCommand':
         return this.executeCommandHandle(params as {
           command: string;
-          arguments?: Array<{ planId?: string }>;
+          arguments?: Array<unknown>;
         }, context);
+      case CODEPOL_LSP_REQUEST_DIAGNOSTICS_CONFIG:
+        return diagnosticsRuntimeGet().getConfig();
       case 'workspace/symbol':
         return this.workspaceSymbolHandle(params as {
           query?: string;
@@ -1040,6 +1047,7 @@ export class CodepolLspServer {
             APPLY_EDIT_PLAN_COMMAND,
             GO_TO_SEMANTIC_DEFINITION_COMMAND,
             SHOW_ARCHITECTURE_LINKS_COMMAND,
+            CODEPOL_LSP_COMMAND_CONFIGURE_DIAGNOSTICS,
           ],
         },
       },
@@ -1283,14 +1291,20 @@ export class CodepolLspServer {
 
   private async executeCommandHandle(params: {
     command: string;
-    arguments?: Array<{ planId?: string; uri?: string }>;
+    arguments?: Array<unknown>;
   }, context: { requestId?: JsonRpcId; signal?: AbortSignal } = {}): Promise<unknown> {
+    if (params.command === CODEPOL_LSP_COMMAND_CONFIGURE_DIAGNOSTICS) {
+      const patch = (params.arguments?.[0] ?? {}) as DiagnosticsConfigPatch;
+      return this.diagnosticsConfigureHandle(patch);
+    }
+
     if (!this.registeredClientSessionId || !this.workspaceId) {
       return null;
     }
 
     if (params.command === APPLY_EDIT_PLAN_COMMAND) {
-      const planId = params.arguments?.[0]?.planId;
+      const firstArg = params.arguments?.[0] as { planId?: string } | undefined;
+      const planId = firstArg?.planId;
       if (!planId) {
         return null;
       }
@@ -1329,7 +1343,8 @@ export class CodepolLspServer {
       });
     }
 
-    const uri = params.arguments?.[0]?.uri;
+    const uriArg = params.arguments?.[0] as { uri?: string } | undefined;
+    const uri = uriArg?.uri;
     if (!uri) {
       return null;
     }
@@ -1342,6 +1357,32 @@ export class CodepolLspServer {
     }
 
     return null;
+  }
+
+  private async diagnosticsConfigureHandle(
+    patch: DiagnosticsConfigPatch,
+  ): Promise<DiagnosticsConfig> {
+    const runtime = diagnosticsRuntimeGet();
+    runtime.setConfig(patch);
+    const localConfig = runtime.getConfig();
+    // Mirror the change to the daemon (if the LSP is fronting a daemon service).
+    try {
+      const anyService = this.service as unknown as {
+        setDiagnosticsConfig?: (
+          input: DiagnosticsConfigPatch,
+        ) => Promise<DiagnosticsConfig>;
+      };
+      if (typeof anyService.setDiagnosticsConfig === 'function') {
+        await anyService.setDiagnosticsConfig(patch);
+      }
+    } catch (err) {
+      console.warn(
+        `[codepol-lsp] failed to forward diagnostics config: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+    return localConfig;
   }
 
   private async workspaceSymbolHandle(

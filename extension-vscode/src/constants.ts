@@ -29,6 +29,16 @@ export const CODEPOL_EXTENSION_COMMAND_OPEN_LINT_RULE_LOCATION =
   'codepol.extension.openLintRuleLocation';
 export const CODEPOL_EXTENSION_COMMAND_REFRESH_LINT_RULES =
   'codepol.extension.refreshLintRules';
+export const CODEPOL_EXTENSION_COMMAND_SET_DIAGNOSTICS_LEVEL =
+  'codepol.extension.setDiagnosticsLevel';
+export const CODEPOL_EXTENSION_COMMAND_SET_DIAGNOSTICS_LOG_FILE =
+  'codepol.extension.setDiagnosticsLogFile';
+export const CODEPOL_EXTENSION_COMMAND_SET_DIAGNOSTICS_SCOPE =
+  'codepol.extension.setDiagnosticsScope';
+export const CODEPOL_EXTENSION_COMMAND_SHOW_DIAGNOSTICS_CONFIG =
+  'codepol.extension.showDiagnosticsConfig';
+export const CODEPOL_EXTENSION_COMMAND_RESTART_DAEMON =
+  'codepol.extension.restartDaemon';
 
 export const CODEPOL_EXTENSION_PANEL_SEMANTIC_DEFINITION =
   'codepol.semanticDefinitionPanel';

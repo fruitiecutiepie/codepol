@@ -418,12 +418,55 @@ export {
 } from './policy/policyGet';
 
 // Tree-sitter checking
-export { parserInit, parserGetForFile } from './parser/parserInit';
+export { parserInit, parserGetForFile, parserGetForLanguage } from './parser/parserInit';
 export {
-  parserParseDebug,
-  parseDebugLogWrite,
-  parseDebugIsEnabled,
-} from './parser/parserParseDebug';
+  parserParseTrace,
+  parserParseAbortHandlerSet,
+  treeDisposeNow,
+  type ParserParseAbortHandler,
+  type ParserParseAbortInfo,
+} from './parser/parserParseTrace';
+
+// Diagnostics / observability runtime
+export type {
+  Clock,
+  DebugChecks,
+  Diagnostics,
+  DiagnosticsConfig,
+  DiagnosticsConfigPatch,
+  DiagnosticsFieldProvider,
+  DiagnosticsPolicy,
+  DiagnosticsRecord,
+  DiagnosticsRuntime,
+  DiagnosticsSink,
+  DiagnosticsSinkConfig,
+  ExecutionContext,
+  LogLevel,
+  Span,
+} from './diagnostics';
+export {
+  logLevelIsEnabled,
+  LOG_LEVEL_ORDER,
+  diagnosticsCreate,
+  diagnosticsRuntimeCreate,
+  diagnosticsConfigDefaults,
+  diagnosticsRuntimeGet,
+  systemClock,
+  consoleSinkCreate,
+  fileSinkCreate,
+  compositeSinkCreate,
+  noopSinkCreate,
+  diagnosticsNoopCreate,
+  executionContextNoopCreate,
+  diagnosticsGet,
+  executionContextCreate,
+  diagnosticsRuntimeGetConfig,
+  diagnosticsRuntimeSetLevel,
+  diagnosticsRuntimeSetScopeLevel,
+  diagnosticsRuntimeSetPolicy,
+  diagnosticsRuntimeSetSink,
+  diagnosticsRuntimeSetConfig,
+} from './diagnostics';
 export {
   policyViolationsGetForFile,
   policyViolationsGetFromDir,

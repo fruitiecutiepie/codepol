@@ -57,6 +57,7 @@ await build({
   },
   define: {
     'process.env.CODEPOL_BINARY': '"1"',
+    'process.env.CODEPOL_BUNDLED_RUNTIME': '"1"',
     'import.meta.url': 'import_meta_url',
   },
   logLevel: 'info',

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { execSync } from 'node:child_process';
 import * as esbuild from 'esbuild';
 
 const production = process.argv.includes('--production');
@@ -58,6 +59,36 @@ function bundleDirReset() {
   fs.mkdirSync(bundleRoot, { recursive: true });
 }
 
+/**
+ * Build-time identity. Has to change whenever the bundled daemon binary
+ * would meaningfully differ, so a LSP bundled against the new sources
+ * can reject a stale running daemon during `hello`. Prefers git when
+ * available (SHA for clean trees, SHA + dirty-timestamp for uncommitted
+ * edits); falls back to a plain timestamp in environments without git.
+ */
+function buildIdResolve() {
+  const override = process.env.CODEPOL_BUILD_ID?.trim();
+  if (override && override.length > 0) {
+    return override;
+  }
+  try {
+    const sha = execSync('git rev-parse HEAD', {
+      cwd: repoRoot,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      encoding: 'utf8',
+    })
+      .trim()
+      .slice(0, 12);
+    const dirty = execSync(
+      'git status --porcelain --untracked-files=no',
+      { cwd: repoRoot, stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8' },
+    ).trim().length > 0;
+    return dirty ? `${sha}-dirty-${Date.now()}` : sha;
+  } catch {
+    return `nogit-${Date.now()}`;
+  }
+}
+
 function wasmAssetsCopy() {
   const webTreeSitterRoot = path.dirname(require.resolve('web-tree-sitter/package.json'));
   const assets = [
@@ -98,12 +129,20 @@ function outputFilesWrite(outputFiles) {
 async function main() {
   bundleDirReset();
 
+  const buildId = buildIdResolve();
+  const sharedDefine = {
+    'process.env.CODEPOL_BUNDLED_RUNTIME': JSON.stringify('1'),
+    // Inlined at bundle time so LSP + daemon carry identical build
+    // identity. The hello handshake compares them; a mismatch forces
+    // the LSP to terminate the running daemon and spawn a fresh one.
+    'process.env.CODEPOL_BUILD_ID': JSON.stringify(buildId),
+  };
+  console.log(`[build-bundle] buildId=${buildId}`);
+
   await esbuild.build({
     absWorkingDir: repoRoot,
     bundle: true,
-    define: {
-      'process.env.CODEPOL_BUNDLED_RUNTIME': JSON.stringify('1'),
-    },
+    define: sharedDefine,
     entryPoints: {
       extension: path.join(extensionRoot, 'src/extension.ts'),
       lsp: path.join(repoRoot, 'apps/lsp/src/indexBundled.ts'),
@@ -123,9 +162,7 @@ async function main() {
   const daemonBuild = await esbuild.build({
     absWorkingDir: repoRoot,
     bundle: true,
-    define: {
-      'process.env.CODEPOL_BUNDLED_RUNTIME': JSON.stringify('1'),
-    },
+    define: sharedDefine,
     entryPoints: {
       daemon: path.join(repoRoot, 'apps/daemon/src/index.ts'),
     },

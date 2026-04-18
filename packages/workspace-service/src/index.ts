@@ -12,10 +12,9 @@ import {
   crossFileResolveForFile,
   indexStoreNew,
   isErr,
+  diagnosticsRuntimeGet,
   lintDiagnosticToWorkspaceDiagnostic,
   pluginGetForRule,
-  parseDebugLogWrite,
-  parseDebugIsEnabled,
   policyPluginsGet,
   policyViolationsGetForFile,
   policyRuleTargetsResolve,
@@ -111,6 +110,13 @@ import {
 } from './warmCache';
 
 export * from './daemon';
+export {
+  daemonSelfWatchEntryFileStart,
+  daemonExitOnFirstWasmAbortInstall,
+  type DaemonExitOnFirstWasmAbortOptions,
+  type DaemonSelfWatchDispose,
+  type DaemonSelfWatchEntryFileOptions,
+} from './daemonSelfWatch';
 export { builtinPluginsRefresh, ensureWorkspaceRuntimeReady } from './runtime';
 export * from './warmCache';
 
@@ -135,10 +141,6 @@ const WORKSPACE_PACKAGE_NAME_DESCRIPTION =
 
 function workspaceRequestCancelledErrorCreate(): Error {
   return new Error('Request cancelled');
-}
-
-function treeCheckDebugIsEnabled(): boolean {
-  return parseDebugIsEnabled();
 }
 
 function workspaceAbortSignalThrowIfAborted(signal?: AbortSignal): void {
@@ -4357,7 +4359,7 @@ function workspaceTreeAnalyzerRun(
   const violations: PolicyViolation[] = [];
   const issues: string[] = [];
   const startedAt = Date.now();
-  const treeCheckDebugEnabled = treeCheckDebugIsEnabled();
+  const diag = diagnosticsRuntimeGet().getDiagnostics('workspace.analyzer');
   let firstTreeCheckFailure: { ruleId: string; filePath: string; error: string } | undefined;
 
   for (const match of treeMatches) {
@@ -4384,20 +4386,14 @@ function workspaceTreeAnalyzerRun(
             filePath: relativePath,
             error: result.Err,
           };
-          if (treeCheckDebugEnabled) {
-            parseDebugLogWrite(
-              `[codepol-parse-debug] workspace analyzer: FIRST tree-check failure ${JSON.stringify(firstTreeCheckFailure)}`,
-            );
-          }
-        } else if (treeCheckDebugEnabled) {
-          parseDebugLogWrite(
-            `[codepol-parse-debug] workspace analyzer: subsequent tree-check failure ${JSON.stringify({
-              ruleId: match.rule.ruleId,
-              filePath: relativePath,
-              error: result.Err,
-              firstFailure: firstTreeCheckFailure,
-            })}`,
-          );
+          diag.warn('tree_check.first_failure', firstTreeCheckFailure);
+        } else {
+          diag.debug('tree_check.subsequent_failure', () => ({
+            ruleId: match.rule.ruleId,
+            filePath: relativePath,
+            error: result.Err,
+            firstFailure: firstTreeCheckFailure,
+          }));
         }
         const issue =
           `Tree check failed for ${match.rule.ruleId} in ` +

@@ -4,11 +4,13 @@ import {
   WorkspaceDaemonPolicyCheckClient,
   policyCheck as workspacePolicyCheck,
   workspaceDaemonLaunchOrConnect,
+  WORKSPACE_DAEMON_BUILD_ID,
   WORKSPACE_DAEMON_PROTOCOL_VERSION,
   type WorkspaceDaemonConnectFn,
   type WorkspacePolicyCheckOptions,
   type WorkspacePolicyCheckResult,
 } from '@codepol/workspace-service';
+import type { DiagnosticsConfigPatch } from '@codepol/core';
 
 const nodeRequire = createRequire(__filename);
 
@@ -22,6 +24,7 @@ export type CliPolicyChecker = {
   policyCheck: (
     options: WorkspacePolicyCheckOptions,
   ) => Promise<WorkspacePolicyCheckResult>;
+  setDiagnosticsConfig?: (patch: DiagnosticsConfigPatch) => Promise<void>;
   close?: () => Promise<void>;
 };
 
@@ -80,6 +83,7 @@ export async function cliPolicyCheckerResolve(options: {
       },
       runtimeDir: env.CODEPOL_DAEMON_RUNTIME_DIR,
       expectedInstallId: env.CODEPOL_INSTALL_ID,
+      expectedBuildId: WORKSPACE_DAEMON_BUILD_ID,
       connect: options.connect,
       startDaemon: options.startDaemon ?? (() => daemonProcessStart(env)),
     });
@@ -91,6 +95,9 @@ export async function cliPolicyCheckerResolve(options: {
     });
     return {
       policyCheck: (policyOptions) => client.policyCheck(policyOptions),
+      setDiagnosticsConfig: async (patch) => {
+        await client.setDiagnosticsConfig(patch);
+      },
       close: () => client.close(),
     };
   } catch (error) {

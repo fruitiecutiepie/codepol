@@ -238,6 +238,13 @@ export type IndexAdapter = {
    * @param file - Absolute file path
    * @param bytes - File contents as bytes
    * @param revision - Revision identifier
+   * @param diag - Optional diagnostics handle; defaults to the runtime's
+   *               scoped diagnostics for `parser.adapterCore`.
    */
-  indexFile(file: string, bytes: Uint8Array, revision: string): FileIndexDelta;
+  indexFile(
+    file: string,
+    bytes: Uint8Array,
+    revision: string,
+    diag?: import('../../diagnostics/diagnosticsTypes').Diagnostics,
+  ): FileIndexDelta;
 };

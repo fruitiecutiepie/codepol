@@ -18,3 +18,7 @@ export const CODEPOL_LSP_REQUEST_PREPARE_RENAME = 'codepol/prepareRename';
 export const CODEPOL_LSP_REQUEST_PREVIEW_RENAME = 'codepol/previewRename';
 export const CODEPOL_LSP_REQUEST_ARCHITECTURE_SUMMARY =
   'codepol/architectureSummary';
+export const CODEPOL_LSP_REQUEST_DIAGNOSTICS_CONFIG =
+  'codepol/diagnosticsConfig';
+export const CODEPOL_LSP_COMMAND_CONFIGURE_DIAGNOSTICS =
+  'codepol.diagnostics.configure';

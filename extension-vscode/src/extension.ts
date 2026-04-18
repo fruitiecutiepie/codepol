@@ -1,11 +1,15 @@
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type {
+  DiagnosticsConfig,
+  DiagnosticsConfigPatch,
+  LogLevel,
   WorkspaceLintRuleDetailsResult,
   WorkspaceLintRuleSummary,
   WorkspaceSearchResult,
 } from '@codepol/core';
 import { configFileDiscover } from '@codepol/core';
+import { workspaceDaemonTerminateExternal } from '@codepol/workspace-service';
 import {
   CodepolCommandController,
   type RenameCommandOptions,
@@ -16,6 +20,11 @@ import {
   CODEPOL_EXTENSION_COMMAND_REFRESH_LINT_RULES,
   CODEPOL_EXTENSION_COMMAND_OPEN_LINT_RULE_LOCATION,
   CODEPOL_EXTENSION_COMMAND_RENAME_CODEPOL_ENTITY,
+  CODEPOL_EXTENSION_COMMAND_SET_DIAGNOSTICS_LEVEL,
+  CODEPOL_EXTENSION_COMMAND_SET_DIAGNOSTICS_LOG_FILE,
+  CODEPOL_EXTENSION_COMMAND_SET_DIAGNOSTICS_SCOPE,
+  CODEPOL_EXTENSION_COMMAND_SHOW_DIAGNOSTICS_CONFIG,
+  CODEPOL_EXTENSION_COMMAND_RESTART_DAEMON,
   CODEPOL_EXTENSION_COMMAND_SHOW_LINT_RULE_DIAGNOSTIC_FIXES,
   CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_SUMMARY,
   CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_LINKS,
@@ -77,6 +86,66 @@ function activeEditorUriGet(): string | undefined {
     return undefined;
   }
   return editor.document.uri.toString();
+}
+
+const DIAGNOSTICS_LOG_LEVELS: readonly LogLevel[] = [
+  'error',
+  'warn',
+  'info',
+  'debug',
+  'trace',
+];
+
+function diagnosticsLogLevelIsValid(value: string): value is LogLevel {
+  return (DIAGNOSTICS_LOG_LEVELS as readonly string[]).includes(value);
+}
+
+function diagnosticsPatchFromSettings(): DiagnosticsConfigPatch {
+  const cfg = vscode.workspace.getConfiguration('codepol.diagnostics');
+  const level = cfg.get<string>('level');
+  const scopesRaw = cfg.get<Record<string, string>>('scopes') ?? {};
+  const logFilePath = cfg.get<string>('logFilePath') ?? '';
+  const includeTiming = cfg.get<boolean>('includeTiming');
+  const includePayloads = cfg.get<boolean>('includePayloads');
+
+  const patch: DiagnosticsConfigPatch = {};
+  if (level && diagnosticsLogLevelIsValid(level)) {
+    patch.level = level;
+  }
+  const scopes: Record<string, LogLevel | null> = {};
+  for (const [key, raw] of Object.entries(scopesRaw)) {
+    if (typeof raw === 'string' && diagnosticsLogLevelIsValid(raw)) {
+      scopes[key] = raw;
+    }
+  }
+  if (Object.keys(scopes).length > 0) {
+    patch.scopes = scopes;
+  }
+  patch.sink = {
+    logFilePath: logFilePath.trim().length > 0 ? logFilePath.trim() : null,
+  };
+  const policy: Partial<DiagnosticsConfig['policy']> = {};
+  if (includeTiming !== undefined) policy.includeTiming = includeTiming;
+  if (includePayloads !== undefined) policy.includePayloads = includePayloads;
+  if (Object.keys(policy).length > 0) {
+    patch.policy = policy;
+  }
+  return patch;
+}
+
+async function diagnosticsConfigApply(
+  protocol: CodepolProtocolClient,
+  patch: DiagnosticsConfigPatch,
+): Promise<void> {
+  try {
+    await protocol.configureDiagnostics(patch);
+  } catch (err) {
+    void vscode.window.showErrorMessage(
+      `Codepol: failed to apply diagnostics config: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
 }
 
 function activeEditorLocationGet():
@@ -574,6 +643,131 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         void sidebarProvider?.refresh();
       },
     ),
+    vscode.commands.registerCommand(
+      CODEPOL_EXTENSION_COMMAND_SET_DIAGNOSTICS_LEVEL,
+      async () => {
+        const choice = await vscode.window.showQuickPick(
+          DIAGNOSTICS_LOG_LEVELS as readonly string[],
+          { placeHolder: 'Select Codepol diagnostics log level' },
+        );
+        if (!choice || !diagnosticsLogLevelIsValid(choice)) return;
+        const cfg = vscode.workspace.getConfiguration('codepol.diagnostics');
+        await cfg.update('level', choice, vscode.ConfigurationTarget.Workspace);
+        await diagnosticsConfigApply(protocol, { level: choice });
+      },
+    ),
+    vscode.commands.registerCommand(
+      CODEPOL_EXTENSION_COMMAND_SET_DIAGNOSTICS_LOG_FILE,
+      async () => {
+        const cfg = vscode.workspace.getConfiguration('codepol.diagnostics');
+        const current = cfg.get<string>('logFilePath') ?? '';
+        const value = await vscode.window.showInputBox({
+          prompt: 'Codepol diagnostics log file path (leave blank to disable)',
+          value: current,
+        });
+        if (value === undefined) return;
+        const trimmed = value.trim();
+        await cfg.update(
+          'logFilePath',
+          trimmed,
+          vscode.ConfigurationTarget.Workspace,
+        );
+        await diagnosticsConfigApply(protocol, {
+          sink: { logFilePath: trimmed.length > 0 ? trimmed : null },
+        });
+      },
+    ),
+    vscode.commands.registerCommand(
+      CODEPOL_EXTENSION_COMMAND_SET_DIAGNOSTICS_SCOPE,
+      async () => {
+        const scope = await vscode.window.showInputBox({
+          prompt: 'Codepol diagnostics scope (e.g. parser, workspace.analyzer)',
+        });
+        if (!scope) return;
+        const choice = await vscode.window.showQuickPick(
+          [...(DIAGNOSTICS_LOG_LEVELS as readonly string[]), '(clear override)'],
+          { placeHolder: `Log level for scope "${scope.trim()}"` },
+        );
+        if (!choice) return;
+        const cfg = vscode.workspace.getConfiguration('codepol.diagnostics');
+        const scopes = {
+          ...(cfg.get<Record<string, string>>('scopes') ?? {}),
+        } as Record<string, string | undefined>;
+        let patchScopes: Record<string, LogLevel | null> = {};
+        const trimmedScope = scope.trim();
+        if (choice === '(clear override)') {
+          delete scopes[trimmedScope];
+          patchScopes[trimmedScope] = null;
+        } else if (diagnosticsLogLevelIsValid(choice)) {
+          scopes[trimmedScope] = choice;
+          patchScopes[trimmedScope] = choice;
+        }
+        await cfg.update(
+          'scopes',
+          scopes,
+          vscode.ConfigurationTarget.Workspace,
+        );
+        await diagnosticsConfigApply(protocol, { scopes: patchScopes });
+      },
+    ),
+    vscode.commands.registerCommand(
+      CODEPOL_EXTENSION_COMMAND_SHOW_DIAGNOSTICS_CONFIG,
+      async () => {
+        try {
+          const config = await protocol.getDiagnosticsConfig();
+          if (!config) {
+            void vscode.window.showInformationMessage(
+              'Codepol diagnostics config is not available (server not connected).',
+            );
+            return;
+          }
+          const doc = await vscode.workspace.openTextDocument({
+            language: 'json',
+            content: JSON.stringify(config, null, 2),
+          });
+          await vscode.window.showTextDocument(doc, { preview: true });
+        } catch (err) {
+          void vscode.window.showErrorMessage(
+            `Codepol: failed to fetch diagnostics config: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        }
+      },
+    ),
+    vscode.commands.registerCommand(
+      CODEPOL_EXTENSION_COMMAND_RESTART_DAEMON,
+      async () => {
+        const runtimeDir = process.env.CODEPOL_DAEMON_RUNTIME_DIR;
+        try {
+          const result = await workspaceDaemonTerminateExternal(runtimeDir);
+          if (!result.descriptor) {
+            void vscode.window.showInformationMessage(
+              'Codepol: no running daemon was registered; the next request will spawn a fresh one.',
+            );
+          } else if (result.terminated) {
+            void vscode.window.showInformationMessage(
+              `Codepol: daemon pid=${result.descriptor.pid} terminated. The next request will spawn a fresh daemon.`,
+            );
+          } else {
+            void vscode.window.showWarningMessage(
+              `Codepol: could not terminate daemon pid=${result.descriptor.pid}. Descriptor was cleared; the next request will spawn a fresh daemon.`,
+            );
+          }
+        } catch (err) {
+          void vscode.window.showErrorMessage(
+            `Codepol: restart daemon failed: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        }
+      },
+    ),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration('codepol.diagnostics')) {
+        void diagnosticsConfigApply(protocol, diagnosticsPatchFromSettings());
+      }
+    }),
     vscode.window.onDidChangeActiveTextEditor(() => {
       void readiness.refresh();
       void sidebarProvider?.refresh();
@@ -585,10 +779,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
   );
 
-  void protocol.start().catch((error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
-    void vscode.window.showErrorMessage(`Codepol failed to start the language client: ${message}`);
-  });
+  void protocol
+    .start()
+    .then(() => diagnosticsConfigApply(protocol, diagnosticsPatchFromSettings()))
+    .catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      void vscode.window.showErrorMessage(`Codepol failed to start the language client: ${message}`);
+    });
   readiness.start();
 
   const packageWatcher = vscode.workspace.createFileSystemWatcher('**/package.json');

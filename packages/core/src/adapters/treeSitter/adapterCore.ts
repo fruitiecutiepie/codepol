@@ -7,9 +7,13 @@
  * configuration (queries, kind mappings) while this module handles execution.
  */
 
-import Parser from 'web-tree-sitter';
 import { createHash } from 'node:crypto';
-import { parserParseDebug } from '../../parser/parserParseDebug';
+import type Parser from 'web-tree-sitter';
+import { parserParseTrace, treeDisposeNow } from '../../parser/parserParseTrace';
+import { parserGetForLanguage } from '../../parser/parserInit';
+import { isErr } from '../../result/result';
+import type { Diagnostics } from '../../diagnostics/diagnosticsTypes';
+import { diagnosticsRuntimeGet } from '../../diagnostics/diagnosticsRuntimeGlobal';
 import type {
   SymbolId,
   ScopeId,
@@ -1871,19 +1875,59 @@ function indexFileWithTreeSitter(
   cfg: LangConfig,
   file: string,
   bytes: Uint8Array,
-  revision: string
+  revision: string,
+  diag?: Diagnostics,
 ): FileIndexDelta {
-  const parser = new Parser();
-  parser.setLanguage(cfg.language);
+  // Use the process-wide pooled parser for this language. Allocating a
+  // fresh `new Parser()` per file leaks native WASM memory (parsers need
+  // explicit `.delete()`) which, accumulated over thousands of files in a
+  // long-running daemon, aborts the shared tree-sitter module.
+  const parserResult = parserGetForLanguage(cfg.language);
+  if (isErr(parserResult)) {
+    throw new Error(
+      `Parser unavailable for "${file}": ${parserResult.Err}`,
+    );
+  }
+  const parser = parserResult.Ok;
+
+  const parseDiag = diag
+    ?? diagnosticsRuntimeGet().getDiagnostics('parser.adapterCore');
 
   // web-tree-sitter expects a string; tree-sitter node indices (startIndex/endIndex)
   // are character offsets into this string, NOT UTF-8 byte offsets. All extraction
   // functions receive the string so sliceText can use string.slice() correctly.
   const sourceText = Buffer.from(bytes).toString('utf8');
-  const tree = parserParseDebug(parser, sourceText, {
+  const tree = parserParseTrace(parser, sourceText, parseDiag, {
     filePath: file,
     callSite: 'adapterCore.indexFileWithTreeSitter',
   });
+  try {
+    return indexDeltaFromTree(cfg, file, revision, sourceText, tree);
+  } finally {
+    // This adapter extracts all tree data synchronously into plain records
+    // (`FileIndexDelta` contains no SyntaxNode references). Dispose the
+    // tree eagerly instead of waiting for GC-driven finalization — during
+    // bulk indexing this keeps the WASM heap bounded regardless of when
+    // the finalizer callback actually runs.
+    //
+    // Uses `treeDisposeNow` (not `tree.delete()` directly) because
+    // `parserParseTrace` registers every tree with a `FinalizationRegistry`
+    // for best-effort GC-driven cleanup. Calling `tree.delete()` bypasses
+    // the registry's bookkeeping and leaves the finalizer armed — when
+    // GC later fires it, the stored pointer is already freed and the
+    // tree-sitter allocator double-frees, corrupting its free list and
+    // making the daemon spin at 100 % CPU or abort.
+    treeDisposeNow(tree);
+  }
+}
+
+function indexDeltaFromTree(
+  cfg: LangConfig,
+  file: string,
+  revision: string,
+  sourceText: string,
+  tree: import('web-tree-sitter').Tree,
+): FileIndexDelta {
   const diags: AdapterDiagnostic[] = [];
 
   // Build scopes first
@@ -1987,8 +2031,13 @@ export function indexAdapterCreate(cfg: LangConfig) {
         'No type information',
       ],
     },
-    indexFile(file: string, bytes: Uint8Array, revision: string): FileIndexDelta {
-      return indexFileWithTreeSitter(cfg, file, bytes, revision);
+    indexFile(
+      file: string,
+      bytes: Uint8Array,
+      revision: string,
+      diag?: Diagnostics,
+    ): FileIndexDelta {
+      return indexFileWithTreeSitter(cfg, file, bytes, revision, diag);
     },
   };
 }
