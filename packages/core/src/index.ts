@@ -50,6 +50,9 @@ export type {
   FixProviderContext,
   FixProvider,
   PolicyPluginCapabilities,
+  ArchitectureCheckContext,
+  ArchitectureCheckFn,
+  ArchitectureCheckProvider,
   PluginRuleConfig,
   CodepolPluginRule,
   PluginRule,
@@ -147,7 +150,12 @@ export type {
   IndexStatusResult,
 } from './types';
 
-export { pluginRuleNew, treeCheckProviderSupportsLanguage } from './types';
+export {
+  pluginRuleNew,
+  treeCheckProviderSupportsLanguage,
+  architectureCheckProviderSupportsLanguage,
+  pluginCapabilitiesRequireProjectIndex,
+} from './types';
 export {
   workspacePathToUri,
   workspaceUriToPath,
@@ -520,6 +528,12 @@ export {
   policyViolationsGetForFile,
   policyViolationsGetFromDir,
 } from './policy/policyTreeCheck';
+export {
+  policyArchitectureViolationsGetFromDir,
+  policyArchitectureViolationsGetForRule,
+  pluginsMapHasArchitectureProvider,
+  moduleGraphFromProjectIndex,
+} from './policy/policyArchitectureCheck';
 
 // Languages
 export type { Lang } from './parser/parserLangs';

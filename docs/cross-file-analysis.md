@@ -150,9 +150,134 @@ targets = ["src"]
 ignoreEntryPoints = true
 ```
 
+## Architecture Check Capability
+
+For project-wide rules that operate on the module graph (cycles, layer
+boundaries, reachability), use the `architectureCheckProvider`
+capability instead of `treeCheckProvider`. The runner invokes an
+architecture check **once per matched rule** with the fully-built
+`ProjectIndex` and `ModuleGraph`, rather than once per file.
+
+Architecture providers always require the project index, so authors do
+not need to set `requiresProjectIndex: true` separately.
+
+```typescript
+import {
+  pluginRuleNew,
+  type ArchitectureCheckContext,
+  type PolicyRule,
+  type PolicyViolation,
+} from '@codepol/core';
+
+function noOrphanCheck(
+  rule: PolicyRule,
+  context: ArchitectureCheckContext,
+): PolicyViolation[] {
+  const orphans = context.moduleGraph
+    .moduleGraphEntryPointsGet()
+    .filter((file) => file.includes('/internal/'));
+
+  return orphans.map((file) => ({
+    ruleId: rule.id || rule.ruleId,
+    filePath: file,
+    message: 'Internal module has no importers — possibly dead.',
+    line: 1,
+    column: 1,
+  }));
+}
+
+export const noOrphanRule = pluginRuleNew({
+  id: 'no-orphan-internal',
+  capabilities: {
+    architectureCheckProvider: {
+      check: noOrphanCheck,
+    },
+  },
+});
+```
+
+### Built-in Architecture Rules
+
+`@codepol/plugin` ships three architecture rules out of the box. They
+read the same `ProjectIndex` / `ModuleGraph` exposed to user-land rules,
+so the patterns above generalise.
+
+#### `no-cycles`
+
+Reports one violation per circular import cycle. Anchors the violation
+on the alphabetically-first cycle member; remaining members appear in
+`relatedLocations`.
+
+```toml
+[[rules]]
+ruleId = "@codepol/plugin/no-cycles"
+targets = ["src"]
+
+[rules.args]
+maxCycles = 50   # default cap on emitted violations
+minSize = 2      # ignore self-imports (length 1) by default
+```
+
+#### `no-layer-violation`
+
+Classifies every indexed file into a named layer based on glob
+membership and rejects edges that violate `allows` / `denies`. Files
+without a matching layer are ignored. When two layer globs match the
+same file with equal specificity, the rule emits an "ambiguous layer"
+violation so the policy author can disambiguate.
+
+```toml
+[[rules]]
+ruleId = "@codepol/plugin/no-layer-violation"
+targets = ["src"]
+
+[rules.args.layers.domain]
+files = ["src/domain/**/*.ts"]
+allows = ["shared"]
+
+[rules.args.layers.infra]
+files = ["src/infra/**/*.ts"]
+allows = ["domain", "shared"]
+
+[rules.args.layers.ui]
+files = ["src/ui/**/*.ts"]
+allows = ["domain", "shared"]
+
+[rules.args.layers.shared]
+files = ["src/shared/**/*.ts"]
+```
+
+A layer with no `allows` and no `denies` is a leaf — other layers may or
+may not be allowed to depend on it depending on their own `allows`. A
+layer with `allows = []` may only import from itself.
+
+#### `dead-module`
+
+Flags files that no entry point transitively imports. Pass entry points
+explicitly via `args.entries` (glob patterns relative to the policy
+`cwd`); when omitted, the natural entry points reported by the module
+graph (files with no importers) are used.
+
+```toml
+[[rules]]
+ruleId = "@codepol/plugin/dead-module"
+targets = ["src"]
+
+[rules.args]
+entries = ["src/index.ts", "src/cli/**/*.ts"]
+ignore = ["src/**/__fixtures__/**/*.ts"]
+```
+
+When an explicit `entries` glob matches no files, the rule emits zero
+violations rather than reporting every file as dead — that pattern
+catches typos in entry-point globs without flooding the report.
+
 ## Example 2: Circular Dependency Detector
 
-A from-scratch rule that uses the module graph to detect circular imports.
+A from-scratch rule that uses the module graph to detect circular
+imports. The built-in `@codepol/plugin/no-cycles` rule (see above) is
+the production-ready version of this pattern; this example remains as a
+tutorial showing the same logic re-implemented through `treeCheckProvider`.
 
 ### Check Function
 

@@ -2,6 +2,7 @@ import path from 'node:path';
 import type { PolicyFile, PolicyViolation } from './policyTypes';
 import { ruleMatchesGet } from './policyGet';
 import { policyViolationsGetFromDir } from './policyTreeCheck';
+import { policyArchitectureViolationsGetFromDir } from './policyArchitectureCheck';
 import { Result, Ok, Err, isErr } from '../result/result';
 import { configGet, configGetFromPath } from '../config/configDiscover';
 
@@ -14,7 +15,19 @@ export type PolicyCheckOptions = {
 export type PolicyCheckResult = {
   policy: PolicyFile;
   files: string[];
+  /**
+   * Violations from per-file tree-sitter checks. For backwards
+   * compatibility this also contains architecture violations so existing
+   * consumers continue to see every violation through this field.
+   * Architecture-specific violations are also exposed separately via
+   * {@link PolicyCheckResult.architectureViolations}.
+   */
   treeViolations: PolicyViolation[];
+  /**
+   * Project-wide violations from {@link ArchitectureCheckProvider} rules.
+   * Optional so older callers ignoring this field keep working.
+   */
+  architectureViolations?: PolicyViolation[];
 };
 
 /**
@@ -58,10 +71,26 @@ export async function policyCheck(options: PolicyCheckOptions): Promise<Result<P
     return treeViolationsResult;
   }
 
+  // Architecture rules run once per matched rule against the project
+  // graph. They share the project index with the tree-check pipeline
+  // when one is built; for now each pipeline builds it independently to
+  // avoid a refactor. Wiring them to the same index is tracked as part
+  // of Phase 1 cache work.
+  const architectureViolationsResult = await policyArchitectureViolationsGetFromDir(policy, cwd, {
+    configPath: resolvedConfigPath,
+  });
+  if (isErr(architectureViolationsResult)) {
+    return architectureViolationsResult;
+  }
+
   return Ok({
     policy,
     files,
-    treeViolations: treeViolationsResult.Ok,
+    treeViolations: [
+      ...treeViolationsResult.Ok,
+      ...architectureViolationsResult.Ok,
+    ],
+    architectureViolations: architectureViolationsResult.Ok,
   });
 }
 

@@ -1,6 +1,7 @@
 import { Result } from '../result/result';
 import type { ProjectIndex } from '../index/indexQuery';
 import type { ByteRange } from '../index/indexTypes';
+import type { ModuleGraph } from '../index/moduleGraph';
 
 /**
  * Configuration for importing the logger module.
@@ -224,6 +225,74 @@ export function treeCheckProviderSupportsLanguage(
 }
 
 /**
+ * Context passed to architecture-level checks.
+ *
+ * Architecture checks operate on the entire project graph rather than a
+ * single file. They run once per matched rule and have access to the
+ * fully-built {@link ProjectIndex} and {@link ModuleGraph}; they never
+ * receive per-file source text because their concern is cross-file
+ * structure (cycles, layering, reachability), not in-file syntax.
+ */
+export type ArchitectureCheckContext = {
+  /** Working directory used to resolve any policy-relative paths */
+  cwd: string;
+  /** Loaded policy definition */
+  policy: PolicyFile;
+  /** Absolute path to the loaded config file, when available */
+  configPath?: string;
+  /** Project-wide semantic index (always present for architecture checks) */
+  projectIndex: ProjectIndex;
+  /** Module graph derived from the project index */
+  moduleGraph: ModuleGraph;
+  /** Resolved arguments for the rule */
+  ruleArgs?: unknown;
+  /** Resolved targets for the rule (for file-membership / layer queries) */
+  ruleTargets?: PolicyRuleTargetContext[];
+};
+
+/**
+ * Function signature for architecture checks. Returns violations
+ * synchronously; runners wrap thrown exceptions into errors.
+ */
+export type ArchitectureCheckFn = (
+  rule: PolicyRule,
+  context: ArchitectureCheckContext,
+) => PolicyViolation[];
+
+/**
+ * Plugin capability for project-wide architecture rules.
+ *
+ * Architecture providers do not run per-file. The runner invokes
+ * {@link ArchitectureCheckProvider.check} once per matched rule with the
+ * full {@link ProjectIndex} and {@link ModuleGraph}. Declaring an
+ * `architectureCheckProvider` implicitly requires the project index, so
+ * authors do not need to also set `requiresProjectIndex`.
+ */
+export type ArchitectureCheckProvider = {
+  /**
+   * Optional language gate. Architecture rules are typically
+   * language-agnostic; when specified the runner applies the rule only
+   * when at least one of the rule's resolved targets matches one of these
+   * languages.
+   */
+  languages?: string[];
+  /** Run the architecture check */
+  check: ArchitectureCheckFn;
+};
+
+/**
+ * Returns true when the architecture check provider supports a given
+ * target language. Architecture rules without an explicit `languages`
+ * gate apply to every language (mirrors `treeCheckProviderSupportsLanguage`).
+ */
+export function architectureCheckProviderSupportsLanguage(
+  provider: ArchitectureCheckProvider,
+  language: string,
+): boolean {
+  return provider.languages === undefined || provider.languages.includes(language);
+}
+
+/**
  * Context passed to lint providers.
  */
 export type LintProviderContext = {
@@ -336,6 +405,13 @@ export type PolicyPluginCapabilities = {
   lintProviders?: LintProvider[];
   /** Optional Tree-sitter check provider */
   treeCheckProvider?: TreeCheckProvider;
+  /**
+   * Optional architecture check provider. Architecture providers operate
+   * on the entire project graph (cycles, layer rules, dead modules) and
+   * implicitly require the project index — authors do not need to also
+   * set {@link PolicyPluginCapabilities.requiresProjectIndex}.
+   */
+  architectureCheckProvider?: ArchitectureCheckProvider;
   /** Optional fix provider */
   fixProvider?: FixProvider;
   /**
@@ -345,6 +421,19 @@ export type PolicyPluginCapabilities = {
    */
   requiresProjectIndex?: boolean;
 };
+
+/**
+ * Returns true when the plugin capabilities require a project-wide
+ * semantic index. Architecture check providers always require it; other
+ * capabilities opt in via {@link PolicyPluginCapabilities.requiresProjectIndex}.
+ */
+export function pluginCapabilitiesRequireProjectIndex(
+  capabilities: PolicyPluginCapabilities,
+): boolean {
+  if (capabilities.requiresProjectIndex) return true;
+  if (capabilities.architectureCheckProvider) return true;
+  return false;
+}
 
 /**
  * Brand symbol for CodepolPluginRule - ensures plugins are created via pluginRuleNew().

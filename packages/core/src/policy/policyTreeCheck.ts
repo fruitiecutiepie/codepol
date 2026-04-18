@@ -92,12 +92,16 @@ export function policyViolationsGetForFile(
 
 /**
  * Check if any plugin in the map requires a project index.
+ *
+ * Architecture check providers always require it implicitly so plugin
+ * authors don't have to set both `architectureCheckProvider` and
+ * `requiresProjectIndex`.
  */
 function pluginsRequireProjectIndex(pluginsMap: PolicyPluginsMap): boolean {
   for (const [, plugin] of pluginsMap) {
-    if (plugin.pluginRule.capabilities.requiresProjectIndex) {
-      return true;
-    }
+    const caps = plugin.pluginRule.capabilities;
+    if (caps.requiresProjectIndex) return true;
+    if (caps.architectureCheckProvider) return true;
   }
   return false;
 }

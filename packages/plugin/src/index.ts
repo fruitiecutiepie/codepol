@@ -14,6 +14,9 @@ import { noStarExportCollisionsRule } from './noStarExportCollisionsRule';
 import { enforceCasingRule } from './enforceCasingRule';
 import { noMixedExportsRule } from './noMixedExportsRule';
 import { noUnusedVarsRule } from './noUnusedVarsRule';
+import { noCyclesRule } from './noCyclesRule';
+import { deadModuleRule } from './deadModuleRule';
+import { noLayerViolationRule } from './noLayerViolationRule';
 import {
   biomeBridgeRule,
   eslintBridgeRule,
@@ -31,6 +34,18 @@ export { unusedExportsCheck };
 export { enforceCasingRule } from './enforceCasingRule';
 export { noMixedExportsRule } from './noMixedExportsRule';
 export { noUnusedVarsRule } from './noUnusedVarsRule';
+export { noCyclesRule } from './noCyclesRule';
+export { noCyclesCheck, NO_CYCLES_DEFAULT_MAX } from './noCyclesCheck';
+export type { NoCyclesArgs } from './noCyclesCheck';
+export { deadModuleRule } from './deadModuleRule';
+export { deadModuleCheck } from './deadModuleCheck';
+export type { DeadModuleArgs } from './deadModuleCheck';
+export { noLayerViolationRule } from './noLayerViolationRule';
+export { noLayerViolationCheck } from './noLayerViolationCheck';
+export type {
+  NoLayerViolationArgs,
+  NoLayerViolationLayerConfig,
+} from './noLayerViolationCheck';
 export { forbiddenDeclarationsRule } from './forbiddenDeclarationsRule';
 export type {
   ForbiddenDeclarationsArgs,
@@ -61,6 +76,9 @@ export default [
   enforceCasingRule,
   noMixedExportsRule,
   noUnusedVarsRule,
+  noCyclesRule,
+  deadModuleRule,
+  noLayerViolationRule,
   eslintBridgeRule,
   biomeBridgeRule,
   ruffBridgeRule,

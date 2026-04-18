@@ -404,13 +404,22 @@ Each phase is independently shippable, additive, and testable.
   - workspace contract: `queryImpactRadius` reuses `WorkspaceDependencyGraphResult`; `queryDependencyPath` / `queryDeadModules` introduce `WorkspaceDependencyPathResult` / `WorkspaceDeadModulesResult` with URI paths; daemon round-trip + LSP adapters (`codepol/impactRadius`, `codepol/dependencyPath`, `codepol/deadModules`) are in place
   - tests: `tests/index.module-graph-queries.spec.ts` (17 unit cases on in-memory graphs) plus workspace-service integration cases and a daemon round-trip case under the existing read-RPC spec
 
-### Phase 3: Policy capability
+### Phase 3: Policy capability — _done_
 
 - new `ArchitectureCheckProvider` capability in `policyTypes.ts`
 - runner module `packages/core/src/policy/policyArchitectureCheck.ts` (mirrors `policyTreeCheck.ts`)
 - ship `no-cycles`, `no-layer-violation`, `dead-module` under `@codepol/plugin`
 - `codepol.toml` schema update + docs example in `docs/cross-file-analysis.md`
 - tests: per-rule spec + one end-to-end policy spec exercising the capability
+- landed:
+  - core types: `ArchitectureCheckProvider`, `ArchitectureCheckContext`, `ArchitectureCheckFn`, `architectureCheckProviderSupportsLanguage`, `pluginCapabilitiesRequireProjectIndex`; `architectureCheckProvider` field on `PolicyPluginCapabilities` (additive — implicitly forces `requiresProjectIndex`)
+  - runner: `policyArchitectureViolationsGetFromDir` is wired into `policyCheck`; result type carries new optional `architectureViolations` field while keeping `treeViolations` populated for back-compat
+  - `ProjectIndex → ModuleGraph` adapter (`moduleGraphFromProjectIndex`) so checks stay on the public index surface
+  - built-ins: `noCyclesRule`, `deadModuleRule`, `noLayerViolationRule` (with typed `args` schemas: `NoCyclesArgs`, `DeadModuleArgs`, `NoLayerViolationArgs`); registered in `@codepol/plugin` default export
+  - `no-cycles` deterministically ranks cycles `(-size, alphabetical first member)`, anchors on first member, lists the rest in `relatedLocations`, and emits a summary violation when truncated by `maxCycles`
+  - `no-layer-violation` resolves layer membership by most-specific glob, ignores edges to/from unclassified files, reports ambiguous layer assignments as their own violation
+  - `dead-module` runs `moduleDeadModulesCompute` against natural or `args.entries` glob roots, supports `args.ignore`, returns zero violations when an explicit entry glob matches nothing (typo-safety)
+  - tests: `noCyclesCheck.spec.ts` (5), `deadModuleCheck.spec.ts` (5), `noLayerViolationCheck.spec.ts` (6), `tests/architecture-policy.spec.ts` end-to-end policy spec exercising all three rules through `policyCheck`
 
 ### Phase 4: CLI graph subcommands
 
