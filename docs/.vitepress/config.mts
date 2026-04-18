@@ -17,6 +17,7 @@ export default withMermaid({
           { text: 'Getting Started', link: '/getting-started' },
           { text: 'Policy Schema', link: '/policy-schema' },
           { text: 'Creating Custom Plugins', link: '/creating-custom-plugins' },
+          { text: 'Adding a Lint Provider', link: '/adding-a-lint-provider' },
           { text: 'API Reference', link: '/api-reference' }
         ]
       },

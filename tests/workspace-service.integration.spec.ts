@@ -845,6 +845,114 @@ describe('workspace service integration', () => {
     expect(reAddedDiagnosticA?.id).toBe(baselineByUri.get(aUri));
   });
 
+  it('reuses cached analysis when no files changed between queries', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(workspaceRoot, 'codepol.toml'), noInterfaceConfigContentCreate(), 'utf8');
+
+    const aFilePath = path.join(workspaceRoot, 'src', 'a.ts');
+    const bFilePath = path.join(workspaceRoot, 'src', 'b.ts');
+    fs.writeFileSync(aFilePath, 'export interface A {\n  name: string;\n}\n', 'utf8');
+    fs.writeFileSync(bFilePath, 'export interface B {\n  name: string;\n}\n', 'utf8');
+
+    const service = workspaceServiceCreate();
+    const { clientSessionId, workspaceId } = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath: path.join(workspaceRoot, 'codepol.toml'),
+    });
+
+    await service.queryDiagnostics({ clientSessionId, workspaceId });
+    const afterFirstStatus = await service.queryIndexStatus({ clientSessionId, workspaceId });
+
+    // Second query with no intervening changes should reuse the cached
+    // analysis verbatim — no new analysis generation.
+    await service.queryDiagnostics({ clientSessionId, workspaceId });
+    const afterReuseStatus = await service.queryIndexStatus({ clientSessionId, workspaceId });
+    expect(afterReuseStatus.analysisGeneration).toBe(afterFirstStatus.analysisGeneration);
+
+    // Touch one file's overlay. Only that file's analysis should be rebuilt
+    // (asserted via diagnostic id stability in the sibling test); the
+    // generation bumps by one because something did change.
+    await service.openOverlay({
+      clientSessionId,
+      workspaceId,
+      uri: workspacePathToUri(aFilePath),
+      version: 1,
+      text: 'export interface A {\n  name: string;\n}\n',
+    });
+    await service.queryDiagnostics({ clientSessionId, workspaceId });
+    const afterEditStatus = await service.queryIndexStatus({ clientSessionId, workspaceId });
+    expect(afterEditStatus.analysisGeneration).toBe(afterReuseStatus.analysisGeneration + 1);
+
+    // Another no-change query is again a pure cache hit.
+    await service.queryDiagnostics({ clientSessionId, workspaceId });
+    const afterSecondReuseStatus = await service.queryIndexStatus({ clientSessionId, workspaceId });
+    expect(afterSecondReuseStatus.analysisGeneration).toBe(afterEditStatus.analysisGeneration);
+  });
+
+  it('preserves cached diagnostic ids across an unrelated-overlay keystroke', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(workspaceRoot, 'codepol.toml'), noInterfaceConfigContentCreate(), 'utf8');
+
+    // Two files with violations; both kept open as overlays so we exercise
+    // the overlay:version branch of the content fingerprint.
+    const xFilePath = path.join(workspaceRoot, 'src', 'x.ts');
+    const yFilePath = path.join(workspaceRoot, 'src', 'y.ts');
+    const xUri = workspacePathToUri(xFilePath);
+    const yUri = workspacePathToUri(yFilePath);
+    fs.writeFileSync(xFilePath, 'export interface X {\n  name: string;\n}\n', 'utf8');
+    fs.writeFileSync(yFilePath, 'export interface Y {\n  name: string;\n}\n', 'utf8');
+
+    const service = workspaceServiceCreate();
+    const { clientSessionId, workspaceId } = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath: path.join(workspaceRoot, 'codepol.toml'),
+    });
+
+    await service.openOverlay({
+      clientSessionId,
+      workspaceId,
+      uri: xUri,
+      version: 1,
+      text: 'export interface X {\n  name: string;\n}\n',
+    });
+    await service.openOverlay({
+      clientSessionId,
+      workspaceId,
+      uri: yUri,
+      version: 1,
+      text: 'export interface Y {\n  name: string;\n}\n',
+    });
+
+    const baselineDiagnostics = await service.queryDiagnostics({
+      clientSessionId,
+      workspaceId,
+    });
+    const baselineYDiagnostic = baselineDiagnostics.find((diagnostic) => diagnostic.uri === yUri);
+    expect(baselineYDiagnostic).toBeDefined();
+
+    // Keystroke on X (version 2 with identical content so the violation id
+    // for X itself is stable). Y's cached tuple must still match, so Y's
+    // diagnostic id is preserved verbatim.
+    await service.updateOverlay({
+      clientSessionId,
+      workspaceId,
+      uri: xUri,
+      version: 2,
+      text: 'export interface X {\n  name: string;\n}\n',
+    });
+
+    const afterEditDiagnostics = await service.queryDiagnostics({
+      clientSessionId,
+      workspaceId,
+    });
+    const afterEditYDiagnostic = afterEditDiagnostics.find((diagnostic) => diagnostic.uri === yUri);
+    expect(afterEditYDiagnostic?.id).toBe(baselineYDiagnostic?.id);
+  });
+
   it('uses overlays for diagnostics and reverts to disk on close', async () => {
     const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
     createdDirs.push(workspaceRoot);

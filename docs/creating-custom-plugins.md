@@ -529,6 +529,10 @@ Codepol's architecture supports future adapters via the `LintProvider` interface
 
 To create an adapter for another platform, implement the `TreeCheckLintAdapter` interface from `@codepol/core`.
 
+::: info Framework-level lint providers
+Adding support for a **new external linter platform** (e.g. `deno lint`, `oxlint`) is different from writing a plugin that reuses an existing provider. That path requires wiring an analyzer into `@codepol/workspace-service` and — importantly — plumbing the tool's binary and config files into the per-analyzer cache fingerprint. See [Adding a Lint Provider](./adding-a-lint-provider.md) for the full checklist.
+:::
+
 ## Advanced Topics
 
 ### Accessing Rule Arguments
