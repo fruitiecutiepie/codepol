@@ -172,7 +172,7 @@ const WORKSPACE_PROVIDER_FINGERPRINT_EXTRACTORS: Record<
   WorkspaceProviderFingerprintExtractor
 > = {
   eslint: (workspace) => [
-    workspace.eslintConfigPath,
+    workspaceExternalToolConfigPathGet(workspace, 'eslint'),
     workspaceNodeModulePackageManifestResolve(workspace.rootPath, 'eslint'),
   ],
   biome: (workspace, providerConfig) => {
@@ -184,6 +184,11 @@ const WORKSPACE_PROVIDER_FINGERPRINT_EXTRACTORS: Record<
   // ... add yours here ...
 };
 ```
+
+`workspaceExternalToolConfigPathGet(workspace, analyzerId)` reads the bridge
+rule's resolved `args.configPath` from `workspace.externalToolConfigs`. Use it
+when your platform has a single workspace-level config file (eslint / biome /
+ruff today) instead of carrying that path on the per-provider config object.
 
 Add one entry for your platform. The extractor returns `Array<string | undefined>`; the orchestrator filters undefined entries, resolves to absolute paths, fingerprints them, and folds them into `toolFingerprintKey`. There is no other place in the workspace-service that should know your platform discriminator — `workspaceConfigFingerprintCompute`, `workspacePluginFingerprintCompute`, and the orchestrator are all platform-agnostic by design.
 
@@ -202,7 +207,7 @@ deno: (workspace, providerConfig) => {
 - **External binary** (if the user can override it via config): always include.
 - **External config file** (e.g. `deno.json`): always include.
 - **Node-loaded package** (like ESLint): include the resolved `package.json` via `workspaceNodeModulePackageManifestResolve(workspace.rootPath, 'your-package')`. `package.json` is rewritten on every `npm install`, which flips the fingerprint even when the version string is unchanged.
-- **Workspace-derived fields** (like `workspace.eslintConfigPath`, resolved from the `@codepol/plugin/eslint` bridge rule's `args.configPath`): the extractor receives the full `WorkspaceContextState`, so it can pluck whichever field is relevant. Prefer deriving from policy rule args rather than adding new top-level config fields.
+- **Bridge-rule config files** (like `workspace.externalToolConfigs.find(c => c.analyzerId === 'eslint')?.configPath`): the extractor receives the full `WorkspaceContextState`, so it can pluck whichever entry is relevant via `workspaceExternalToolConfigPathGet(workspace, '<analyzerId>')`. Prefer deriving from policy rule args rather than adding new top-level config fields.
 - **Rule-level options embedded in `policy.rules[].args`**: already covered by `configFingerprint` (the whole policy is JSON-hashed). You do not need to do anything.
 - **Plugin capability definitions**: already covered by `pluginFingerprint`.
 

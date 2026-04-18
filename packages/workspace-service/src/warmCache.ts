@@ -8,11 +8,17 @@ import type {
   WorkspaceDiagnostic,
 } from '@codepol/core';
 
-// Bumped to 2: per-(analyzer, file) cache entries are now persisted alongside
-// the composed `lastAnalysis`. v1 snapshots are dropped on read because they
-// lack `analyzerCache` and would otherwise force an all-or-nothing
-// invalidation on the first file change.
-export const WORKSPACE_WARM_CACHE_COMPAT_VERSION = 2;
+// Bumped to 3: external tool configs (eslint, biome, ruff) are now tracked as
+// a single `externalToolConfigs` array on the snapshot, replacing the
+// ESLint-only `eslintConfigPath` / `eslintConfigFingerprint` fields. v2
+// snapshots are dropped on read because their schema cannot represent the new
+// per-tool fingerprints needed for symmetric watcher invalidation.
+//
+// History:
+// - v2: per-(analyzer, file) cache entries persisted alongside `lastAnalysis`.
+//       Dropped v1 snapshots because they lacked `analyzerCache`.
+// - v1: initial workspace-scoped snapshot.
+export const WORKSPACE_WARM_CACHE_COMPAT_VERSION = 3;
 
 const WORKSPACE_WARM_CACHE_ENVIRONMENT_KEYS = [
   'PATH',
@@ -92,6 +98,21 @@ export type WorkspaceWarmCacheAnalyzerEntry = {
   fileResults: WorkspaceWarmCacheAnalyzerFileEntry[];
 };
 
+/**
+ * One external tool config file (eslint / biome / ruff) referenced by the
+ * policy at the time the snapshot was persisted. The file fingerprint lets
+ * `workspaceWarmCacheSnapshotRestore` invalidate the snapshot when any tool
+ * config has changed on disk between sessions.
+ *
+ * The list is kept in stable sort order by `(analyzerId, configPath)` so
+ * snapshot equality reduces to element-wise comparison.
+ */
+export type WorkspaceWarmCacheExternalToolConfigEntry = {
+  analyzerId: 'eslint' | 'biome' | 'ruff';
+  configPath: string;
+  fingerprint: WorkspaceWarmCacheFileFingerprint;
+};
+
 export type WorkspaceWarmCacheSnapshot = {
   compatVersion: number;
   engineVersion: string;
@@ -100,7 +121,7 @@ export type WorkspaceWarmCacheSnapshot = {
   workspaceId: string;
   rootPath: string;
   configPath: string;
-  eslintConfigPath: string;
+  externalToolConfigs: WorkspaceWarmCacheExternalToolConfigEntry[];
   analysisGeneration: number;
   workspaceIndexRequired: boolean;
   files: string[];
@@ -138,7 +159,6 @@ export type WorkspaceWarmCacheSnapshot = {
   baseIndexState?: WorkspaceWarmCacheBaseIndexStateSnapshot;
   projectIndexStoreSnapshot?: ProjectIndexStoreSnapshot;
   configFingerprint: WorkspaceWarmCacheFileFingerprint;
-  eslintConfigFingerprint?: WorkspaceWarmCacheFileFingerprint;
   fileFingerprints: WorkspaceWarmCacheFileFingerprint[];
   toolFingerprints: WorkspaceWarmCacheFileFingerprint[];
   pluginSignature: string;

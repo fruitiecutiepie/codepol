@@ -110,6 +110,7 @@ import {
   type WorkspaceWarmCacheAnalyzerFileEntry,
   type WorkspaceWarmCacheAnalyzerKey,
   type WorkspaceWarmCacheAnalyzerKeyTuple,
+  type WorkspaceWarmCacheExternalToolConfigEntry,
   type WorkspaceWarmCacheFileFingerprint,
   type WorkspaceWarmCacheSnapshot,
   type WorkspaceWarmCacheStore,
@@ -128,6 +129,18 @@ export * from './warmCache';
 
 const BIOME_FILE_EXTENSIONS = ['.js', '.mjs', '.cjs', '.jsx', '.ts', '.mts', '.cts', '.tsx'];
 const ESLINT_BRIDGE_RULE_ID = '@codepol/plugin/eslint';
+const BIOME_BRIDGE_RULE_ID = '@codepol/plugin/biome';
+const RUFF_BRIDGE_RULE_ID = '@codepol/plugin/ruff';
+/**
+ * Bridge rule id per external analyzer. Used by `externalToolConfigsResolve`
+ * to walk `policy.rules` and collect every `args.configPath` that should
+ * participate in warm-cache fingerprinting and file-watcher invalidation.
+ */
+const EXTERNAL_BRIDGE_RULE_IDS: Readonly<Record<WorkspaceExternalToolAnalyzerKey, string>> = {
+  eslint: ESLINT_BRIDGE_RULE_ID,
+  biome: BIOME_BRIDGE_RULE_ID,
+  ruff: RUFF_BRIDGE_RULE_ID,
+};
 const PYTHON_FILE_EXTENSIONS = ['.py', '.pyw'];
 const WORKSPACE_WATCH_IGNORED = ['**/node_modules/**', '**/.git/**'];
 const WORKSPACE_SYMBOL_LIMIT_DEFAULT = 50;
@@ -266,10 +279,35 @@ type WorkspaceLintRuleSummaryBuilderState = {
   fixSurfaceNotes: Set<string>;
 };
 
+/**
+ * Discriminator for external linter analyzers whose tool-config files
+ * participate in warm-cache fingerprinting and file-watcher invalidation.
+ *
+ * Mirrors `WorkspaceAnalyzerCacheKey` minus `'tree'` (which has no external
+ * config file).
+ */
+export type WorkspaceExternalToolAnalyzerKey = 'eslint' | 'biome' | 'ruff';
+
+/**
+ * One external tool config file referenced by the policy. Resolved to an
+ * absolute path against the policy config directory at workspace-context
+ * construction time. The orchestrator collects these from the bridge rules
+ * (`@codepol/plugin/{eslint,biome,ruff}`) via `externalToolConfigsResolve`.
+ */
+export type WorkspaceExternalToolConfigEntry = {
+  analyzerId: WorkspaceExternalToolAnalyzerKey;
+  configPath: string;
+};
+
 type WorkspaceContextState = {
   rootPath: string;
   configPath: string;
-  eslintConfigPath: string;
+  /**
+   * External tool config files referenced by the policy's bridge rules,
+   * sorted by `(analyzerId, configPath)` and deduped. Drives both warm-cache
+   * fingerprinting and file-watcher path coverage.
+   */
+  externalToolConfigs: WorkspaceExternalToolConfigEntry[];
   config: CodepolConfig;
   baseIndexState?: WorkspaceBaseIndexState;
 };
@@ -356,6 +394,14 @@ export type WorkspaceWatcher = {
 export type WorkspaceWatcherCreate = (input: {
   rootPath: string;
   configPath: string;
+  /**
+   * Absolute paths of external tool config files (eslint / biome / ruff) that
+   * the policy references via bridge rules. Listed as additional watch
+   * targets so changes to deep tool configs (e.g. nested `biome.json` or
+   * `pyproject.toml`) trigger invalidation even when the watcher is
+   * shallowly rooted at the workspace.
+   */
+  externalToolConfigPaths: string[];
 }) => WorkspaceWatcher;
 
 export type WorkspaceServiceEngineOptions = {
@@ -570,7 +616,6 @@ export type WorkspaceServiceCreateOptions = {
 export type WorkspacePolicyCheckOptions = {
   config?: CodepolConfig;
   configPath: string;
-  eslintConfigPath?: string;
   fix: boolean;
   cwd: string;
 };
@@ -667,6 +712,25 @@ function workspaceStateAnalysisInvalidateFiles(
     }
     state.dirtyFiles.add(filePath);
   }
+}
+
+/**
+ * Drop a single analyzer's bucket from the per-(analyzer, file) cache and
+ * force `lastAnalysis` to be re-merged on the next run. Other analyzers'
+ * buckets keep their per-file entries so unaffected files continue to hit.
+ *
+ * Used by the file watcher when an external tool config (eslint / biome /
+ * ruff) changes on disk: only that tool's results are stale, but every other
+ * analyzer's per-file output is still valid.
+ */
+function workspaceStateAnalyzerCacheInvalidate(
+  state: WorkspaceAnalysisCacheState,
+  analyzerKey: WorkspaceAnalyzerCacheKey,
+): void {
+  if (state.analyzerCache) {
+    delete state.analyzerCache[analyzerKey];
+  }
+  state.lastAnalysis = undefined;
 }
 
 function workspaceFeatureStatusCreate(
@@ -816,10 +880,15 @@ function workspaceSessionInvalidate(
     // Per-analyzer cache entries survive; the orchestrator decides hit vs
     // miss via the cache key tuple at the next run.
     dirtyFiles?: Iterable<string>;
+    // When provided, drop only the listed analyzers' buckets from the
+    // per-(analyzer, file) cache. Other analyzers' per-file results remain
+    // valid. Used by the file watcher when an external tool config (eslint /
+    // biome / ruff) changes on disk: only that tool's results are stale.
+    invalidateAnalyzers?: Iterable<WorkspaceAnalyzerCacheKey>;
     // When true, drop all session analyzer caches even if dirtyFiles is set.
-    // Used by callers that know a global invariant changed (config / eslint
-    // config / plugin manifest). Tuple keys would also miss naturally, but
-    // flushing is needed so session status flips back to 'cold' immediately.
+    // Used by callers that know a global invariant changed (config / plugin
+    // manifest). Tuple keys would also miss naturally, but flushing is needed
+    // so session status flips back to 'cold' immediately.
     flushAnalyzerCache?: boolean;
   } = {},
 ): void {
@@ -843,6 +912,17 @@ function workspaceSessionInvalidate(
     // index requirement). Drop the session analyzer caches so status flips
     // back to 'cold'.
     workspaceStateAnalysisInvalidateAll(state);
+  } else if (options.invalidateAnalyzers !== undefined) {
+    // Per-analyzer invalidation: drop only the listed analyzers' buckets.
+    // `lastAnalysis` is dropped so status flips to 'cold' and the next run
+    // re-merges fresh outputs from the named analyzers with cached entries
+    // from the others.
+    for (const analyzerKey of options.invalidateAnalyzers) {
+      workspaceStateAnalyzerCacheInvalidate(state, analyzerKey);
+    }
+    if (options.dirtyFiles !== undefined) {
+      workspaceStateAnalysisInvalidateFiles(state, options.dirtyFiles);
+    }
   } else if (options.dirtyFiles !== undefined) {
     workspaceStateAnalysisInvalidateFiles(state, options.dirtyFiles);
   }
@@ -854,25 +934,53 @@ function workspaceSessionInvalidate(
   state.lastError = undefined;
 }
 
-function workspaceWatchItemsResolve(input: {
-  rootPath: string;
-  configPath: string;
-}): string[] {
-  return [...new Set([path.resolve(input.rootPath), path.resolve(input.configPath)])];
+function workspaceExternalToolConfigPathsExtract(
+  externalToolConfigs: ReadonlyArray<WorkspaceExternalToolConfigEntry>,
+): string[] {
+  return externalToolConfigs.map((entry) => entry.configPath);
 }
 
-function workspaceWatchItemsKeyCreate(input: {
+function workspaceWatchItemsResolve(workspace: {
   rootPath: string;
   configPath: string;
+  externalToolConfigs: ReadonlyArray<WorkspaceExternalToolConfigEntry>;
+}): string[] {
+  const items = new Set<string>();
+  items.add(path.resolve(workspace.rootPath));
+  items.add(path.resolve(workspace.configPath));
+  for (const toolConfigPath of workspaceExternalToolConfigPathsExtract(
+    workspace.externalToolConfigs,
+  )) {
+    items.add(path.resolve(toolConfigPath));
+  }
+  return [...items].sort();
+}
+
+function workspaceWatchItemsKeyCreate(workspace: {
+  rootPath: string;
+  configPath: string;
+  externalToolConfigs: ReadonlyArray<WorkspaceExternalToolConfigEntry>;
 }): string {
-  return workspaceWatchItemsResolve(input).join('\0');
+  return workspaceWatchItemsResolve(workspace).join('\0');
 }
 
 export function workspaceWatcherCreate(input: {
   rootPath: string;
   configPath: string;
+  externalToolConfigPaths: string[];
 }): WorkspaceWatcher {
-  return chokidar.watch(workspaceWatchItemsResolve(input), {
+  const watchItems = workspaceWatchItemsResolve({
+    rootPath: input.rootPath,
+    configPath: input.configPath,
+    externalToolConfigs: input.externalToolConfigPaths.map((configPath) => ({
+      // analyzerId is irrelevant to the watch list itself; the dispatch logic
+      // owns the path -> analyzer mapping. Stamp a stable placeholder so
+      // dedupe still works when callers pass mixed eslint/biome/ruff paths.
+      analyzerId: 'eslint' as WorkspaceExternalToolAnalyzerKey,
+      configPath,
+    })),
+  });
+  return chokidar.watch(watchItems, {
     ignoreInitial: true,
     ignored: WORKSPACE_WATCH_IGNORED,
     // Recursive chokidar scans can exhaust file descriptors on remote Linux
@@ -901,7 +1009,7 @@ async function workspaceContextRefreshFromDisk(workspace: WorkspaceState): Promi
   const { config, configPath: resolvedConfigPath } = await configGetFromPath(workspace.configPath);
   workspace.config = config;
   workspace.configPath = resolvedConfigPath;
-  workspace.eslintConfigPath = eslintBridgeConfigPathResolve(
+  workspace.externalToolConfigs = externalToolConfigsResolve(
     resolvedConfigPath,
     config,
   );
@@ -922,6 +1030,9 @@ async function workspaceWatcherEnsure(input: {
   const watcher = input.watcherCreate({
     rootPath: input.workspace.rootPath,
     configPath: input.workspace.configPath,
+    externalToolConfigPaths: workspaceExternalToolConfigPathsExtract(
+      input.workspace.externalToolConfigs,
+    ),
   });
   watcher.on('all', (_eventName, filePath) => {
     input.onInvalidate(filePath);
@@ -1145,28 +1256,69 @@ const ESLINT_BRIDGE_MIGRATION_HINT =
   '  args.configPath = "./eslint.config.mjs"';
 
 /**
- * Resolves the ESLint config path from the `@codepol/plugin/eslint` bridge
- * rule in the policy. Returns the empty string when no bridge rule is
- * declared; callers that need a config path must check and produce a
- * migration-pointing error.
+ * Walks the policy rules looking for external linter bridge rules
+ * (`@codepol/plugin/{eslint,biome,ruff}`) and collects every `args.configPath`
+ * into a stable, deduped, sorted list.
  *
- * The returned path is absolute and resolved against the directory of the
- * policy config file.
+ * The returned `configPath` values are absolute, resolved against the
+ * directory of the policy config file. Bridge rules without an
+ * `args.configPath` contribute nothing (matches biome/ruff's "use the tool's
+ * own config discovery" behavior; ESLint enforces presence at analyzer time).
+ */
+function externalToolConfigsResolve(
+  configPath: string,
+  config: CodepolConfig,
+): WorkspaceExternalToolConfigEntry[] {
+  const seen = new Set<string>();
+  const entries: WorkspaceExternalToolConfigEntry[] = [];
+  const configDir = path.dirname(configPath);
+
+  for (const rule of config.rules) {
+    for (const [analyzerId, ruleId] of Object.entries(EXTERNAL_BRIDGE_RULE_IDS) as Array<
+      [WorkspaceExternalToolAnalyzerKey, string]
+    >) {
+      if (rule.ruleId !== ruleId) {
+        continue;
+      }
+      const ruleArgs = (rule.args ?? {}) as { configPath?: unknown };
+      if (typeof ruleArgs.configPath !== 'string' || ruleArgs.configPath.length === 0) {
+        continue;
+      }
+      const resolvedPath = path.resolve(configDir, ruleArgs.configPath);
+      const dedupeKey = `${analyzerId}\0${resolvedPath}`;
+      if (seen.has(dedupeKey)) {
+        continue;
+      }
+      seen.add(dedupeKey);
+      entries.push({ analyzerId, configPath: resolvedPath });
+    }
+  }
+
+  entries.sort((left, right) =>
+    left.analyzerId === right.analyzerId
+      ? left.configPath.localeCompare(right.configPath)
+      : left.analyzerId.localeCompare(right.analyzerId),
+  );
+  return entries;
+}
+
+/**
+ * Convenience wrapper for ESLint analyzer-time resolution. Returns the empty
+ * string when no `@codepol/plugin/eslint` bridge rule is declared with an
+ * `args.configPath`; the analyzer then produces a migration-pointing error.
+ *
+ * Kept as a wrapper so the analyzer's args-time resolution mirrors ruff/biome
+ * (which read their own configs from `LintProviderEntry.ruleArgs`) rather
+ * than reaching into `WorkspaceContextState`.
  */
 function eslintBridgeConfigPathResolve(
   configPath: string,
   config: CodepolConfig,
 ): string {
-  for (const rule of config.rules) {
-    if (rule.ruleId !== ESLINT_BRIDGE_RULE_ID) {
-      continue;
-    }
-    const ruleArgs = (rule.args ?? {}) as { configPath?: unknown };
-    if (typeof ruleArgs.configPath === 'string' && ruleArgs.configPath.length > 0) {
-      return path.resolve(path.dirname(configPath), ruleArgs.configPath);
-    }
-  }
-  return '';
+  const eslintEntry = externalToolConfigsResolve(configPath, config).find(
+    (entry) => entry.analyzerId === 'eslint',
+  );
+  return eslintEntry?.configPath ?? '';
 }
 
 function policyRuleTargetsGet(policy: PolicyFile): PolicyRuleTargetContext[] {
@@ -4234,10 +4386,10 @@ function workspaceWarmCacheFileFingerprintRead(
 function workspaceWarmCacheFingerprintsRead(input: {
   files: string[];
   configPath: string;
-  eslintConfigPath: string;
+  externalToolConfigs: WorkspaceExternalToolConfigEntry[];
 }): {
   configFingerprint: WorkspaceWarmCacheFileFingerprint;
-  eslintConfigFingerprint?: WorkspaceWarmCacheFileFingerprint;
+  externalToolConfigFingerprints: WorkspaceWarmCacheExternalToolConfigEntry[];
   fileFingerprints: WorkspaceWarmCacheFileFingerprint[];
 } | undefined {
   const configFingerprint = workspaceWarmCacheFileFingerprintRead(input.configPath);
@@ -4254,11 +4406,50 @@ function workspaceWarmCacheFingerprintsRead(input: {
     fileFingerprints.push(fingerprint);
   }
 
+  // Tool config files may legitimately be missing on disk (e.g. user removed
+  // their `biome.json` between sessions); the snapshot still records the
+  // path with a "missing" sentinel fingerprint so restore picks up the
+  // change as a mismatch instead of silently passing.
+  const externalToolConfigFingerprints: WorkspaceWarmCacheExternalToolConfigEntry[] =
+    input.externalToolConfigs.map((entry) => ({
+      analyzerId: entry.analyzerId,
+      configPath: entry.configPath,
+      fingerprint:
+        workspaceWarmCacheFileFingerprintRead(entry.configPath) ?? {
+          path: path.resolve(entry.configPath),
+          size: -1,
+          mtimeMs: -1,
+        },
+    }));
+
   return {
     configFingerprint,
-    eslintConfigFingerprint: workspaceWarmCacheFileFingerprintRead(input.eslintConfigPath),
+    externalToolConfigFingerprints,
     fileFingerprints,
   };
+}
+
+function workspaceWarmCacheExternalToolConfigEntriesEqual(
+  left: WorkspaceWarmCacheExternalToolConfigEntry[],
+  right: WorkspaceWarmCacheExternalToolConfigEntry[],
+): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  for (let index = 0; index < left.length; index += 1) {
+    const leftEntry = left[index];
+    const rightEntry = right[index];
+    if (leftEntry.analyzerId !== rightEntry.analyzerId) {
+      return false;
+    }
+    if (path.resolve(leftEntry.configPath) !== path.resolve(rightEntry.configPath)) {
+      return false;
+    }
+    if (!workspaceWarmCacheFingerprintEquals(leftEntry.fingerprint, rightEntry.fingerprint)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function workspaceWarmCacheFingerprintEquals(
@@ -4358,21 +4549,30 @@ function workspaceNodeModulePackageManifestResolve(
  * a specific platform discriminator.
  *
  * Returned paths are absolute and may be `undefined` (filtered out by the
- * caller). The extractor receives the workspace context so it can reach
- * top-level fields like `eslintConfigPath` that aren't carried in the per-rule
- * provider config.
+ * caller). The extractor receives the workspace context so it can derive tool
+ * config paths from `externalToolConfigs` (resolved by
+ * `externalToolConfigsResolve` from the bridge rules in the policy).
  */
 type WorkspaceProviderFingerprintExtractor = (
   workspace: WorkspaceContextState,
   providerConfig: unknown,
 ) => Array<string | undefined>;
 
+function workspaceExternalToolConfigPathGet(
+  workspace: WorkspaceContextState,
+  analyzerId: WorkspaceExternalToolAnalyzerKey,
+): string | undefined {
+  return workspace.externalToolConfigs.find(
+    (entry) => entry.analyzerId === analyzerId,
+  )?.configPath;
+}
+
 const WORKSPACE_PROVIDER_FINGERPRINT_EXTRACTORS: Record<
   string,
   WorkspaceProviderFingerprintExtractor
 > = {
   eslint: (workspace) => [
-    workspace.eslintConfigPath,
+    workspaceExternalToolConfigPathGet(workspace, 'eslint'),
     workspaceNodeModulePackageManifestResolve(workspace.rootPath, 'eslint'),
   ],
   biome: (workspace, providerConfig) => {
@@ -5082,7 +5282,7 @@ async function workspaceWarmCacheSnapshotRestore(input: {
     const currentFingerprints = workspaceWarmCacheFingerprintsRead({
       files: currentFiles,
       configPath: input.workspace.configPath,
-      eslintConfigPath: input.workspace.eslintConfigPath,
+      externalToolConfigs: input.workspace.externalToolConfigs,
     });
     if (!currentFingerprints) {
       await input.warmCache.delete(cacheKey);
@@ -5096,9 +5296,9 @@ async function workspaceWarmCacheSnapshotRestore(input: {
         currentFingerprints.configFingerprint,
         snapshot.configFingerprint,
       ) ||
-      !workspaceWarmCacheFingerprintEquals(
-        currentFingerprints.eslintConfigFingerprint,
-        snapshot.eslintConfigFingerprint,
+      !workspaceWarmCacheExternalToolConfigEntriesEqual(
+        currentFingerprints.externalToolConfigFingerprints,
+        snapshot.externalToolConfigs,
       )
     ) {
       await input.warmCache.delete(cacheKey);
@@ -5296,7 +5496,7 @@ async function workspaceWarmCacheSnapshotPersist(input: {
   const fingerprints = workspaceWarmCacheFingerprintsRead({
     files: input.workspaceSession.lastAnalysis.files,
     configPath: input.workspace.configPath,
-    eslintConfigPath: input.workspace.eslintConfigPath,
+    externalToolConfigs: input.workspace.externalToolConfigs,
   });
   if (!fingerprints) {
     return;
@@ -5320,7 +5520,7 @@ async function workspaceWarmCacheSnapshotPersist(input: {
     workspaceId: input.workspace.workspaceId,
     rootPath: input.workspace.rootPath,
     configPath: input.workspace.configPath,
-    eslintConfigPath: input.workspace.eslintConfigPath,
+    externalToolConfigs: fingerprints.externalToolConfigFingerprints,
     analysisGeneration: input.workspaceSession.analysisGeneration,
     workspaceIndexRequired: input.workspaceSession.workspaceIndexRequired ?? false,
     files: [...input.workspaceSession.lastAnalysis.files],
@@ -5337,7 +5537,6 @@ async function workspaceWarmCacheSnapshotPersist(input: {
         )
       : undefined,
     configFingerprint: fingerprints.configFingerprint,
-    eslintConfigFingerprint: fingerprints.eslintConfigFingerprint,
     fileFingerprints: fingerprints.fileFingerprints,
     toolFingerprints: input.workspaceSession.toolFingerprints ?? [],
     pluginSignature: pluginCompatibility.pluginSignature,
@@ -5540,13 +5739,35 @@ function workspaceTreeAnalyzerRun(
   );
 }
 
+/**
+ * Resolves the ESLint config path from the bridge entry's `args.configPath`,
+ * mirroring how ruff/biome read their per-rule config from `LintProviderEntry`
+ * at analyzer time. Returns the empty string when the bridge entry is missing
+ * or `args.configPath` is unset; the caller surfaces a migration error.
+ *
+ * Relative paths are resolved against the policy config file's directory.
+ */
+function eslintAnalyzerConfigPathResolve(
+  entries: LintProviderEntry[],
+  policyConfigPath: string,
+): string {
+  const bridgeEntry = entries.find(
+    (entry) =>
+      entry.provider.platform === 'eslint' && entry.ruleId === ESLINT_BRIDGE_RULE_ID,
+  );
+  const ruleArgs = (bridgeEntry?.ruleArgs ?? {}) as { configPath?: unknown };
+  if (typeof ruleArgs.configPath !== 'string' || ruleArgs.configPath.length === 0) {
+    return '';
+  }
+  return path.resolve(path.dirname(policyConfigPath), ruleArgs.configPath);
+}
+
 async function eslintAnalyzerRun(
   input: {
     files: string[];
     sourceByFilePath: Map<string, string>;
     policy: PolicyFile;
     configPath: string;
-    eslintConfigPath: string;
     cwd: string;
     lintProviderEntries: LintProviderEntry[];
     nativeOwnedWrappedRuleIds: ReadonlySet<string>;
@@ -5590,7 +5811,11 @@ async function eslintAnalyzerRun(
       ESLINT_BRIDGE_MIGRATION_HINT,
     );
   }
-  if (!input.eslintConfigPath) {
+  const eslintConfigPath = eslintAnalyzerConfigPathResolve(
+    eligibleEntries,
+    input.configPath,
+  );
+  if (!eslintConfigPath) {
     throw new Error(
       '`@codepol/plugin/eslint` requires `args.configPath` (e.g. "./eslint.config.mjs"). ' +
       ESLINT_BRIDGE_MIGRATION_HINT,
@@ -5662,7 +5887,7 @@ async function eslintAnalyzerRun(
 
   const startedAt = Date.now();
   const eslint = new ESLintClass({
-    overrideConfigFile: input.eslintConfigPath,
+    overrideConfigFile: eslintConfigPath,
     plugins: {
       codepol: eslintPluginCreate(
         Array.from(input.pluginRules.values()).map((entry) => entry.pluginRule),
@@ -6509,7 +6734,6 @@ async function workspaceAnalysisRunFullPath(
     sourceByFilePath,
     policy,
     configPath: workspace.configPath,
-    eslintConfigPath: workspace.eslintConfigPath,
     cwd: workspace.rootPath,
     lintProviderEntries,
     nativeOwnedWrappedRuleIds,
@@ -6722,7 +6946,6 @@ async function workspaceAnalysisRunIncremental(
       sourceByFilePath,
       policy,
       configPath: workspace.configPath,
-      eslintConfigPath: workspace.eslintConfigPath,
       cwd: workspace.rootPath,
       lintProviderEntries,
       nativeOwnedWrappedRuleIds,
@@ -7135,6 +7358,10 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     options: {
       configDirty?: boolean;
       changedFilePath?: string;
+      // When provided, drop only the listed analyzers' buckets across every
+      // attached session. Used by the file watcher when an external tool
+      // config (eslint / biome / ruff) changes on disk.
+      invalidateAnalyzers?: ReadonlyArray<WorkspaceAnalyzerCacheKey>;
     } = {},
   ): void {
     workspace.baseIndexState = undefined;
@@ -7148,14 +7375,20 @@ export class WorkspaceServiceEngine implements WorkspaceService {
         continue;
       }
       if (options.configDirty) {
-        // Config / eslint config / plugin manifest change: drop session
-        // analyzer caches so status flips back to 'cold'. Tuple-keyed entries
-        // would also miss naturally, but flushing reflects the new readiness
-        // state to consumers immediately.
+        // Policy config / plugin manifest change: drop session analyzer
+        // caches so status flips back to 'cold'. Tuple-keyed entries would
+        // also miss naturally, but flushing reflects the new readiness state
+        // to consumers immediately.
         workspaceSessionInvalidate(attachedWorkspaceSession, {
           clearIndexState: true,
           clearWorkspaceIndexRequirement: true,
           flushAnalyzerCache: true,
+        });
+      } else if (options.invalidateAnalyzers && options.invalidateAnalyzers.length > 0) {
+        // External tool config change: drop only the matching analyzer's
+        // bucket. Other analyzers' per-file entries stay valid.
+        workspaceSessionInvalidate(attachedWorkspaceSession, {
+          invalidateAnalyzers: options.invalidateAnalyzers,
         });
       } else if (options.changedFilePath) {
         // Single-file disk change: mark just that file dirty so the next run
@@ -7244,13 +7477,11 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     const workspaceId = workspaceIdCreate(rootPath, resolvedConfigPath);
 
     let workspace = this.workspaces.get(workspaceId);
+    const externalToolConfigs = externalToolConfigsResolve(resolvedConfigPath, config);
     const policyWorkspaceIndexRequired = await workspaceIndexRequirementResolve({
       rootPath,
       configPath: resolvedConfigPath,
-      eslintConfigPath: eslintBridgeConfigPathResolve(
-        resolvedConfigPath,
-        config,
-      ),
+      externalToolConfigs,
       config,
     });
     const workspaceIndexRequired =
@@ -7261,10 +7492,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
         workspaceInstanceId: opaqueIdCreate('workspace') as WorkspaceInstanceId,
         rootPath,
         configPath: resolvedConfigPath,
-        eslintConfigPath: eslintBridgeConfigPathResolve(
-          resolvedConfigPath,
-          config,
-        ),
+        externalToolConfigs,
         config,
         attachedClientSessionIds: new Set(),
         configDirty: false,
@@ -7273,10 +7501,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     } else {
       workspace.config = config;
       workspace.configPath = resolvedConfigPath;
-      workspace.eslintConfigPath = eslintBridgeConfigPathResolve(
-        resolvedConfigPath,
-        config,
-      );
+      workspace.externalToolConfigs = externalToolConfigs;
       workspace.baseIndexState = undefined;
       workspace.configDirty = false;
       this.workspaceInvalidateFromDisk(workspace);
@@ -7338,12 +7563,27 @@ export class WorkspaceServiceEngine implements WorkspaceService {
         watcherCreate: this.watcherCreate,
         onInvalidate: (filePath) => {
           const resolvedFilePath = path.resolve(filePath);
-          const isConfigChange =
-            resolvedFilePath === path.resolve(workspace.configPath) ||
-            resolvedFilePath === path.resolve(workspace.eslintConfigPath);
+          // Policy config: drop everything; this is the only "global
+          // invariant" tracked by the watcher.
+          if (resolvedFilePath === path.resolve(workspace.configPath)) {
+            this.workspaceInvalidateFromDisk(workspace, { configDirty: true });
+            return;
+          }
+          // External tool config (eslint / biome / ruff): drop only that
+          // analyzer's bucket. Other analyzers' per-file results stay valid.
+          const matchedTools = workspace.externalToolConfigs
+            .filter((entry) => path.resolve(entry.configPath) === resolvedFilePath)
+            .map((entry) => entry.analyzerId);
+          if (matchedTools.length > 0) {
+            this.workspaceInvalidateFromDisk(workspace, {
+              invalidateAnalyzers: matchedTools,
+            });
+            return;
+          }
+          // Source file or unknown event: mark just that path dirty so the
+          // next run recomputes its content fingerprint.
           this.workspaceInvalidateFromDisk(workspace, {
-            configDirty: isConfigChange,
-            changedFilePath: isConfigChange ? undefined : resolvedFilePath,
+            changedFilePath: resolvedFilePath,
           });
         },
       });
@@ -8276,7 +8516,7 @@ function workspaceStateCreateForPolicyCheck(
     cwd: string;
     config: CodepolConfig;
     configPath: string;
-    eslintConfigPath: string;
+    externalToolConfigs: WorkspaceExternalToolConfigEntry[];
   },
 ): PolicyCheckWorkspaceState {
   const rootPath = path.resolve(options.cwd);
@@ -8284,7 +8524,7 @@ function workspaceStateCreateForPolicyCheck(
   return {
     rootPath,
     configPath,
-    eslintConfigPath: options.eslintConfigPath,
+    externalToolConfigs: options.externalToolConfigs,
     config: options.config,
     documents: new Map(),
     analysisGeneration: 0,
@@ -8313,12 +8553,12 @@ export async function policyCheck(
 ): Promise<WorkspacePolicyCheckResult> {
   await ensureWorkspaceRuntimeReady();
   const { config, configPath } = await configResolve(options);
-  const eslintConfigPath = eslintBridgeConfigPathResolve(configPath, config);
+  const externalToolConfigs = externalToolConfigsResolve(configPath, config);
   const state = workspaceStateCreateForPolicyCheck({
     cwd: options.cwd,
     config,
     configPath,
-    eslintConfigPath,
+    externalToolConfigs,
   });
   const analysis = await workspaceAnalysisRun(state, state, {
     fix: options.fix,

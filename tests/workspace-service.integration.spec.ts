@@ -5741,4 +5741,260 @@ targets = ["src"]
       }),
     ).toEqual([]);
   });
+
+  describe('external tool config watcher invalidation', () => {
+    type AnalyzerCacheKey = 'tree' | 'eslint' | 'biome' | 'ruff';
+
+    function externalBridgeConfigContentCreate(input: {
+      eslintConfigPath: string;
+      biomeConfigPath: string;
+      ruffConfigPath: string;
+    }): string {
+      return `[[plugins]]
+id = "@codepol/plugin"
+source = { kind = "builtin" }
+
+[targets.ts-src]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[targets.python-src]
+language = "python"
+files = ["src/**/*.py"]
+
+[[rules]]
+ruleId = "@codepol/plugin/eslint"
+targets = ["ts-src"]
+args.configPath = "${input.eslintConfigPath}"
+
+[[rules]]
+ruleId = "@codepol/plugin/biome"
+targets = ["ts-src"]
+args.configPath = "${input.biomeConfigPath}"
+
+[[rules]]
+ruleId = "@codepol/plugin/ruff"
+targets = ["python-src"]
+args.configPath = "${input.ruffConfigPath}"
+`;
+    }
+
+    /**
+     * Pre-populates the workspace session's analyzer cache with all four
+     * buckets so per-tool invalidation has something observable to drop.
+     * Returns helpers to read post-event state.
+     */
+    function externalBridgeWorkspaceSetup(workspaceRoot: string): {
+      configPath: string;
+      eslintConfigPath: string;
+      biomeConfigPath: string;
+      ruffConfigPath: string;
+      sourceTsPath: string;
+      sourcePyPath: string;
+    } {
+      fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+      const eslintConfigPath = path.join(workspaceRoot, 'eslint.config.mjs');
+      const biomeConfigPath = path.join(workspaceRoot, 'biome.json');
+      const ruffConfigPath = path.join(workspaceRoot, 'ruff.toml');
+      const configPath = path.join(workspaceRoot, 'codepol.toml');
+      const sourceTsPath = path.join(workspaceRoot, 'src', 'app.ts');
+      const sourcePyPath = path.join(workspaceRoot, 'src', 'app.py');
+
+      fs.writeFileSync(
+        configPath,
+        externalBridgeConfigContentCreate({
+          eslintConfigPath: './eslint.config.mjs',
+          biomeConfigPath: './biome.json',
+          ruffConfigPath: './ruff.toml',
+        }),
+        'utf8',
+      );
+      fs.writeFileSync(
+        eslintConfigPath,
+        `export default [{ files: ['**/*.ts'], rules: {} }];\n`,
+        'utf8',
+      );
+      fs.writeFileSync(biomeConfigPath, '{}\n', 'utf8');
+      fs.writeFileSync(ruffConfigPath, 'line-length = 100\n', 'utf8');
+      fs.writeFileSync(sourceTsPath, 'export const x = 1;\n', 'utf8');
+      fs.writeFileSync(sourcePyPath, 'x = 1\n', 'utf8');
+
+      return {
+        configPath,
+        eslintConfigPath,
+        biomeConfigPath,
+        ruffConfigPath,
+        sourceTsPath,
+        sourcePyPath,
+      };
+    }
+
+    function workspaceSessionDebugRead(
+      engine: WorkspaceServiceEngine,
+      input: { clientSessionId: string; workspaceId: string },
+    ): {
+      session: {
+        analyzerCache?: Partial<Record<AnalyzerCacheKey, unknown>>;
+        lastAnalysis?: unknown;
+        dirtyFiles?: Set<string>;
+      };
+      workspace: { configDirty: boolean };
+    } {
+      const debugEngine = engine as unknown as {
+        clientSessions: Map<
+          string,
+          {
+            workspaces: Map<
+              string,
+              {
+                analyzerCache?: Partial<Record<AnalyzerCacheKey, unknown>>;
+                lastAnalysis?: unknown;
+                dirtyFiles?: Set<string>;
+              }
+            >;
+          }
+        >;
+        workspaces: Map<string, { configDirty: boolean }>;
+      };
+      const session = debugEngine.clientSessions
+        .get(input.clientSessionId)!
+        .workspaces.get(input.workspaceId)!;
+      const workspace = debugEngine.workspaces.get(input.workspaceId)!;
+      return { session, workspace };
+    }
+
+    function workspaceSessionAnalyzerCachePlant(
+      engine: WorkspaceServiceEngine,
+      input: { clientSessionId: string; workspaceId: string },
+    ): void {
+      const { session } = workspaceSessionDebugRead(engine, input);
+      // Stamp every analyzer bucket so invalidation has something to drop.
+      // Concrete entry contents do not matter for the invalidation check; the
+      // assertion only inspects the key set.
+      session.analyzerCache = {
+        tree: { scorecardTemplate: {}, fileResults: new Map() },
+        eslint: { scorecardTemplate: {}, fileResults: new Map() },
+        biome: { scorecardTemplate: {}, fileResults: new Map() },
+        ruff: { scorecardTemplate: {}, fileResults: new Map() },
+      } as never;
+      session.lastAnalysis = { sentinel: 'present' } as never;
+    }
+
+    async function externalBridgeWorkspaceAttach(workspaceRoot: string): Promise<{
+      service: ReturnType<typeof workspaceServiceCreate>;
+      engine: WorkspaceServiceEngine;
+      watcher: ReturnType<typeof workspaceWatcherStubCreate>;
+      attached: { clientSessionId: string; workspaceId: string };
+      paths: ReturnType<typeof externalBridgeWorkspaceSetup>;
+    }> {
+      const paths = externalBridgeWorkspaceSetup(workspaceRoot);
+      const watcher = workspaceWatcherStubCreate();
+      const engine = new WorkspaceServiceEngine({
+        watcherCreate: watcher.watcherCreate,
+      });
+      const service = workspaceServiceCreate({ engine });
+      const attached = await clientWorkspaceAttach(service, {
+        rootPath: workspaceRoot,
+        configPath: paths.configPath,
+        clientInstanceId: `external-bridge-watcher-${randomUUID()}`,
+      });
+      workspaceSessionAnalyzerCachePlant(engine, attached);
+      return { service, engine, watcher, attached, paths };
+    }
+
+    function analyzerCacheKeysGet(
+      engine: WorkspaceServiceEngine,
+      input: { clientSessionId: string; workspaceId: string },
+    ): AnalyzerCacheKey[] {
+      const { session } = workspaceSessionDebugRead(engine, input);
+      return Object.keys(session.analyzerCache ?? {}).sort() as AnalyzerCacheKey[];
+    }
+
+    it('eslint config change drops only the eslint analyzer bucket', async () => {
+      const workspaceRoot = tempWorkspaceCreate('codepol-watcher-eslint-');
+      createdDirs.push(workspaceRoot);
+      const { engine, watcher, attached, paths } = await externalBridgeWorkspaceAttach(
+        workspaceRoot,
+      );
+
+      watcher.trigger('change', paths.eslintConfigPath);
+
+      expect(analyzerCacheKeysGet(engine, attached)).toEqual(['biome', 'ruff', 'tree']);
+      const { session, workspace } = workspaceSessionDebugRead(engine, attached);
+      expect(session.lastAnalysis).toBeUndefined();
+      expect(workspace.configDirty).toBe(false);
+    });
+
+    it('biome config change drops only the biome analyzer bucket', async () => {
+      const workspaceRoot = tempWorkspaceCreate('codepol-watcher-biome-');
+      createdDirs.push(workspaceRoot);
+      const { engine, watcher, attached, paths } = await externalBridgeWorkspaceAttach(
+        workspaceRoot,
+      );
+
+      watcher.trigger('change', paths.biomeConfigPath);
+
+      expect(analyzerCacheKeysGet(engine, attached)).toEqual(['eslint', 'ruff', 'tree']);
+      const { session, workspace } = workspaceSessionDebugRead(engine, attached);
+      expect(session.lastAnalysis).toBeUndefined();
+      expect(workspace.configDirty).toBe(false);
+    });
+
+    it('ruff config change drops only the ruff analyzer bucket', async () => {
+      const workspaceRoot = tempWorkspaceCreate('codepol-watcher-ruff-');
+      createdDirs.push(workspaceRoot);
+      const { engine, watcher, attached, paths } = await externalBridgeWorkspaceAttach(
+        workspaceRoot,
+      );
+
+      watcher.trigger('change', paths.ruffConfigPath);
+
+      expect(analyzerCacheKeysGet(engine, attached)).toEqual(['biome', 'eslint', 'tree']);
+      const { session, workspace } = workspaceSessionDebugRead(engine, attached);
+      expect(session.lastAnalysis).toBeUndefined();
+      expect(workspace.configDirty).toBe(false);
+    });
+
+    it('policy config change triggers full workspace invalidation', async () => {
+      const workspaceRoot = tempWorkspaceCreate('codepol-watcher-policy-');
+      createdDirs.push(workspaceRoot);
+      const { engine, watcher, attached, paths } = await externalBridgeWorkspaceAttach(
+        workspaceRoot,
+      );
+
+      watcher.trigger('change', paths.configPath);
+
+      const { session, workspace } = workspaceSessionDebugRead(engine, attached);
+      // Full invalidation flushes the entire analyzer cache, not just one
+      // bucket; configDirty is also set so the next analysis reloads the
+      // policy from disk.
+      expect(session.analyzerCache).toBeUndefined();
+      expect(session.lastAnalysis).toBeUndefined();
+      expect(workspace.configDirty).toBe(true);
+    });
+
+    it('source file change preserves all analyzer buckets and only marks the file dirty', async () => {
+      const workspaceRoot = tempWorkspaceCreate('codepol-watcher-source-');
+      createdDirs.push(workspaceRoot);
+      const { engine, watcher, attached, paths } = await externalBridgeWorkspaceAttach(
+        workspaceRoot,
+      );
+
+      watcher.trigger('change', paths.sourceTsPath);
+
+      // All four analyzer buckets survive — only the changed file is marked
+      // dirty so the next run recomputes its content fingerprint.
+      expect(analyzerCacheKeysGet(engine, attached)).toEqual([
+        'biome',
+        'eslint',
+        'ruff',
+        'tree',
+      ]);
+      const { session, workspace } = workspaceSessionDebugRead(engine, attached);
+      expect(workspace.configDirty).toBe(false);
+      expect(Array.from(session.dirtyFiles ?? [])).toEqual([
+        path.resolve(paths.sourceTsPath),
+      ]);
+    });
+  });
 });
