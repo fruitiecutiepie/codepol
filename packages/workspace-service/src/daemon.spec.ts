@@ -358,6 +358,8 @@ function workspaceReadQueriesStubCreate(): Pick<
   | 'queryDependencyPath'
   | 'queryDeadModules'
   | 'queryDependencyDiff'
+  | 'queryCallGraph'
+  | 'queryTypeHierarchy'
   | 'querySemanticSearch'
   | 'querySemanticDefinition'
   | 'querySemanticReferences'
@@ -420,6 +422,22 @@ function workspaceReadQueriesStubCreate(): Pick<
         removedEdges: [],
         newCycles: [],
         removedCycles: [],
+      };
+    },
+    async queryCallGraph() {
+      return {
+        nodes: [],
+        edges: [],
+        entryPoints: [],
+        cycles: [],
+      };
+    },
+    async queryTypeHierarchy() {
+      return {
+        nodes: [],
+        edges: [],
+        entryPoints: [],
+        cycles: [],
       };
     },
     async querySemanticSearch() {
@@ -2039,6 +2057,30 @@ describe('workspace daemon control plane', () => {
     ).toEqual({
       unreachable: [],
     });
+
+    // Phase 7 symbol-level queries round-trip through the daemon
+    // transport. We pass an unknown symbol id so the request exercises
+    // the daemon plumbing without depending on any specific id format.
+    const callGraph = await service.queryCallGraph({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      symbolId: 'unknown-id',
+      direction: 'both',
+    });
+    expect(callGraph.nodes).toHaveLength(1);
+    expect(callGraph.nodes[0]!.symbolId).toBe('unknown-id');
+    expect(callGraph.nodes[0]!.uri.startsWith('codepol-symbol://')).toBe(true);
+    expect(callGraph.edges).toEqual([]);
+
+    const typeHierarchy = await service.queryTypeHierarchy({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      symbolId: 'unknown-id',
+      direction: 'both',
+    });
+    expect(typeHierarchy.nodes).toHaveLength(1);
+    expect(typeHierarchy.nodes[0]!.symbolId).toBe('unknown-id');
+    expect(typeHierarchy.edges).toEqual([]);
   });
 
   it('rejects stale analysisGeneration for workspace symbol reads through the daemon service client', async () => {

@@ -12,6 +12,8 @@ export const CODEPOL_LSP_REQUEST_IMPACT_RADIUS = 'codepol/impactRadius';
 export const CODEPOL_LSP_REQUEST_DEPENDENCY_PATH = 'codepol/dependencyPath';
 export const CODEPOL_LSP_REQUEST_DEAD_MODULES = 'codepol/deadModules';
 export const CODEPOL_LSP_REQUEST_DEPENDENCY_DIFF = 'codepol/dependencyDiff';
+export const CODEPOL_LSP_REQUEST_CALL_GRAPH = 'codepol/callGraph';
+export const CODEPOL_LSP_REQUEST_TYPE_HIERARCHY = 'codepol/typeHierarchy';
 export const CODEPOL_LSP_REQUEST_SEMANTIC_SEARCH = 'codepol/semanticSearch';
 export const CODEPOL_LSP_REQUEST_SEMANTIC_DEFINITION =
   'codepol/semanticDefinition';

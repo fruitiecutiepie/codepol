@@ -13,6 +13,7 @@ import type {
   IndexStatusResult,
   WorkspaceApplyResult,
   WorkspaceArchitectureSummaryResult,
+  WorkspaceCallGraphDirection,
   WorkspaceCodeAction,
   WorkspaceDeadModulesResult,
   WorkspaceDependencyDiffResult,
@@ -31,6 +32,7 @@ import type {
   WorkspaceSemanticReferencesResult,
   WorkspaceInstanceId,
   WorkspaceSymbolResult,
+  WorkspaceTypeHierarchyDirection,
 } from '@codepol/core';
 import { diagnosticsRuntimeGet } from '@codepol/core';
 import type {
@@ -447,6 +449,30 @@ type WorkspaceDaemonQueryDependencyDiffRequest = WorkspaceDaemonMessage &
   analysisGeneration?: number;
 };
 
+type WorkspaceDaemonQueryCallGraphRequest = WorkspaceDaemonMessage &
+  WorkspaceDaemonClientSessionFreshness &
+  WorkspaceDaemonRequestFreshness &
+  WorkspaceDaemonWorkspaceFreshness & {
+  type: 'query_call_graph';
+  workspaceId: string;
+  symbolId: string;
+  direction: WorkspaceCallGraphDirection;
+  depth?: number;
+  analysisGeneration?: number;
+};
+
+type WorkspaceDaemonQueryTypeHierarchyRequest = WorkspaceDaemonMessage &
+  WorkspaceDaemonClientSessionFreshness &
+  WorkspaceDaemonRequestFreshness &
+  WorkspaceDaemonWorkspaceFreshness & {
+  type: 'query_type_hierarchy';
+  workspaceId: string;
+  symbolId: string;
+  direction: WorkspaceTypeHierarchyDirection;
+  depth?: number;
+  analysisGeneration?: number;
+};
+
 type WorkspaceDaemonQuerySemanticSearchRequest = WorkspaceDaemonMessage &
   WorkspaceDaemonClientSessionFreshness &
   WorkspaceDaemonRequestFreshness &
@@ -644,6 +670,16 @@ type WorkspaceDaemonQueryDependencyDiffAck = {
   result: WorkspaceDependencyDiffResult;
 };
 
+type WorkspaceDaemonQueryCallGraphAck = {
+  type: 'query_call_graph_ack';
+  result: WorkspaceDependencyGraphResult;
+};
+
+type WorkspaceDaemonQueryTypeHierarchyAck = {
+  type: 'query_type_hierarchy_ack';
+  result: WorkspaceDependencyGraphResult;
+};
+
 type WorkspaceDaemonQuerySemanticSearchAck = {
   type: 'query_semantic_search_ack';
   results: WorkspaceSearchResult[];
@@ -743,6 +779,8 @@ type WorkspaceDaemonServiceResponse =
   | WorkspaceDaemonQueryDependencyPathAck
   | WorkspaceDaemonQueryDeadModulesAck
   | WorkspaceDaemonQueryDependencyDiffAck
+  | WorkspaceDaemonQueryCallGraphAck
+  | WorkspaceDaemonQueryTypeHierarchyAck
   | WorkspaceDaemonQuerySemanticSearchAck
   | WorkspaceDaemonQuerySemanticDefinitionAck
   | WorkspaceDaemonQuerySemanticReferencesAck
@@ -1673,6 +1711,8 @@ export class WorkspaceDaemonSession {
       case 'query_dependency_path':
       case 'query_dead_modules':
       case 'query_dependency_diff':
+      case 'query_call_graph':
+      case 'query_type_hierarchy':
       case 'query_semantic_search':
       case 'query_semantic_definition':
       case 'query_semantic_references':
@@ -1700,6 +1740,8 @@ export class WorkspaceDaemonSession {
           | WorkspaceDaemonQueryDependencyPathRequest
           | WorkspaceDaemonQueryDeadModulesRequest
           | WorkspaceDaemonQueryDependencyDiffRequest
+          | WorkspaceDaemonQueryCallGraphRequest
+          | WorkspaceDaemonQueryTypeHierarchyRequest
           | WorkspaceDaemonQuerySemanticSearchRequest
           | WorkspaceDaemonQuerySemanticDefinitionRequest
           | WorkspaceDaemonQuerySemanticReferencesRequest
@@ -1745,6 +1787,8 @@ export class WorkspaceDaemonSession {
       case 'query_dependency_path':
       case 'query_dead_modules':
       case 'query_dependency_diff':
+      case 'query_call_graph':
+      case 'query_type_hierarchy':
       case 'query_semantic_references':
       case 'preview_rename':
       case 'query_architecture_summary':
@@ -2767,6 +2811,86 @@ export class WorkspaceDaemonSession {
             result,
           };
         }
+        case 'query_call_graph': {
+          if (!this.options.service) {
+            return messageErrorCreate(
+              'unsupported_request',
+              `Unsupported daemon request: ${message.type}`,
+            );
+          }
+          const input = message as WorkspaceDaemonQueryCallGraphRequest;
+          const daemonSessionError = this.daemonSessionValidate(input);
+          if (daemonSessionError) {
+            return daemonSessionError;
+          }
+          const replayGate = this.replayGateEnsure(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          if (replayGate) {
+            return replayGate;
+          }
+          const state = this.workspaceReplayStateGet(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          const workspaceInstanceError = this.workspaceInstanceValidate(state, input);
+          if (workspaceInstanceError) {
+            return workspaceInstanceError;
+          }
+          const replayEpochError = this.replayEpochValidate(state, input);
+          if (replayEpochError) {
+            return replayEpochError;
+          }
+          const result = await this.options.service.queryCallGraph({
+            ...input,
+            signal: options.signal,
+          });
+          return {
+            type: 'query_call_graph_ack',
+            result,
+          };
+        }
+        case 'query_type_hierarchy': {
+          if (!this.options.service) {
+            return messageErrorCreate(
+              'unsupported_request',
+              `Unsupported daemon request: ${message.type}`,
+            );
+          }
+          const input = message as WorkspaceDaemonQueryTypeHierarchyRequest;
+          const daemonSessionError = this.daemonSessionValidate(input);
+          if (daemonSessionError) {
+            return daemonSessionError;
+          }
+          const replayGate = this.replayGateEnsure(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          if (replayGate) {
+            return replayGate;
+          }
+          const state = this.workspaceReplayStateGet(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          const workspaceInstanceError = this.workspaceInstanceValidate(state, input);
+          if (workspaceInstanceError) {
+            return workspaceInstanceError;
+          }
+          const replayEpochError = this.replayEpochValidate(state, input);
+          if (replayEpochError) {
+            return replayEpochError;
+          }
+          const result = await this.options.service.queryTypeHierarchy({
+            ...input,
+            signal: options.signal,
+          });
+          return {
+            type: 'query_type_hierarchy_ack',
+            result,
+          };
+        }
         case 'query_semantic_search': {
           if (!this.options.service) {
             return messageErrorCreate(
@@ -3639,6 +3763,64 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
       replayEpoch: freshness?.replayEpoch,
       baselineLabel: input.baselineLabel,
       baselineGraph: input.baselineGraph,
+      analysisGeneration: input.analysisGeneration,
+    }, {
+      signal: input.signal,
+    }).then((response) => response.result);
+  }
+
+  queryCallGraph(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    symbolId: string;
+    direction: WorkspaceCallGraphDirection;
+    depth?: number;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceDependencyGraphResult> {
+    const freshness = this.workspaceFreshnessGet(input);
+    const daemonSessionId = this.daemonSessionIdGet(input.clientSessionId);
+    return this.connection.request<WorkspaceDaemonQueryCallGraphAck>({
+      type: 'query_call_graph',
+      clientSessionId: input.clientSessionId,
+      daemonSessionId,
+      requestId: input.requestId,
+      workspaceId: input.workspaceId,
+      workspaceInstanceId: freshness?.workspaceInstanceId,
+      replayEpoch: freshness?.replayEpoch,
+      symbolId: input.symbolId,
+      direction: input.direction,
+      depth: input.depth,
+      analysisGeneration: input.analysisGeneration,
+    }, {
+      signal: input.signal,
+    }).then((response) => response.result);
+  }
+
+  queryTypeHierarchy(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    symbolId: string;
+    direction: WorkspaceTypeHierarchyDirection;
+    depth?: number;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceDependencyGraphResult> {
+    const freshness = this.workspaceFreshnessGet(input);
+    const daemonSessionId = this.daemonSessionIdGet(input.clientSessionId);
+    return this.connection.request<WorkspaceDaemonQueryTypeHierarchyAck>({
+      type: 'query_type_hierarchy',
+      clientSessionId: input.clientSessionId,
+      daemonSessionId,
+      requestId: input.requestId,
+      workspaceId: input.workspaceId,
+      workspaceInstanceId: freshness?.workspaceInstanceId,
+      replayEpoch: freshness?.replayEpoch,
+      symbolId: input.symbolId,
+      direction: input.direction,
+      depth: input.depth,
       analysisGeneration: input.analysisGeneration,
     }, {
       signal: input.signal,

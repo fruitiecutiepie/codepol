@@ -138,6 +138,8 @@ export type {
   WorkspaceDependencyGraphEdgeKind,
   WorkspaceDependencyGraphResult,
   WorkspaceImpactRadiusDirection,
+  WorkspaceCallGraphDirection,
+  WorkspaceTypeHierarchyDirection,
   WorkspaceDependencyPathResult,
   WorkspaceDeadModulesResult,
   WorkspaceDependencyDiffNode,
@@ -693,6 +695,21 @@ export type {
   ModuleDependencyDiffResult,
 } from './index/moduleGraphDiff';
 export { moduleDependencyDiffCompute } from './index/moduleGraphDiff';
+
+// Symbol-level graph queries (Phase 7: call graph, type hierarchy)
+export type {
+  SymbolCallGraphDirection,
+  SymbolCallGraphInput,
+  SymbolCallGraphView,
+  SymbolGraphTraversalResult,
+  SymbolTypeHierarchyDirection,
+  SymbolTypeHierarchyInput,
+  SymbolTypeHierarchyView,
+} from './index/symbolGraphQueries';
+export {
+  symbolCallGraphCompute,
+  symbolTypeHierarchyCompute,
+} from './index/symbolGraphQueries';
 
 // Index builder
 export type { IndexBuildOptions, IndexBuildResult } from './index/indexBuilder';

@@ -19,6 +19,7 @@ import type {
   EscalationRuleInput,
   IndexStatusResult,
   WorkspaceArchitectureSummaryResult,
+  WorkspaceCallGraphDirection,
   WorkspaceDeadModulesResult,
   WorkspaceDependencyDiffResult,
   WorkspaceDependencyGraphResult,
@@ -34,6 +35,7 @@ import type {
   WorkspaceSemanticHoverResult,
   WorkspaceSemanticReferencesResult,
   WorkspaceSearchResult,
+  WorkspaceTypeHierarchyDirection,
 } from '@codepol/core';
 import {
   CODEPOL_LSP_COMMAND_APPLY_EDIT_PLAN,
@@ -41,6 +43,7 @@ import {
   CODEPOL_LSP_COMMAND_ESCALATE_DIAGNOSTICS,
   CODEPOL_LSP_COMMAND_REVOKE_DIAGNOSTICS_ESCALATION,
   CODEPOL_LSP_REQUEST_ARCHITECTURE_SUMMARY,
+  CODEPOL_LSP_REQUEST_CALL_GRAPH,
   CODEPOL_LSP_REQUEST_DEAD_MODULES,
   CODEPOL_LSP_REQUEST_DEPENDENCY_DIFF,
   CODEPOL_LSP_REQUEST_DEPENDENCY_GRAPH,
@@ -48,6 +51,7 @@ import {
   CODEPOL_LSP_REQUEST_DIAGNOSTICS_CONFIG,
   CODEPOL_LSP_REQUEST_DIAGNOSTICS_ESCALATIONS,
   CODEPOL_LSP_REQUEST_IMPACT_RADIUS,
+  CODEPOL_LSP_REQUEST_TYPE_HIERARCHY,
   CODEPOL_LSP_REQUEST_INDEX_STATUS,
   CODEPOL_LSP_REQUEST_LINT_RULE_DETAILS,
   CODEPOL_LSP_REQUEST_LINT_RULES,
@@ -163,6 +167,16 @@ export type CodepolProtocolClient = {
     baselineLabel?: string;
     baselineGraph?: WorkspaceDependencyGraphResult;
   }): Promise<WorkspaceDependencyDiffResult | null>;
+  queryCallGraph(input: {
+    symbolId: string;
+    direction: WorkspaceCallGraphDirection;
+    depth?: number;
+  }): Promise<WorkspaceDependencyGraphResult | null>;
+  queryTypeHierarchy(input: {
+    symbolId: string;
+    direction: WorkspaceTypeHierarchyDirection;
+    depth?: number;
+  }): Promise<WorkspaceDependencyGraphResult | null>;
   querySemanticSearch(query: string): Promise<WorkspaceSearchResult[] | null>;
   querySemanticDefinition(uri: string): Promise<WorkspaceSemanticDefinitionResult | null>;
   querySemanticReferences(uri: string): Promise<WorkspaceSemanticReferencesResult | null>;
@@ -439,6 +453,28 @@ export class VscodeLanguageClientProtocol implements CodepolProtocolClient {
   }): Promise<WorkspaceDependencyDiffResult | null> {
     return this.requestRun<WorkspaceDependencyDiffResult | null>(
       CODEPOL_LSP_REQUEST_DEPENDENCY_DIFF,
+      input,
+    );
+  }
+
+  async queryCallGraph(input: {
+    symbolId: string;
+    direction: WorkspaceCallGraphDirection;
+    depth?: number;
+  }): Promise<WorkspaceDependencyGraphResult | null> {
+    return this.requestRun<WorkspaceDependencyGraphResult | null>(
+      CODEPOL_LSP_REQUEST_CALL_GRAPH,
+      input,
+    );
+  }
+
+  async queryTypeHierarchy(input: {
+    symbolId: string;
+    direction: WorkspaceTypeHierarchyDirection;
+    depth?: number;
+  }): Promise<WorkspaceDependencyGraphResult | null> {
+    return this.requestRun<WorkspaceDependencyGraphResult | null>(
+      CODEPOL_LSP_REQUEST_TYPE_HIERARCHY,
       input,
     );
   }

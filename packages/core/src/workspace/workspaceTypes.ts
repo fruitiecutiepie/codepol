@@ -489,6 +489,38 @@ export type WorkspaceDependencyGraphNode = {
    * any known package.
    */
   packageName?: string;
+  /**
+   * Stable identifier of the symbol this node represents, when the node
+   * comes from a symbol-level graph (`queryCallGraph`,
+   * `queryTypeHierarchy`). Absent for file-level graph nodes.
+   *
+   * When `symbolId` is set, `uri` carries a synthetic identifier of the
+   * form `codepol-symbol://<symbolId>` so the panel can use `uri` as a
+   * unique key the same way it does for file-level nodes.
+   */
+  symbolId?: string;
+  /**
+   * Display name of the symbol when {@link symbolId} is set. Empty
+   * string when the symbol has no name (anonymous functions).
+   */
+  symbolName?: string;
+  /**
+   * Language-agnostic kind of the symbol when {@link symbolId} is set
+   * (e.g. `function`, `method`, `class`, `interface`). Mirrors
+   * `SymbolKind` from `@codepol/core`.
+   */
+  symbolKind?: string;
+  /**
+   * `file://` URI of the file that declares the symbol. Lets clients
+   * jump to the declaration without re-resolving the symbol id.
+   */
+  declarationUri?: string;
+  /**
+   * Range of the symbol declaration in the declaration file. Optional;
+   * populated only when computing the range is cheap (the workspace
+   * service has the source text on hand).
+   */
+  declarationRange?: WorkspaceRange;
 };
 
 /**
@@ -639,6 +671,35 @@ export type WorkspaceDependencyDiffResult = {
   newCycles: string[][];
   removedCycles: string[][];
 };
+
+/**
+ * Direction of a call-graph traversal. Mirrors
+ * `SymbolCallGraphDirection` from `@codepol/core` one-for-one so clients
+ * that speak the workspace contract can pass the string straight
+ * through.
+ *
+ * - `callers`: walk reverse edges (who calls the focus symbol,
+ *   transitively) — "what triggers this code path?"
+ * - `callees`: walk forward edges (what the focus symbol calls,
+ *   transitively) — "what does this function do, structurally?"
+ * - `both`: union of callers and callees starting at the focus.
+ */
+export type WorkspaceCallGraphDirection = 'callers' | 'callees' | 'both';
+
+/**
+ * Direction of a type-hierarchy traversal. Mirrors
+ * `SymbolTypeHierarchyDirection` from `@codepol/core` one-for-one.
+ *
+ * - `supertypes`: walk forward edges (what the focus symbol extends /
+ *   implements, transitively) — "what contracts does this satisfy?"
+ * - `subtypes`: walk reverse edges (what extends / implements the focus
+ *   symbol, transitively) — "who must change if I change this contract?"
+ * - `both`: union of supertypes and subtypes starting at the focus.
+ */
+export type WorkspaceTypeHierarchyDirection =
+  | 'supertypes'
+  | 'subtypes'
+  | 'both';
 
 export type WorkspaceArchitectureSummaryHotspot = {
   uri: string;

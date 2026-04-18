@@ -7,6 +7,7 @@ import type {
   PolicyViolation,
   WorkspaceApplyResult,
   WorkspaceArchitectureSummaryResult,
+  WorkspaceCallGraphDirection,
   WorkspaceCodeAction,
   WorkspaceDeadModulesResult,
   WorkspaceDependencyDiffResult,
@@ -25,6 +26,7 @@ import type {
   WorkspaceSemanticHoverResult,
   WorkspaceSemanticReferencesResult,
   WorkspaceSymbolResult,
+  WorkspaceTypeHierarchyDirection,
 } from '@codepol/core';
 
 export type WorkspaceClientKind = 'lsp' | 'cli' | 'test';
@@ -235,6 +237,57 @@ export type WorkspaceService = {
     analysisGeneration?: number;
     signal?: AbortSignal;
   }) => Promise<WorkspaceDependencyDiffResult>;
+  /**
+   * Symbol-level call graph centered on a stable symbol identifier.
+   *
+   * Returns a {@link WorkspaceDependencyGraphResult} so the panel can
+   * render call graphs with the same render path used for the
+   * file-level dependency graph. Nodes carry the synthetic URI
+   * `codepol-symbol://<symbolId>` plus optional `symbolId`,
+   * `symbolName`, `symbolKind`, and `declarationUri` fields. Edges are
+   * oriented `from = caller`, `to = callee` regardless of the requested
+   * traversal direction.
+   *
+   * Fidelity caveat: this is the structural call graph derived from the
+   * tree-sitter index. Dynamic dispatch, higher-order calls, and calls
+   * that cross re-exports are not tracked in MVP. See Phase 7 / open
+   * question Q5 in the architecture-graph TODO note for the
+   * over-approximation strategy that may follow.
+   */
+  queryCallGraph: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    symbolId: string;
+    direction: WorkspaceCallGraphDirection;
+    depth?: number;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceDependencyGraphResult>;
+  /**
+   * Symbol-level type hierarchy centered on a stable symbol identifier
+   * (typically a class or interface declaration).
+   *
+   * Returns a {@link WorkspaceDependencyGraphResult} so the panel can
+   * reuse its rendering pipeline. Edges are oriented
+   * `from = subtype/child`, `to = supertype/parent` so a visual
+   * top-to-bottom layout matches the natural reading direction of an
+   * `extends` / `implements` chain.
+   *
+   * Fidelity caveat: only `extends` / `implements` relations that
+   * resolved to a concrete symbol target during indexing are followed.
+   * Structural typing and conditional types are not modeled.
+   */
+  queryTypeHierarchy: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    symbolId: string;
+    direction: WorkspaceTypeHierarchyDirection;
+    depth?: number;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceDependencyGraphResult>;
   querySemanticSearch: (input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;

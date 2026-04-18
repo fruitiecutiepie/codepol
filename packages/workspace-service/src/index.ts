@@ -19,6 +19,8 @@ import {
   moduleDependencyDiffCompute,
   moduleDependencyPathCompute,
   moduleImpactRadiusCompute,
+  symbolCallGraphCompute,
+  symbolTypeHierarchyCompute,
   policyArchitectureViolationsGetFromDir,
   pluginsMapHasArchitectureProvider,
   pluginGetForRule,
@@ -79,6 +81,8 @@ import {
   type WorkspaceDependencyGraphResult,
   type WorkspaceDependencyPathResult,
   type WorkspaceImpactRadiusDirection,
+  type WorkspaceCallGraphDirection,
+  type WorkspaceTypeHierarchyDirection,
   type WorkspaceDiagnostic,
   type WorkspaceDiagnosticSeverity,
   type WorkspaceFeatureStatus,
@@ -675,6 +679,26 @@ export type WorkspaceService = {
     analysisGeneration?: number;
     signal?: AbortSignal;
   }) => Promise<WorkspaceDependencyDiffResult>;
+  queryCallGraph: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    symbolId: string;
+    direction: WorkspaceCallGraphDirection;
+    depth?: number;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceDependencyGraphResult>;
+  queryTypeHierarchy: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    symbolId: string;
+    direction: WorkspaceTypeHierarchyDirection;
+    depth?: number;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceDependencyGraphResult>;
   querySemanticSearch: (input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;
@@ -4511,6 +4535,136 @@ function workspaceDeadModulesResultCreate(
   return {
     unreachable: result.unreachable.map((filePath) => workspacePathToUri(filePath)),
   };
+}
+
+/**
+ * Synthetic URI scheme used for symbol-level graph nodes
+ * (`queryCallGraph`, `queryTypeHierarchy`). Carrying the symbol id in
+ * the URI keeps the panel's `uri`-as-key invariant intact: every
+ * symbol-level node has a unique URI even when several nodes resolve
+ * to the same declaration file.
+ */
+const WORKSPACE_SYMBOL_URI_SCHEME = 'codepol-symbol';
+
+function workspaceSymbolUriCreate(symbolId: string): string {
+  return `${WORKSPACE_SYMBOL_URI_SCHEME}://${encodeURIComponent(symbolId)}`;
+}
+
+function workspaceSymbolGraphNodeBuild(
+  workspace: WorkspaceContextState,
+  index: ProjectIndex,
+  symbolId: string,
+): WorkspaceDependencyGraphNode {
+  const symbol = index.symbolGet(symbolId);
+  if (!symbol) {
+    return {
+      uri: workspaceSymbolUriCreate(symbolId),
+      workspaceRelativePath: symbolId,
+      symbolId,
+    };
+  }
+  const declarationUri = workspacePathToUri(symbol.file);
+  const workspaceRelative = workspaceRelativePathCreate(workspace.rootPath, symbol.file);
+  return {
+    uri: workspaceSymbolUriCreate(symbolId),
+    workspaceRelativePath:
+      symbol.name.length > 0
+        ? `${workspaceRelative}::${symbol.name}`
+        : workspaceRelative,
+    symbolId,
+    symbolName: symbol.name,
+    symbolKind: symbol.kind,
+    declarationUri,
+  };
+}
+
+function workspaceSymbolGraphResultCreate(input: {
+  workspace: WorkspaceContextState;
+  index: ProjectIndex;
+  symbols: string[];
+  edges: Array<{ from: string; to: string }>;
+}): WorkspaceDependencyGraphResult {
+  const nodes: WorkspaceDependencyGraphNode[] = input.symbols.map((symbolId) =>
+    workspaceSymbolGraphNodeBuild(input.workspace, input.index, symbolId),
+  );
+  const edges: WorkspaceDependencyGraphEdge[] = input.edges.map((edge) => ({
+    fromUri: workspaceSymbolUriCreate(edge.from),
+    toUri: workspaceSymbolUriCreate(edge.to),
+  }));
+  return {
+    nodes,
+    edges,
+    entryPoints: [],
+    cycles: [],
+  };
+}
+
+function workspaceCallGraphResultCreate(
+  workspace: WorkspaceContextState,
+  index: ProjectIndex,
+  input: {
+    symbolId: string;
+    direction: WorkspaceCallGraphDirection;
+    depth?: number;
+  },
+): WorkspaceDependencyGraphResult {
+  const result = symbolCallGraphCompute(
+    {
+      callersGet: (id) => index.callersGet(id),
+      calleesGet: (id) => index.calleesGet(id),
+    },
+    {
+      symbolId: input.symbolId,
+      direction: input.direction,
+      depth: input.depth,
+    },
+  );
+  return workspaceSymbolGraphResultCreate({
+    workspace,
+    index,
+    symbols: result.symbols,
+    edges: result.edges,
+  });
+}
+
+function workspaceTypeHierarchyResultCreate(
+  workspace: WorkspaceContextState,
+  index: ProjectIndex,
+  input: {
+    symbolId: string;
+    direction: WorkspaceTypeHierarchyDirection;
+    depth?: number;
+  },
+): WorkspaceDependencyGraphResult {
+  const view = {
+    superTypesGet(symbolId: string): string[] {
+      const ids = new Set<string>();
+      for (const relation of index.typeRelationsGet(symbolId)) {
+        if (relation.resolvedTargetId === undefined) continue;
+        ids.add(relation.resolvedTargetId);
+      }
+      return [...ids].sort();
+    },
+    subTypesGet(symbolId: string): string[] {
+      const ids = new Set<string>();
+      for (const relation of index.subTypesGet(symbolId)) {
+        if (relation.resolvedTargetId !== symbolId) continue;
+        ids.add(relation.symbolId);
+      }
+      return [...ids].sort();
+    },
+  };
+  const result = symbolTypeHierarchyCompute(view, {
+    symbolId: input.symbolId,
+    direction: input.direction,
+    depth: input.depth,
+  });
+  return workspaceSymbolGraphResultCreate({
+    workspace,
+    index,
+    symbols: result.symbols,
+    edges: result.edges,
+  });
 }
 
 /**
@@ -9105,6 +9259,60 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     });
   }
 
+  async queryCallGraph(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    symbolId: string;
+    direction: WorkspaceCallGraphDirection;
+    depth?: number;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceDependencyGraphResult> {
+    const { workspace, workspaceSession } = workspaceSessionGet(
+      this.workspaces,
+      this.clientSessions,
+      input.clientSessionId,
+      input.workspaceId,
+    );
+    const index = await this.workspaceSessionIndexEnsure(workspace, workspaceSession, {
+      signal: input.signal,
+    });
+    workspaceAnalysisGenerationValidate(workspaceSession, input);
+    return workspaceCallGraphResultCreate(workspace, index, {
+      symbolId: input.symbolId,
+      direction: input.direction,
+      depth: input.depth,
+    });
+  }
+
+  async queryTypeHierarchy(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    symbolId: string;
+    direction: WorkspaceTypeHierarchyDirection;
+    depth?: number;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceDependencyGraphResult> {
+    const { workspace, workspaceSession } = workspaceSessionGet(
+      this.workspaces,
+      this.clientSessions,
+      input.clientSessionId,
+      input.workspaceId,
+    );
+    const index = await this.workspaceSessionIndexEnsure(workspace, workspaceSession, {
+      signal: input.signal,
+    });
+    workspaceAnalysisGenerationValidate(workspaceSession, input);
+    return workspaceTypeHierarchyResultCreate(workspace, index, {
+      symbolId: input.symbolId,
+      direction: input.direction,
+      depth: input.depth,
+    });
+  }
+
   async queryDependencyDiff(input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;
@@ -9627,6 +9835,32 @@ class InProcessWorkspaceService implements WorkspaceService {
     signal?: AbortSignal;
   }): Promise<WorkspaceDependencyDiffResult> {
     return this.engine.queryDependencyDiff(input);
+  }
+
+  queryCallGraph(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    symbolId: string;
+    direction: WorkspaceCallGraphDirection;
+    depth?: number;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceDependencyGraphResult> {
+    return this.engine.queryCallGraph(input);
+  }
+
+  queryTypeHierarchy(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    symbolId: string;
+    direction: WorkspaceTypeHierarchyDirection;
+    depth?: number;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceDependencyGraphResult> {
+    return this.engine.queryTypeHierarchy(input);
   }
 
   querySemanticSearch(input: {

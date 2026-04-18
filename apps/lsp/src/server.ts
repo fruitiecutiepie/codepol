@@ -9,6 +9,7 @@ import {
   type EscalationRuleInput,
   type IndexStatusResult,
   type WorkspaceArchitectureSummaryResult,
+  type WorkspaceCallGraphDirection,
   type WorkspaceCodeAction,
   type WorkspaceDeadModulesResult,
   type WorkspaceDependencyDiffResult,
@@ -17,6 +18,7 @@ import {
   type WorkspaceDiagnostic,
   type WorkspaceEditPlan,
   type WorkspaceImpactRadiusDirection,
+  type WorkspaceTypeHierarchyDirection,
   type WorkspaceLintRuleDetailsResult,
   type WorkspaceLintRulesResult,
   type WorkspacePrepareRenameResult,
@@ -37,11 +39,13 @@ import {
   CODEPOL_LSP_COMMAND_REVOKE_DIAGNOSTICS_ESCALATION,
   CODEPOL_LSP_COMMAND_SHOW_ARCHITECTURE_LINKS,
   CODEPOL_LSP_REQUEST_ARCHITECTURE_SUMMARY,
+  CODEPOL_LSP_REQUEST_CALL_GRAPH,
   CODEPOL_LSP_REQUEST_DEAD_MODULES,
   CODEPOL_LSP_REQUEST_DEPENDENCY_DIFF,
   CODEPOL_LSP_REQUEST_DEPENDENCY_GRAPH,
   CODEPOL_LSP_REQUEST_DEPENDENCY_PATH,
   CODEPOL_LSP_REQUEST_IMPACT_RADIUS,
+  CODEPOL_LSP_REQUEST_TYPE_HIERARCHY,
   CODEPOL_LSP_REQUEST_DIAGNOSTICS_CONFIG,
   CODEPOL_LSP_REQUEST_DIAGNOSTICS_ESCALATIONS,
   CODEPOL_LSP_REQUEST_INDEX_STATUS,
@@ -1082,6 +1086,18 @@ export class CodepolLspServer {
           baselineLabel?: string;
           baselineGraph?: WorkspaceDependencyGraphResult;
         }, context);
+      case CODEPOL_LSP_REQUEST_CALL_GRAPH:
+        return this.callGraphHandle(params as {
+          symbolId?: string;
+          direction?: WorkspaceCallGraphDirection;
+          depth?: number;
+        }, context);
+      case CODEPOL_LSP_REQUEST_TYPE_HIERARCHY:
+        return this.typeHierarchyHandle(params as {
+          symbolId?: string;
+          direction?: WorkspaceTypeHierarchyDirection;
+          depth?: number;
+        }, context);
       case CODEPOL_LSP_REQUEST_SEMANTIC_SEARCH:
         return this.semanticSearchHandle(params as {
           query?: string;
@@ -1879,6 +1895,78 @@ export class CodepolLspServer {
           context.requestId === undefined || context.requestId === null
             ? undefined
             : `lsp-codepol-dependency-diff:${String(context.requestId)}`,
+        signal: context.signal,
+      }), {
+      signal: context.signal,
+    });
+  }
+
+  private async callGraphHandle(
+    params: {
+      symbolId?: string;
+      direction?: WorkspaceCallGraphDirection;
+      depth?: number;
+    },
+    context: { requestId?: JsonRpcId; signal?: AbortSignal } = {},
+  ): Promise<WorkspaceDependencyGraphResult | null> {
+    if (
+      !this.registeredClientSessionId ||
+      !this.workspaceId ||
+      !params.symbolId ||
+      !params.direction
+    ) {
+      return null;
+    }
+    const symbolId = params.symbolId;
+    const direction = params.direction;
+
+    return this.serviceCall((service) =>
+      service.queryCallGraph({
+        clientSessionId: this.registeredClientSessionId!,
+        workspaceId: this.workspaceId!,
+        symbolId,
+        direction,
+        depth: params.depth,
+        requestId:
+          context.requestId === undefined || context.requestId === null
+            ? undefined
+            : `lsp-codepol-call-graph:${String(context.requestId)}`,
+        signal: context.signal,
+      }), {
+      signal: context.signal,
+    });
+  }
+
+  private async typeHierarchyHandle(
+    params: {
+      symbolId?: string;
+      direction?: WorkspaceTypeHierarchyDirection;
+      depth?: number;
+    },
+    context: { requestId?: JsonRpcId; signal?: AbortSignal } = {},
+  ): Promise<WorkspaceDependencyGraphResult | null> {
+    if (
+      !this.registeredClientSessionId ||
+      !this.workspaceId ||
+      !params.symbolId ||
+      !params.direction
+    ) {
+      return null;
+    }
+    const symbolId = params.symbolId;
+    const direction = params.direction;
+
+    return this.serviceCall((service) =>
+      service.queryTypeHierarchy({
+        clientSessionId: this.registeredClientSessionId!,
+        workspaceId: this.workspaceId!,
+        symbolId,
+        direction,
+        depth: params.depth,
+        requestId:
+          context.requestId === undefined || context.requestId === null
+            ? undefined
+            : `lsp-codepol-type-hierarchy:${String(context.requestId)}`,
         signal: context.signal,
       }), {
       signal: context.signal,
