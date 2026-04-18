@@ -6,9 +6,12 @@ const { policyCheck } = require('../packages/workspace-service/dist/index.js');
 const { diagnosticsRuntimeSetConfig } = require('../packages/core/dist/index.js');
 
 diagnosticsRuntimeSetConfig({
-  level: 'debug',
-  scopes: { parser: 'trace', 'workspace.analyzer': 'debug' },
-  policy: { includeTiming: true },
+  environment: 'dev',
+  overrides: {
+    level: 'debug',
+    scopes: { parser: 'trace', 'workspace.analyzer': 'debug' },
+    tracing: { enabled: true, sampleRate: 1 },
+  },
 });
 
 (async () => {

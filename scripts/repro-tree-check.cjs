@@ -15,9 +15,12 @@ const {
 } = require('../packages/core/dist/index.js');
 
 diagnosticsRuntimeSetConfig({
-  level: 'debug',
-  scopes: { parser: 'trace', 'workspace.analyzer': 'debug' },
-  policy: { includeTiming: true },
+  environment: 'dev',
+  overrides: {
+    level: 'debug',
+    scopes: { parser: 'trace', 'workspace.analyzer': 'debug' },
+    tracing: { enabled: true, sampleRate: 1 },
+  },
 });
 const codepolBuiltinExports = require('../packages/plugin/dist/index.js');
 const codepolBuiltin = codepolBuiltinExports.default ?? codepolBuiltinExports;

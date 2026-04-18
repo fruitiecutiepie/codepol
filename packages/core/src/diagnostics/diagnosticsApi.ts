@@ -9,19 +9,27 @@ import type {
   Diagnostics,
   DiagnosticsConfig,
   DiagnosticsConfigPatch,
-  DiagnosticsPolicy,
+  DiagnosticsOverridePatch,
+  EffectiveDiagnosticsPolicy,
+  EnvironmentName,
+  EscalationHandle,
+  EscalationRule,
+  EscalationRuleInput,
   ExecutionContext,
-  LogLevel,
+  ExecutionContextScopeOpts,
 } from './diagnosticsTypes';
 import { diagnosticsRuntimeGet } from './diagnosticsRuntimeGlobal';
 
-export function diagnosticsGet(scope: string): Diagnostics {
-  return diagnosticsRuntimeGet().getDiagnostics(scope);
+export function diagnosticsGet(
+  scope: string,
+  opts?: { requestId?: string; workspaceId?: string },
+): Diagnostics {
+  return diagnosticsRuntimeGet().getDiagnostics(scope, opts);
 }
 
 export function executionContextCreate(
   scope: string,
-  opts?: { requestId?: string; abortSignal?: AbortSignal },
+  opts?: ExecutionContextScopeOpts,
 ): ExecutionContext {
   return diagnosticsRuntimeGet().getContext(scope, opts);
 }
@@ -30,32 +38,42 @@ export function diagnosticsRuntimeGetConfig(): DiagnosticsConfig {
   return diagnosticsRuntimeGet().getConfig();
 }
 
-export function diagnosticsRuntimeSetLevel(level: LogLevel): void {
-  diagnosticsRuntimeGet().setLevel(level);
+export function diagnosticsRuntimeGetEffectivePolicy(opts?: {
+  scope?: string;
+  requestId?: string;
+  workspaceId?: string;
+}): EffectiveDiagnosticsPolicy {
+  return diagnosticsRuntimeGet().getEffectivePolicy(opts);
 }
 
-export function diagnosticsRuntimeSetScopeLevel(
-  scope: string,
-  level: LogLevel | undefined,
+export function diagnosticsRuntimeSetEnvironment(
+  environment: EnvironmentName,
 ): void {
-  diagnosticsRuntimeGet().setScopeLevel(scope, level);
+  diagnosticsRuntimeGet().setEnvironment(environment);
 }
 
-export function diagnosticsRuntimeSetPolicy(
-  patch: Partial<DiagnosticsPolicy>,
+export function diagnosticsRuntimeSetOverrides(
+  patch: DiagnosticsOverridePatch,
 ): void {
-  diagnosticsRuntimeGet().setPolicy(patch);
-}
-
-export function diagnosticsRuntimeSetSink(patch: {
-  consoleEnabled?: boolean;
-  logFilePath?: string | null;
-}): void {
-  diagnosticsRuntimeGet().setSink(patch);
+  diagnosticsRuntimeGet().setOverrides(patch);
 }
 
 export function diagnosticsRuntimeSetConfig(
   patch: DiagnosticsConfigPatch,
 ): void {
   diagnosticsRuntimeGet().setConfig(patch);
+}
+
+export function diagnosticsRuntimeEscalate(
+  rule: EscalationRuleInput,
+): EscalationHandle {
+  return diagnosticsRuntimeGet().escalate(rule);
+}
+
+export function diagnosticsRuntimeRevokeEscalation(id: string): boolean {
+  return diagnosticsRuntimeGet().revokeEscalation(id);
+}
+
+export function diagnosticsRuntimeListEscalations(): readonly EscalationRule[] {
+  return diagnosticsRuntimeGet().listEscalations();
 }

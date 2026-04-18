@@ -20,5 +20,11 @@ export const CODEPOL_LSP_REQUEST_ARCHITECTURE_SUMMARY =
   'codepol/architectureSummary';
 export const CODEPOL_LSP_REQUEST_DIAGNOSTICS_CONFIG =
   'codepol/diagnosticsConfig';
+export const CODEPOL_LSP_REQUEST_DIAGNOSTICS_ESCALATIONS =
+  'codepol/diagnosticsEscalations';
 export const CODEPOL_LSP_COMMAND_CONFIGURE_DIAGNOSTICS =
   'codepol.diagnostics.configure';
+export const CODEPOL_LSP_COMMAND_ESCALATE_DIAGNOSTICS =
+  'codepol.diagnostics.escalate';
+export const CODEPOL_LSP_COMMAND_REVOKE_DIAGNOSTICS_ESCALATION =
+  'codepol.diagnostics.revokeEscalation';

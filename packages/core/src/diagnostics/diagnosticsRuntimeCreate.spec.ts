@@ -1,89 +1,101 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import {
-  diagnosticsConfigDefaults,
-  diagnosticsRuntimeCreate,
-} from './diagnosticsRuntimeCreate';
+import { describe, expect, it } from 'vitest';
+import { diagnosticsRuntimeCreate } from './diagnosticsRuntimeCreate';
+import { memorySinkCreate } from './diagnosticsSinks';
+import type { Clock } from './diagnosticsTypes';
+
+function mockClockCreate(start = 1_000): {
+  clock: Clock;
+  advance: (ms: number) => void;
+} {
+  let now = start;
+  return {
+    clock: { now: () => now },
+    advance(ms) { now += ms; },
+  };
+}
 
 describe('diagnosticsRuntimeCreate', () => {
-  const tempFiles: string[] = [];
-
-  afterEach(() => {
-    for (const file of tempFiles) {
-      try { fs.unlinkSync(file); } catch { /* ignore */ }
-    }
-    tempFiles.length = 0;
+  it('applies the starting environment preset', () => {
+    const runtime = diagnosticsRuntimeCreate({ environment: 'dev' });
+    const effective = runtime.getEffectivePolicy();
+    expect(effective.level).toBe('debug');
+    expect(effective.environment).toBe('dev');
   });
 
-  it('setLevel affects future contexts but not previously captured ones', () => {
-    const runtime = diagnosticsRuntimeCreate({
-      initialConfig: { ...diagnosticsConfigDefaults(), level: 'warn' },
-    });
+  it('overrides layer on top of the preset and persist across getContext calls', () => {
+    const runtime = diagnosticsRuntimeCreate({ environment: 'user' });
+    runtime.setOverrides({ level: 'info' });
+    const effective = runtime.getEffectivePolicy();
+    expect(effective.level).toBe('info');
+  });
+
+  it('in-flight handles keep their snapshot when the environment changes', () => {
+    const runtime = diagnosticsRuntimeCreate({ environment: 'user' });
     const earlier = runtime.getDiagnostics('scope.a');
-    runtime.setLevel('trace');
+    runtime.setEnvironment('verbose');
     const later = runtime.getDiagnostics('scope.a');
-    expect(earlier.enabled('debug')).toBe(false);
-    expect(later.enabled('debug')).toBe(true);
+    expect(earlier.enabled('trace')).toBe(false);
+    expect(later.enabled('trace')).toBe(true);
   });
 
-  it('setScopeLevel overrides only the targeted scope', () => {
+  it('escalate + revoke round-trips and is reflected in listEscalations', () => {
+    const mock = mockClockCreate();
     const runtime = diagnosticsRuntimeCreate({
-      initialConfig: { ...diagnosticsConfigDefaults(), level: 'warn' },
+      environment: 'user',
+      clock: mock.clock,
     });
-    runtime.setScopeLevel('parser', 'trace');
-    expect(runtime.getDiagnostics('parser.adapterCore').enabled('trace')).toBe(true);
-    expect(runtime.getDiagnostics('workspace.analyzer').enabled('trace')).toBe(false);
+    const handle = runtime.escalate({
+      scope: { kind: 'global' },
+      level: 'trace',
+      ttlMs: 60_000,
+      reason: 'test',
+      actor: 'spec',
+    });
+    expect(runtime.listEscalations()).toHaveLength(1);
+    expect(runtime.getEffectivePolicy().level).toBe('trace');
+    runtime.revokeEscalation(handle.id);
+    expect(runtime.getEffectivePolicy().level).toBe('warn');
   });
 
-  it('setSink({ logFilePath }) re-opens the file sink at the new path', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-diag-'));
-    const fileA = path.join(dir, 'a.log');
-    const fileB = path.join(dir, 'b.log');
-    tempFiles.push(fileA, fileB);
-
+  it('memory sink captures emitted records', () => {
+    const memory = memorySinkCreate();
     const runtime = diagnosticsRuntimeCreate({
-      initialConfig: {
-        ...diagnosticsConfigDefaults(),
-        level: 'info',
-        sink: { consoleEnabled: false, logFilePath: fileA },
-      },
+      environment: 'test',
+      sinkFactories: { memoryOverride: memory },
     });
-    runtime.getDiagnostics('svc').info('first', { where: 'A' });
-    runtime.setSink({ logFilePath: fileB });
-    runtime.getDiagnostics('svc').info('second', { where: 'B' });
-
-    const contentA = fs.readFileSync(fileA, 'utf8');
-    const contentB = fs.readFileSync(fileB, 'utf8');
-    expect(contentA).toContain('"first"');
-    expect(contentA).not.toContain('"second"');
-    expect(contentB).toContain('"second"');
-    expect(contentB).not.toContain('"first"');
+    runtime.getDiagnostics('scope.test').warn('hello');
+    const records = memory.snapshot();
+    expect(records).toHaveLength(1);
+    expect(records[0]?.name).toBe('hello');
+    expect(records[0]?.scope).toBe('scope.test');
   });
 
-  it('clearing a scope override restores parent level', () => {
-    const runtime = diagnosticsRuntimeCreate({
-      initialConfig: { ...diagnosticsConfigDefaults(), level: 'warn' },
+  it('getContext sets requestId and workspaceId on the resulting context', () => {
+    const runtime = diagnosticsRuntimeCreate({ environment: 'user' });
+    const ctx = runtime.getContext('plugin.x', {
+      requestId: 'req-1',
+      workspaceId: 'ws-1',
     });
-    runtime.setScopeLevel('plugin', 'trace');
-    expect(runtime.getDiagnostics('plugin.logger').enabled('trace')).toBe(true);
-    runtime.setScopeLevel('plugin', undefined);
-    expect(runtime.getDiagnostics('plugin.logger').enabled('trace')).toBe(false);
+    expect(ctx.requestId).toBe('req-1');
+    expect(ctx.workspaceId).toBe('ws-1');
   });
 
-  it('setConfig patches multiple fields atomically', () => {
-    const runtime = diagnosticsRuntimeCreate({
-      initialConfig: diagnosticsConfigDefaults(),
-    });
+  it('ChecksPolicy drives ExecutionContext.checks depth', () => {
+    const runtime = diagnosticsRuntimeCreate({ environment: 'user' });
+    expect(runtime.getContext('x').checks.validateIndexConsistency).toBeUndefined();
+    runtime.setOverrides({ checks: { invariants: 'full' } });
+    expect(runtime.getContext('x').checks.validateIndexConsistency).toBeDefined();
+  });
+
+  it('setConfig patches environment + overrides + escalations atomically', () => {
+    const runtime = diagnosticsRuntimeCreate({ environment: 'user' });
     runtime.setConfig({
-      level: 'debug',
-      scopes: { parser: 'trace' },
-      policy: { includeTiming: true },
+      environment: 'dev',
+      overrides: { level: 'trace' },
+      escalations: [],
     });
-    const cfg = runtime.getConfig();
-    expect(cfg.level).toBe('debug');
-    expect(cfg.scopes.parser).toBe('trace');
-    expect(cfg.policy.includeTiming).toBe(true);
+    const config = runtime.getConfig();
+    expect(config.environment).toBe('dev');
+    expect(config.overrides.level).toBe('trace');
   });
 });

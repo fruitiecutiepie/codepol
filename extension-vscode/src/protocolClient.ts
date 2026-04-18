@@ -15,6 +15,8 @@ import {
 import type {
   DiagnosticsConfig,
   DiagnosticsConfigPatch,
+  EscalationRule,
+  EscalationRuleInput,
   IndexStatusResult,
   WorkspaceArchitectureSummaryResult,
   WorkspaceDependencyGraphResult,
@@ -32,9 +34,12 @@ import type {
 import {
   CODEPOL_LSP_COMMAND_APPLY_EDIT_PLAN,
   CODEPOL_LSP_COMMAND_CONFIGURE_DIAGNOSTICS,
+  CODEPOL_LSP_COMMAND_ESCALATE_DIAGNOSTICS,
+  CODEPOL_LSP_COMMAND_REVOKE_DIAGNOSTICS_ESCALATION,
   CODEPOL_LSP_REQUEST_ARCHITECTURE_SUMMARY,
   CODEPOL_LSP_REQUEST_DEPENDENCY_GRAPH,
   CODEPOL_LSP_REQUEST_DIAGNOSTICS_CONFIG,
+  CODEPOL_LSP_REQUEST_DIAGNOSTICS_ESCALATIONS,
   CODEPOL_LSP_REQUEST_INDEX_STATUS,
   CODEPOL_LSP_REQUEST_LINT_RULE_DETAILS,
   CODEPOL_LSP_REQUEST_LINT_RULES,
@@ -149,6 +154,11 @@ export type CodepolProtocolClient = {
     patch: DiagnosticsConfigPatch,
   ): Promise<DiagnosticsConfig | null>;
   getDiagnosticsConfig(): Promise<DiagnosticsConfig | null>;
+  escalateDiagnostics(
+    rule: EscalationRuleInput,
+  ): Promise<{ id: string; expiresAtUnixMs: number } | null>;
+  revokeDiagnosticsEscalation(id: string): Promise<void>;
+  listDiagnosticsEscalations(): Promise<readonly EscalationRule[]>;
 };
 
 export class VscodeLanguageClientProtocol implements CodepolProtocolClient {
@@ -449,5 +459,34 @@ export class VscodeLanguageClientProtocol implements CodepolProtocolClient {
       CODEPOL_LSP_REQUEST_DIAGNOSTICS_CONFIG,
       {},
     );
+  }
+
+  async escalateDiagnostics(
+    rule: EscalationRuleInput,
+  ): Promise<{ id: string; expiresAtUnixMs: number } | null> {
+    const params: ExecuteCommandParams = {
+      command: CODEPOL_LSP_COMMAND_ESCALATE_DIAGNOSTICS,
+      arguments: [rule],
+    };
+    const result = await this.requestRun<
+      { id: string; expiresAtUnixMs: number } | null
+    >('workspace/executeCommand', params);
+    return result ?? null;
+  }
+
+  async revokeDiagnosticsEscalation(id: string): Promise<void> {
+    const params: ExecuteCommandParams = {
+      command: CODEPOL_LSP_COMMAND_REVOKE_DIAGNOSTICS_ESCALATION,
+      arguments: [{ id }],
+    };
+    await this.requestRun('workspace/executeCommand', params);
+  }
+
+  async listDiagnosticsEscalations(): Promise<readonly EscalationRule[]> {
+    const result = await this.requestRun<readonly EscalationRule[] | null>(
+      CODEPOL_LSP_REQUEST_DIAGNOSTICS_ESCALATIONS,
+      {},
+    );
+    return result ?? [];
   }
 }

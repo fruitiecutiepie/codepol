@@ -1,10 +1,16 @@
 #!/usr/bin/env node
 
+import { diagnosticsRuntimeSetOverrides } from '@codepol/core';
 import { CodepolLspServer } from './server';
 import {
   lspWorkspaceServiceResolve,
   type LspWorkspaceServiceResolvedInfo,
 } from './serviceFactory';
+
+// The LSP uses stdout for the JSON-RPC protocol itself, so the structured
+// stdout sink would corrupt it. Force the console sink (which writes to
+// stderr) before any diagnostics are emitted by this process.
+diagnosticsRuntimeSetOverrides({ sinks: ['console'] });
 
 function frameWrite(payload: unknown): void {
   const json = JSON.stringify(payload);

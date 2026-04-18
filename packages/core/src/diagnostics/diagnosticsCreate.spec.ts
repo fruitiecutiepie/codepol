@@ -1,156 +1,149 @@
 import { describe, expect, it, vi } from 'vitest';
 import { diagnosticsCreate } from './diagnosticsCreate';
-import { diagnosticsConfigDefaults } from './diagnosticsRuntimeCreate';
+import { memorySinkCreate } from './diagnosticsSinks';
 import type {
-  DiagnosticsConfig,
-  DiagnosticsRecord,
-  DiagnosticsSink,
+  Clock,
+  EffectiveDiagnosticsPolicy,
+  ShippedDebugCapabilities,
 } from './diagnosticsTypes';
 
-function recordingSinkCreate(): { sink: DiagnosticsSink; records: DiagnosticsRecord[] } {
-  const records: DiagnosticsRecord[] = [];
+function shipped(): ShippedDebugCapabilities {
   return {
-    records,
-    sink: { write: (r) => { records.push(r); } },
+    deepStateSnapshots: true,
+    invariantChecks: true,
+    traceSpans: true,
+    profiling: true,
+    faultInjection: true,
+    adminInspectors: true,
+    allowedSinks: ['console', 'file', 'memory', 'stdout', 'otel'],
+    allowedMaxLevel: 'trace',
   };
 }
 
-function testConfigCreate(
-  overrides: Partial<DiagnosticsConfig> = {},
-): DiagnosticsConfig {
-  const defaults = diagnosticsConfigDefaults();
+function policyFrom(overrides: {
+  level: EffectiveDiagnosticsPolicy['level'];
+  tracing?: EffectiveDiagnosticsPolicy['tracing'];
+  scopes?: EffectiveDiagnosticsPolicy['scopes'];
+}): EffectiveDiagnosticsPolicy {
   return {
-    ...defaults,
-    ...overrides,
-    policy: { ...defaults.policy, ...(overrides.policy ?? {}) },
-    sink: { ...defaults.sink, ...(overrides.sink ?? {}) },
-    scopes: { ...defaults.scopes, ...(overrides.scopes ?? {}) },
+    environment: 'dev',
+    shipped: shipped(),
+    activeEscalations: [],
+    level: overrides.level,
+    scopes: overrides.scopes ?? {},
+    tracing: overrides.tracing ?? { enabled: false, sampleRate: 0 },
+    metrics: { enabled: false },
+    snapshots: { enabled: false, maxBytes: 0 },
+    checks: { invariants: 'off' },
+    redaction: { mode: 'off' },
+    sinks: ['memory'],
   };
 }
 
-const clock = { now: () => 1000 };
+const fixedClock: Clock = { now: () => 1_000 };
 
 describe('diagnosticsCreate', () => {
   it('gates events by level', () => {
-    const { sink, records } = recordingSinkCreate();
+    const sink = memorySinkCreate();
     const diag = diagnosticsCreate({
-      config: testConfigCreate({ level: 'warn' }),
+      policy: policyFrom({ level: 'warn' }),
       sink,
       scope: 'test',
-      clock,
+      clock: fixedClock,
     });
-    diag.info('should_be_dropped');
-    diag.warn('should_appear');
-    diag.error('should_also_appear');
-    expect(records.map((r) => r.name)).toEqual([
-      'should_appear',
-      'should_also_appear',
-    ]);
+    diag.info('dropped');
+    diag.warn('kept');
+    diag.error('also_kept');
+    expect(sink.snapshot().map((r) => r.name)).toEqual(['kept', 'also_kept']);
   });
 
-  it('does not invoke lazy field builder when level is below threshold', () => {
-    const { sink } = recordingSinkCreate();
+  it('does not call the lazy payload builder below threshold', () => {
+    const sink = memorySinkCreate();
     const diag = diagnosticsCreate({
-      config: testConfigCreate({ level: 'warn' }),
+      policy: policyFrom({ level: 'warn' }),
       sink,
       scope: 'test',
-      clock,
+      clock: fixedClock,
     });
     const builder = vi.fn(() => ({ heavy: true }));
-    diag.debug('heavy', builder);
+    diag.debug('noisy', builder);
     expect(builder).not.toHaveBeenCalled();
   });
 
-  it('invokes lazy field builder when debug is enabled', () => {
-    const { sink, records } = recordingSinkCreate();
+  it('applies dotted-scope overrides via the effective policy', () => {
+    const sink = memorySinkCreate();
     const diag = diagnosticsCreate({
-      config: testConfigCreate({ level: 'debug' }),
-      sink,
-      scope: 'test',
-      clock,
-    });
-    const builder = vi.fn(() => ({ ok: 1 }));
-    diag.debug('payload', builder);
-    expect(builder).toHaveBeenCalledTimes(1);
-    expect(records[0]?.fields).toEqual({ ok: 1 });
-  });
-
-  it('applies per-scope overrides via dotted-path inheritance', () => {
-    const { sink, records } = recordingSinkCreate();
-    const diag = diagnosticsCreate({
-      config: testConfigCreate({
+      policy: policyFrom({
         level: 'warn',
         scopes: { parser: 'trace' },
       }),
       sink,
       scope: 'parser.adapterCore',
-      clock,
+      clock: fixedClock,
     });
-    diag.trace('detail', () => ({ ok: true }));
-    expect(records).toHaveLength(1);
-    expect(records[0]?.level).toBe('trace');
+    diag.trace('detail');
+    expect(sink.snapshot()).toHaveLength(1);
   });
 
-  it('child scopes extend the dotted scope path', () => {
-    const { sink, records } = recordingSinkCreate();
-    const root = diagnosticsCreate({
-      config: testConfigCreate({ level: 'debug' }),
-      sink,
-      scope: 'plugin.logger',
-      clock,
-    });
-    const child = root.child('require-logger');
-    child.debug('hello');
-    expect(records[0]?.scope).toBe('plugin.logger.require-logger');
-  });
-
-  it('span.end emits timing only when includeTiming is set', () => {
-    const { sink: offSink, records: offRecords } = recordingSinkCreate();
-    const offDiag = diagnosticsCreate({
-      config: testConfigCreate({
+  it('span only emits when tracing is enabled + debug level is reached', () => {
+    const offSink = memorySinkCreate();
+    const off = diagnosticsCreate({
+      policy: policyFrom({
         level: 'debug',
-        policy: { ...diagnosticsConfigDefaults().policy, includeTiming: false },
+        tracing: { enabled: false, sampleRate: 1 },
       }),
       sink: offSink,
       scope: 'test',
-      clock,
+      clock: fixedClock,
     });
-    offDiag.span('parse', { file: 'a.ts' }).end({ ok: true });
-    expect(offRecords).toHaveLength(0);
+    off.span('parse').end({ ok: true });
+    expect(offSink.snapshot()).toHaveLength(0);
 
-    const { sink: onSink, records: onRecords } = recordingSinkCreate();
+    const onSink = memorySinkCreate();
     let t = 0;
-    const timedClock = { now: () => (t += 5) };
-    const onDiag = diagnosticsCreate({
-      config: testConfigCreate({
+    const clock: Clock = { now: () => (t += 5) };
+    const on = diagnosticsCreate({
+      policy: policyFrom({
         level: 'debug',
-        policy: { ...diagnosticsConfigDefaults().policy, includeTiming: true },
+        tracing: { enabled: true, sampleRate: 1 },
       }),
       sink: onSink,
       scope: 'test',
-      clock: timedClock,
+      clock,
+      requestId: 'r',
     });
-    onDiag.span('parse', { file: 'a.ts' }).end({ ok: true });
-    expect(onRecords.map((r) => r.name)).toEqual(['parse.begin', 'parse.end']);
-    expect(onRecords[1]?.fields).toMatchObject({
-      file: 'a.ts',
-      ok: true,
-      durationMs: 10,
-    });
+    on.span('parse', { file: 'a.ts' }).end({ ok: true });
+    const names = onSink.snapshot().map((r) => r.name);
+    expect(names).toEqual(['parse.begin', 'parse.end']);
   });
 
-  it('drops payload fields when includePayloads is false', () => {
-    const { sink, records } = recordingSinkCreate();
-    const diag = diagnosticsCreate({
-      config: testConfigCreate({
-        level: 'info',
-        policy: { ...diagnosticsConfigDefaults().policy, includePayloads: false },
-      }),
-      sink,
-      scope: 'test',
-      clock,
+  it('span sampling is deterministic for a given scope+name+requestId', () => {
+    const policy = policyFrom({
+      level: 'debug',
+      tracing: { enabled: true, sampleRate: 0.5 },
     });
-    diag.info('event', { secret: 'value' });
-    expect(records[0]?.fields).toBeUndefined();
+    const sinkA = memorySinkCreate();
+    const sinkB = memorySinkCreate();
+    const diagA = diagnosticsCreate({
+      policy, sink: sinkA, scope: 'svc', clock: fixedClock, requestId: 'r1',
+    });
+    const diagB = diagnosticsCreate({
+      policy, sink: sinkB, scope: 'svc', clock: fixedClock, requestId: 'r1',
+    });
+    diagA.span('parse').end();
+    diagB.span('parse').end();
+    expect(sinkA.snapshot().length).toBe(sinkB.snapshot().length);
+  });
+
+  it('child scopes inherit the dotted path', () => {
+    const sink = memorySinkCreate();
+    const root = diagnosticsCreate({
+      policy: policyFrom({ level: 'debug' }),
+      sink,
+      scope: 'plugin.logger',
+      clock: fixedClock,
+    });
+    root.child('rule-1').debug('event');
+    expect(sink.snapshot()[0]?.scope).toBe('plugin.logger.rule-1');
   });
 });

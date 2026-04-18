@@ -5,6 +5,8 @@ import {
   workspaceUriToPath,
   type DiagnosticsConfig,
   type DiagnosticsConfigPatch,
+  type EscalationRule,
+  type EscalationRuleInput,
   type IndexStatusResult,
   type WorkspaceArchitectureSummaryResult,
   type WorkspaceCodeAction,
@@ -26,11 +28,14 @@ import type { WorkspaceService } from '@codepol/workspace-service/contracts';
 import {
   CODEPOL_LSP_COMMAND_APPLY_EDIT_PLAN,
   CODEPOL_LSP_COMMAND_CONFIGURE_DIAGNOSTICS,
+  CODEPOL_LSP_COMMAND_ESCALATE_DIAGNOSTICS,
   CODEPOL_LSP_COMMAND_GO_TO_SEMANTIC_DEFINITION,
+  CODEPOL_LSP_COMMAND_REVOKE_DIAGNOSTICS_ESCALATION,
   CODEPOL_LSP_COMMAND_SHOW_ARCHITECTURE_LINKS,
   CODEPOL_LSP_REQUEST_ARCHITECTURE_SUMMARY,
   CODEPOL_LSP_REQUEST_DEPENDENCY_GRAPH,
   CODEPOL_LSP_REQUEST_DIAGNOSTICS_CONFIG,
+  CODEPOL_LSP_REQUEST_DIAGNOSTICS_ESCALATIONS,
   CODEPOL_LSP_REQUEST_INDEX_STATUS,
   CODEPOL_LSP_REQUEST_LINT_RULE_DETAILS,
   CODEPOL_LSP_REQUEST_LINT_RULES,
@@ -938,6 +943,8 @@ export class CodepolLspServer {
         }, context);
       case CODEPOL_LSP_REQUEST_DIAGNOSTICS_CONFIG:
         return diagnosticsRuntimeGet().getConfig();
+      case CODEPOL_LSP_REQUEST_DIAGNOSTICS_ESCALATIONS:
+        return diagnosticsRuntimeGet().listEscalations();
       case 'workspace/symbol':
         return this.workspaceSymbolHandle(params as {
           query?: string;
@@ -1048,6 +1055,8 @@ export class CodepolLspServer {
             GO_TO_SEMANTIC_DEFINITION_COMMAND,
             SHOW_ARCHITECTURE_LINKS_COMMAND,
             CODEPOL_LSP_COMMAND_CONFIGURE_DIAGNOSTICS,
+            CODEPOL_LSP_COMMAND_ESCALATE_DIAGNOSTICS,
+            CODEPOL_LSP_COMMAND_REVOKE_DIAGNOSTICS_ESCALATION,
           ],
         },
       },
@@ -1297,6 +1306,16 @@ export class CodepolLspServer {
       const patch = (params.arguments?.[0] ?? {}) as DiagnosticsConfigPatch;
       return this.diagnosticsConfigureHandle(patch);
     }
+    if (params.command === CODEPOL_LSP_COMMAND_ESCALATE_DIAGNOSTICS) {
+      const rule = (params.arguments?.[0] ?? undefined) as EscalationRuleInput | undefined;
+      if (!rule) return null;
+      return this.diagnosticsEscalateHandle(rule);
+    }
+    if (params.command === CODEPOL_LSP_COMMAND_REVOKE_DIAGNOSTICS_ESCALATION) {
+      const arg = params.arguments?.[0] as { id?: string } | undefined;
+      if (!arg?.id) return null;
+      return this.diagnosticsRevokeEscalationHandle(arg.id);
+    }
 
     if (!this.registeredClientSessionId || !this.workspaceId) {
       return null;
@@ -1383,6 +1402,61 @@ export class CodepolLspServer {
       );
     }
     return localConfig;
+  }
+
+  private async diagnosticsEscalateHandle(
+    rule: EscalationRuleInput,
+  ): Promise<{ id: string; expiresAtUnixMs: number; escalations: readonly EscalationRule[] }> {
+    const runtime = diagnosticsRuntimeGet();
+    const handle = runtime.escalate(rule);
+    try {
+      const anyService = this.service as unknown as {
+        setDiagnosticsEscalation?: (
+          input: EscalationRuleInput,
+        ) => Promise<{ id: string; expiresAtUnixMs: number; escalations: readonly EscalationRule[] }>;
+      };
+      if (typeof anyService.setDiagnosticsEscalation === 'function') {
+        await anyService.setDiagnosticsEscalation(rule);
+      }
+    } catch (err) {
+      console.warn(
+        `[codepol-lsp] failed to forward diagnostics escalation: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+    return {
+      id: handle.id,
+      expiresAtUnixMs: handle.expiresAtUnixMs,
+      escalations: runtime.listEscalations(),
+    };
+  }
+
+  private async diagnosticsRevokeEscalationHandle(
+    id: string,
+  ): Promise<{ revoked: boolean; escalations: readonly EscalationRule[] }> {
+    const runtime = diagnosticsRuntimeGet();
+    const revoked = runtime.revokeEscalation(id);
+    try {
+      const anyService = this.service as unknown as {
+        revokeDiagnosticsEscalation?: (
+          id: string,
+        ) => Promise<{ revoked: boolean; escalations: readonly EscalationRule[] }>;
+      };
+      if (typeof anyService.revokeDiagnosticsEscalation === 'function') {
+        await anyService.revokeDiagnosticsEscalation(id);
+      }
+    } catch (err) {
+      console.warn(
+        `[codepol-lsp] failed to forward diagnostics escalation revoke: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+    return {
+      revoked,
+      escalations: runtime.listEscalations(),
+    };
   }
 
   private async workspaceSymbolHandle(

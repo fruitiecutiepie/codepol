@@ -79,16 +79,16 @@
         "title": "Codepol: Refresh Rename Targets"
       },
       {
-        "command": "codepol.extension.setDiagnosticsLevel",
-        "title": "Codepol: Set Diagnostics Level"
+        "command": "codepol.extension.setDiagnosticsEnvironment",
+        "title": "Codepol: Set Diagnostics Environment"
       },
       {
-        "command": "codepol.extension.setDiagnosticsLogFile",
-        "title": "Codepol: Set Diagnostics Log File"
+        "command": "codepol.extension.addDiagnosticsEscalation",
+        "title": "Codepol: Add Diagnostics Escalation"
       },
       {
-        "command": "codepol.extension.setDiagnosticsScope",
-        "title": "Codepol: Set Diagnostics Scope Level"
+        "command": "codepol.extension.clearDiagnosticsEscalations",
+        "title": "Codepol: Clear Diagnostics Escalations"
       },
       {
         "command": "codepol.extension.showDiagnosticsConfig",
@@ -164,35 +164,76 @@
           "default": false,
           "markdownDescription": "Enable verbose Codepol LSP diagnostics in the `Codepol LSP` output channel. Superseded stale requests are logged at trace level only when this setting is enabled."
         },
-        "codepol.diagnostics.level": {
+        "codepol.diagnostics.environment": {
           "type": "string",
-          "enum": ["error", "warn", "info", "debug", "trace"],
-          "default": "warn",
-          "markdownDescription": "Default log level for the Codepol diagnostics runtime. Applies to all scopes unless overridden by `codepol.diagnostics.scopes`."
+          "enum": ["user", "dev", "test", "verbose"],
+          "default": "user",
+          "markdownDescription": "Named diagnostics preset. `user` is the safe field posture; `dev` is productive daily; `test` is deterministic verification; `verbose` is temporary investigation. Overlays in `codepol.diagnostics.overrides` layer on top, and escalations in `codepol.diagnostics.escalations` apply with a TTL."
         },
-        "codepol.diagnostics.scopes": {
+        "codepol.diagnostics.overrides": {
           "type": "object",
           "default": {},
-          "additionalProperties": {
-            "type": "string",
-            "enum": ["error", "warn", "info", "debug", "trace"]
-          },
-          "markdownDescription": "Per-scope log level overrides. Keys are dotted scopes (e.g. `parser`, `workspace.analyzer`, `plugin.logger`)."
+          "markdownDescription": "Partial `RuntimeDiagnosticsPolicy` overlaid on the selected environment. Examples: `{ \"level\": \"debug\" }`, `{ \"sinks\": [\"console\",\"file\"], \"logFilePath\": \"/tmp/codepol.log\" }`, `{ \"scopes\": { \"parser\": \"trace\" } }`.",
+          "properties": {
+            "level": { "type": "string", "enum": ["error", "warn", "info", "debug", "trace"] },
+            "scopes": {
+              "type": "object",
+              "additionalProperties": { "type": "string", "enum": ["error", "warn", "info", "debug", "trace"] }
+            },
+            "sinks": {
+              "type": "array",
+              "items": { "type": "string", "enum": ["console", "file", "memory", "stdout", "otel"] }
+            },
+            "logFilePath": { "type": "string" },
+            "otelEndpoint": { "type": "string" },
+            "tracing": {
+              "type": "object",
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "sampleRate": { "type": "number", "minimum": 0, "maximum": 1 }
+              }
+            },
+            "metrics": {
+              "type": "object",
+              "properties": {
+                "enabled": { "type": "boolean" }
+              }
+            },
+            "snapshots": {
+              "type": "object",
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "maxBytes": { "type": "number", "minimum": 0 }
+              }
+            },
+            "checks": {
+              "type": "object",
+              "properties": {
+                "invariants": { "type": "string", "enum": ["off", "cheap", "full"] }
+              }
+            },
+            "redaction": {
+              "type": "object",
+              "properties": {
+                "mode": { "type": "string", "enum": ["strict", "standard", "off"] }
+              }
+            }
+          }
         },
-        "codepol.diagnostics.logFilePath": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Optional file path for Codepol diagnostics output. Events are appended in addition to the console sink. Leave blank to disable file logging."
-        },
-        "codepol.diagnostics.includeTiming": {
-          "type": "boolean",
-          "default": false,
-          "markdownDescription": "Emit span begin/end events with durations."
-        },
-        "codepol.diagnostics.includePayloads": {
-          "type": "boolean",
-          "default": true,
-          "markdownDescription": "Include structured payload fields on events. Disable to reduce log volume."
+        "codepol.diagnostics.escalations": {
+          "type": "array",
+          "default": [],
+          "markdownDescription": "Standing diagnostics escalations applied on activation. Each entry is `{ scope, level, ttlSec, reason }`. Scope can be `global`, `scope:<dotted>`, `request:<id>`, or `workspace:<id>`.",
+          "items": {
+            "type": "object",
+            "required": ["scope", "level", "ttlSec"],
+            "properties": {
+              "scope": { "type": "string" },
+              "level": { "type": "string", "enum": ["error", "warn", "info", "debug", "trace"] },
+              "ttlSec": { "type": "number", "minimum": 1 },
+              "reason": { "type": "string" }
+            }
+          }
         }
       }
     }

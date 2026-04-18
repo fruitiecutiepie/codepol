@@ -1,14 +1,16 @@
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type {
-  DiagnosticsConfig,
   DiagnosticsConfigPatch,
+  EnvironmentName,
+  EscalationRuleInput,
   LogLevel,
+  RuntimeDiagnosticsPolicy,
   WorkspaceLintRuleDetailsResult,
   WorkspaceLintRuleSummary,
   WorkspaceSearchResult,
 } from '@codepol/core';
-import { configFileDiscover } from '@codepol/core';
+import { configFileDiscover, environmentNamesList } from '@codepol/core';
 import { workspaceDaemonTerminateExternal } from '@codepol/workspace-service';
 import {
   CodepolCommandController,
@@ -16,13 +18,13 @@ import {
   type SemanticSearchCommandOptions,
 } from './commands';
 import {
+  CODEPOL_EXTENSION_COMMAND_ADD_DIAGNOSTICS_ESCALATION,
+  CODEPOL_EXTENSION_COMMAND_CLEAR_DIAGNOSTICS_ESCALATIONS,
   CODEPOL_EXTENSION_COMMAND_REFRESH_RENAME_TARGETS,
   CODEPOL_EXTENSION_COMMAND_REFRESH_LINT_RULES,
   CODEPOL_EXTENSION_COMMAND_OPEN_LINT_RULE_LOCATION,
   CODEPOL_EXTENSION_COMMAND_RENAME_CODEPOL_ENTITY,
-  CODEPOL_EXTENSION_COMMAND_SET_DIAGNOSTICS_LEVEL,
-  CODEPOL_EXTENSION_COMMAND_SET_DIAGNOSTICS_LOG_FILE,
-  CODEPOL_EXTENSION_COMMAND_SET_DIAGNOSTICS_SCOPE,
+  CODEPOL_EXTENSION_COMMAND_SET_DIAGNOSTICS_ENVIRONMENT,
   CODEPOL_EXTENSION_COMMAND_SHOW_DIAGNOSTICS_CONFIG,
   CODEPOL_EXTENSION_COMMAND_RESTART_DAEMON,
   CODEPOL_EXTENSION_COMMAND_SHOW_LINT_RULE_DIAGNOSTIC_FIXES,
@@ -100,37 +102,63 @@ function diagnosticsLogLevelIsValid(value: string): value is LogLevel {
   return (DIAGNOSTICS_LOG_LEVELS as readonly string[]).includes(value);
 }
 
+type DiagnosticsEscalationSetting = {
+  scope: string;
+  level: string;
+  ttlSec: number;
+  reason?: string;
+};
+
+function diagnosticsEnvironmentFromSetting(raw: string | undefined): EnvironmentName {
+  if (!raw) return 'user';
+  const lowered = raw.trim().toLowerCase();
+  if (lowered === 'user' || lowered === 'dev' || lowered === 'test' || lowered === 'verbose') {
+    return lowered;
+  }
+  return 'user';
+}
+
 function diagnosticsPatchFromSettings(): DiagnosticsConfigPatch {
   const cfg = vscode.workspace.getConfiguration('codepol.diagnostics');
-  const level = cfg.get<string>('level');
-  const scopesRaw = cfg.get<Record<string, string>>('scopes') ?? {};
-  const logFilePath = cfg.get<string>('logFilePath') ?? '';
-  const includeTiming = cfg.get<boolean>('includeTiming');
-  const includePayloads = cfg.get<boolean>('includePayloads');
-
-  const patch: DiagnosticsConfigPatch = {};
-  if (level && diagnosticsLogLevelIsValid(level)) {
-    patch.level = level;
-  }
-  const scopes: Record<string, LogLevel | null> = {};
-  for (const [key, raw] of Object.entries(scopesRaw)) {
-    if (typeof raw === 'string' && diagnosticsLogLevelIsValid(raw)) {
-      scopes[key] = raw;
-    }
-  }
-  if (Object.keys(scopes).length > 0) {
-    patch.scopes = scopes;
-  }
-  patch.sink = {
-    logFilePath: logFilePath.trim().length > 0 ? logFilePath.trim() : null,
-  };
-  const policy: Partial<DiagnosticsConfig['policy']> = {};
-  if (includeTiming !== undefined) policy.includeTiming = includeTiming;
-  if (includePayloads !== undefined) policy.includePayloads = includePayloads;
-  if (Object.keys(policy).length > 0) {
-    patch.policy = policy;
+  const environment = diagnosticsEnvironmentFromSetting(cfg.get<string>('environment'));
+  const overridesRaw = cfg.get<Partial<RuntimeDiagnosticsPolicy>>('overrides') ?? {};
+  const patch: DiagnosticsConfigPatch = { environment };
+  if (Object.keys(overridesRaw).length > 0) {
+    patch.overrides = overridesRaw;
   }
   return patch;
+}
+
+function escalationInputsFromSettings(
+  actor: string,
+): EscalationRuleInput[] {
+  const cfg = vscode.workspace.getConfiguration('codepol.diagnostics');
+  const raw = cfg.get<DiagnosticsEscalationSetting[]>('escalations') ?? [];
+  const out: EscalationRuleInput[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    if (typeof entry.scope !== 'string' || entry.scope.length === 0) continue;
+    if (typeof entry.level !== 'string' || !diagnosticsLogLevelIsValid(entry.level)) continue;
+    if (typeof entry.ttlSec !== 'number' || entry.ttlSec <= 0) continue;
+    out.push({
+      scope: escalationScopeParse(entry.scope),
+      level: entry.level,
+      ttlMs: Math.floor(entry.ttlSec * 1000),
+      reason: typeof entry.reason === 'string' && entry.reason.length > 0
+        ? entry.reason
+        : 'vscode_setting_escalation',
+      actor,
+    });
+  }
+  return out;
+}
+
+function escalationScopeParse(raw: string): EscalationRuleInput['scope'] {
+  if (raw === 'global') return { kind: 'global' };
+  if (raw.startsWith('scope:')) return { kind: 'scope', scope: raw.slice('scope:'.length) };
+  if (raw.startsWith('request:')) return { kind: 'request', requestId: raw.slice('request:'.length) };
+  if (raw.startsWith('workspace:')) return { kind: 'workspace', workspaceId: raw.slice('workspace:'.length) };
+  return { kind: 'scope', scope: raw };
 }
 
 async function diagnosticsConfigApply(
@@ -145,6 +173,23 @@ async function diagnosticsConfigApply(
         err instanceof Error ? err.message : String(err)
       }`,
     );
+  }
+}
+
+async function diagnosticsEscalationsApply(
+  protocol: CodepolProtocolClient,
+  escalations: readonly EscalationRuleInput[],
+): Promise<void> {
+  for (const rule of escalations) {
+    try {
+      await protocol.escalateDiagnostics(rule);
+    } catch (err) {
+      void vscode.window.showErrorMessage(
+        `Codepol: failed to apply diagnostics escalation: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
   }
 }
 
@@ -644,70 +689,91 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       },
     ),
     vscode.commands.registerCommand(
-      CODEPOL_EXTENSION_COMMAND_SET_DIAGNOSTICS_LEVEL,
+      CODEPOL_EXTENSION_COMMAND_SET_DIAGNOSTICS_ENVIRONMENT,
       async () => {
-        const choice = await vscode.window.showQuickPick(
-          DIAGNOSTICS_LOG_LEVELS as readonly string[],
-          { placeHolder: 'Select Codepol diagnostics log level' },
-        );
-        if (!choice || !diagnosticsLogLevelIsValid(choice)) return;
-        const cfg = vscode.workspace.getConfiguration('codepol.diagnostics');
-        await cfg.update('level', choice, vscode.ConfigurationTarget.Workspace);
-        await diagnosticsConfigApply(protocol, { level: choice });
-      },
-    ),
-    vscode.commands.registerCommand(
-      CODEPOL_EXTENSION_COMMAND_SET_DIAGNOSTICS_LOG_FILE,
-      async () => {
-        const cfg = vscode.workspace.getConfiguration('codepol.diagnostics');
-        const current = cfg.get<string>('logFilePath') ?? '';
-        const value = await vscode.window.showInputBox({
-          prompt: 'Codepol diagnostics log file path (leave blank to disable)',
-          value: current,
+        const choices = [...environmentNamesList()] as string[];
+        const choice = await vscode.window.showQuickPick(choices, {
+          placeHolder: 'Select Codepol diagnostics environment preset',
         });
-        if (value === undefined) return;
-        const trimmed = value.trim();
-        await cfg.update(
-          'logFilePath',
-          trimmed,
-          vscode.ConfigurationTarget.Workspace,
-        );
-        await diagnosticsConfigApply(protocol, {
-          sink: { logFilePath: trimmed.length > 0 ? trimmed : null },
-        });
-      },
-    ),
-    vscode.commands.registerCommand(
-      CODEPOL_EXTENSION_COMMAND_SET_DIAGNOSTICS_SCOPE,
-      async () => {
-        const scope = await vscode.window.showInputBox({
-          prompt: 'Codepol diagnostics scope (e.g. parser, workspace.analyzer)',
-        });
-        if (!scope) return;
-        const choice = await vscode.window.showQuickPick(
-          [...(DIAGNOSTICS_LOG_LEVELS as readonly string[]), '(clear override)'],
-          { placeHolder: `Log level for scope "${scope.trim()}"` },
-        );
         if (!choice) return;
+        const environment = diagnosticsEnvironmentFromSetting(choice);
         const cfg = vscode.workspace.getConfiguration('codepol.diagnostics');
-        const scopes = {
-          ...(cfg.get<Record<string, string>>('scopes') ?? {}),
-        } as Record<string, string | undefined>;
-        let patchScopes: Record<string, LogLevel | null> = {};
-        const trimmedScope = scope.trim();
-        if (choice === '(clear override)') {
-          delete scopes[trimmedScope];
-          patchScopes[trimmedScope] = null;
-        } else if (diagnosticsLogLevelIsValid(choice)) {
-          scopes[trimmedScope] = choice;
-          patchScopes[trimmedScope] = choice;
-        }
-        await cfg.update(
-          'scopes',
-          scopes,
-          vscode.ConfigurationTarget.Workspace,
+        await cfg.update('environment', environment, vscode.ConfigurationTarget.Workspace);
+        await diagnosticsConfigApply(protocol, { environment });
+      },
+    ),
+    vscode.commands.registerCommand(
+      CODEPOL_EXTENSION_COMMAND_ADD_DIAGNOSTICS_ESCALATION,
+      async () => {
+        const scopeInput = await vscode.window.showInputBox({
+          prompt: 'Codepol escalation scope (e.g. global, scope:parser, workspace:<id>)',
+          value: 'scope:parser',
+        });
+        if (!scopeInput) return;
+        const level = await vscode.window.showQuickPick(
+          DIAGNOSTICS_LOG_LEVELS as readonly string[],
+          { placeHolder: 'Escalation level' },
         );
-        await diagnosticsConfigApply(protocol, { scopes: patchScopes });
+        if (!level || !diagnosticsLogLevelIsValid(level)) return;
+        const ttlInput = await vscode.window.showInputBox({
+          prompt: 'TTL in seconds',
+          value: '600',
+        });
+        if (!ttlInput) return;
+        const ttlSec = Number(ttlInput.trim());
+        if (!Number.isFinite(ttlSec) || ttlSec <= 0) return;
+        const reason = await vscode.window.showInputBox({
+          prompt: 'Reason (shown in the audit log)',
+          value: 'vscode_user_escalation',
+        });
+        if (reason === undefined) return;
+        const rule: EscalationRuleInput = {
+          scope: escalationScopeParse(scopeInput.trim()),
+          level,
+          ttlMs: Math.floor(ttlSec * 1000),
+          reason: reason || 'vscode_user_escalation',
+          actor: `vscode-${process.pid}`,
+        };
+        try {
+          await protocol.escalateDiagnostics(rule);
+          void vscode.window.showInformationMessage(
+            `Codepol: escalation added (scope=${scopeInput.trim()}, level=${level}, ttl=${ttlSec}s).`,
+          );
+        } catch (err) {
+          void vscode.window.showErrorMessage(
+            `Codepol: failed to add escalation: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        }
+      },
+    ),
+    vscode.commands.registerCommand(
+      CODEPOL_EXTENSION_COMMAND_CLEAR_DIAGNOSTICS_ESCALATIONS,
+      async () => {
+        try {
+          const escalations = await protocol.listDiagnosticsEscalations();
+          if (!escalations || escalations.length === 0) {
+            void vscode.window.showInformationMessage('Codepol: no active escalations.');
+            return;
+          }
+          for (const rule of escalations) {
+            try {
+              await protocol.revokeDiagnosticsEscalation(rule.id);
+            } catch {
+              // continue revoking the remaining rules
+            }
+          }
+          void vscode.window.showInformationMessage(
+            `Codepol: revoked ${escalations.length} escalation(s).`,
+          );
+        } catch (err) {
+          void vscode.window.showErrorMessage(
+            `Codepol: failed to clear escalations: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        }
       },
     ),
     vscode.commands.registerCommand(
@@ -766,6 +832,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration('codepol.diagnostics')) {
         void diagnosticsConfigApply(protocol, diagnosticsPatchFromSettings());
+        if (event.affectsConfiguration('codepol.diagnostics.escalations')) {
+          void diagnosticsEscalationsApply(
+            protocol,
+            escalationInputsFromSettings(`vscode-${process.pid}`),
+          );
+        }
       }
     }),
     vscode.window.onDidChangeActiveTextEditor(() => {
@@ -781,7 +853,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   void protocol
     .start()
-    .then(() => diagnosticsConfigApply(protocol, diagnosticsPatchFromSettings()))
+    .then(async () => {
+      await diagnosticsConfigApply(protocol, diagnosticsPatchFromSettings());
+      await diagnosticsEscalationsApply(
+        protocol,
+        escalationInputsFromSettings(`vscode-${process.pid}`),
+      );
+    })
     .catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
       void vscode.window.showErrorMessage(`Codepol failed to start the language client: ${message}`);

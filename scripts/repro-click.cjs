@@ -17,10 +17,14 @@ const {
 } = require('../packages/core/dist/index.js');
 
 diagnosticsRuntimeSetConfig({
-  level: 'debug',
-  scopes: { parser: 'trace', 'workspace.analyzer': 'debug' },
-  sink: { logFilePath },
-  policy: { includeTiming: true },
+  environment: 'dev',
+  overrides: {
+    level: 'debug',
+    scopes: { parser: 'trace', 'workspace.analyzer': 'debug' },
+    sinks: ['console', 'file'],
+    logFilePath,
+    tracing: { enabled: true, sampleRate: 1 },
+  },
 });
 
 (async () => {

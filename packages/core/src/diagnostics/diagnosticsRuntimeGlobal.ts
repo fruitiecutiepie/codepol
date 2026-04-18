@@ -1,22 +1,23 @@
 /**
  * Process-wide singleton `DiagnosticsRuntime`.
  *
- * Seeds initial configuration once from env vars so back-compat users setting
- * `CODEPOL_DEBUG_PARSE=1` / `CODEPOL_DEBUG_PARSE_FILE=/tmp/x.log` keep working.
- * After the first read, the env is ignored — only the runtime API (directly,
- * or via CLI / LSP / VSCode command relays) mutates state. This prevents the
- * old bug where changing `CODEPOL_DEBUG_PARSE_FILE` at runtime had no effect
- * because the log path was cached on first use.
+ * Seeds initial state from `CODEPOL_ENV` (or `NODE_ENV`) first, then overlays
+ * legacy `CODEPOL_DEBUG_PARSE` / `CODEPOL_DEBUG_PARSE_FILE` /
+ * `CODEPOL_DIAGNOSTICS_LEVEL` / `CODEPOL_DIAGNOSTICS_LOG_FILE` as overrides.
+ * After the singleton is built the env is ignored — only the runtime API
+ * (directly or via CLI / daemon IPC / LSP / VSCode command relays) mutates
+ * state. This preserves back-compat while making the control flow
+ * unambiguous.
  */
 import type {
-  DiagnosticsConfig,
+  DiagnosticSinkKind,
+  DiagnosticsOverridePatch,
   DiagnosticsRuntime,
+  EnvironmentName,
   LogLevel,
 } from './diagnosticsTypes';
-import {
-  diagnosticsConfigDefaults,
-  diagnosticsRuntimeCreate,
-} from './diagnosticsRuntimeCreate';
+import { diagnosticsRuntimeCreate } from './diagnosticsRuntimeCreate';
+import { environmentNameParse } from './diagnosticsPresets';
 
 const diagnosticsRuntimeKey = Symbol.for('codepol.diagnostics-runtime');
 
@@ -45,46 +46,65 @@ function envLevelParse(raw: string | undefined): LogLevel | undefined {
   }
 }
 
-function envSeedBuild(env: NodeJS.ProcessEnv): DiagnosticsConfig {
-  const base = diagnosticsConfigDefaults();
+function environmentFromEnv(env: NodeJS.ProcessEnv): EnvironmentName {
+  const explicit = environmentNameParse(env.CODEPOL_ENV);
+  if (explicit) return explicit;
+  const nodeEnv = env.NODE_ENV?.trim().toLowerCase();
+  if (nodeEnv === 'development') return 'dev';
+  if (nodeEnv === 'test') return 'test';
+  return 'user';
+}
+
+function legacyOverridesFromEnv(env: NodeJS.ProcessEnv): DiagnosticsOverridePatch {
+  const patch: DiagnosticsOverridePatch = {};
   const explicitLevel = envLevelParse(env.CODEPOL_DIAGNOSTICS_LEVEL);
   const debugParseEnabled = envTruthy(env.CODEPOL_DEBUG_PARSE);
-  const level: LogLevel = explicitLevel
-    ?? (debugParseEnabled ? 'debug' : base.level);
-  const scopes: Record<string, LogLevel> = {};
-  if (debugParseEnabled) {
-    scopes['parser'] = 'debug';
-    scopes['workspace.analyzer'] = 'debug';
+  if (explicitLevel) {
+    patch.level = explicitLevel;
+  } else if (debugParseEnabled) {
+    patch.level = 'debug';
+    patch.scopes = {
+      parser: 'debug',
+      'workspace.analyzer': 'debug',
+    };
+  }
+  if (debugParseEnabled || explicitLevel === 'trace') {
+    patch.tracing = { enabled: true };
   }
   const logFilePath = env.CODEPOL_DEBUG_PARSE_FILE?.trim()
     || env.CODEPOL_DIAGNOSTICS_LOG_FILE?.trim()
     || undefined;
-  return {
-    ...base,
-    level,
-    scopes,
-    policy: {
-      ...base.policy,
-      includeTiming: debugParseEnabled || explicitLevel === 'trace',
-    },
-    sink: {
-      consoleEnabled: base.sink.consoleEnabled,
-      logFilePath,
-    },
-  };
+  if (logFilePath) {
+    patch.logFilePath = logFilePath;
+    // ensure the file sink is present without stomping other sinks entirely
+    patch.sinks = sinksEnsureFile(patch.sinks);
+  }
+  return patch;
+}
+
+function sinksEnsureFile(
+  existing: readonly DiagnosticSinkKind[] | undefined,
+): readonly DiagnosticSinkKind[] | undefined {
+  if (!existing) return undefined;
+  if (existing.includes('file')) return existing;
+  return [...existing, 'file'];
 }
 
 export function diagnosticsRuntimeGet(): DiagnosticsRuntime {
   const g = globalThis as GlobalWithRuntime;
   if (!g[diagnosticsRuntimeKey]) {
-    g[diagnosticsRuntimeKey] = diagnosticsRuntimeCreate({
-      initialConfig: envSeedBuild(process.env),
-    });
+    const environment = environmentFromEnv(process.env);
+    const legacyOverrides = legacyOverridesFromEnv(process.env);
+    const runtime = diagnosticsRuntimeCreate({ environment });
+    if (Object.keys(legacyOverrides).length > 0) {
+      runtime.setOverrides(legacyOverrides);
+    }
+    g[diagnosticsRuntimeKey] = runtime;
   }
   return g[diagnosticsRuntimeKey]!;
 }
 
-/** Test-only: replace the global runtime. Not exported from the package. */
+/** Test-only: replace the global runtime. */
 export function diagnosticsRuntimeSetForTest(
   runtime: DiagnosticsRuntime | undefined,
 ): void {
@@ -94,4 +114,10 @@ export function diagnosticsRuntimeSetForTest(
   } else {
     g[diagnosticsRuntimeKey] = runtime;
   }
+}
+
+/** Test-only: reset to the initial seed. */
+export function diagnosticsRuntimeResetForTest(): void {
+  const g = globalThis as GlobalWithRuntime;
+  delete g[diagnosticsRuntimeKey];
 }

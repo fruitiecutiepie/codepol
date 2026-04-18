@@ -1,51 +1,30 @@
 /**
- * Factory for a `Diagnostics` handle bound to a snapshot of `DiagnosticsConfig`.
+ * Factory for a `Diagnostics` handle bound to a snapshot of
+ * `EffectiveDiagnosticsPolicy`.
  *
- * The returned handle is immutable: each call to the runtime's `getDiagnostics`
- * or `getContext` captures the current snapshot so operations in flight do not
- * observe concurrent `setLevel` / `setPolicy` changes mid-flight. Runtime
- * mutations take effect on the next `get*` call.
+ * Binding per-operation is what makes in-flight operations safe from
+ * concurrent policy changes: each call to `DiagnosticsRuntime.getDiagnostics`
+ * or `getContext` passes a freshly resolved policy here, and the returned
+ * handle never re-reads the runtime.
  *
- * Child scopes inherit their parent dotted scope path and resolve effective
- * level by preferring the most specific override. For example, with
- * `scopes = { "parser": "trace" }`, a `diag.child("adapterCore")` rooted under
- * `parser` resolves as scope `parser.adapterCore`, which inherits `trace`.
+ * Span sampling is deterministic: a span is kept when a hash of
+ * `scope + name + requestId` falls below the effective `sampleRate`. That
+ * means all spans for one request either sample together or not at all, and
+ * the same scope/name pair is reproducibly sampled across replays of the
+ * same operation.
  */
 import type {
   Clock,
   Diagnostics,
-  DiagnosticsConfig,
   DiagnosticsFieldProvider,
   DiagnosticsRecord,
   DiagnosticsSink,
+  EffectiveDiagnosticsPolicy,
   LogLevel,
   Span,
 } from './diagnosticsTypes';
 import { logLevelIsEnabled } from './diagnosticsTypes';
-
-function scopeEffectiveLevelGet(
-  config: DiagnosticsConfig,
-  scope: string,
-): LogLevel {
-  const override = scopeOverrideResolve(config.scopes, scope);
-  return override ?? config.level;
-}
-
-function scopeOverrideResolve(
-  scopes: Record<string, LogLevel>,
-  scope: string,
-): LogLevel | undefined {
-  if (scope.length === 0) return undefined;
-  let candidate = scope;
-  while (candidate.length > 0) {
-    const hit = scopes[candidate];
-    if (hit) return hit;
-    const lastDot = candidate.lastIndexOf('.');
-    if (lastDot === -1) break;
-    candidate = candidate.slice(0, lastDot);
-  }
-  return undefined;
-}
+import { scopeEffectiveLevelResolve } from './diagnosticsPolicyResolve';
 
 function fieldsResolve(
   fields: DiagnosticsFieldProvider | undefined,
@@ -61,16 +40,41 @@ function fieldsResolve(
   return fields;
 }
 
-export function diagnosticsCreate(args: {
-  config: DiagnosticsConfig;
+function sampleHash(input: string): number {
+  // FNV-1a 32-bit — deterministic, cheap, no crypto dep. Returns in [0, 1).
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0) / 0x1_0000_0000;
+}
+
+function spanSampleDecide(
+  scope: string,
+  name: string,
+  requestId: string | undefined,
+  sampleRate: number,
+): boolean {
+  if (sampleRate <= 0) return false;
+  if (sampleRate >= 1) return true;
+  return sampleHash(`${scope}|${name}|${requestId ?? ''}`) < sampleRate;
+}
+
+export type DiagnosticsBindArgs = {
+  policy: EffectiveDiagnosticsPolicy;
   sink: DiagnosticsSink;
   scope: string;
   clock: Clock;
-}): Diagnostics {
-  const { config, sink, scope, clock } = args;
-  const effectiveLevel = scopeEffectiveLevelGet(config, scope);
-  const includePayloads = config.policy.includePayloads;
-  const includeTiming = config.policy.includeTiming;
+  requestId?: string;
+  workspaceId?: string;
+};
+
+export function diagnosticsCreate(args: DiagnosticsBindArgs): Diagnostics {
+  const { policy, sink, scope, clock, requestId, workspaceId } = args;
+  const effectiveLevel = scopeEffectiveLevelResolve(policy, scope);
+  const tracingActive = policy.tracing.enabled;
+  const tracingSampleRate = policy.tracing.sampleRate;
 
   function emit(
     level: LogLevel,
@@ -82,7 +86,7 @@ export function diagnosticsCreate(args: {
       scope,
       level,
       name,
-      fields: includePayloads ? fields : undefined,
+      fields,
       timestampMs: clock.now(),
     };
     sink.write(record);
@@ -95,10 +99,12 @@ export function diagnosticsCreate(args: {
         ? childScope
         : `${scope}.${childScope}`;
       return diagnosticsCreate({
-        config,
+        policy,
         sink,
         scope: combined,
         clock,
+        requestId,
+        workspaceId,
       });
     },
     enabled(level) {
@@ -122,10 +128,13 @@ export function diagnosticsCreate(args: {
       emit('trace', name, fieldsResolve(fields));
     },
     span(name, fields) {
+      const enabled = tracingActive
+        && logLevelIsEnabled(effectiveLevel, 'debug')
+        && spanSampleDecide(scope, name, requestId, tracingSampleRate);
       return spanCreate({
         name,
         fields,
-        enabled: includeTiming && logLevelIsEnabled(effectiveLevel, 'debug'),
+        enabled,
         emit,
         clock,
       });

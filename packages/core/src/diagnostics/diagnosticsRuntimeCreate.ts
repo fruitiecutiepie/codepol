@@ -1,10 +1,14 @@
 /**
  * Runtime-owned diagnostics manager.
  *
- * Stores an immutable `DiagnosticsConfig` snapshot plus a composed sink.
- * Mutators (`setLevel`, `setScopeLevel`, `setPolicy`, `setSink`, `setConfig`)
- * produce a new snapshot. Consumers call `getContext` / `getDiagnostics` to
- * capture the current snapshot, so changes never mutate an in-flight
+ * Stores `{ environment, preset, overrides, escalations }` and resolves the
+ * effective policy on every `getContext` / `getDiagnostics` call. Mutators
+ * (`setEnvironment`, `setOverrides`, `setConfig`, `escalate`,
+ * `revokeEscalation`) produce new state and rebuild the sink pipeline when
+ * sink-relevant dimensions change.
+ *
+ * Operations in flight keep their bound `EffectiveDiagnosticsPolicy`
+ * snapshot, so concurrent mutations never mutate an already-returned
  * `Diagnostics` handle.
  */
 import { randomUUID } from 'node:crypto';
@@ -14,166 +18,345 @@ import type {
   Diagnostics,
   DiagnosticsConfig,
   DiagnosticsConfigPatch,
+  DiagnosticsOverridePatch,
   DiagnosticsRuntime,
   DiagnosticsSink,
+  EffectiveDiagnosticsPolicy,
+  EnvironmentName,
+  EscalationHandle,
+  EscalationRule,
+  EscalationRuleInput,
   ExecutionContext,
+  ExecutionContextScopeOpts,
   LogLevel,
+  RuntimeDiagnosticsPolicy,
+  ShippedDebugCapabilities,
 } from './diagnosticsTypes';
 import { diagnosticsCreate, systemClock } from './diagnosticsCreate';
 import {
-  compositeSinkCreate,
-  consoleSinkCreate,
-  fileSinkCreate,
-  noopSinkCreate,
+  effectivePolicyResolve,
+  type PolicyResolveOpts,
+} from './diagnosticsPolicyResolve';
+import {
+  environmentPresetPolicyClone,
+} from './diagnosticsPresets';
+import {
+  redactionPolicyCreate,
+  type RedactionExecutor,
+} from './diagnosticsRedaction';
+import {
+  sinkPipelineCreate,
+  type SinkFactories,
 } from './diagnosticsSinks';
+import {
+  escalationStoreCreate,
+  type EscalationStore,
+} from './diagnosticsEscalate';
+import { shippedDebugCapabilitiesGet } from './diagnosticsShipped';
+
+const AUDIT_SCOPE = 'diagnostics.audit';
 
 function noopChecksCreate(): DebugChecks {
   return {};
 }
 
-function strictChecksCreate(): DebugChecks {
+function cheapChecksCreate(): DebugChecks {
   return {
     validateIndexConsistency(_index) {
-      // Placeholder slot: intentionally light. Future: call index invariant
-      // validators here. Kept cheap so enabling trace mode stays usable.
+      // intentionally cheap: presence-only smoke checks go here
     },
   };
 }
 
-function sinkBuild(config: DiagnosticsConfig): DiagnosticsSink {
-  const sinks: DiagnosticsSink[] = [];
-  if (config.sink.consoleEnabled) {
-    sinks.push(consoleSinkCreate());
-  }
-  if (config.sink.logFilePath) {
-    sinks.push(fileSinkCreate(config.sink.logFilePath));
-  }
-  if (sinks.length === 0) {
-    return noopSinkCreate();
-  }
-  if (sinks.length === 1) {
-    return sinks[0]!;
-  }
-  return compositeSinkCreate(sinks);
+function fullChecksCreate(): DebugChecks {
+  return {
+    validateIndexConsistency(_index) {
+      // placeholder slot: full invariant validators plug in here
+    },
+  };
 }
 
-function configPatchApply(
-  config: DiagnosticsConfig,
-  patch: DiagnosticsConfigPatch,
-): DiagnosticsConfig {
-  const nextScopes: Record<string, LogLevel> = { ...config.scopes };
+function checksFromPolicy(policy: EffectiveDiagnosticsPolicy): DebugChecks {
+  switch (policy.checks.invariants) {
+    case 'off':
+      return noopChecksCreate();
+    case 'cheap':
+      return cheapChecksCreate();
+    case 'full':
+      return fullChecksCreate();
+  }
+}
+
+function overridesPatchApply(
+  base: Partial<RuntimeDiagnosticsPolicy>,
+  patch: DiagnosticsOverridePatch,
+): Partial<RuntimeDiagnosticsPolicy> {
+  const next: Partial<RuntimeDiagnosticsPolicy> = { ...base };
+  if (patch.level !== undefined) next.level = patch.level;
   if (patch.scopes) {
+    const scopes: Record<string, LogLevel> = { ...(next.scopes ?? {}) };
     for (const [key, value] of Object.entries(patch.scopes)) {
       if (value === null || value === undefined) {
-        delete nextScopes[key];
+        delete scopes[key];
       } else {
-        nextScopes[key] = value;
+        scopes[key] = value;
       }
     }
+    next.scopes = scopes;
   }
-  const nextSink: DiagnosticsConfig['sink'] = { ...config.sink };
-  if (patch.sink) {
-    if (patch.sink.consoleEnabled !== undefined) {
-      nextSink.consoleEnabled = patch.sink.consoleEnabled;
-    }
-    if (patch.sink.logFilePath !== undefined) {
-      if (patch.sink.logFilePath === null || patch.sink.logFilePath === '') {
-        delete nextSink.logFilePath;
-      } else {
-        nextSink.logFilePath = patch.sink.logFilePath;
-      }
-    }
+  if (patch.tracing) {
+    next.tracing = {
+      ...(next.tracing ?? ({} as RuntimeDiagnosticsPolicy['tracing'])),
+      ...patch.tracing,
+    };
   }
-  return {
-    level: patch.level ?? config.level,
-    scopes: nextScopes,
-    policy: {
-      ...config.policy,
-      ...(patch.policy ?? {}),
-    },
-    sink: nextSink,
-  };
+  if (patch.metrics) {
+    next.metrics = {
+      ...(next.metrics ?? ({} as RuntimeDiagnosticsPolicy['metrics'])),
+      ...patch.metrics,
+    };
+  }
+  if (patch.snapshots) {
+    next.snapshots = {
+      ...(next.snapshots ?? ({} as RuntimeDiagnosticsPolicy['snapshots'])),
+      ...patch.snapshots,
+    };
+  }
+  if (patch.checks) {
+    next.checks = {
+      ...(next.checks ?? ({} as RuntimeDiagnosticsPolicy['checks'])),
+      ...patch.checks,
+    };
+  }
+  if (patch.redaction) {
+    next.redaction = {
+      ...(next.redaction ?? ({} as RuntimeDiagnosticsPolicy['redaction'])),
+      ...patch.redaction,
+    };
+  }
+  if (patch.sinks) {
+    next.sinks = [...patch.sinks];
+  }
+  if (patch.logFilePath !== undefined) {
+    next.logFilePath = patch.logFilePath === null || patch.logFilePath === ''
+      ? undefined
+      : patch.logFilePath;
+  }
+  if (patch.otelEndpoint !== undefined) {
+    next.otelEndpoint = patch.otelEndpoint === null || patch.otelEndpoint === ''
+      ? undefined
+      : patch.otelEndpoint;
+  }
+  return next;
 }
 
-export function diagnosticsRuntimeCreate(args: {
-  initialConfig: DiagnosticsConfig;
-  clock?: Clock;
-}): DiagnosticsRuntime {
-  const clock = args.clock ?? systemClock;
-  let config: DiagnosticsConfig = args.initialConfig;
-  let sink: DiagnosticsSink = sinkBuild(config);
+function pipelineShapeKey(policy: EffectiveDiagnosticsPolicy): string {
+  return JSON.stringify({
+    sinks: policy.sinks,
+    redaction: policy.redaction.mode,
+    logFilePath: policy.logFilePath ?? null,
+    otelEndpoint: policy.otelEndpoint ?? null,
+  });
+}
 
-  function getDiagnostics(scope: string): Diagnostics {
-    return diagnosticsCreate({ config, sink, scope, clock });
+export type DiagnosticsRuntimeCreateArgs = {
+  environment: EnvironmentName;
+  overrides?: Partial<RuntimeDiagnosticsPolicy>;
+  escalations?: readonly EscalationRule[];
+  clock?: Clock;
+  shipped?: ShippedDebugCapabilities;
+  sinkFactories?: SinkFactories;
+};
+
+export function diagnosticsRuntimeCreate(
+  args: DiagnosticsRuntimeCreateArgs,
+): DiagnosticsRuntime {
+  const clock = args.clock ?? systemClock;
+  const shipped = args.shipped ?? shippedDebugCapabilitiesGet();
+  const sinkFactories = args.sinkFactories;
+
+  let environment: EnvironmentName = args.environment;
+  let preset: RuntimeDiagnosticsPolicy = environmentPresetPolicyClone(environment);
+  let overrides: Partial<RuntimeDiagnosticsPolicy> = args.overrides
+    ? { ...args.overrides }
+    : {};
+  let escalationStore: EscalationStore | undefined;
+
+  let cachedPipelineKey: string | undefined;
+  let cachedSink: DiagnosticsSink | undefined;
+  let cachedRedaction: RedactionExecutor | undefined;
+
+  function escalationsGet(): readonly EscalationRule[] {
+    return escalationStore?.list() ?? [];
+  }
+
+  const configSnapshot = (): DiagnosticsConfig => ({
+    environment,
+    preset,
+    overrides,
+    escalations: escalationsGet(),
+  });
+
+  function effectivePolicyCompute(opts?: PolicyResolveOpts): EffectiveDiagnosticsPolicy {
+    return effectivePolicyResolve({
+      config: configSnapshot(),
+      shipped,
+      nowMs: clock.now(),
+      opts,
+    });
+  }
+
+  function sinkEnsure(policy: EffectiveDiagnosticsPolicy): DiagnosticsSink {
+    const key = pipelineShapeKey(policy);
+    if (cachedSink && cachedPipelineKey === key && cachedRedaction) {
+      return cachedSink;
+    }
+    const redaction = cachedRedaction?.mode === policy.redaction.mode
+      ? cachedRedaction
+      : redactionPolicyCreate(policy.redaction.mode);
+    const sink = sinkPipelineCreate({
+      kinds: policy.sinks,
+      redaction,
+      logFilePath: policy.logFilePath,
+      otelEndpoint: policy.otelEndpoint,
+      factories: sinkFactories,
+    });
+    cachedPipelineKey = key;
+    cachedSink = sink;
+    cachedRedaction = redaction;
+    return sink;
+  }
+
+  function auditDiagCreate(): Diagnostics {
+    const policy = effectivePolicyCompute({ scope: AUDIT_SCOPE });
+    return diagnosticsCreate({
+      policy,
+      sink: sinkEnsure(policy),
+      scope: AUDIT_SCOPE,
+      clock,
+    });
+  }
+
+  escalationStore = escalationStoreCreate({
+    clock,
+    audit: {
+      scope: AUDIT_SCOPE,
+      child(sub) { return auditDiagCreate().child(sub); },
+      enabled(lvl) { return auditDiagCreate().enabled(lvl); },
+      error(name, fields) { auditDiagCreate().error(name, fields); },
+      warn(name, fields) { auditDiagCreate().warn(name, fields); },
+      info(name, fields) { auditDiagCreate().info(name, fields); },
+      debug(name, fields) { auditDiagCreate().debug(name, fields); },
+      trace(name, fields) { auditDiagCreate().trace(name, fields); },
+      span(name, fields) { return auditDiagCreate().span(name, fields); },
+    },
+  });
+
+  if (args.escalations && args.escalations.length > 0) {
+    escalationStore.replace(args.escalations);
+  }
+
+  function getDiagnostics(
+    scope: string,
+    opts?: { requestId?: string; workspaceId?: string },
+  ): Diagnostics {
+    const policy = effectivePolicyCompute({
+      scope,
+      requestId: opts?.requestId,
+      workspaceId: opts?.workspaceId,
+    });
+    return diagnosticsCreate({
+      policy,
+      sink: sinkEnsure(policy),
+      scope,
+      clock,
+      requestId: opts?.requestId,
+      workspaceId: opts?.workspaceId,
+    });
   }
 
   function getContext(
     scope: string,
-    opts?: { requestId?: string; abortSignal?: AbortSignal },
+    opts?: ExecutionContextScopeOpts,
   ): ExecutionContext {
-    const diag = getDiagnostics(scope);
-    const traceLevelActive = diag.enabled('trace');
+    const requestId = opts?.requestId ?? randomUUID();
+    const workspaceId = opts?.workspaceId;
+    const policy = effectivePolicyCompute({
+      scope,
+      requestId,
+      workspaceId,
+    });
+    const diag = diagnosticsCreate({
+      policy,
+      sink: sinkEnsure(policy),
+      scope,
+      clock,
+      requestId,
+      workspaceId,
+    });
     return {
       diag,
       clock,
-      checks: traceLevelActive ? strictChecksCreate() : noopChecksCreate(),
-      requestId: opts?.requestId ?? randomUUID(),
+      checks: checksFromPolicy(policy),
+      requestId,
+      workspaceId,
       abortSignal: opts?.abortSignal,
     };
   }
 
-  function applyPatch(patch: DiagnosticsConfigPatch): void {
-    const prevLogPath = config.sink.logFilePath;
-    const prevConsole = config.sink.consoleEnabled;
-    config = configPatchApply(config, patch);
-    const logPathChanged = prevLogPath !== config.sink.logFilePath;
-    const consoleChanged = prevConsole !== config.sink.consoleEnabled;
-    if (logPathChanged || consoleChanged) {
-      sink = sinkBuild(config);
-    }
+  function getEffectivePolicy(opts?: PolicyResolveOpts): EffectiveDiagnosticsPolicy {
+    return effectivePolicyCompute(opts);
+  }
+
+  function setEnvironment(next: EnvironmentName): void {
+    if (next === environment) return;
+    auditDiagCreate().info('environment.changing', {
+      previous: environment,
+      next,
+    });
+    environment = next;
+    preset = environmentPresetPolicyClone(environment);
+    cachedPipelineKey = undefined;
+    cachedSink = undefined;
+    cachedRedaction = undefined;
+    auditDiagCreate().info('environment.changed', { environment });
+  }
+
+  function setOverrides(patch: DiagnosticsOverridePatch): void {
+    overrides = overridesPatchApply(overrides, patch);
+    cachedPipelineKey = undefined;
+    cachedSink = undefined;
+    cachedRedaction = undefined;
+  }
+
+  function setConfig(patch: DiagnosticsConfigPatch): void {
+    if (patch.environment) setEnvironment(patch.environment);
+    if (patch.overrides) setOverrides(patch.overrides);
+    if (patch.escalations) escalationStore!.replace(patch.escalations);
+  }
+
+  function escalate(input: EscalationRuleInput): EscalationHandle {
+    return escalationStore!.add(input);
+  }
+
+  function revokeEscalation(id: string): boolean {
+    return escalationStore!.revoke(id);
+  }
+
+  function listEscalations(): readonly EscalationRule[] {
+    return escalationStore!.list();
   }
 
   return {
     getContext,
     getDiagnostics,
-    getConfig() {
-      return {
-        level: config.level,
-        scopes: { ...config.scopes },
-        policy: { ...config.policy },
-        sink: { ...config.sink },
-      };
-    },
-    setLevel(level) {
-      applyPatch({ level });
-    },
-    setScopeLevel(scope, level) {
-      applyPatch({ scopes: { [scope]: level ?? null } });
-    },
-    setPolicy(patch) {
-      applyPatch({ policy: patch });
-    },
-    setSink(patch) {
-      applyPatch({ sink: patch });
-    },
-    setConfig(patch) {
-      applyPatch(patch);
-    },
-  };
-}
-
-export function diagnosticsConfigDefaults(): DiagnosticsConfig {
-  return {
-    level: 'warn',
-    scopes: {},
-    policy: {
-      includePayloads: true,
-      includeTiming: false,
-      includeInternalStateSnapshots: false,
-      redaction: 'standard',
-    },
-    sink: {
-      consoleEnabled: true,
-    },
+    getConfig: configSnapshot,
+    getEffectivePolicy,
+    setEnvironment,
+    setOverrides,
+    setConfig,
+    escalate,
+    revokeEscalation,
+    listEscalations,
   };
 }

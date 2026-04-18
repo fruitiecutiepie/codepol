@@ -8,6 +8,8 @@ import type {
   DaemonSessionId,
   DiagnosticsConfig,
   DiagnosticsConfigPatch,
+  EscalationRule,
+  EscalationRuleInput,
   IndexStatusResult,
   WorkspaceApplyResult,
   WorkspaceArchitectureSummaryResult,
@@ -460,6 +462,20 @@ type WorkspaceDaemonGetDiagnosticsConfigRequest = WorkspaceDaemonMessage & {
   type: 'get_diagnostics_config';
 };
 
+type WorkspaceDaemonSetDiagnosticsEscalationRequest = WorkspaceDaemonMessage & {
+  type: 'set_diagnostics_escalation';
+  rule: EscalationRuleInput;
+};
+
+type WorkspaceDaemonRevokeDiagnosticsEscalationRequest = WorkspaceDaemonMessage & {
+  type: 'revoke_diagnostics_escalation';
+  id: string;
+};
+
+type WorkspaceDaemonListDiagnosticsEscalationsRequest = WorkspaceDaemonMessage & {
+  type: 'list_diagnostics_escalations';
+};
+
 type WorkspaceDaemonQueuePriority =
   | 'highest'
   | 'high'
@@ -578,6 +594,24 @@ type WorkspaceDaemonGetDiagnosticsConfigAck = {
   config: DiagnosticsConfig;
 };
 
+type WorkspaceDaemonSetDiagnosticsEscalationAck = {
+  type: 'set_diagnostics_escalation_ack';
+  id: string;
+  expiresAtUnixMs: number;
+  escalations: readonly EscalationRule[];
+};
+
+type WorkspaceDaemonRevokeDiagnosticsEscalationAck = {
+  type: 'revoke_diagnostics_escalation_ack';
+  revoked: boolean;
+  escalations: readonly EscalationRule[];
+};
+
+type WorkspaceDaemonListDiagnosticsEscalationsAck = {
+  type: 'list_diagnostics_escalations_ack';
+  escalations: readonly EscalationRule[];
+};
+
 type WorkspaceDaemonCancelRequestAck = {
   type: 'cancel_request_ack';
   targetId: number;
@@ -613,6 +647,9 @@ type WorkspaceDaemonServiceResponse =
   | WorkspaceDaemonPolicyCheckAck
   | WorkspaceDaemonSetDiagnosticsConfigAck
   | WorkspaceDaemonGetDiagnosticsConfigAck
+  | WorkspaceDaemonSetDiagnosticsEscalationAck
+  | WorkspaceDaemonRevokeDiagnosticsEscalationAck
+  | WorkspaceDaemonListDiagnosticsEscalationsAck
   | WorkspaceDaemonCancelRequestAck
   | WorkspaceDaemonVoidAck
   | WorkspaceDaemonHelloAck
@@ -1768,6 +1805,34 @@ export class WorkspaceDaemonSession {
           return {
             type: 'get_diagnostics_config_ack',
             config: diagnosticsRuntimeGet().getConfig(),
+          };
+        }
+        case 'set_diagnostics_escalation': {
+          const input = message as WorkspaceDaemonSetDiagnosticsEscalationRequest;
+          const runtime = diagnosticsRuntimeGet();
+          const handle = runtime.escalate(input.rule);
+          return {
+            type: 'set_diagnostics_escalation_ack',
+            id: handle.id,
+            expiresAtUnixMs: handle.expiresAtUnixMs,
+            escalations: runtime.listEscalations(),
+          };
+        }
+        case 'revoke_diagnostics_escalation': {
+          const input = message as WorkspaceDaemonRevokeDiagnosticsEscalationRequest;
+          const runtime = diagnosticsRuntimeGet();
+          const revoked = runtime.revokeEscalation(input.id);
+          return {
+            type: 'revoke_diagnostics_escalation_ack',
+            revoked,
+            escalations: runtime.listEscalations(),
+          };
+        }
+        case 'list_diagnostics_escalations': {
+          void (message as WorkspaceDaemonListDiagnosticsEscalationsRequest);
+          return {
+            type: 'list_diagnostics_escalations_ack',
+            escalations: diagnosticsRuntimeGet().listEscalations(),
           };
         }
         case 'register_client_session': {
@@ -3229,6 +3294,37 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
     }).then((response) => response.config);
   }
 
+  setDiagnosticsEscalation(
+    rule: EscalationRuleInput,
+  ): Promise<{ id: string; expiresAtUnixMs: number; escalations: readonly EscalationRule[] }> {
+    return this.connection.request<WorkspaceDaemonSetDiagnosticsEscalationAck>({
+      type: 'set_diagnostics_escalation',
+      rule,
+    }).then((response) => ({
+      id: response.id,
+      expiresAtUnixMs: response.expiresAtUnixMs,
+      escalations: response.escalations,
+    }));
+  }
+
+  revokeDiagnosticsEscalation(
+    id: string,
+  ): Promise<{ revoked: boolean; escalations: readonly EscalationRule[] }> {
+    return this.connection.request<WorkspaceDaemonRevokeDiagnosticsEscalationAck>({
+      type: 'revoke_diagnostics_escalation',
+      id,
+    }).then((response) => ({
+      revoked: response.revoked,
+      escalations: response.escalations,
+    }));
+  }
+
+  listDiagnosticsEscalations(): Promise<readonly EscalationRule[]> {
+    return this.connection.request<WorkspaceDaemonListDiagnosticsEscalationsAck>({
+      type: 'list_diagnostics_escalations',
+    }).then((response) => response.escalations);
+  }
+
   close(): Promise<void> {
     return this.connection.close();
   }
@@ -3251,6 +3347,37 @@ export class WorkspaceDaemonPolicyCheckClient {
       type: 'set_diagnostics_config',
       patch,
     }).then((response) => response.config);
+  }
+
+  setDiagnosticsEscalation(
+    rule: EscalationRuleInput,
+  ): Promise<{ id: string; expiresAtUnixMs: number; escalations: readonly EscalationRule[] }> {
+    return this.connection.request<WorkspaceDaemonSetDiagnosticsEscalationAck>({
+      type: 'set_diagnostics_escalation',
+      rule,
+    }).then((response) => ({
+      id: response.id,
+      expiresAtUnixMs: response.expiresAtUnixMs,
+      escalations: response.escalations,
+    }));
+  }
+
+  revokeDiagnosticsEscalation(
+    id: string,
+  ): Promise<{ revoked: boolean; escalations: readonly EscalationRule[] }> {
+    return this.connection.request<WorkspaceDaemonRevokeDiagnosticsEscalationAck>({
+      type: 'revoke_diagnostics_escalation',
+      id,
+    }).then((response) => ({
+      revoked: response.revoked,
+      escalations: response.escalations,
+    }));
+  }
+
+  listDiagnosticsEscalations(): Promise<readonly EscalationRule[]> {
+    return this.connection.request<WorkspaceDaemonListDiagnosticsEscalationsAck>({
+      type: 'list_diagnostics_escalations',
+    }).then((response) => response.escalations);
   }
 
   getDiagnosticsConfig(): Promise<DiagnosticsConfig> {

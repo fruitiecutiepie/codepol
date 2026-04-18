@@ -10,7 +10,7 @@ import {
   type WorkspacePolicyCheckOptions,
   type WorkspacePolicyCheckResult,
 } from '@codepol/workspace-service';
-import type { DiagnosticsConfigPatch } from '@codepol/core';
+import type { DiagnosticsConfigPatch, EscalationRuleInput } from '@codepol/core';
 
 const nodeRequire = createRequire(__filename);
 
@@ -25,6 +25,7 @@ export type CliPolicyChecker = {
     options: WorkspacePolicyCheckOptions,
   ) => Promise<WorkspacePolicyCheckResult>;
   setDiagnosticsConfig?: (patch: DiagnosticsConfigPatch) => Promise<void>;
+  setDiagnosticsEscalation?: (rule: EscalationRuleInput) => Promise<void>;
   close?: () => Promise<void>;
 };
 
@@ -97,6 +98,9 @@ export async function cliPolicyCheckerResolve(options: {
       policyCheck: (policyOptions) => client.policyCheck(policyOptions),
       setDiagnosticsConfig: async (patch) => {
         await client.setDiagnosticsConfig(patch);
+      },
+      setDiagnosticsEscalation: async (rule) => {
+        await client.setDiagnosticsEscalation(rule);
       },
       close: () => client.close(),
     };
