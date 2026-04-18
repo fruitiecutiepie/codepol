@@ -196,6 +196,28 @@ codepol
 codepol --config ./codepol.toml
 ```
 
+## Runtime diagnostics
+
+Codepol ships a runtime diagnostics runtime that is configured per environment, not per caller. Business code depends on a `Diagnostics` / `ExecutionContext` interface; what actually flows out to console, file, or OTEL is decided once at the process boundary.
+
+The control knobs are named presets — pick the one that matches the job:
+
+| Preset | Posture |
+| ------ | ------- |
+| `user` | Safe field posture (default). warn / strict redaction / stdout sink. |
+| `dev` | Productive daily engineering. debug / console + file / cheap invariants. |
+| `test` | Deterministic CI verification. warn / memory sink / no tracing. |
+| `verbose` | Explicit investigation. trace / console + file / full invariants / profiling on. |
+
+Control surfaces:
+
+- **CLI**: `--env <preset>`, `--override <dim=value>` (repeatable), `--escalate <scope=level@ttlSec:reason>` (repeatable). Env var `CODEPOL_ENV` sets the preset without a flag; legacy `CODEPOL_DEBUG_PARSE` / `CODEPOL_DEBUG_PARSE_FILE` continue to work as overlays.
+- **VSCode**: settings `codepol.diagnostics.environment`, `codepol.diagnostics.overrides`, `codepol.diagnostics.escalations`, commands `Codepol: Set Diagnostics Environment`, `Codepol: Add Diagnostics Escalation`, `Codepol: Clear Diagnostics Escalations`, `Codepol: Show Current Diagnostics Config`.
+- **Daemon IPC / LSP**: `set_diagnostics_config`, `set_diagnostics_escalation`, `revoke_diagnostics_escalation`, `list_diagnostics_escalations`, plus LSP command `codepol.diagnostics.configure` and request `codepol/diagnosticsConfig`.
+- **Programmatic API**: `diagnosticsRuntimeSetEnvironment`, `diagnosticsRuntimeSetOverrides`, `diagnosticsRuntimeSetConfig`, `diagnosticsRuntimeEscalate`, `diagnosticsRuntimeRevokeEscalation` exported from `@codepol/core`.
+
+The canonical reference — model, resolution rules, escalation semantics, redaction pipeline, sink pipeline — lives at [packages/core/src/diagnostics/README.md](./packages/core/src/diagnostics/README.md).
+
 ## What It Enforces
 
 Codepol enforces custom policy rules defined by plugins. For example, a `no-duplicate-exports` rule that prevents naming collisions across your codebase:

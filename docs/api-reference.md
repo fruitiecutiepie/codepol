@@ -451,6 +451,52 @@ if (isOk(result)) {
 
 ---
 
+### parserParseTrace
+
+Runs `parser.parse(source)` with structured diagnostic tracing through an
+injected `Diagnostics` handle. Always returns whatever `parser.parse` returns
+and re-throws whatever it throws; events are strictly additive and gated by
+the effective policy. First WASM abort in the process is tagged
+`first_abort`; subsequent aborts are tagged `collateral_abort` so the true
+culprit is easy to find in a log.
+
+```typescript
+type ParserParseTraceContext = {
+  filePath: string;
+  ruleId?: string;
+  callSite: string;
+};
+
+function parserParseTrace(
+  parser: Parser,
+  source: string,
+  diag: Diagnostics,
+  context: ParserParseTraceContext,
+): Tree;
+```
+
+**Example:**
+
+```typescript
+import {
+  executionContextCreate,
+  parserGetForFile,
+  parserParseTrace,
+  isOk,
+} from '@codepol/core';
+
+const parserResult = parserGetForFile(filePath);
+if (!isOk(parserResult)) throw new Error(parserResult.Err);
+
+const ctx = executionContextCreate('parser.myAdapter');
+const tree = parserParseTrace(parserResult.Ok, source, ctx.diag, {
+  filePath,
+  callSite: 'myAdapter',
+});
+```
+
+---
+
 ### Lang
 
 Language registration configuration.
@@ -1355,6 +1401,432 @@ for (const [name, entryPoint] of packages) {
 ```
 
 This is used internally by the semantic index for monorepo-aware module resolution (resolving bare specifiers like `import { foo } from '@codepol/core'` to their source files).
+
+---
+
+## Runtime diagnostics
+
+Codepol ships a runtime diagnostics layer so business code depends on a
+capability interface (`Diagnostics` / `ExecutionContext`), not on environment
+names or module-local debug flags. The active behaviour at any moment is
+resolved as `policy ∩ shipped capabilities`, where the policy comes from a
+named environment preset plus runtime overrides and any active escalations.
+See [@codepol/core/diagnostics README](https://github.com/fruitiecutiepie/codepol/blob/master/packages/core/src/diagnostics/README.md)
+for the full architectural model; this section documents the public API.
+
+### Diagnostics / ExecutionContext
+
+The two interfaces business code depends on.
+
+```typescript
+type LogLevel = 'error' | 'warn' | 'info' | 'debug' | 'trace';
+
+type Diagnostics = {
+  readonly scope: string;
+  child(scope: string): Diagnostics;
+  enabled(level: LogLevel): boolean;
+  error(name: string, fields?: Record<string, unknown>): void;
+  warn(name: string, fields?: Record<string, unknown>): void;
+  info(name: string, fields?: Record<string, unknown>): void;
+  debug(name: string, fields?: DiagnosticsFieldProvider): void;
+  trace(name: string, fields?: DiagnosticsFieldProvider): void;
+  span(name: string, fields?: Record<string, unknown>): Span;
+};
+
+type DiagnosticsFieldProvider =
+  | Record<string, unknown>
+  | (() => Record<string, unknown>);
+
+type Span = { end(fields?: Record<string, unknown>): void };
+
+type ExecutionContext = {
+  diag: Diagnostics;
+  clock: { now(): number };
+  checks: DebugChecks;
+  requestId: string;
+  workspaceId?: string;
+  abortSignal?: AbortSignal;
+};
+```
+
+Contracts:
+
+- `debug` / `trace` accept a lazy `() => fields` factory; the factory is only
+  called when the effective level is reached.
+- `child('sub')` returns a `Diagnostics` with the dotted scope
+  `parent.sub`; scope-level overrides resolve most-specific first.
+- `span` emits `name.begin` / `name.end` pairs only when
+  `tracing.enabled` is true at a level of debug or higher. Sampling is
+  deterministic per `scope + name + requestId`.
+
+---
+
+### EnvironmentName and ENV_PRESETS
+
+Named presets are data, not branches. Each preset sets `checks.invariants`
+explicitly so a level bump never silently implies a check-depth change.
+
+```typescript
+type EnvironmentName = 'user' | 'dev' | 'test' | 'verbose';
+
+type EnvironmentPreset = {
+  name: EnvironmentName;
+  diagnostics: RuntimeDiagnosticsPolicy;
+};
+
+declare const ENV_PRESETS: Record<EnvironmentName, EnvironmentPreset>;
+```
+
+| Preset | level | redaction | sinks | tracing | checks | snapshots |
+| ------ | ----- | --------- | ----- | ------- | ------ | --------- |
+| `user` | `warn` | `strict` | `['stdout']` | off (`sampleRate: 0`) | `off` | off |
+| `dev` | `debug` | `standard` | `['console','file']` | on (`sampleRate: 0.2`) | `cheap` | 1 MB cap |
+| `test` | `warn` | `off` | `['memory']` | off | `cheap` | off |
+| `verbose` | `trace` | `standard` | `['console','file']` | on (`sampleRate: 1.0`) | `full` | 8 MB cap |
+
+Helper exports: `environmentNameParse`, `environmentNamesList`,
+`environmentPresetGet`, `environmentPresetPolicyClone`.
+
+---
+
+### RuntimeDiagnosticsPolicy / DiagnosticsConfig / DiagnosticsConfigPatch
+
+Runtime state is stored as `{ environment, preset, overrides, escalations }`.
+Consumers never mutate this shape directly; they mutate through the runtime's
+setters. Patches look like:
+
+```typescript
+type DiagnosticsOverridePatch = {
+  level?: LogLevel;
+  /** Null clears an override for a given dotted scope. */
+  scopes?: Record<string, LogLevel | null>;
+  tracing?: Partial<TracingPolicy>;
+  metrics?: Partial<MetricsPolicy>;
+  snapshots?: Partial<SnapshotsPolicy>;
+  checks?: Partial<ChecksPolicy>;
+  redaction?: Partial<RedactionPolicy>;
+  sinks?: readonly DiagnosticSinkKind[];
+  logFilePath?: string | null;
+  otelEndpoint?: string | null;
+};
+
+type DiagnosticsConfigPatch = {
+  environment?: EnvironmentName;
+  overrides?: DiagnosticsOverridePatch;
+  escalations?: readonly EscalationRule[];
+};
+```
+
+The nested `RuntimeDiagnosticsPolicy` composes these dimensions:
+
+```typescript
+type RuntimeDiagnosticsPolicy = {
+  level: LogLevel;
+  scopes: Record<string, LogLevel>;
+  tracing: { enabled: boolean; sampleRate: number };
+  metrics: { enabled: boolean };
+  snapshots: { enabled: boolean; maxBytes: number };
+  checks: { invariants: 'off' | 'cheap' | 'full' };
+  redaction: { mode: 'strict' | 'standard' | 'off' };
+  sinks: readonly DiagnosticSinkKind[];
+  logFilePath?: string;
+  otelEndpoint?: string;
+};
+```
+
+---
+
+### ShippedDebugCapabilities and BuildProfile
+
+Compile-time constant that caps what the binary can do at runtime. Resolved
+once from `CODEPOL_BUILD_PROFILE` (`standard` | `hardened`) or the bundler
+replacement `__CODEPOL_BUILD_PROFILE__`.
+
+```typescript
+type ShippedDebugCapabilities = {
+  deepStateSnapshots: boolean;
+  invariantChecks: boolean;
+  traceSpans: boolean;
+  profiling: boolean;
+  faultInjection: boolean;
+  adminInspectors: boolean;
+  allowedSinks: readonly DiagnosticSinkKind[];
+  allowedMaxLevel: LogLevel;
+};
+
+type BuildProfile = 'standard' | 'hardened';
+
+function shippedDebugCapabilitiesGet(): ShippedDebugCapabilities;
+```
+
+Effective policy is always intersected with this set: the runtime can never
+enable a capability the binary did not ship, nor pick a level above
+`allowedMaxLevel`, nor emit to a sink outside `allowedSinks`.
+
+---
+
+### EscalationRule / EscalationScope / EscalationHandle / EscalationRuleInput
+
+Time-bounded elevations. Rules can target `global`, a specific scope, a
+specific `requestId`, or a specific `workspaceId`; only matching operations
+see the elevated level. Expired rules are pruned automatically on the next
+resolve.
+
+```typescript
+type EscalationScope =
+  | { kind: 'global' }
+  | { kind: 'scope'; scope: string }
+  | { kind: 'request'; requestId: string }
+  | { kind: 'workspace'; workspaceId: string };
+
+type EscalationRule = {
+  id: string;
+  scope: EscalationScope;
+  level: LogLevel;
+  policyOverrides?: Partial<RuntimeDiagnosticsPolicy>;
+  expiresAtUnixMs: number;
+  reason: string;
+  actor: string;
+};
+
+type EscalationRuleInput = {
+  id?: string;
+  scope: EscalationScope;
+  level: LogLevel;
+  policyOverrides?: Partial<RuntimeDiagnosticsPolicy>;
+  ttlMs: number;
+  reason: string;
+  actor: string;
+};
+
+type EscalationHandle = {
+  id: string;
+  expiresAtUnixMs: number;
+  revoke(): void;
+};
+```
+
+Add/revoke/list emit audit events (`escalation.added`,
+`escalation.revoked`, `escalation.expired`) through the runtime's own
+`diagnostics.audit` scope.
+
+---
+
+### EffectiveDiagnosticsPolicy and effectivePolicyResolve
+
+Pure resolver that materializes the policy for a single operation:
+`preset → overrides → active escalations → capability intersection`.
+`effectivePolicyResolve` is deterministic for fixed inputs and is used
+internally by the runtime on each `getContext`/`getDiagnostics` call so that
+an in-flight operation keeps the snapshot it started with.
+
+```typescript
+type EffectiveDiagnosticsPolicy = RuntimeDiagnosticsPolicy & {
+  environment: EnvironmentName;
+  shipped: ShippedDebugCapabilities;
+  activeEscalations: readonly EscalationRule[];
+};
+
+type PolicyResolveOpts = {
+  scope?: string;
+  requestId?: string;
+  workspaceId?: string;
+};
+
+function effectivePolicyResolve(args: {
+  config: DiagnosticsConfig;
+  shipped: ShippedDebugCapabilities;
+  nowMs: number;
+  opts?: PolicyResolveOpts;
+}): EffectiveDiagnosticsPolicy;
+
+function scopeEffectiveLevelResolve(
+  policy: EffectiveDiagnosticsPolicy,
+  scope: string,
+): LogLevel;
+```
+
+---
+
+### Redaction
+
+Sinks never decide redaction individually. The runtime wraps the composite
+sink in a `RedactionExecutor` derived from the effective `redaction.mode`:
+
+- `off` — passthrough.
+- `standard` — replaces `*Token`, `*Secret`, `*Password`, `*Key`,
+  `*ApiKey`, `*SessionId`, `Auth*` fields with `[redacted]`.
+- `strict` — everything `standard` does, plus source-like fields
+  (`source`, `sourcePreview`, `source_text`, `errorStack`, …), and string
+  values longer than 512 characters are truncated with `<truncated>`.
+
+```typescript
+type RedactionMode = 'strict' | 'standard' | 'off';
+
+type RedactionExecutor = {
+  readonly mode: RedactionMode;
+  redactRecord(record: DiagnosticsRecord): DiagnosticsRecord;
+  redactFields(
+    fields: Record<string, unknown> | undefined,
+  ): Record<string, unknown> | undefined;
+};
+
+function redactionPolicyCreate(mode: RedactionMode): RedactionExecutor;
+```
+
+---
+
+### Sinks
+
+Sinks are plain factories. They consume `DiagnosticsRecord`s after redaction.
+
+```typescript
+type DiagnosticSinkKind = 'console' | 'file' | 'memory' | 'stdout' | 'otel';
+
+type DiagnosticsRecord = {
+  scope: string;
+  level: LogLevel;
+  name: string;
+  fields?: Record<string, unknown>;
+  timestampMs: number;
+};
+
+type DiagnosticsSink = {
+  write(record: DiagnosticsRecord): void;
+  close?(): void;
+};
+
+type MemorySink = DiagnosticsSink & {
+  snapshot(): readonly DiagnosticsRecord[];
+  clear(): void;
+  size(): number;
+};
+
+function consoleSinkCreate(): DiagnosticsSink;
+function stdoutSinkCreate(): DiagnosticsSink;
+function fileSinkCreate(logFilePath: string): DiagnosticsSink;
+function memorySinkCreate(capacity?: number): MemorySink;
+function otelSinkCreate(endpoint: string | undefined): DiagnosticsSink;
+
+type SinkPipelineArgs = {
+  kinds: readonly DiagnosticSinkKind[];
+  redaction: RedactionExecutor;
+  logFilePath?: string;
+  otelEndpoint?: string;
+  factories?: SinkFactories;
+};
+
+function sinkPipelineCreate(args: SinkPipelineArgs): DiagnosticsSink;
+```
+
+The OTEL sink is a stub today: it logs one warning and drops records unless a
+real exporter is wired in. `MemorySink` is intended for tests.
+
+---
+
+### diagnosticsCreate
+
+Low-level factory. Most callers use `diagnosticsRuntimeGet().getDiagnostics(scope)` instead.
+
+```typescript
+function diagnosticsCreate(args: {
+  policy: EffectiveDiagnosticsPolicy;
+  sink: DiagnosticsSink;
+  scope: string;
+  clock: Clock;
+  requestId?: string;
+  workspaceId?: string;
+}): Diagnostics;
+```
+
+---
+
+### diagnosticsRuntimeCreate and diagnosticsRuntimeGet
+
+The runtime orchestrates presets, overrides, escalations, and sink pipelines.
+`diagnosticsRuntimeGet()` returns the process-wide singleton (seeded from
+`CODEPOL_ENV` or `NODE_ENV`, with legacy `CODEPOL_DEBUG_PARSE[_FILE]` /
+`CODEPOL_DIAGNOSTICS_LEVEL` / `CODEPOL_DIAGNOSTICS_LOG_FILE` applied as
+overrides). `diagnosticsRuntimeCreate` is useful for tests or custom hosts.
+
+```typescript
+type DiagnosticsRuntime = {
+  getContext(scope: string, opts?: ExecutionContextScopeOpts): ExecutionContext;
+  getDiagnostics(scope: string, opts?: { requestId?: string; workspaceId?: string }): Diagnostics;
+  getConfig(): DiagnosticsConfig;
+  getEffectivePolicy(opts?: PolicyResolveOpts): EffectiveDiagnosticsPolicy;
+  setEnvironment(environment: EnvironmentName): void;
+  setOverrides(patch: DiagnosticsOverridePatch): void;
+  setConfig(patch: DiagnosticsConfigPatch): void;
+  escalate(rule: EscalationRuleInput): EscalationHandle;
+  revokeEscalation(id: string): boolean;
+  listEscalations(): readonly EscalationRule[];
+};
+
+function diagnosticsRuntimeCreate(args: {
+  environment: EnvironmentName;
+  overrides?: Partial<RuntimeDiagnosticsPolicy>;
+  escalations?: readonly EscalationRule[];
+  clock?: Clock;
+  shipped?: ShippedDebugCapabilities;
+  sinkFactories?: SinkFactories;
+}): DiagnosticsRuntime;
+
+function diagnosticsRuntimeGet(): DiagnosticsRuntime;
+```
+
+---
+
+### Global helpers
+
+Thin wrappers over the singleton for application-layer wiring.
+
+```typescript
+function diagnosticsGet(
+  scope: string,
+  opts?: { requestId?: string; workspaceId?: string },
+): Diagnostics;
+
+function executionContextCreate(
+  scope: string,
+  opts?: ExecutionContextScopeOpts,
+): ExecutionContext;
+
+function diagnosticsRuntimeGetConfig(): DiagnosticsConfig;
+function diagnosticsRuntimeGetEffectivePolicy(opts?: PolicyResolveOpts): EffectiveDiagnosticsPolicy;
+function diagnosticsRuntimeSetEnvironment(environment: EnvironmentName): void;
+function diagnosticsRuntimeSetOverrides(patch: DiagnosticsOverridePatch): void;
+function diagnosticsRuntimeSetConfig(patch: DiagnosticsConfigPatch): void;
+function diagnosticsRuntimeEscalate(rule: EscalationRuleInput): EscalationHandle;
+function diagnosticsRuntimeRevokeEscalation(id: string): boolean;
+function diagnosticsRuntimeListEscalations(): readonly EscalationRule[];
+```
+
+**Example:** switch to the `verbose` preset for an investigation, escalate
+the parser scope to trace for 10 minutes, then automatically stop.
+
+```typescript
+import {
+  diagnosticsRuntimeSetConfig,
+  diagnosticsRuntimeEscalate,
+} from '@codepol/core';
+
+diagnosticsRuntimeSetConfig({ environment: 'verbose' });
+
+const escalation = diagnosticsRuntimeEscalate({
+  scope: { kind: 'scope', scope: 'parser' },
+  level: 'trace',
+  ttlMs: 10 * 60 * 1000,
+  reason: 'reproduce_wasm_abort',
+  actor: 'spec',
+});
+
+try {
+  await runUnderInvestigation();
+} finally {
+  escalation.revoke();
+}
+```
 
 ---
 

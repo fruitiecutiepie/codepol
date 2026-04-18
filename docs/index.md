@@ -20,4 +20,7 @@ features:
     details: Built specifically for TypeScript projects with full type awareness and tree-sitter parsing.
   - title: ESLint Integration
     details: Seamlessly integrates with your existing ESLint setup for unified code quality enforcement.
+  - title: Runtime observability
+    details: Scoped environment presets, time-bounded escalations, and strict redaction by default. Dial up the noise only when you need to.
+    link: /getting-started#tuning-diagnostics
 ---

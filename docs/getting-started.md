@@ -351,6 +351,51 @@ codepol
 codepol --config ./codepol.toml --eslint-config ./eslint.config.js
 ```
 
+## Tuning diagnostics
+
+Codepol's diagnostics runtime is driven by named environment presets:
+
+- `user` (default) — safe field posture: warn level, strict redaction, stdout sink.
+- `dev` — productive daily engineering: debug level, console + file sink, cheap invariants.
+- `test` — deterministic CI: warn level, memory sink, tracing off.
+- `verbose` — explicit investigation: trace level, snapshots + profiling on, full invariants.
+
+Pick one and layer overrides or time-bounded escalations on top. The same
+configuration flows through the CLI, the daemon, and the LSP.
+
+**CLI:**
+
+```bash
+# Switch preset for a single run.
+codepol --env dev
+
+# Dev preset with a file sink added.
+codepol --env dev --override sinks=console,file --override logFilePath=/tmp/codepol.log
+
+# Time-bounded escalation of the parser scope (10 minutes, then automatic rollback).
+codepol --escalate scope:parser=trace@600:reproduce_wasm_abort
+
+# Or pick the preset via env var — handy for npm scripts and CI.
+CODEPOL_ENV=verbose codepol
+```
+
+**VSCode:** set `codepol.diagnostics.environment` to `dev` (or `verbose`) in your
+workspace settings. For finer control add `codepol.diagnostics.overrides`
+(e.g. `{ "sinks": ["console", "file"], "logFilePath": "/tmp/codepol.log" }`) or
+a standing escalation in `codepol.diagnostics.escalations`. The commands
+`Codepol: Set Diagnostics Environment`, `Codepol: Add Diagnostics Escalation`,
+`Codepol: Clear Diagnostics Escalations`, and `Codepol: Show Current
+Diagnostics Config` are available from the command palette.
+
+**Env vars:** `CODEPOL_ENV` selects the preset at startup. Legacy
+`CODEPOL_DEBUG_PARSE=1` and `CODEPOL_DEBUG_PARSE_FILE=/tmp/x.log` are still
+honored — they seed the runtime as overrides on top of whichever preset is
+active.
+
+See [packages/core/src/diagnostics/README.md](https://github.com/fruitiecutiepie/codepol/blob/master/packages/core/src/diagnostics/README.md)
+for the full model and [API Reference → Runtime diagnostics](./api-reference.md#runtime-diagnostics)
+for the programmatic surface.
+
 ## Next Steps
 
 - [Policy Schema Reference](./policy-schema.md) - All configuration options

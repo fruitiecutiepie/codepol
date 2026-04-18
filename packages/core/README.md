@@ -100,6 +100,64 @@ if (result.Ok.length > 0) {
 }
 ```
 
+### Runtime diagnostics
+
+Business code in `@codepol/core` depends on a `Diagnostics` / `ExecutionContext`
+interface, never on an environment name. The runtime singleton resolves the
+effective policy per call from the active preset (`user` / `dev` / `test` /
+`verbose`), layered overrides, and any active escalations.
+
+Typical injection pattern when writing a parser / adapter:
+
+```typescript
+import {
+  executionContextCreate,
+  parserGetForFile,
+  parserParseTrace,
+} from '@codepol/core';
+
+const parserResult = parserGetForFile(filePath);
+if ('Err' in parserResult) {
+  throw new Error(parserResult.Err);
+}
+
+const ctx = executionContextCreate('parser.myAdapter');
+const tree = parserParseTrace(parserResult.Ok, source, ctx.diag, {
+  filePath,
+  callSite: 'myAdapter',
+});
+```
+
+Application wiring (CLI / LSP / daemon / tests) picks the environment once and
+layers overrides or time-bounded escalations on top:
+
+```typescript
+import {
+  diagnosticsRuntimeSetConfig,
+  diagnosticsRuntimeEscalate,
+} from '@codepol/core';
+
+diagnosticsRuntimeSetConfig({
+  environment: 'dev',
+  overrides: { sinks: ['console', 'file'], logFilePath: '/tmp/codepol.log' },
+});
+
+const escalation = diagnosticsRuntimeEscalate({
+  scope: { kind: 'scope', scope: 'parser' },
+  level: 'trace',
+  ttlMs: 10 * 60 * 1000,
+  reason: 'reproduce_wasm_abort',
+  actor: 'spec',
+});
+// ... later ...
+escalation.revoke();
+```
+
+See [src/diagnostics/README.md](./src/diagnostics/README.md) for the full
+model (shipped capabilities, policy resolution order, redaction pipeline,
+sink pipeline) and [api-reference.md](../../docs/api-reference.md#runtime-diagnostics)
+for the typed API surface.
+
 ### Running Full Policy Checks
 
 ```typescript
@@ -206,6 +264,8 @@ type PolicyViolation = {
 | `langsGet()` | Get all registered languages |
 | `wasmPathGet(grammarName)` | Get path to bundled WASM file |
 | `parserInit()` | Initialize the WASM parser (must be called after registering languages) |
+| `parserGetForFile(filePath)` | Return a `Parser` configured for `filePath`'s registered language |
+| `parserParseTrace(parser, source, diag, context)` | `parser.parse(source)` wrapped with structured diagnostics events |
 | `configGet(cwd?)` | Auto-discover and load codepol.toml |
 | `configGetFromPath(path)` | Load config from explicit path |
 | `policyFileGet(path)` | (deprecated) Load JSON config file |
@@ -216,6 +276,35 @@ type PolicyViolation = {
 | `policyViolationsGetFromDir(policy, cwd)` | Check all matching files in a directory |
 | `policyCheck(options)` | Run complete policy checks |
 | `policyViolationsGetOutputPretty(violations, cwd)` | Format violations as string |
+
+### Runtime diagnostics functions
+
+| Function | Description |
+| -------- | ----------- |
+| `diagnosticsGet(scope, opts?)` | Acquire a `Diagnostics` handle bound to the current effective policy |
+| `executionContextCreate(scope, opts?)` | Build an `ExecutionContext` with `{ diag, clock, checks, requestId, workspaceId? }` |
+| `diagnosticsRuntimeGet()` | Access the process-wide `DiagnosticsRuntime` singleton |
+| `diagnosticsRuntimeGetConfig()` | Read the current stored `DiagnosticsConfig` (environment, overrides, escalations) |
+| `diagnosticsRuntimeGetEffectivePolicy(opts?)` | Resolve the effective policy for a given scope / requestId / workspaceId |
+| `diagnosticsRuntimeSetEnvironment(name)` | Switch to a preset (`user` / `dev` / `test` / `verbose`) |
+| `diagnosticsRuntimeSetOverrides(patch)` | Overlay a `DiagnosticsOverridePatch` on the current preset |
+| `diagnosticsRuntimeSetConfig(patch)` | Apply environment + overrides + escalations atomically |
+| `diagnosticsRuntimeEscalate(rule)` | Add a time-bounded `EscalationRule`; returns `{ id, expiresAtUnixMs, revoke() }` |
+| `diagnosticsRuntimeRevokeEscalation(id)` | Revoke an escalation by id |
+| `diagnosticsRuntimeListEscalations()` | List active (non-expired) escalations |
+
+### Runtime diagnostics types
+
+`Diagnostics`, `ExecutionContext`, `EnvironmentName`, `EnvironmentPreset`,
+`RuntimeDiagnosticsPolicy`, `DiagnosticsOverridePatch`, `DiagnosticsConfig`,
+`DiagnosticsConfigPatch`, `EffectiveDiagnosticsPolicy`,
+`ShippedDebugCapabilities`, `EscalationRule`, `EscalationScope`,
+`EscalationHandle`, `EscalationRuleInput`, `TracingPolicy`, `MetricsPolicy`,
+`SnapshotsPolicy`, `ChecksPolicy`, `RedactionPolicy`, `DiagnosticSinkKind`,
+`LogLevel`. See
+[docs/api-reference.md#runtime-diagnostics](../../docs/api-reference.md#runtime-diagnostics)
+for shapes and [src/diagnostics/README.md](./src/diagnostics/README.md) for
+the architectural model.
 
 ## License
 

@@ -61,6 +61,36 @@ codepol --config ./config/codepol.toml
 codepol --eslint-config ./config/eslint.config.js
 ```
 
+### Tuning diagnostics
+
+Codepol's diagnostics runtime is driven by named environment presets. The CLI
+picks `user` by default; set `CODEPOL_ENV` or pass `--env` to switch.
+
+```bash
+# Productive daily posture: debug level, console + file sink, cheap invariants.
+codepol --env dev
+
+# Same preset but also append to a file sink.
+codepol --env dev --override sinks=console,file --override logFilePath=/tmp/codepol.log
+
+# Time-bounded escalation: raise the parser scope to trace for 10 minutes.
+codepol --escalate scope:parser=trace@600:reproduce_wasm_abort
+
+# Env-var form (handy in CI / npm scripts).
+CODEPOL_ENV=verbose codepol
+```
+
+`--override` accepts any dimension of the runtime policy — `level`,
+`scopes.<name>`, `tracing.enabled`, `tracing.sampleRate`, `metrics.enabled`,
+`snapshots.enabled`, `snapshots.maxBytes`, `checks.invariants`,
+`redaction.mode`, `sinks`, `logFilePath`, `otelEndpoint`. `--escalate` targets
+are `global`, `scope:<dotted>`, `request:<id>`, or `workspace:<id>`.
+
+Legacy `CODEPOL_DEBUG_PARSE=1` / `CODEPOL_DEBUG_PARSE_FILE=/tmp/x.log` still
+work; they are overlaid as overrides on whichever preset is active.
+
+See [packages/core/src/diagnostics/README.md](../../packages/core/src/diagnostics/README.md) for the full model (presets, escalation semantics, redaction pipeline).
+
 ### Standalone Binary Usage
 
 If you are using a prebuilt standalone binary, download it from [GitHub Releases](https://github.com/fruitiecutiepie/codepol/releases) (or CI artifacts) and keep these files in the same directory as the executable:
@@ -102,6 +132,9 @@ Then run:
 | `--config` | Path to config file | auto-discovered |
 | `--eslint-config` | Path to ESLint config | auto-detected |
 | `--check-plugins` | Validate plugins and exit | `false` |
+| `--env <preset>` | Diagnostics environment preset. One of `user`, `dev`, `test`, `verbose`. | `$CODEPOL_ENV` or `user` |
+| `--override <dim=value>` | Overlay a single policy dimension on top of the preset (repeatable). See [Tuning diagnostics](#tuning-diagnostics). | `[]` |
+| `--escalate <scope=level@ttlSec:reason>` | Add a time-bounded escalation (repeatable). Scope: `global`, `scope:<dotted>`, `request:<id>`, or `workspace:<id>`. | `[]` |
 | `--help` | Show help | |
 | `--version` | Show version | |
 
@@ -119,6 +152,13 @@ codepol --config ./config/codepol.toml --eslint-config ./eslint.config.js
 
 # Validate plugins
 codepol --check-plugins
+
+# Run under the dev preset, or pick one via env var.
+codepol --env dev
+CODEPOL_ENV=verbose codepol
+
+# Escalate parser scope to trace for 10 minutes while investigating.
+codepol --escalate scope:parser=trace@600:investigate_wasm_abort
 
 # Show help
 codepol --help
