@@ -564,7 +564,6 @@ export {
 // Config (unified config file support)
 export type {
   CodepolConfig,
-  CodepolConfigOptions,
   ConfigFileResult,
 } from './config/configTypes';
 export { defineConfig } from './config/defineConfig';

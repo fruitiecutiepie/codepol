@@ -152,7 +152,6 @@ describe('biome provider integration', () => {
       const result = await policyCheck({
         config,
         configPath: path.join(projectDir, 'codepol.toml'),
-        eslintConfigPath: path.join(projectDir, 'eslint.config.mjs'),
         fix: false,
         cwd: projectDir,
       });
@@ -195,7 +194,6 @@ describe('biome provider integration', () => {
       const result = await policyCheck({
         config,
         configPath: path.join(projectDir, 'codepol.toml'),
-        eslintConfigPath: path.join(projectDir, 'eslint.config.mjs'),
         fix: true,
         cwd: projectDir,
       });
@@ -288,7 +286,6 @@ describe('biome provider integration', () => {
       const result = await policyCheck({
         config,
         configPath: path.join(projectDir, 'codepol.toml'),
-        eslintConfigPath: path.join(projectDir, 'eslint.config.mjs'),
         fix: false,
         cwd: projectDir,
       });
@@ -378,7 +375,6 @@ describe('biome provider integration', () => {
       const result = await policyCheck({
         config,
         configPath: path.join(projectDir, 'codepol.toml'),
-        eslintConfigPath: path.join(projectDir, 'eslint.config.mjs'),
         fix: false,
         cwd: projectDir,
       });
@@ -450,7 +446,6 @@ describe('biome provider integration', () => {
       policyCheck({
         config,
         configPath: path.join(projectDir, 'codepol.toml'),
-        eslintConfigPath: path.join(projectDir, 'eslint.config.mjs'),
         fix: false,
         cwd: projectDir,
       }),

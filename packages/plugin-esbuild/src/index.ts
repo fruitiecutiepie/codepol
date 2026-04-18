@@ -10,14 +10,10 @@ import {
   configGetFromPath,
   policyViolationsGetOutputPretty,
 } from '@codepol/core';
-import {
-  eslintConfigPathDetect,
-  policyCheck,
-} from '@codepol/workspace-service';
+import { policyCheck } from '@codepol/workspace-service';
 
 export type PolicyPluginOptions = {
   configPath?: string;
-  eslintConfigPath?: string;
   fix?: boolean;
   cwd?: string;
 };
@@ -42,16 +38,9 @@ export function esbuildPluginCreate(options: PolicyPluginOptions = {}): Plugin {
           : await configGet(cwd);
         const { config, configPath } = configResult;
 
-        const eslintConfigPath = options.eslintConfigPath
-          ? path.resolve(cwd, options.eslintConfigPath)
-          : config.eslintConfigPath
-            ? path.resolve(path.dirname(configPath), config.eslintConfigPath)
-            : eslintConfigPathDetect(cwd);
-
         const result = await policyCheck({
           config,
           configPath,
-          eslintConfigPath,
           fix: options.fix ?? false,
           cwd,
         });

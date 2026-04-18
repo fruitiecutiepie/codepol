@@ -46,6 +46,11 @@ language = "typescript"
 files = ["src/**/*.ts"]
 
 [[rules]]
+ruleId = "@codepol/plugin/eslint"
+targets = ["src"]
+args.configPath = "./eslint.config.mjs"
+
+[[rules]]
 ruleId = "@codepol/plugin/no-unused-vars"
 targets = ["src"]
 `;
@@ -132,7 +137,6 @@ describe('CLI daemon policy checks', () => {
         rules: [],
       } as WorkspacePolicyCheckResult['policy'],
       configPath: 'codepol.toml',
-      eslintConfigPath: path.join(workspaceRoot, 'eslint.config.mjs'),
       fix: false,
       cwd: workspaceRoot,
       env: {
@@ -187,7 +191,6 @@ describe('CLI daemon policy checks', () => {
         rules: [],
       } as WorkspacePolicyCheckResult['policy'],
       configPath: 'codepol.toml',
-      eslintConfigPath: path.join(workspaceRoot, 'eslint.config.mjs'),
       fix: false,
       cwd: workspaceRoot,
       env: {
@@ -242,7 +245,6 @@ describe('CLI daemon policy checks', () => {
 
     const result = await policyCheck({
       configPath: path.join(workspaceRoot, 'codepol.toml'),
-      eslintConfigPath: path.join(workspaceRoot, 'eslint.config.mjs'),
       fix: true,
       cwd: workspaceRoot,
       env: {
@@ -290,7 +292,6 @@ demo();
     const resolved: Array<{ mode: string }> = [];
     const result = await policyCheck({
       configPath: path.join(workspaceRoot, 'codepol.toml'),
-      eslintConfigPath: path.join(workspaceRoot, 'eslint.config.mjs'),
       fix: false,
       cwd: workspaceRoot,
       env: {
@@ -362,7 +363,6 @@ demo();
 
     const result = await policyCheck({
       configPath: path.join(workspaceRoot, 'codepol.toml'),
-      eslintConfigPath: path.join(workspaceRoot, 'eslint.config.mjs'),
       fix: true,
       cwd: workspaceRoot,
       env: {
@@ -411,7 +411,6 @@ demo();
     const resolved: Array<{ mode: string }> = [];
     const result = await policyCheck({
       configPath: path.join(workspaceRoot, 'codepol.toml'),
-      eslintConfigPath: path.join(workspaceRoot, 'eslint.config.mjs'),
       fix: false,
       cwd: workspaceRoot,
       env: {
@@ -460,7 +459,6 @@ demo();
     const resolved: Array<{ mode: string; error?: string }> = [];
     const result = await policyCheck({
       configPath: path.join(workspaceRoot, 'codepol.toml'),
-      eslintConfigPath: path.join(workspaceRoot, 'eslint.config.mjs'),
       fix: false,
       cwd: workspaceRoot,
       env: {
@@ -521,7 +519,6 @@ demo();
     const resolved: Array<{ mode: string; error?: string }> = [];
     const result = await policyCheck({
       configPath: path.join(workspaceRoot, 'codepol.toml'),
-      eslintConfigPath: path.join(workspaceRoot, 'eslint.config.mjs'),
       fix: false,
       cwd: workspaceRoot,
       env: {

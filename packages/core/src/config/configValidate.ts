@@ -189,12 +189,24 @@ function pluginsParse(value: unknown, path: string): PolicyPluginDeclaration[] |
   return value.map((plugin, index) => pluginDeclarationParse(plugin, `${path}[${index}]`));
 }
 
+const ESLINT_CONFIG_PATH_MIGRATION_MESSAGE =
+  'Top-level `eslintConfigPath` is no longer supported. Enable ESLint by adding the bridge rule:\n' +
+  '\n' +
+  '  [[rules]]\n' +
+  '  ruleId = "@codepol/plugin/eslint"\n' +
+  '  targets = ["<target-name>"]\n' +
+  '  args.configPath = "./eslint.config.mjs"\n' +
+  '\n' +
+  'See docs/policy-schema.md for details.';
+
 export function configValidate(raw: unknown): CodepolConfig {
   const record = recordExpect(raw, 'config');
-  keysAllowed(record, ['eslintConfigPath', 'targets', 'rules', 'exclude', 'plugins'], 'config');
+  if ('eslintConfigPath' in record) {
+    validationError('config.eslintConfigPath', ESLINT_CONFIG_PATH_MIGRATION_MESSAGE);
+  }
+  keysAllowed(record, ['targets', 'rules', 'exclude', 'plugins'], 'config');
 
   return {
-    eslintConfigPath: stringOptional(record.eslintConfigPath, 'config.eslintConfigPath'),
     targets: targetsParse(record.targets, 'config.targets'),
     rules: rulesParse(record.rules, 'config.rules'),
     exclude: stringArrayOptional(record.exclude, 'config.exclude'),

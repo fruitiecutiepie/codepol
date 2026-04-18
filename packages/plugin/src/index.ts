@@ -14,6 +14,17 @@ import { noStarExportCollisionsRule } from './noStarExportCollisionsRule';
 import { enforceCasingRule } from './enforceCasingRule';
 import { noMixedExportsRule } from './noMixedExportsRule';
 import { noUnusedVarsRule } from './noUnusedVarsRule';
+import {
+  biomeBridgeRule,
+  eslintBridgeRule,
+  ruffBridgeRule,
+} from './externalBridgeRules';
+
+export {
+  biomeBridgeRule,
+  eslintBridgeRule,
+  ruffBridgeRule,
+} from './externalBridgeRules';
 
 export { unusedExportsRule };
 export { unusedExportsCheck };
@@ -50,4 +61,7 @@ export default [
   enforceCasingRule,
   noMixedExportsRule,
   noUnusedVarsRule,
+  eslintBridgeRule,
+  biomeBridgeRule,
+  ruffBridgeRule,
 ];

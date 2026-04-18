@@ -44,8 +44,6 @@ pnpm add -D @codepol/plugin-eslint @codepol/core @codepol/plugin
 Create `codepol.toml` in your project root:
 
 ```toml
-# Optional: specify ESLint config path (auto-detected if not specified)
-eslintConfigPath = "./eslint.config.mjs"
 exclude = ["dist/**", "node_modules/**", "*.config.ts"]
 
 [[plugins]]
@@ -61,6 +59,13 @@ exclude = [
   "**/__mocks__/**",
   "**/__tests__/**",
 ]
+
+# Enable ESLint on the typescript-src target; required for any ESLint-backed
+# rule (including @codepol/plugin/no-unused-vars) to run.
+[[rules]]
+ruleId = "@codepol/plugin/eslint"
+targets = ["typescript-src"]
+args.configPath = "./eslint.config.mjs"
 
 [[rules]]
 id = "function-logging"
@@ -347,9 +352,12 @@ Then in the consumer project:
 # Run from project root (auto-discovers codepol.toml)
 codepol
 
-# Or pass explicit paths
-codepol --config ./codepol.toml --eslint-config ./eslint.config.js
+# Or pass an explicit policy config path
+codepol --config ./codepol.toml
 ```
+
+The ESLint config path is declared on the `@codepol/plugin/eslint` rule via
+`args.configPath`; there is no CLI override for it.
 
 ## Tuning diagnostics
 

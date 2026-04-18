@@ -1,26 +1,17 @@
 import type { PolicyFile } from '../policy/policyTypes';
 
 /**
- * Runtime configuration options for codepol.
- * These options control how codepol runs, separate from policy rules.
- */
-export type CodepolConfigOptions = {
-  /**
-   * Path to ESLint config file.
-   * If not specified, auto-detected from common locations.
-   * @example './eslint.config.ts'
-   */
-  eslintConfigPath?: string;
-};
-
-/**
- * Full codepol configuration combining policy definition and runtime options.
- * This is the schema for `codepol.toml`.
+ * Full codepol configuration.
+ *
+ * This is the schema for `codepol.toml`. All enforcement behavior is expressed
+ * as policy rules; there are no top-level runtime flags.
+ *
+ * External linters (ESLint, Biome, Ruff) are enabled by referencing the
+ * corresponding bridge rule from `@codepol/plugin` and configuring the tool
+ * via its per-rule `args`:
  *
  * @example
  * ```toml
- * eslintConfigPath = "./eslint.config.mjs"
- *
  * [[plugins]]
  * id = "@codepol/plugin"
  * source = { kind = "builtin" }
@@ -30,11 +21,12 @@ export type CodepolConfigOptions = {
  * files = ["src/**\/*.ts"]
  *
  * [[rules]]
- * ruleId = "@codepol/plugin/require-logger-enter-exit"
+ * ruleId = "@codepol/plugin/eslint"
  * targets = ["typescript-src"]
+ * args.configPath = "./eslint.config.mjs"
  * ```
  */
-export type CodepolConfig = PolicyFile & CodepolConfigOptions;
+export type CodepolConfig = PolicyFile;
 
 /**
  * Result of config file discovery and loading.

@@ -121,8 +121,8 @@ export {
 export { builtinPluginsRefresh, ensureWorkspaceRuntimeReady } from './runtime';
 export * from './warmCache';
 
-const ESLINT_CONFIG_EXTENSIONS = ['.js', '.mjs', '.cjs', '.ts', '.mts', '.cts'];
 const BIOME_FILE_EXTENSIONS = ['.js', '.mjs', '.cjs', '.jsx', '.ts', '.mts', '.cts', '.tsx'];
+const ESLINT_BRIDGE_RULE_ID = '@codepol/plugin/eslint';
 const PYTHON_FILE_EXTENSIONS = ['.py', '.pyw'];
 const WORKSPACE_WATCH_IGNORED = ['**/node_modules/**', '**/.git/**'];
 const WORKSPACE_SYMBOL_LIMIT_DEFAULT = 50;
@@ -894,8 +894,7 @@ async function workspaceContextRefreshFromDisk(workspace: WorkspaceState): Promi
   const { config, configPath: resolvedConfigPath } = await configGetFromPath(workspace.configPath);
   workspace.config = config;
   workspace.configPath = resolvedConfigPath;
-  workspace.eslintConfigPath = eslintConfigPathResolve(
-    workspace.rootPath,
+  workspace.eslintConfigPath = eslintBridgeConfigPathResolve(
     resolvedConfigPath,
     config,
   );
@@ -1003,13 +1002,96 @@ function biomeProviderConfigFromKey(key: string): BiomeProviderConfig {
   return out;
 }
 
+/**
+ * Resolves the effective biome provider config for a policy rule.
+ *
+ * Args-only semantics: any `BiomeProviderConfig`-shaped field on `entry.ruleArgs`
+ * (from `codepol.toml`) replaces the plugin's static `provider.config`. Unknown
+ * keys are dropped with a warning so typos surface clearly.
+ */
+function biomeProviderConfigResolve(entry: LintProviderEntry): BiomeProviderConfig {
+  const base = (entry.provider.config ?? {}) as BiomeProviderConfig;
+  const args = (entry.ruleArgs ?? {}) as Record<string, unknown>;
+  const merged: BiomeProviderConfig = { ...base };
+  const allowedKeys = new Set<keyof BiomeProviderConfig>([
+    'biomeBin',
+    'configPath',
+    'extraArgs',
+  ]);
+
+  for (const [key, value] of Object.entries(args)) {
+    if (!allowedKeys.has(key as keyof BiomeProviderConfig)) {
+      console.warn(
+        `[codepol] @codepol/plugin/biome rule "${entry.ruleId}" ignoring unknown args key "${key}".`,
+      );
+      continue;
+    }
+    if (key === 'biomeBin' || key === 'configPath') {
+      if (typeof value === 'string' && value.length > 0) {
+        (merged as Record<string, unknown>)[key] = value;
+      }
+      continue;
+    }
+    if (key === 'extraArgs') {
+      if (Array.isArray(value) && value.every((entry) => typeof entry === 'string')) {
+        merged.extraArgs = value as string[];
+      }
+      continue;
+    }
+  }
+  return merged;
+}
+
+/**
+ * Resolves the effective ruff provider config for a policy rule.
+ *
+ * Args-only semantics: any `RuffProviderConfig`-shaped field on `entry.ruleArgs`
+ * (from `codepol.toml`) replaces the plugin's static `provider.config`. Unknown
+ * keys are dropped with a warning.
+ */
+function ruffProviderConfigResolve(entry: LintProviderEntry): RuffProviderConfig {
+  const base = (entry.provider.config ?? {}) as RuffProviderConfig;
+  const args = (entry.ruleArgs ?? {}) as Record<string, unknown>;
+  const merged: RuffProviderConfig = { ...base };
+  const allowedKeys = new Set<keyof RuffProviderConfig>([
+    'ruffBin',
+    'select',
+    'ignore',
+    'fixable',
+    'configPath',
+    'extraArgs',
+  ]);
+
+  for (const [key, value] of Object.entries(args)) {
+    if (!allowedKeys.has(key as keyof RuffProviderConfig)) {
+      console.warn(
+        `[codepol] @codepol/plugin/ruff rule "${entry.ruleId}" ignoring unknown args key "${key}".`,
+      );
+      continue;
+    }
+    if (key === 'ruffBin' || key === 'configPath') {
+      if (typeof value === 'string' && value.length > 0) {
+        (merged as Record<string, unknown>)[key] = value;
+      }
+      continue;
+    }
+    if (key === 'select' || key === 'ignore' || key === 'fixable' || key === 'extraArgs') {
+      if (Array.isArray(value) && value.every((entry) => typeof entry === 'string')) {
+        (merged as Record<string, unknown>)[key] = value as string[];
+      }
+      continue;
+    }
+  }
+  return merged;
+}
+
 function biomeRuleIdToConfigMapBuild(entries: LintProviderEntry[]): Map<string, BiomeProviderConfig> {
   const map = new Map<string, BiomeProviderConfig>();
   for (const entry of entries) {
     if (entry.provider.platform !== 'biome') {
       continue;
     }
-    const cfg = entry.provider.config as BiomeProviderConfig;
+    const cfg = biomeProviderConfigResolve(entry);
     const prev = map.get(entry.ruleId);
     if (prev !== undefined && biomeProviderConfigKey(prev) !== biomeProviderConfigKey(cfg)) {
       throw new Error(
@@ -1047,29 +1129,37 @@ function biomeFilesByConfigKeyCollect(
   return byKey;
 }
 
-export function eslintConfigPathDetect(cwd: string): string {
-  for (const ext of ESLINT_CONFIG_EXTENSIONS) {
-    const configPath = path.join(cwd, `eslint.config${ext}`);
-    if (fs.existsSync(configPath)) {
-      return configPath;
-    }
-  }
-  return path.join(cwd, 'eslint.config.js');
-}
+const ESLINT_BRIDGE_MIGRATION_HINT =
+  'Add the ESLint bridge rule to your policy:\n' +
+  '\n' +
+  '  [[rules]]\n' +
+  '  ruleId = "@codepol/plugin/eslint"\n' +
+  '  targets = ["<target-name>"]\n' +
+  '  args.configPath = "./eslint.config.mjs"';
 
-function eslintConfigPathResolve(
-  cwd: string,
+/**
+ * Resolves the ESLint config path from the `@codepol/plugin/eslint` bridge
+ * rule in the policy. Returns the empty string when no bridge rule is
+ * declared; callers that need a config path must check and produce a
+ * migration-pointing error.
+ *
+ * The returned path is absolute and resolved against the directory of the
+ * policy config file.
+ */
+function eslintBridgeConfigPathResolve(
   configPath: string,
   config: CodepolConfig,
-  explicit?: string,
 ): string {
-  if (explicit) {
-    return path.resolve(cwd, explicit);
+  for (const rule of config.rules) {
+    if (rule.ruleId !== ESLINT_BRIDGE_RULE_ID) {
+      continue;
+    }
+    const ruleArgs = (rule.args ?? {}) as { configPath?: unknown };
+    if (typeof ruleArgs.configPath === 'string' && ruleArgs.configPath.length > 0) {
+      return path.resolve(path.dirname(configPath), ruleArgs.configPath);
+    }
   }
-  if (config.eslintConfigPath) {
-    return path.resolve(path.dirname(configPath), config.eslintConfigPath);
-  }
-  return eslintConfigPathDetect(cwd);
+  return '';
 }
 
 function policyRuleTargetsGet(policy: PolicyFile): PolicyRuleTargetContext[] {
@@ -1101,6 +1191,11 @@ function eslintConfigGet(
 
   for (const entry of providers) {
     if (entry.provider.platform !== 'eslint') {
+      continue;
+    }
+    if (entry.ruleId === ESLINT_BRIDGE_RULE_ID) {
+      // The bridge rule triggers ESLint invocation but contributes no rules
+      // to the override config; the user's eslint.config.mjs drives enablement.
       continue;
     }
     const eslintConfig = entry.provider.config as EslintProviderConfig;
@@ -4948,6 +5043,22 @@ async function eslintAnalyzerRun(
     );
   }
 
+  const hasBridgeEntry = eligibleEntries.some(
+    (entry) => entry.ruleId === ESLINT_BRIDGE_RULE_ID,
+  );
+  if (!hasBridgeEntry) {
+    throw new Error(
+      'ESLint-backed policy rule found without the ESLint bridge rule. ' +
+      ESLINT_BRIDGE_MIGRATION_HINT,
+    );
+  }
+  if (!input.eslintConfigPath) {
+    throw new Error(
+      '`@codepol/plugin/eslint` requires `args.configPath` (e.g. "./eslint.config.mjs"). ' +
+      ESLINT_BRIDGE_MIGRATION_HINT,
+    );
+  }
+
   const executableEntries = eligibleEntries.filter(
     (entry) => !workspaceLintProviderEntryIsNativePreferred(entry, input.nativeOwnedWrappedRuleIds),
   );
@@ -5361,7 +5472,9 @@ async function ruffAnalyzerRun(
     );
   }
 
-  const config = executableEntries[0]?.provider.config as RuffProviderConfig | undefined;
+  const config = executableEntries[0]
+    ? ruffProviderConfigResolve(executableEntries[0])
+    : undefined;
   const startedAt = Date.now();
   const issues: string[] = [];
 
@@ -6596,8 +6709,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     const policyWorkspaceIndexRequired = await workspaceIndexRequirementResolve({
       rootPath,
       configPath: resolvedConfigPath,
-      eslintConfigPath: eslintConfigPathResolve(
-        rootPath,
+      eslintConfigPath: eslintBridgeConfigPathResolve(
         resolvedConfigPath,
         config,
       ),
@@ -6611,8 +6723,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
         workspaceInstanceId: opaqueIdCreate('workspace') as WorkspaceInstanceId,
         rootPath,
         configPath: resolvedConfigPath,
-        eslintConfigPath: eslintConfigPathResolve(
-          rootPath,
+        eslintConfigPath: eslintBridgeConfigPathResolve(
           resolvedConfigPath,
           config,
         ),
@@ -6624,8 +6735,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     } else {
       workspace.config = config;
       workspace.configPath = resolvedConfigPath;
-      workspace.eslintConfigPath = eslintConfigPathResolve(
-        rootPath,
+      workspace.eslintConfigPath = eslintBridgeConfigPathResolve(
         resolvedConfigPath,
         config,
       );
@@ -7646,12 +7756,7 @@ export async function policyCheck(
 ): Promise<WorkspacePolicyCheckResult> {
   await ensureWorkspaceRuntimeReady();
   const { config, configPath } = await configResolve(options);
-  const eslintConfigPath = eslintConfigPathResolve(
-    options.cwd,
-    configPath,
-    config,
-    options.eslintConfigPath,
-  );
+  const eslintConfigPath = eslintBridgeConfigPathResolve(configPath, config);
   const state = workspaceStateCreateForPolicyCheck({
     cwd: options.cwd,
     config,

@@ -1,4 +1,3 @@
-eslintConfigPath = "./eslint.config.mjs"
 exclude = ["dist/**", "node_modules/**"]
 
 targets.codepol-src.language = "typescript"
@@ -11,6 +10,11 @@ targets.python-src.exclude = ["**/venv/**", "**/.venv/**", "**/dist/**", "**/nod
 [[plugins]]
 id = "@codepol/plugin"
 source = { kind = "builtin" }
+
+[[rules]]
+ruleId = "@codepol/plugin/eslint"
+targets = ["codepol-src"]
+args.configPath = "./eslint.config.mjs"
 
 [[rules]]
 id = "no-unused-exports"

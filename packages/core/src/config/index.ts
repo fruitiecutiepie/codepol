@@ -1,4 +1,4 @@
-export type { CodepolConfig, CodepolConfigOptions, ConfigFileResult } from './configTypes';
+export type { CodepolConfig, ConfigFileResult } from './configTypes';
 export { defineConfig } from './defineConfig';
 export {
   configGet,

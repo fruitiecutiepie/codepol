@@ -57,8 +57,14 @@ codepol --config ./config/codepol.toml
 
 ### Custom ESLint Config
 
-```bash
-codepol --eslint-config ./config/eslint.config.js
+The ESLint config path is declared on the `@codepol/plugin/eslint` rule in
+`codepol.toml`:
+
+```toml
+[[rules]]
+ruleId = "@codepol/plugin/eslint"
+targets = ["typescript-src"]
+args.configPath = "./config/eslint.config.mjs"
 ```
 
 ### Tuning diagnostics
@@ -130,7 +136,6 @@ Then run:
 | `--fix` | Apply ESLint fixes where possible | `false` |
 | `--watch` | Run in watch mode | `false` |
 | `--config` | Path to config file | auto-discovered |
-| `--eslint-config` | Path to ESLint config | auto-detected |
 | `--check-plugins` | Validate plugins and exit | `false` |
 | `--env <preset>` | Diagnostics environment preset. One of `user`, `dev`, `test`, `verbose`. | `$CODEPOL_ENV` or `user` |
 | `--override <dim=value>` | Overlay a single policy dimension on top of the preset (repeatable). See [Tuning diagnostics](#tuning-diagnostics). | `[]` |
@@ -148,7 +153,7 @@ codepol
 codepol --fix --watch
 
 # Use custom configuration
-codepol --config ./config/codepol.toml --eslint-config ./eslint.config.js
+codepol --config ./config/codepol.toml
 
 # Validate plugins
 codepol --check-plugins

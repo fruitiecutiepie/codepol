@@ -160,6 +160,11 @@ language = "typescript"
 files = ["src/**/*.ts"]
 
 [[rules]]
+ruleId = "@codepol/plugin/eslint"
+targets = ["src"]
+args.configPath = "./eslint.config.mjs"
+
+[[rules]]
 ruleId = "@codepol/plugin/no-unused-vars"
 targets = ["src"]
 `;
@@ -1413,6 +1418,11 @@ demo();
     );
     const configPath = path.join(workspaceRoot, 'codepol.toml');
     fs.writeFileSync(configPath, noUnusedVarsConfigContentCreate(), 'utf8');
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'eslint.config.mjs'),
+      `export default [{ files: ['**/*.ts'], rules: {} }];\n`,
+      'utf8',
+    );
 
     const engine = new WorkspaceServiceEngine();
     const service = workspaceServiceCreate({ engine });
@@ -1451,8 +1461,8 @@ demo();
       expect.objectContaining({
         analyzerId: 'eslint',
         platform: 'eslint',
-        status: 'skipped',
-        ownedRuleIds: [],
+        status: 'ran',
+        ownedRuleIds: ['@codepol/plugin/eslint'],
         skippedRuleIds: ['@codepol/plugin/no-unused-vars'],
         skippedReason: 'native_preferred',
       }),

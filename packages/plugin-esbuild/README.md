@@ -39,7 +39,6 @@ import { esbuildPluginCreate } from '@codepol/plugin-esbuild';
 plugins: [
   esbuildPluginCreate({
     configPath: './config/codepol.toml',
-    eslintConfigPath: './config/eslint.config.js',
     fix: false,
     cwd: process.cwd(),
   }),
@@ -82,9 +81,6 @@ type PolicyPluginOptions = {
   /** Path to config file (auto-discovered if not specified) */
   configPath?: string;
 
-  /** Path to ESLint config file (uses config value or auto-detects) */
-  eslintConfigPath?: string;
-
   /** Whether to apply ESLint fixes (default: false) */
   fix?: boolean;
 
@@ -92,6 +88,9 @@ type PolicyPluginOptions = {
   cwd?: string;
 };
 ```
+
+The ESLint config path is declared on the `@codepol/plugin/eslint` rule in
+`codepol.toml` via `args.configPath`.
 
 ## How It Works
 

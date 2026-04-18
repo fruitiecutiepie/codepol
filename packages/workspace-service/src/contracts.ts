@@ -37,7 +37,6 @@ export type WorkspaceDiagnosticsSubscriptionResult = {
 export type WorkspacePolicyCheckOptions = {
   config?: CodepolConfig;
   configPath: string;
-  eslintConfigPath?: string;
   fix: boolean;
   cwd: string;
 };

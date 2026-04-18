@@ -30,7 +30,6 @@ import {
 import {
   builtinPluginsRefresh,
   ensureWorkspaceRuntimeReady,
-  eslintConfigPathDetect,
   policyCheck as workspacePolicyCheck,
   type WorkspaceDaemonConnectFn,
   type WorkspacePolicyCheckOptions,
@@ -46,7 +45,6 @@ type CliOptions = {
   watch: boolean;
   checkPlugins: boolean;
   configPath: string;
-  eslintConfig: string;
   config: CodepolConfig;
   diagnosticsPatch?: DiagnosticsConfigPatch;
 };
@@ -325,7 +323,6 @@ function daemonBuiltinPluginFallbackNeeded(
 export async function policyCheck(options: {
   config?: CodepolConfig;
   configPath: string;
-  eslintConfigPath?: string;
   fix: boolean;
   cwd: string;
   env?: NodeJS.ProcessEnv;
@@ -374,7 +371,6 @@ export async function policyCheck(options: {
   const policyCheckOptions: WorkspacePolicyCheckOptions = {
     config: options.config,
     configPath: options.configPath,
-    eslintConfigPath: options.eslintConfigPath,
     fix: options.fix,
     cwd: options.cwd,
   };
@@ -399,7 +395,6 @@ async function policyCheckAndPrintOutput(
   const result = await policyCheck({
     config: options.config,
     configPath: options.configPath,
-    eslintConfigPath: options.eslintConfig,
     fix: options.fix,
     cwd,
     diagnosticsPatch: options.diagnosticsPatch,
@@ -499,10 +494,6 @@ async function main(): Promise<void> {
       type: 'string',
       describe: 'Path to config file (auto-discovered if not specified)',
     })
-    .option('eslint-config', {
-      type: 'string',
-      describe: 'Path to the ESLint config file (uses config file value or auto-detects)',
-    })
     .option('check-plugins', {
       type: 'boolean',
       default: false,
@@ -547,12 +538,6 @@ async function main(): Promise<void> {
     : await configGet(cwd);
   const { config, configPath } = configResult;
 
-  const eslintConfigPath = argv['eslint-config']
-    ? path.resolve(argv['eslint-config'] as string)
-    : config.eslintConfigPath
-      ? path.resolve(path.dirname(configPath), config.eslintConfigPath)
-      : eslintConfigPathDetect(cwd);
-
   const { patch: diagnosticsPatch, escalations } = diagnosticsPatchBuild({
     env: argv.env as string | undefined,
     overrides: argv.override as string[] | undefined,
@@ -567,7 +552,6 @@ async function main(): Promise<void> {
     watch: argv.watch ?? false,
     checkPlugins: argv['check-plugins'] ?? false,
     configPath,
-    eslintConfig: eslintConfigPath,
     config,
     diagnosticsPatch,
   };

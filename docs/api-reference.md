@@ -112,12 +112,19 @@ Type-safe helper for building codepol config objects programmatically (e.g. in t
 import { defineConfig } from '@codepol/core';
 
 const config = defineConfig({
-  eslintConfigPath: './eslint.config.ts',
   plugins: [
     { id: '@codepol/plugin', source: { kind: 'builtin' } },
   ],
-  targets: { /* ... */ },
-  rules: [ /* ... */ ],
+  targets: {
+    'typescript-src': { language: 'typescript', files: ['src/**/*.ts'] },
+  },
+  rules: [
+    {
+      ruleId: '@codepol/plugin/eslint',
+      targets: ['typescript-src'],
+      args: { configPath: './eslint.config.mjs' },
+    },
+  ],
 });
 ```
 
@@ -267,15 +274,19 @@ configCacheClear();
 
 ### CodepolConfig
 
-Full codepol configuration type combining policy definition and runtime options.
+Full codepol configuration. All enforcement behavior is expressed as policy rules; there are no top-level runtime flags.
 
 ```typescript
-type CodepolConfig = PolicyFile & CodepolConfigOptions;
+type CodepolConfig = PolicyFile;
+```
 
-type CodepolConfigOptions = {
-  /** Path to ESLint config (auto-detected if not specified) */
-  eslintConfigPath?: string;
-};
+External linters (ESLint, Biome, Ruff) are enabled by referencing the corresponding bridge rule from `@codepol/plugin` and setting per-rule `args`:
+
+```toml
+[[rules]]
+ruleId = "@codepol/plugin/eslint"
+targets = ["typescript-src"]
+args.configPath = "./eslint.config.mjs"
 ```
 
 ---
@@ -2965,12 +2976,14 @@ function esbuildPluginCreate(options?: PolicyPluginOptions): Plugin
 
 ```typescript
 type PolicyPluginOptions = {
-  configPath?: string;       // Path to config file (auto-discovered if not specified)
-  eslintConfigPath?: string; // Path to ESLint config (uses config value or auto-detects)
-  fix?: boolean;             // Default: false
-  cwd?: string;              // Default: esbuild's absWorkingDir or cwd
+  configPath?: string; // Path to config file (auto-discovered if not specified)
+  fix?: boolean;       // Default: false
+  cwd?: string;        // Default: esbuild's absWorkingDir or cwd
 };
 ```
+
+The ESLint config path is declared on the `@codepol/plugin/eslint` rule in
+`codepol.toml` via `args.configPath`; it is not an esbuild plugin option.
 
 **Returns:** esbuild Plugin
 

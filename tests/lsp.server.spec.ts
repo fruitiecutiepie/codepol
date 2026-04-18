@@ -52,6 +52,11 @@ language = "typescript"
 files = ["src/**/*.ts"]
 
 [[rules]]
+ruleId = "@codepol/plugin/eslint"
+targets = ["src"]
+args.configPath = "./eslint.config.mjs"
+
+[[rules]]
 ruleId = "@codepol/plugin/no-unused-vars"
 targets = ["src"]
 `;
@@ -4614,6 +4619,11 @@ describe('CodepolLspServer', () => {
     fs.writeFileSync(
       path.join(workspaceRoot, 'codepol.toml'),
       noUnusedVarsConfigContentCreate(),
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'eslint.config.mjs'),
+      `export default [{ files: ['**/*.ts'], rules: {} }];\n`,
       'utf8',
     );
 

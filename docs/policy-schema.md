@@ -9,12 +9,14 @@ Codepol uses a TOML config file so the policy stays language-agnostic and easy t
 - `targets` define which files belong to a named scope.
 - `rules` define what to enforce against those targets.
 - `plugins` declare where rule capabilities come from.
-- `eslintConfigPath` optionally points to your ESLint config for host integrations.
+
+External linters (ESLint, Biome, Ruff) are enabled by referencing the
+corresponding bridge rule from `@codepol/plugin` with per-rule `args`.
+There are no top-level runtime flags; every setting lives on a rule.
 
 ## Complete Example
 
 ```toml
-eslintConfigPath = "./eslint.config.mjs"
 exclude = ["dist/**", "node_modules/**"]
 
 [[plugins]]
@@ -34,6 +36,11 @@ timeoutMs = 5000
 language = "typescript"
 files = ["src/**/*.ts", "src/**/*.tsx"]
 exclude = ["**/*.spec.ts", "**/*.test.ts"]
+
+[[rules]]
+ruleId = "@codepol/plugin/eslint"
+targets = ["typescript-src"]
+args.configPath = "./eslint.config.mjs"
 
 [[rules]]
 id = "function-logging"
@@ -61,7 +68,41 @@ targets = ["typescript-src"]
 | `rules` | array of tables | Yes | Enforcement rules |
 | `plugins` | array of tables | No | Built-in or subprocess plugin declarations |
 | `exclude` | string array | No | Global file patterns to exclude |
-| `eslintConfigPath` | string | No | Optional path to your ESLint config |
+
+### External Linter Bridge Rules
+
+Codepol ships three trigger-only bridge rules that invoke the matching external
+linter on files that match the rule's targets. The tool's own config file
+decides which rules fire; codepol only decides when/where the tool runs and
+normalizes the resulting diagnostics.
+
+| Rule ID | Platform | `args` |
+| ------- | -------- | ------ |
+| `@codepol/plugin/eslint` | ESLint (JS/TS/JSX/TSX) | `configPath` (required) |
+| `@codepol/plugin/biome` | Biome (JS/TS/JSX/TSX) | `biomeBin`, `configPath`, `extraArgs` |
+| `@codepol/plugin/ruff` | Ruff (Python) | `ruffBin`, `select`, `ignore`, `fixable`, `configPath`, `extraArgs` |
+
+```toml
+[[rules]]
+ruleId = "@codepol/plugin/ruff"
+targets = ["python-src"]
+args.select = ["E", "F", "I"]
+args.ignore = ["E501"]
+
+[[rules]]
+ruleId = "@codepol/plugin/biome"
+targets = ["ts-src"]
+args.configPath = "./biome.json"
+
+[[rules]]
+ruleId = "@codepol/plugin/eslint"
+targets = ["ts-src"]
+args.configPath = "./eslint.config.mjs"
+```
+
+The `@codepol/plugin/eslint` rule is required whenever any ESLint-backed rule
+appears in the policy (for example `@codepol/plugin/no-unused-vars`); without
+it, the ESLint analyzer cannot resolve a config and fails at load time.
 
 ## Targets
 
