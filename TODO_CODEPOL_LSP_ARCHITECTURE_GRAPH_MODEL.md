@@ -441,12 +441,216 @@ Each phase is independently shippable, additive, and testable.
 
 ## Open Questions
 
-- **Baseline persistence for diff.** `queryDependencyDiff` requires storing or recomputing a prior generation. Options: piggyback on index persistence in `packages/core/src/index/TODO.md`, or add a lightweight graph-only snapshot. Decision deferred to Phase 6 kickoff.
-- **Layer config schema.** Where do layer definitions live in `codepol.toml`? Candidates: `[layers.<name>]` with `files` + `allows` + `denies`, or a dedicated `[[layerRules]]` block. Must be reviewed against the existing rule-target schema to avoid shape drift.
-- **Test-file semantics.** Do test files count toward fan-in / fan-out and dead-module detection? Default: excluded via the existing target exclude globs; panel filter toggle is additive.
-- **External package representation.** MVP excludes externals. A future mode could collapse all external imports into a single `external:<name>` node for visualizing third-party coupling. Not in MVP.
-- **Call graph fidelity.** `callersGet` / `calleesGet` from `ProjectIndex` does not model dynamic dispatch or higher-order functions. Document the gap when Phase 7 ships; do not attempt to close it in MVP.
-- **Cycle diagnostic volume.** Large legacy codebases can have thousands of cycles. Add a `maxCycles` policy arg with deterministic truncation before surfacing as diagnostics.
+Each question lists the candidate options, trade-offs, and a proposed default. Defaults are opinionated to unblock Phase 6 / Phase 7 without prematurely locking more general decisions.
+
+### Q1. Baseline persistence for diff
+
+**Context.** `queryDependencyDiff` needs to compare the current module graph against a prior version. The index is in-memory today (`packages/core/src/index/TODO.md` item 2), so there is nothing to compare against across restarts or across a PR boundary.
+
+**Option A — Piggyback on full index persistence.**
+Wait for `packages/core/src/index/TODO.md` item 2 to ship (SQLite / binary format). Diff reads two snapshots and reruns `moduleGraphBuild`.
+
+- Pros: single source of truth; any future feature (go-to-def-from-cache, cross-session symbol lookup) reuses the same store; historical snapshots fall out for free.
+- Cons: couples Phase 6 to a large piece of work that is currently labeled *Effort: Large*; forces schema decisions (columnar vs blob, versioning, migration) before we know what diff actually needs.
+- Failure mode: Phase 6 blocks on Phase-X persistence and never ships.
+
+**Option B — Graph-only snapshot sidecar.**
+Emit a compact JSON/CBOR file per generation containing only `{ nodes[], edges[], cycles[], entryPoints[], generation, rootPathHash }`. Written next to `.codepol/` cache. Read back by `queryDependencyDiff`.
+
+- Pros: small blast radius (one writer, one reader); independent ship vehicle; file is human-inspectable, which helps CI debugging; rotates trivially (`keep last N`).
+- Cons: becomes dead code if full index persistence ships later; duplicates some data already derivable from the index; must pick a stable serialization version immediately.
+- Failure mode: divergent on-disk formats between this and a later general index store.
+
+**Option C — Recompute on demand from git.**
+For `codepol graph diff <ref>`, check out `<ref>` in a scratch dir (or use `git worktree add`), build the index there, compare. No persisted snapshot.
+
+- Pros: zero persistent state; always consistent with what is actually on a branch; natural fit for CI where the comparison is always "base vs head".
+- Cons: slow (two full indexes per invocation); not usable interactively in the editor; depends on `git` and a writable filesystem; doesn't help in-editor "what changed since this morning" workflows.
+- Failure mode: builds are too slow on large monorepos, pushing teams off the feature.
+
+**Option D — In-process ring buffer (editor-only diff).**
+Keep the last N generations of the graph in daemon memory (no disk). Diff works only within a live session.
+
+- Pros: zero persistence decisions; cheap; fits the daemon lifecycle already in `packages/workspace-service/src/daemon.ts`.
+- Cons: useless for CI and for the `codepol graph diff` CLI; lost on daemon restart.
+
+**Proposed default.** Ship **B for CI and CLI** (smallest, independent) and **D for the editor** (cheap, immediate value). When Option A eventually lands, retire B behind the same public contract — both the sidecar and the full store implement one `GraphSnapshotStore` interface, so the swap is internal.
+
+Contract sketch:
+
+```ts
+export type GraphSnapshotStore = {
+  graphSnapshotWrite(generation: number, graph: WorkspaceDependencyGraphResult): Promise<void>;
+  graphSnapshotRead(generation: number): Promise<WorkspaceDependencyGraphResult | undefined>;
+  graphSnapshotGenerationsList(): Promise<number[]>;
+};
+```
+
+### Q2. Layer config schema
+
+**Context.** `no-layer-violation` and `no-cross-package-internal-import` need a way to classify files into layers (`ui`, `domain`, `infra`, …) and declare allowed / denied edges. Existing config already has `targets.<name>` with `files` globs, and `[[rules]]` blocks with `targets` arrays.
+
+**Option A — Reuse `[targets.<name>]`.**
+A layer *is* a target. Add an `allows` / `denies` field to target blocks; `no-layer-violation` scans all targets that declare `allows`/`denies`.
+
+- Pros: no new top-level concept; existing glob-resolution pipeline works unchanged; a file naturally belongs to one or more layers because targets already compose.
+- Cons: overloads targets with a second role (who runs this rule *and* who is this layer); a file can match multiple targets, which makes "what layer is this file?" ambiguous; mixing layer semantics into targets bleeds architectural intent into every rule's target list.
+
+**Option B — Dedicated `[layers.<name>]` section.**
+Parallel to `[targets.<name>]`. Each layer has `files`, `allows`, `denies`. `no-layer-violation` does not use `targets` at all.
+
+- Pros: single-purpose concept; "what layer is this file?" is a direct lookup against `[layers]`; targets keep their one job (select files for rules); error messages can name layers without confusion.
+- Cons: two overlapping selection mechanisms (`targets` vs `layers`); users have to declare the same glob twice if a layer is also used as a target.
+- Mitigation: allow `targets.<name>.layer = "domain"` as syntactic sugar when a target wants to double as layer membership without duplicating the glob.
+
+**Option C — `[[layerRules]]` block inline with `[[rules]]`.**
+Each element declares `from`, `to`, `kind = 'allow' | 'deny'`. No named layers; relationships are expressed directly as glob pairs.
+
+- Pros: extremely local — the rule and its data live in the same block; easy to read one rule in isolation; no cross-reference between sections.
+- Cons: N² verbosity for anything beyond 3–4 layers; no reusable "this is the UI layer" identity, which blocks the panel's `layer` badge and the cross-layer edge color.
+- Mitigation: could layer this on top of Option B as a shorthand for targeted exceptions.
+
+**Option D — External layer file.**
+A separate `codepol.layers.toml` or YAML referenced from `codepol.toml`. Keeps layers visually separate.
+
+- Pros: decouples architectural documents from enforcement config; non-engineers (architects, reviewers) can own it.
+- Cons: adds a file; cross-file validation complicates loader errors; breaks the "one config" simplicity.
+
+**Proposed default.** Option **B**, with the `targets.<name>.layer = "domain"` sugar. It keeps `targets` single-purpose, supports the panel's layer badge, and avoids the N² verbosity of Option C. Schema:
+
+```toml
+[layers.domain]
+files = ["src/domain/**/*.ts"]
+allows = ["shared"]
+
+[layers.infra]
+files = ["src/infra/**/*.ts"]
+allows = ["domain", "shared"]
+
+[layers.ui]
+files = ["src/ui/**/*.ts"]
+allows = ["domain", "shared"]
+
+[layers.shared]
+files = ["src/shared/**/*.ts"]
+```
+
+A file that matches multiple `layers[*].files` patterns resolves to the most specific glob; ties produce a loader error with both layer names to force a decision.
+
+### Q3. Test-file semantics
+
+**Context.** Fan-in / fan-out budgets and dead-module detection behave very differently depending on whether tests are counted. A shared helper imported by 200 tests has importerCount 200, which is either meaningful (it's a widely-depended helper) or noise (it's just "everything has tests").
+
+**Option A — Exclude tests by default, make the filter additive.**
+Reuse each target's existing `exclude` globs. Panel adds an "include tests" toggle for ad-hoc investigation.
+
+- Pros: matches the instinct that "architecture" is a production concern; avoids inflating metrics with symmetric test noise; no new config surface.
+- Cons: a test-only import that creates a *new* cross-layer edge is invisible to enforcement — a common way that architectural intent erodes.
+
+**Option B — Include tests by default.**
+Tests count like any other file. Users opt out via config.
+
+- Pros: catches the test-only layer violation; symmetric with how the rest of the index already behaves.
+- Cons: noisy metrics on most codebases; "fan-in = 500" for a utility is almost always test-driven.
+
+**Option C — Separate axis: `tests` is a visible role, not an exclude.**
+Introduce a first-class `role = "test"` tag on files (derived from policy target exclude globs or a new `[testFiles]` block). Rules declare whether they count tests. Panel renders test nodes in a different color.
+
+- Pros: most expressive — different rules can answer different questions ("dead prod code" vs "orphan tests"); makes the visual distinction explicit.
+- Cons: extra concept to document; requires config surface beyond just globs; probably overbuilt for Phase 3.
+
+**Proposed default.** **A now, C later.** Exclusion by the existing policy `exclude` machinery keeps Phase 3 small. When we hit real cases where test-only layer violations matter, promote to C and pipe it through `ArchitectureCheckContext.filesGetByRole('production' | 'test')`.
+
+### Q4. External package representation
+
+**Context.** Today any `ImportBindingRelation.resolvedModulePath` that doesn't point into the indexed set is dropped. That hides legitimate third-party coupling: "how many files import `lodash`?", "does `domain` depend on `axios`?".
+
+**Option A — Stay excluded (status quo).**
+
+- Pros: smallest graph, cleanest cycles (no false cycles through `node_modules`); aligns with the current `moduleGraphBuild` contract; no UX work.
+- Cons: third-party coupling is invisible — a legitimate architectural question.
+
+**Option B — Collapse externals into `external:<packageName>` nodes.**
+Every unresolved import is bucketed by its package name (from `package.json` + bare-specifier parsing). One synthetic node per package.
+
+- Pros: big wins at low cost; answers "who depends on `axios`?" directly; panel can render externals in a dim shade; supports `no-external-dep-in-layer` rule variants.
+- Cons: parser must know about monorepo package aliases (`workspace:*`, tsconfig paths); cycle detection must skip externals (one-way edges only).
+
+**Option C — Expand externals into per-file nodes.**
+Index the *used* entry files of each external package that the project actually imports.
+
+- Pros: maximal fidelity — shows "you import these 3 of 200 functions from `lodash`"; supports unused-dep detection.
+- Cons: huge blast radius (parsing `node_modules`); breaks the "only index user code" invariant; cost scales with dependency count not user code size.
+
+**Option D — Opt-in synthetic nodes per rule.**
+No change to `ModuleGraph`. `ArchitectureCheckProvider` rules that care about externals iterate `importBindingsGet` directly.
+
+- Pros: zero graph bloat; keeps the shared graph fast.
+- Cons: every external-aware rule re-invents bucketing; panel can't render externals unless it also re-implements the logic.
+
+**Proposed default.** **B, gated by a `includeExternal` flag.** `queryDependencyGraph({ includeExternal: true })` returns synthetic `external:<pkg>` nodes; default remains exclusion to preserve cycle/path semantics. This also matches the existing `QueryDependencyGraphInput` draft above — the flag already exists in the contract.
+
+### Q5. Call graph fidelity
+
+**Context.** `callersGet` / `calleesGet` are structural. They miss dynamic dispatch, higher-order functions, event emitters, and effectively most "interesting" indirection. Promoting them to a UI feature (Phase 7) will expose the gap.
+
+**Option A — Ship as-is with an explicit "structural only" label.**
+Panel and hover state plainly: `Structural call graph only — dynamic dispatch and higher-order calls are not tracked.`
+
+- Pros: honest; fast; enough fidelity for many real questions ("who calls this exported helper directly?"); doesn't set a precedent of competing with language servers.
+- Cons: users will hit cases where the graph is wrong by omission; surprising silences.
+
+**Option B — Over-approximate via type relations.**
+When a method is reached through an interface type, include every known `implements` target as a potential callee.
+
+- Pros: closer to how engineers actually read code; reduces silent misses.
+- Cons: over-approximation explodes graph size on interfaces with many implementers; false positives in the panel look like real dependencies.
+- Mitigation: render "approximate" edges with a distinct style.
+
+**Option C — Delegate to `tsserver` where available.**
+For TS/JS, call `tsserver`'s `references` for each target symbol and fold results into the graph. For Python, defer to Pylance LSP.
+
+- Pros: highest fidelity available; uses the authoritative language server.
+- Cons: violates the Capability Ownership Matrix decision (we don't replace language servers — and we shouldn't proxy them either); slow; requires running a language server we otherwise don't need; fragile across editor environments.
+
+**Option D — Narrow the feature: callers only, from exports.**
+Restrict Phase 7 to `queryCallersOfExport(symbolId)`. That is the high-confidence subset: it's almost entirely structural because exports are named entry points.
+
+- Pros: safe subset; matches the most common workflow ("who uses this exported function?"); cleanly composable with existing `queryImpactRadius`.
+- Cons: "who does this function call?" stays undocumented; symmetric feature surface is postponed.
+
+**Proposed default.** **A for the panel + D for LSP**: the panel renders the structural graph with an explicit label. The LSP hover/CodeLens surfaces only "callers of exports" because that's the one direction we can vouch for. Option B gets revisited only if we collect specific missed cases.
+
+### Q6. Cycle diagnostic volume
+
+**Context.** `moduleCyclesGet()` can return thousands of SCCs on legacy codebases. Surfacing all of them as diagnostics would flood the Problems panel and destroy signal.
+
+**Option A — Hard cap with deterministic truncation.**
+`args.maxCycles: number` (default 50). Cycles sorted by `(-size, first member)`; keep the first N. One additional summary diagnostic at the workspace root: `K more cycles omitted`.
+
+- Pros: bounded noise; deterministic output for CI; summary provides the "there's more" signal.
+- Cons: picks a ranking, which is a judgment call (size vs frequency vs depth); users with "important but small" cycles may have them hidden.
+
+**Option B — Severity ladder.**
+Cycle size N → severity: `N=2` is `warn`, `N=3-5` is `info`, `N>5` is `hint`. No cap.
+
+- Pros: preserves full signal; users can filter by severity in the Problems panel.
+- Cons: editors still render all of them, which is what we were trying to avoid.
+
+**Option C — One diagnostic per cycle root, rest as clickable payload.**
+Emit one diagnostic per cycle on the alphabetically-first member. Code action "show full cycle" opens the panel with every member highlighted.
+
+- Pros: bounded by number of cycles, not number of cycle members; each diagnostic is actionable; panel reuse is natural.
+- Cons: still unbounded if there are thousands of cycles.
+- Complement: combine with Option A's hard cap for a good balance.
+
+**Option D — No diagnostics; architecture lives in a dedicated view.**
+Cycles appear only in the `ArchitectureLinksPanel` and in CLI output. Nothing in the Problems panel.
+
+- Pros: zero diagnostic noise; clean separation between "fix this file" and "fix this architecture".
+- Cons: loses the "I noticed this in my editor today" nudge; CI has to surface it some other way.
+
+**Proposed default.** **C + A combined.** One diagnostic per cycle on the first member, with a code action to show the full cycle; capped at `args.maxCycles` (default 50) with a single summary diagnostic when truncated. If the `codepol/architecture` source turns out to be unwelcome in Problems, users can silence the source at the editor level — no code change needed.
 
 ## Related Documents
 
