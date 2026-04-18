@@ -12,6 +12,7 @@ import {
   parserRuntimeStateForOwnerGet,
   parserRuntimeStateGet,
 } from './parserRuntimeState';
+import { parseDebugLogWrite } from './parserParseDebug';
 
 /**
  * Resolves the web-tree-sitter core WASM file.
@@ -42,7 +43,7 @@ export async function parserInit(): Promise<void> {
   const debug = parserInitDebugEnabled();
   if (!state.parserInitPromise) {
     if (debug) {
-      console.error(
+      parseDebugLogWrite(
         '[codepol-parse-debug] parserInit: initializing web-tree-sitter core WASM',
       );
     }
@@ -52,7 +53,7 @@ export async function parserInit(): Promise<void> {
           state.parserInitialized = true;
         }
         if (debug) {
-          console.error(
+          parseDebugLogWrite(
             '[codepol-parse-debug] parserInit: web-tree-sitter core WASM initialized',
           );
         }
@@ -63,7 +64,7 @@ export async function parserInit(): Promise<void> {
         }
         if (debug) {
           const message = error instanceof Error ? error.message : String(error);
-          console.error(
+          parseDebugLogWrite(
             `[codepol-parse-debug] parserInit: core WASM init failed: ${message}`,
           );
         }
@@ -74,9 +75,8 @@ export async function parserInit(): Promise<void> {
 
   const langs = langsGet();
   if (debug) {
-    console.error(
-      '[codepol-parse-debug] parserInit: registered languages',
-      JSON.stringify(
+    parseDebugLogWrite(
+      `[codepol-parse-debug] parserInit: registered languages ${JSON.stringify(
         langs.map((lang) => ({
           langId: lang.langId,
           wasmPath: lang.wasmPath,
@@ -87,7 +87,7 @@ export async function parserInit(): Promise<void> {
           fileExtensions: lang.fileExtensions,
           alreadyLoaded: langExists(lang.langId),
         })),
-      ),
+      )}`,
     );
   }
   await Promise.all(
@@ -99,14 +99,14 @@ export async function parserInit(): Promise<void> {
         const language = await Parser.Language.load(lang.wasmPath);
         langSet(lang.langId, language);
         if (debug) {
-          console.error(
+          parseDebugLogWrite(
             `[codepol-parse-debug] parserInit: loaded grammar "${lang.langId}" from ${lang.wasmPath}`,
           );
         }
       } catch (error) {
         if (debug) {
           const message = error instanceof Error ? error.message : String(error);
-          console.error(
+          parseDebugLogWrite(
             `[codepol-parse-debug] parserInit: FAILED to load grammar "${lang.langId}" from ${lang.wasmPath}: ${message}`,
           );
         }

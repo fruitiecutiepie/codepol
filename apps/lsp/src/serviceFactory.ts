@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import {
   WorkspaceDaemonServiceClient,
   workspaceDaemonLaunchOrConnect,
+  WORKSPACE_DAEMON_BUILD_ID,
   WORKSPACE_DAEMON_PROTOCOL_VERSION,
   type WorkspaceDaemonConnectFn,
 } from '@codepol/workspace-service/daemon';
@@ -186,6 +187,7 @@ export async function lspWorkspaceServiceResolve(options: {
       },
       runtimeDir: env.CODEPOL_DAEMON_RUNTIME_DIR,
       expectedInstallId: env.CODEPOL_INSTALL_ID,
+      expectedBuildId: WORKSPACE_DAEMON_BUILD_ID,
       requiredCapabilities: daemonRequiredCapabilities,
       minStartedAtUnixMs,
       connect: options.connect,

@@ -14,6 +14,8 @@ import {
   isErr,
   lintDiagnosticToWorkspaceDiagnostic,
   pluginGetForRule,
+  parseDebugLogWrite,
+  parseDebugIsEnabled,
   policyPluginsGet,
   policyViolationsGetForFile,
   policyRuleTargetsResolve,
@@ -136,12 +138,7 @@ function workspaceRequestCancelledErrorCreate(): Error {
 }
 
 function treeCheckDebugIsEnabled(): boolean {
-  const raw = process.env.CODEPOL_DEBUG_PARSE;
-  if (!raw) {
-    return false;
-  }
-  const trimmed = raw.trim().toLowerCase();
-  return trimmed !== '' && trimmed !== '0' && trimmed !== 'false';
+  return parseDebugIsEnabled();
 }
 
 function workspaceAbortSignalThrowIfAborted(signal?: AbortSignal): void {
@@ -4388,20 +4385,18 @@ function workspaceTreeAnalyzerRun(
             error: result.Err,
           };
           if (treeCheckDebugEnabled) {
-            console.error(
-              '[codepol-parse-debug] workspace analyzer: FIRST tree-check failure',
-              JSON.stringify(firstTreeCheckFailure),
+            parseDebugLogWrite(
+              `[codepol-parse-debug] workspace analyzer: FIRST tree-check failure ${JSON.stringify(firstTreeCheckFailure)}`,
             );
           }
         } else if (treeCheckDebugEnabled) {
-          console.error(
-            '[codepol-parse-debug] workspace analyzer: subsequent tree-check failure',
-            JSON.stringify({
+          parseDebugLogWrite(
+            `[codepol-parse-debug] workspace analyzer: subsequent tree-check failure ${JSON.stringify({
               ruleId: match.rule.ruleId,
               filePath: relativePath,
               error: result.Err,
               firstFailure: firstTreeCheckFailure,
-            }),
+            })}`,
           );
         }
         const issue =
