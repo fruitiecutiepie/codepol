@@ -361,6 +361,8 @@ function workspaceReadQueriesStubCreate(): Pick<
   | 'prepareRename'
   | 'previewRename'
   | 'queryArchitectureSummary'
+  | 'planSourceFixAll'
+  | 'planFileFixAll'
 > {
   return {
     async queryLintRules() {
@@ -421,6 +423,12 @@ function workspaceReadQueriesStubCreate(): Pick<
         cycleCount: 0,
         hotspots: [],
       };
+    },
+    async planSourceFixAll() {
+      return null;
+    },
+    async planFileFixAll() {
+      return null;
     },
   };
 }

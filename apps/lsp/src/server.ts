@@ -227,6 +227,51 @@ function diagnosticTouchesRange(
   ) ?? false;
 }
 
+const CODEPOL_SOURCE_FIX_ALL_KIND = 'source.fixAll.codepol';
+
+type CodeActionKindRequest =
+  | { kind: 'quickfix' }
+  | { kind: 'source.fixAll' }
+  | { kind: 'source.fixAll.rule'; ruleId: string };
+
+/**
+ * Map the `context.only` filter sent by the editor into the internal code
+ * action kind request. If the filter doesn't mention any of our namespaced
+ * `source.fixAll*` kinds we fall back to the `quickfix` path.
+ */
+function codeActionKindRequestedResolve(
+  only: string[] | undefined,
+): CodeActionKindRequest {
+  if (!only || only.length === 0) {
+    return { kind: 'quickfix' };
+  }
+  const wantsSourceFixAll = only.some(
+    (kind) => kind === 'source.fixAll' || kind === CODEPOL_SOURCE_FIX_ALL_KIND,
+  );
+  for (const entry of only) {
+    if (entry.startsWith(`${CODEPOL_SOURCE_FIX_ALL_KIND}.`)) {
+      return {
+        kind: 'source.fixAll.rule',
+        ruleId: entry.slice(CODEPOL_SOURCE_FIX_ALL_KIND.length + 1),
+      };
+    }
+  }
+  if (wantsSourceFixAll) {
+    return { kind: 'source.fixAll' };
+  }
+  return { kind: 'quickfix' };
+}
+
+function workspaceCodeActionKindToLsp(action: WorkspaceCodeAction): string {
+  if (action.kind === 'source.fixAll') {
+    return CODEPOL_SOURCE_FIX_ALL_KIND;
+  }
+  if (action.kind === 'source.fixAll.rule' && action.ruleId) {
+    return `${CODEPOL_SOURCE_FIX_ALL_KIND}.${action.ruleId}`;
+  }
+  return action.kind;
+}
+
 function diagnosticsToLsp(diagnostics: WorkspaceDiagnostic[]): unknown[] {
   const lspDiagnostics: unknown[] = [];
 
@@ -1096,7 +1141,14 @@ export class CodepolLspServer {
     return {
       capabilities: {
         textDocumentSync: 2,
-        codeActionProvider: true,
+        codeActionProvider: {
+          codeActionKinds: [
+            'quickfix',
+            'source.fixAll',
+            'source.fixAll.codepol',
+          ],
+          resolveProvider: false,
+        },
         workspaceSymbolProvider: true,
         executeCommandProvider: {
           commands: [
@@ -1272,14 +1324,48 @@ export class CodepolLspServer {
   private async codeActionHandle(params: {
     textDocument: { uri: string };
     range?: LspRange;
-    context: { diagnostics?: Array<{ data?: { id?: string } }> };
+    context: {
+      diagnostics?: Array<{ data?: { id?: string } }>;
+      only?: string[];
+    };
   }, context: { requestId?: JsonRpcId; signal?: AbortSignal } = {}): Promise<unknown> {
     if (!this.registeredClientSessionId || !this.workspaceId) {
       return [];
     }
     const document = this.documents.get(params.textDocument.uri);
+    const requested = codeActionKindRequestedResolve(params.context.only);
     try {
       return await this.serviceCall(async (service) => {
+        if (requested.kind === 'source.fixAll') {
+          const action = await service.planSourceFixAll({
+            clientSessionId: this.registeredClientSessionId!,
+            workspaceId: this.workspaceId!,
+            uri: params.textDocument.uri,
+            version: document?.version ?? 0,
+            requestId:
+              context.requestId === undefined || context.requestId === null
+                ? undefined
+                : `lsp-code-action:${String(context.requestId)}:source-fix-all`,
+            signal: context.signal,
+          });
+          return action ? [this.codeActionToLsp(action)] : [];
+        }
+        if (requested.kind === 'source.fixAll.rule') {
+          const action = await service.planFileFixAll({
+            clientSessionId: this.registeredClientSessionId!,
+            workspaceId: this.workspaceId!,
+            uri: params.textDocument.uri,
+            version: document?.version ?? 0,
+            includeRuleIds: [requested.ruleId],
+            requestId:
+              context.requestId === undefined || context.requestId === null
+                ? undefined
+                : `lsp-code-action:${String(context.requestId)}:source-fix-all-rule:${requested.ruleId}`,
+            signal: context.signal,
+          });
+          return action ? [this.codeActionToLsp(action)] : [];
+        }
+
         const diagnosticIds = new Set(
           (params.context.diagnostics ?? [])
             .map((diagnostic) => diagnostic.data?.id)
@@ -1334,9 +1420,10 @@ export class CodepolLspServer {
   }
 
   private codeActionToLsp(action: WorkspaceCodeAction): unknown {
+    const lspKind = workspaceCodeActionKindToLsp(action);
     return {
       title: action.title,
-      kind: action.kind,
+      kind: lspKind,
       isPreferred: action.isPreferred,
       command: {
         title: action.title,

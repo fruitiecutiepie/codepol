@@ -44,9 +44,9 @@ export type WorkspaceEdit = {
   newText: string;
 };
 
-export type WorkspaceEditPlanKind = 'quickfix' | 'rename';
+export type WorkspaceEditPlanKind = 'quickfix' | 'rename' | 'source.fixAll';
 
-export type WorkspaceEditPlanIntent = 'quickfix' | 'rename';
+export type WorkspaceEditPlanIntent = 'quickfix' | 'rename' | 'source.fixAll';
 
 export type WorkspaceEditExecutionMode = 'apply_direct' | 'preview_then_apply';
 
@@ -110,13 +110,29 @@ export type WorkspaceEditPlan = {
   previewSummary?: WorkspaceEditPlanPreviewSummary;
 };
 
+export type WorkspaceCodeActionKind =
+  | 'quickfix'
+  | 'source.fixAll'
+  | 'source.fixAll.rule';
+
+export type WorkspaceCodeActionConflict = {
+  uri: string;
+  firstByteRange: { start: number; end: number };
+  secondByteRange: { start: number; end: number };
+  droppedRuleId?: string;
+};
+
 export type WorkspaceCodeAction = {
   id: string;
   title: string;
-  kind: 'quickfix';
+  kind: WorkspaceCodeActionKind;
   diagnosticIds: string[];
   plan: WorkspaceEditPlan;
   isPreferred?: boolean;
+  /** Present when kind === 'source.fixAll.rule'. Namespaced rule id this action scopes to. */
+  ruleId?: string;
+  /** Non-fatal conflicts encountered while assembling a fix-all plan. */
+  conflicts?: WorkspaceCodeActionConflict[];
 };
 
 export type WorkspaceDiagnostic = {

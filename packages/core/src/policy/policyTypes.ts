@@ -120,6 +120,17 @@ export type PolicyTargetMap = Record<string, PolicyRuleTarget>;
 export type LintSeverity = 'error' | 'warn' | 'off';
 
 /**
+ * Fix application policy for a rule.
+ *
+ * - `on-save`: the rule participates in `source.fixAll.codepol` code actions
+ *   and is applied automatically when editors trigger `editor.codeActionsOnSave`.
+ * - `manual`: fixes are exposed only as per-diagnostic quickfixes; nothing
+ *   runs automatically.
+ * - `never`: no fix surface at all — no quickfix, no on-save participation.
+ */
+export type PolicyRuleFixMode = 'on-save' | 'manual' | 'never';
+
+/**
  * A single policy rule that defines which files to check and how.
  * References named targets defined in the top-level `targets` map.
  */
@@ -138,6 +149,13 @@ export type PolicyRule = {
   args?: unknown;
   /** Array of target names referencing entries in top-level targets */
   targets: string[];
+  /**
+   * How autofixes for this rule should be surfaced.
+   *
+   * When omitted the effective mode is `manual`. When `severity = "off"` the
+   * effective mode is forced to `never` regardless of the declared value.
+   */
+  fix?: PolicyRuleFixMode;
 };
 
 /**

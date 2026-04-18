@@ -117,6 +117,23 @@ export type WorkspaceService = {
     requestId?: string;
     signal?: AbortSignal;
   }) => Promise<WorkspaceCodeAction[]>;
+  planSourceFixAll: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    version: number;
+    requestId?: string;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceCodeAction | null>;
+  planFileFixAll: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    version: number;
+    includeRuleIds?: string[];
+    requestId?: string;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceCodeAction | null>;
   applyEditPlan: (input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;

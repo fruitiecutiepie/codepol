@@ -5997,4 +5997,226 @@ args.configPath = "${input.ruffConfigPath}"
       ]);
     });
   });
+
+  describe('fix on save', () => {
+    function noInterfaceOnSaveConfigContentCreate(): string {
+      return `[[plugins]]
+id = "@codepol/plugin"
+source = { kind = "builtin" }
+
+[targets.src]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[[rules]]
+ruleId = "@codepol/plugin/no-interface"
+targets = ["src"]
+fix = "on-save"
+`;
+    }
+
+    function noInterfaceManualConfigContentCreate(): string {
+      return `[[plugins]]
+id = "@codepol/plugin"
+source = { kind = "builtin" }
+
+[targets.src]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[[rules]]
+ruleId = "@codepol/plugin/no-interface"
+targets = ["src"]
+`;
+    }
+
+    function noInterfaceNeverConfigContentCreate(): string {
+      return `[[plugins]]
+id = "@codepol/plugin"
+source = { kind = "builtin" }
+
+[targets.src]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[[rules]]
+ruleId = "@codepol/plugin/no-interface"
+targets = ["src"]
+fix = "never"
+`;
+    }
+
+    it('planSourceFixAll returns one action for rules tagged fix = "on-save"', async () => {
+      const workspaceRoot = tempWorkspaceCreate('codepol-fix-on-save-');
+      createdDirs.push(workspaceRoot);
+      fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+      fs.writeFileSync(
+        path.join(workspaceRoot, 'codepol.toml'),
+        noInterfaceOnSaveConfigContentCreate(),
+        'utf8',
+      );
+
+      const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+      const uri = workspacePathToUri(filePath);
+      fs.writeFileSync(
+        filePath,
+        'export interface User {\n  name: string;\n}\n',
+        'utf8',
+      );
+
+      const service = workspaceServiceCreate();
+      const { clientSessionId, workspaceId } = await clientWorkspaceAttach(service, {
+        rootPath: workspaceRoot,
+        configPath: path.join(workspaceRoot, 'codepol.toml'),
+      });
+      await service.openOverlay({
+        clientSessionId,
+        workspaceId,
+        uri,
+        version: 1,
+        text: fs.readFileSync(filePath, 'utf8'),
+      });
+
+      const action = await service.planSourceFixAll({
+        clientSessionId,
+        workspaceId,
+        uri,
+        version: 1,
+      });
+
+      expect(action).not.toBeNull();
+      expect(action?.kind).toBe('source.fixAll');
+      expect(action?.plan.kind).toBe('source.fixAll');
+      expect(action?.plan.edits.length).toBeGreaterThan(0);
+    });
+
+    it('planSourceFixAll skips rules tagged fix = "manual"', async () => {
+      const workspaceRoot = tempWorkspaceCreate('codepol-fix-on-save-');
+      createdDirs.push(workspaceRoot);
+      fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+      fs.writeFileSync(
+        path.join(workspaceRoot, 'codepol.toml'),
+        noInterfaceManualConfigContentCreate(),
+        'utf8',
+      );
+
+      const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+      const uri = workspacePathToUri(filePath);
+      fs.writeFileSync(
+        filePath,
+        'export interface User {\n  name: string;\n}\n',
+        'utf8',
+      );
+
+      const service = workspaceServiceCreate();
+      const { clientSessionId, workspaceId } = await clientWorkspaceAttach(service, {
+        rootPath: workspaceRoot,
+        configPath: path.join(workspaceRoot, 'codepol.toml'),
+      });
+      await service.openOverlay({
+        clientSessionId,
+        workspaceId,
+        uri,
+        version: 1,
+        text: fs.readFileSync(filePath, 'utf8'),
+      });
+
+      const action = await service.planSourceFixAll({
+        clientSessionId,
+        workspaceId,
+        uri,
+        version: 1,
+      });
+
+      expect(action).toBeNull();
+    });
+
+    it('queryCodeActions hides quickfixes for rules tagged fix = "never"', async () => {
+      const workspaceRoot = tempWorkspaceCreate('codepol-fix-on-save-');
+      createdDirs.push(workspaceRoot);
+      fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+      fs.writeFileSync(
+        path.join(workspaceRoot, 'codepol.toml'),
+        noInterfaceNeverConfigContentCreate(),
+        'utf8',
+      );
+
+      const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+      const uri = workspacePathToUri(filePath);
+      fs.writeFileSync(
+        filePath,
+        'export interface User {\n  name: string;\n}\n',
+        'utf8',
+      );
+
+      const service = workspaceServiceCreate();
+      const { clientSessionId, workspaceId } = await clientWorkspaceAttach(service, {
+        rootPath: workspaceRoot,
+        configPath: path.join(workspaceRoot, 'codepol.toml'),
+      });
+      await service.openOverlay({
+        clientSessionId,
+        workspaceId,
+        uri,
+        version: 1,
+        text: fs.readFileSync(filePath, 'utf8'),
+      });
+
+      const diagnostics = await service.queryDiagnostics({ clientSessionId, workspaceId, uri });
+      expect(diagnostics.length).toBeGreaterThan(0);
+
+      const actions = await service.queryCodeActions({
+        clientSessionId,
+        workspaceId,
+        uri,
+        version: 1,
+        diagnosticIds: diagnostics.map((diagnostic) => diagnostic.id),
+      });
+
+      expect(actions).toHaveLength(0);
+    });
+
+    it('planFileFixAll scopes to a single ruleId when only one is provided', async () => {
+      const workspaceRoot = tempWorkspaceCreate('codepol-fix-on-save-');
+      createdDirs.push(workspaceRoot);
+      fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+      fs.writeFileSync(
+        path.join(workspaceRoot, 'codepol.toml'),
+        noInterfaceOnSaveConfigContentCreate(),
+        'utf8',
+      );
+
+      const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+      const uri = workspacePathToUri(filePath);
+      fs.writeFileSync(
+        filePath,
+        'export interface User {\n  name: string;\n}\n',
+        'utf8',
+      );
+
+      const service = workspaceServiceCreate();
+      const { clientSessionId, workspaceId } = await clientWorkspaceAttach(service, {
+        rootPath: workspaceRoot,
+        configPath: path.join(workspaceRoot, 'codepol.toml'),
+      });
+      await service.openOverlay({
+        clientSessionId,
+        workspaceId,
+        uri,
+        version: 1,
+        text: fs.readFileSync(filePath, 'utf8'),
+      });
+
+      const action = await service.planFileFixAll({
+        clientSessionId,
+        workspaceId,
+        uri,
+        version: 1,
+        includeRuleIds: ['@codepol/plugin/no-interface'],
+      });
+
+      expect(action?.kind).toBe('source.fixAll.rule');
+      expect(action?.ruleId).toBe('@codepol/plugin/no-interface');
+    });
+  });
 });

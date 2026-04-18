@@ -209,6 +209,10 @@ function workspaceReadQueriesStubCreate(): Pick<
   | 'prepareRename'
   | 'previewRename'
   | 'queryArchitectureSummary'
+  | 'planSourceFixAll'
+  | 'planFileFixAll'
+  | 'queryLintRules'
+  | 'queryLintRuleDetails'
 > {
   return {
     async queryWorkspaceSymbols() {
@@ -259,6 +263,22 @@ function workspaceReadQueriesStubCreate(): Pick<
         cycleCount: 0,
         hotspots: [],
       };
+    },
+    async planSourceFixAll() {
+      return null;
+    },
+    async planFileFixAll() {
+      return null;
+    },
+    async queryLintRules() {
+      return {
+        analysisGeneration: 0,
+        workspaceReady: false,
+        rules: [],
+      };
+    },
+    async queryLintRuleDetails() {
+      return null;
     },
   };
 }
@@ -4728,5 +4748,201 @@ demo();
 
     const executeResponse = messages.find((message) => message.id === 3);
     expect(executeResponse?.result).toBeNull();
+  });
+
+  it('advertises source.fixAll code action kinds in server capabilities', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');
+    createdDirs.push(workspaceRoot);
+    fs.writeFileSync(path.join(workspaceRoot, 'codepol.toml'), noInterfaceConfigContentCreate(), 'utf8');
+
+    const messages: any[] = [];
+    const server = new CodepolLspServer({
+      sendMessage: (message) => {
+        messages.push(message);
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        rootUri: pathToFileURL(workspaceRoot).href,
+      },
+    });
+
+    const initResponse = messages.find((message) => message.id === 1);
+    const codeActionProvider = initResponse?.result?.capabilities?.codeActionProvider;
+    expect(codeActionProvider).toBeDefined();
+    expect(codeActionProvider.codeActionKinds).toEqual(
+      expect.arrayContaining(['quickfix', 'source.fixAll', 'source.fixAll.codepol']),
+    );
+  });
+
+  it('resolves source.fixAll.codepol into a single aggregated code action', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'codepol.toml'),
+      `[[plugins]]
+id = "@codepol/plugin"
+source = { kind = "builtin" }
+
+[targets.src]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[[rules]]
+ruleId = "@codepol/plugin/no-interface"
+targets = ["src"]
+fix = "on-save"
+`,
+      'utf8',
+    );
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = pathToFileURL(filePath).href;
+    fs.writeFileSync(filePath, 'export interface User {\n  name: string;\n}\n', 'utf8');
+
+    const messages: any[] = [];
+    const server = new CodepolLspServer({
+      sendMessage: (message) => {
+        messages.push(message);
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        rootUri: pathToFileURL(workspaceRoot).href,
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      method: 'textDocument/didOpen',
+      params: {
+        textDocument: {
+          uri,
+          version: 1,
+          text: fs.readFileSync(filePath, 'utf8'),
+        },
+      },
+    });
+
+    // Wait for the initial publishDiagnostics before asking for fixAll so
+    // the workspace analysis has actually populated violations.
+    await messageWaitFor(
+      messages,
+      (message) => message.method === 'textDocument/publishDiagnostics',
+    );
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'textDocument/codeAction',
+      params: {
+        textDocument: { uri },
+        context: {
+          only: ['source.fixAll.codepol'],
+          diagnostics: [],
+        },
+      },
+    });
+
+    const codeActionResponse = messages.find((message) => message.id === 2);
+    expect(codeActionResponse?.result).toHaveLength(1);
+    expect(codeActionResponse?.result[0]).toEqual(
+      expect.objectContaining({
+        kind: 'source.fixAll.codepol',
+      }),
+    );
+
+    const executePromise = server.handleMessage({
+      jsonrpc: '2.0',
+      id: 3,
+      method: 'workspace/executeCommand',
+      params: codeActionResponse.result[0].command,
+    });
+
+    const applyEditRequest = await messageWaitFor(
+      messages,
+      (message) => message.method === 'workspace/applyEdit',
+    );
+    expect(applyEditRequest?.params.edit.changes[uri]).toBeDefined();
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: applyEditRequest.id,
+      result: { applied: true },
+    });
+    await executePromise;
+  });
+
+  it('returns no source.fixAll.codepol action when every rule is fix = "manual"', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'codepol.toml'),
+      noInterfaceConfigContentCreate(),
+      'utf8',
+    );
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = pathToFileURL(filePath).href;
+    fs.writeFileSync(filePath, 'export interface User {\n  name: string;\n}\n', 'utf8');
+
+    const messages: any[] = [];
+    const server = new CodepolLspServer({
+      sendMessage: (message) => {
+        messages.push(message);
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        rootUri: pathToFileURL(workspaceRoot).href,
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      method: 'textDocument/didOpen',
+      params: {
+        textDocument: {
+          uri,
+          version: 1,
+          text: fs.readFileSync(filePath, 'utf8'),
+        },
+      },
+    });
+
+    await messageWaitFor(
+      messages,
+      (message) => message.method === 'textDocument/publishDiagnostics',
+    );
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'textDocument/codeAction',
+      params: {
+        textDocument: { uri },
+        context: {
+          only: ['source.fixAll.codepol'],
+          diagnostics: [],
+        },
+      },
+    });
+
+    const codeActionResponse = messages.find((message) => message.id === 2);
+    expect(codeActionResponse?.result).toEqual([]);
   });
 });

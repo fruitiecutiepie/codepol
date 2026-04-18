@@ -4,6 +4,7 @@ import type {
   PolicyPluginDeclaration,
   PolicyPluginSource,
   PolicyRule,
+  PolicyRuleFixMode,
   PolicyRuleTarget,
   PolicyTargetMap,
 } from '../policy/policyTypes';
@@ -93,6 +94,20 @@ function severityOptional(value: unknown, path: string): LintSeverity | undefine
   return severity;
 }
 
+function fixModeOptional(value: unknown, path: string): PolicyRuleFixMode | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const mode = stringExpect(value, path);
+  if (mode !== 'on-save' && mode !== 'manual' && mode !== 'never') {
+    validationError(
+      path,
+      `expected one of "on-save", "manual", "never", received "${mode}"`,
+    );
+  }
+  return mode;
+}
+
 function envOptional(value: unknown, path: string): Record<string, string> | undefined {
   if (value === undefined) {
     return undefined;
@@ -160,7 +175,11 @@ function targetsParse(value: unknown, path: string): PolicyTargetMap {
 
 function ruleParse(value: unknown, path: string): PolicyRule {
   const record = recordExpect(value, path);
-  keysAllowed(record, ['id', 'ruleId', 'description', 'severity', 'providers', 'args', 'targets'], path);
+  keysAllowed(
+    record,
+    ['id', 'ruleId', 'description', 'severity', 'providers', 'args', 'targets', 'fix'],
+    path,
+  );
   return {
     id: stringOptional(record.id, `${path}.id`),
     ruleId: stringExpect(record.ruleId, `${path}.ruleId`),
@@ -169,6 +188,7 @@ function ruleParse(value: unknown, path: string): PolicyRule {
     providers: stringArrayOptional(record.providers, `${path}.providers`),
     args: record.args,
     targets: stringArrayExpect(record.targets, `${path}.targets`),
+    fix: fixModeOptional(record.fix, `${path}.fix`),
   };
 }
 

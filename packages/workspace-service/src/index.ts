@@ -96,9 +96,15 @@ import { biomeCheckAsync, biomeFixAsync } from '@codepol/plugin-biome';
 import { eslintPluginCreate } from '@codepol/plugin-eslint';
 import { ruffCheckAsync, ruffFixAsync } from '@codepol/plugin-ruff';
 import {
+  fixAllContributionFromViolation,
   treeCheckFixesApply,
   workspaceEditPlanCreateFromFix,
+  workspaceFixAllActionCreate,
 } from './edits';
+import {
+  ruleFixModeResolverCreate,
+  type RuleFixModeResolver,
+} from './fixMode';
 import {
   builtinPluginArtifactPathsResolve,
   builtinPluginsRefresh,
@@ -535,6 +541,23 @@ export type WorkspaceService = {
     requestId?: string;
     signal?: AbortSignal;
   }) => Promise<WorkspaceCodeAction[]>;
+  planSourceFixAll: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    version: number;
+    requestId?: string;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceCodeAction | null>;
+  planFileFixAll: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    version: number;
+    includeRuleIds?: string[];
+    requestId?: string;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceCodeAction | null>;
   applyEditPlan: (input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;
@@ -7927,6 +7950,15 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       signal: input.signal,
     });
 
+    const pluginRulesResult = await policyPluginsGet(
+      analysis.policy,
+      workspace.rootPath,
+      { configPath: workspace.configPath },
+    );
+    const fixModeResolver = isErr(pluginRulesResult)
+      ? undefined
+      : ruleFixModeResolverCreate(analysis.policy, pluginRulesResult.Ok);
+
     const selectedDiagnosticIds = new Set(
       input.diagnosticIds ??
         analysis.diagnostics
@@ -7941,6 +7973,9 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       }
       const violation = analysis.fixableTreeViolationsByDiagnosticId.get(diagnostic.id);
       if (!violation) {
+        continue;
+      }
+      if (fixModeResolver && fixModeResolver.ruleFixModeGet(violation.ruleId) === 'never') {
         continue;
       }
 
@@ -7986,6 +8021,147 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     }
 
     return actions;
+  }
+
+  async planSourceFixAll(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    version: number;
+    requestId?: string;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceCodeAction | null> {
+    return this.fixAllPlanCompute({
+      ...input,
+      kind: 'source.fixAll',
+      ruleMode: 'on-save',
+    });
+  }
+
+  async planFileFixAll(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    version: number;
+    includeRuleIds?: string[];
+    requestId?: string;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceCodeAction | null> {
+    return this.fixAllPlanCompute({
+      ...input,
+      kind:
+        input.includeRuleIds && input.includeRuleIds.length === 1
+          ? 'source.fixAll.rule'
+          : 'source.fixAll',
+      ruleMode: 'include',
+      includeRuleIds: input.includeRuleIds,
+    });
+  }
+
+  private async fixAllPlanCompute(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    version: number;
+    kind: 'source.fixAll' | 'source.fixAll.rule';
+    ruleMode: 'on-save' | 'include';
+    includeRuleIds?: string[];
+    signal?: AbortSignal;
+  }): Promise<WorkspaceCodeAction | null> {
+    const { workspace, workspaceSession } = workspaceSessionGet(
+      this.workspaces,
+      this.clientSessions,
+      input.clientSessionId,
+      input.workspaceId,
+    );
+    workspaceDocumentVersionValidate(workspaceSession, {
+      uri: input.uri,
+      documentVersion: input.version,
+    });
+    const analysis = await workspaceSessionAnalysisGet(workspace, workspaceSession, {
+      signal: input.signal,
+    });
+
+    const pluginRulesResult = await policyPluginsGet(
+      analysis.policy,
+      workspace.rootPath,
+      { configPath: workspace.configPath },
+    );
+    if (isErr(pluginRulesResult)) {
+      return null;
+    }
+    const fixModeResolver = ruleFixModeResolverCreate(
+      analysis.policy,
+      pluginRulesResult.Ok,
+    );
+
+    let ruleAllowList: Set<string>;
+    if (input.ruleMode === 'on-save') {
+      ruleAllowList = new Set(fixModeResolver.onSaveRuleIdsList());
+    } else if (input.includeRuleIds && input.includeRuleIds.length > 0) {
+      const allowed = new Set<string>();
+      for (const ruleId of input.includeRuleIds) {
+        if (fixModeResolver.ruleFixModeGet(ruleId) !== 'never') {
+          allowed.add(ruleId);
+        }
+      }
+      ruleAllowList = allowed;
+    } else {
+      ruleAllowList = new Set(fixModeResolver.fixEligibleRuleIdsList());
+    }
+
+    if (ruleAllowList.size === 0) {
+      return null;
+    }
+
+    const diagnosticsByFileUri = analysis.diagnostics.filter(
+      (diagnostic) => diagnostic.uri === input.uri,
+    );
+
+    const contributions = [];
+    for (const diagnostic of diagnosticsByFileUri) {
+      const violation = analysis.fixableTreeViolationsByDiagnosticId.get(diagnostic.id);
+      if (!violation) {
+        continue;
+      }
+      if (!ruleAllowList.has(violation.ruleId)) {
+        continue;
+      }
+      const contribution = fixAllContributionFromViolation(violation, diagnostic.id);
+      if (contribution) {
+        contributions.push(contribution);
+      }
+    }
+
+    if (contributions.length === 0) {
+      return null;
+    }
+
+    const title =
+      input.kind === 'source.fixAll.rule' && input.includeRuleIds?.[0]
+        ? `Fix all ${input.includeRuleIds[0]}`
+        : 'Fix all Codepol auto-fixable problems';
+
+    const actionResult = workspaceFixAllActionCreate({
+      title,
+      kind: input.kind,
+      ruleId:
+        input.kind === 'source.fixAll.rule'
+          ? input.includeRuleIds?.[0]
+          : undefined,
+      contributions,
+      sourceGet: (filePath) => workspaceSourceGet(workspaceSession, filePath),
+      idSalt: input.clientSessionId,
+    });
+    if (isErr(actionResult)) {
+      return null;
+    }
+    const action = actionResult.Ok;
+    if (!action) {
+      return null;
+    }
+    workspaceSessionEditPlanStore(workspaceSession, action.plan);
+    return action;
   }
 
   async applyEditPlan(input: {
@@ -8515,6 +8691,29 @@ class InProcessWorkspaceService implements WorkspaceService {
     signal?: AbortSignal;
   }): Promise<WorkspaceCodeAction[]> {
     return this.engine.queryCodeActions(input);
+  }
+
+  planSourceFixAll(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    version: number;
+    requestId?: string;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceCodeAction | null> {
+    return this.engine.planSourceFixAll(input);
+  }
+
+  planFileFixAll(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    version: number;
+    includeRuleIds?: string[];
+    requestId?: string;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceCodeAction | null> {
+    return this.engine.planFileFixAll(input);
   }
 
   applyEditPlan(input: {

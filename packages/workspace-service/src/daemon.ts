@@ -319,6 +319,27 @@ type WorkspaceDaemonQueryCodeActionsRequest = WorkspaceDaemonMessage &
   diagnosticIds?: string[];
 };
 
+type WorkspaceDaemonPlanSourceFixAllRequest = WorkspaceDaemonMessage &
+  WorkspaceDaemonClientSessionFreshness &
+  WorkspaceDaemonRequestFreshness &
+  WorkspaceDaemonWorkspaceFreshness & {
+  type: 'plan_source_fix_all';
+  workspaceId: string;
+  uri: string;
+  version: number;
+};
+
+type WorkspaceDaemonPlanFileFixAllRequest = WorkspaceDaemonMessage &
+  WorkspaceDaemonClientSessionFreshness &
+  WorkspaceDaemonRequestFreshness &
+  WorkspaceDaemonWorkspaceFreshness & {
+  type: 'plan_file_fix_all';
+  workspaceId: string;
+  uri: string;
+  version: number;
+  includeRuleIds?: string[];
+};
+
 type WorkspaceDaemonApplyEditPlanRequest = WorkspaceDaemonMessage &
   WorkspaceDaemonClientSessionFreshness &
   WorkspaceDaemonRequestFreshness &
@@ -514,6 +535,16 @@ type WorkspaceDaemonQueryCodeActionsAck = {
   codeActions: WorkspaceCodeAction[];
 };
 
+type WorkspaceDaemonPlanSourceFixAllAck = {
+  type: 'plan_source_fix_all_ack';
+  action: WorkspaceCodeAction | null;
+};
+
+type WorkspaceDaemonPlanFileFixAllAck = {
+  type: 'plan_file_fix_all_ack';
+  action: WorkspaceCodeAction | null;
+};
+
 type WorkspaceDaemonApplyEditPlanAck = {
   type: 'apply_edit_plan_ack';
   result: WorkspaceApplyResult;
@@ -631,6 +662,8 @@ type WorkspaceDaemonServiceResponse =
   | WorkspaceDaemonCompleteReplayAck
   | WorkspaceDaemonQueryDiagnosticsAck
   | WorkspaceDaemonQueryCodeActionsAck
+  | WorkspaceDaemonPlanSourceFixAllAck
+  | WorkspaceDaemonPlanFileFixAllAck
   | WorkspaceDaemonApplyEditPlanAck
   | WorkspaceDaemonQueryIndexStatusAck
   | WorkspaceDaemonQueryLintRulesAck
@@ -1461,6 +1494,15 @@ export class WorkspaceDaemonSession {
         const input = message as WorkspaceDaemonQueryCodeActionsRequest;
         return `query_code_actions:${input.clientSessionId}:${input.workspaceId}:${input.uri}`;
       }
+      case 'plan_source_fix_all': {
+        const input = message as WorkspaceDaemonPlanSourceFixAllRequest;
+        return `plan_source_fix_all:${input.clientSessionId}:${input.workspaceId}:${input.uri}`;
+      }
+      case 'plan_file_fix_all': {
+        const input = message as WorkspaceDaemonPlanFileFixAllRequest;
+        const ruleIdsKey = (input.includeRuleIds ?? []).slice().sort().join(',');
+        return `plan_file_fix_all:${input.clientSessionId}:${input.workspaceId}:${input.uri}:${ruleIdsKey}`;
+      }
       case 'query_index_status': {
         const input = message as WorkspaceDaemonQueryIndexStatusRequest;
         return `query_index_status:${input.clientSessionId}:${input.workspaceId}`;
@@ -1546,6 +1588,8 @@ export class WorkspaceDaemonSession {
       case 'close_overlay':
       case 'query_diagnostics':
       case 'query_code_actions':
+      case 'plan_source_fix_all':
+      case 'plan_file_fix_all':
       case 'apply_edit_plan':
       case 'query_index_status':
       case 'query_lint_rules':
@@ -1567,6 +1611,8 @@ export class WorkspaceDaemonSession {
           | WorkspaceDaemonCloseOverlayRequest
           | WorkspaceDaemonQueryDiagnosticsRequest
           | WorkspaceDaemonQueryCodeActionsRequest
+          | WorkspaceDaemonPlanSourceFixAllRequest
+          | WorkspaceDaemonPlanFileFixAllRequest
           | WorkspaceDaemonApplyEditPlanRequest
           | WorkspaceDaemonQueryIndexStatusRequest
           | WorkspaceDaemonQueryLintRulesRequest
@@ -1609,6 +1655,8 @@ export class WorkspaceDaemonSession {
       case 'prepare_rename':
         return 'high';
       case 'query_code_actions':
+      case 'plan_source_fix_all':
+      case 'plan_file_fix_all':
       case 'apply_edit_plan':
       case 'query_lint_rule_details':
       case 'query_dependency_graph':
@@ -2151,6 +2199,94 @@ export class WorkspaceDaemonSession {
           return {
             type: 'query_code_actions_ack',
             codeActions,
+          };
+        }
+        case 'plan_source_fix_all': {
+          if (!this.options.service) {
+            return messageErrorCreate(
+              'unsupported_request',
+              `Unsupported daemon request: ${message.type}`,
+            );
+          }
+          const input = message as WorkspaceDaemonPlanSourceFixAllRequest;
+          const daemonSessionError = this.daemonSessionValidate(input);
+          if (daemonSessionError) {
+            return daemonSessionError;
+          }
+          const replayGate = this.replayGateEnsure(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          if (replayGate) {
+            return replayGate;
+          }
+          const state = this.workspaceReplayStateGet(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          const workspaceInstanceError = this.workspaceInstanceValidate(state, input);
+          if (workspaceInstanceError) {
+            return workspaceInstanceError;
+          }
+          const documentVersionError = this.documentVersionValidate(state, input);
+          if (documentVersionError) {
+            return documentVersionError;
+          }
+          const replayEpochError = this.replayEpochValidate(state, input);
+          if (replayEpochError) {
+            return replayEpochError;
+          }
+          const action = await this.options.service.planSourceFixAll({
+            ...input,
+            signal: options.signal,
+          });
+          return {
+            type: 'plan_source_fix_all_ack',
+            action,
+          };
+        }
+        case 'plan_file_fix_all': {
+          if (!this.options.service) {
+            return messageErrorCreate(
+              'unsupported_request',
+              `Unsupported daemon request: ${message.type}`,
+            );
+          }
+          const input = message as WorkspaceDaemonPlanFileFixAllRequest;
+          const daemonSessionError = this.daemonSessionValidate(input);
+          if (daemonSessionError) {
+            return daemonSessionError;
+          }
+          const replayGate = this.replayGateEnsure(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          if (replayGate) {
+            return replayGate;
+          }
+          const state = this.workspaceReplayStateGet(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          const workspaceInstanceError = this.workspaceInstanceValidate(state, input);
+          if (workspaceInstanceError) {
+            return workspaceInstanceError;
+          }
+          const documentVersionError = this.documentVersionValidate(state, input);
+          if (documentVersionError) {
+            return documentVersionError;
+          }
+          const replayEpochError = this.replayEpochValidate(state, input);
+          if (replayEpochError) {
+            return replayEpochError;
+          }
+          const action = await this.options.service.planFileFixAll({
+            ...input,
+            signal: options.signal,
+          });
+          return {
+            type: 'plan_file_fix_all_ack',
+            action,
           };
         }
         case 'apply_edit_plan': {
@@ -2954,6 +3090,58 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
     }, {
       signal: input.signal,
     }).then((response) => response.codeActions);
+  }
+
+  planSourceFixAll(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    version: number;
+    requestId?: string;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceCodeAction | null> {
+    const freshness = this.workspaceFreshnessGet(input);
+    const daemonSessionId = this.daemonSessionIdGet(input.clientSessionId);
+    return this.connection.request<WorkspaceDaemonPlanSourceFixAllAck>({
+      type: 'plan_source_fix_all',
+      clientSessionId: input.clientSessionId,
+      daemonSessionId,
+      requestId: input.requestId,
+      workspaceId: input.workspaceId,
+      workspaceInstanceId: freshness?.workspaceInstanceId,
+      replayEpoch: freshness?.replayEpoch,
+      uri: input.uri,
+      version: input.version,
+    }, {
+      signal: input.signal,
+    }).then((response) => response.action);
+  }
+
+  planFileFixAll(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    version: number;
+    includeRuleIds?: string[];
+    requestId?: string;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceCodeAction | null> {
+    const freshness = this.workspaceFreshnessGet(input);
+    const daemonSessionId = this.daemonSessionIdGet(input.clientSessionId);
+    return this.connection.request<WorkspaceDaemonPlanFileFixAllAck>({
+      type: 'plan_file_fix_all',
+      clientSessionId: input.clientSessionId,
+      daemonSessionId,
+      requestId: input.requestId,
+      workspaceId: input.workspaceId,
+      workspaceInstanceId: freshness?.workspaceInstanceId,
+      replayEpoch: freshness?.replayEpoch,
+      uri: input.uri,
+      version: input.version,
+      includeRuleIds: input.includeRuleIds,
+    }, {
+      signal: input.signal,
+    }).then((response) => response.action);
   }
 
   applyEditPlan(input: {

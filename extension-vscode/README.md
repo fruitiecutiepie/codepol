@@ -54,6 +54,26 @@ daemon so escalations are process-global on the daemon side. See
 [../packages/core/src/diagnostics/README.md](../packages/core/src/diagnostics/README.md)
 for the underlying model.
 
+## Fix on save
+
+Codepol exposes a `source.fixAll.codepol` code action that merges every
+rule whose `codepol.toml` entry declares `fix = "on-save"` into a single
+`EditPlan`. To run it automatically on save, add this to your VS Code
+settings:
+
+```jsonc
+"editor.codeActionsOnSave": {
+  "source.fixAll.codepol": "explicit"
+}
+```
+
+Per-rule variants are published as `source.fixAll.codepol.<ruleId>` — for
+example, the language client can request
+`source.fixAll.codepol.@codepol/plugin/enforce-casing` to apply only that
+rule's fixes. Rules with `fix = "never"` (or `severity = "off"`) are
+hidden from every code-action surface, including the standard quickfix
+lightbulb.
+
 ## Smoke Test
 
 Run `pnpm --dir extension-vscode test:smoke` after building to launch a standard VS Code extension test host against the bundled fixture workspace.

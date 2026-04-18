@@ -153,6 +153,35 @@ targets = ["typescript-src"]
 | `severity` | `"error" \| "warn" \| "off"` | No | Default is `error` |
 | `providers` | string array | No | Optional provider filter |
 | `args` | table | No | Rule-specific arguments |
+| `fix` | `"on-save" \| "manual" \| "never"` | No | How autofixes for this rule are surfaced. Default is `manual`. |
+
+### Fix Application (`fix`)
+
+Controls how autofixes for this rule are surfaced across editor and CLI
+flows:
+
+- `manual` (default): fixes are exposed as per-diagnostic quickfixes
+  through the lightbulb / Quick Fix menu. Nothing runs automatically.
+- `on-save`: the rule participates in the LSP `source.fixAll.codepol`
+  code action. Editors that include `source.fixAll.codepol` in their
+  `editor.codeActionsOnSave` setting will apply these fixes on save.
+- `never`: the rule is hidden from every fix surface — no quickfix, no
+  on-save participation, no `codepol --fix` pass.
+
+Precedence rules:
+
+- `severity = "off"` forces `fix = "never"` regardless of the declared
+  value.
+- A rule whose plugin declares neither a `fixProvider` nor a
+  `treeCheckProvider` is silently treated as `"never"` at runtime —
+  there is no edit the engine can produce.
+
+```toml
+[[rules]]
+ruleId = "@codepol/plugin/enforce-casing"
+targets = ["typescript-src"]
+fix = "on-save"
+```
 
 ### Rule Args
 

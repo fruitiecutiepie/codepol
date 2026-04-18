@@ -254,6 +254,30 @@ export type User = {
 };
 ```
 
+### Fix on save (VS Code)
+
+Tag rules whose fixes should run automatically with `fix = "on-save"`
+and let VS Code apply them through the standard
+`editor.codeActionsOnSave` hook:
+
+```toml
+[[rules]]
+ruleId = "@codepol/plugin/enforce-casing"
+targets = ["typescript-src"]
+fix = "on-save"
+```
+
+```jsonc
+// .vscode/settings.json
+"editor.codeActionsOnSave": {
+  "source.fixAll.codepol": "explicit"
+}
+```
+
+`fix = "manual"` keeps the rule's fix available as a quickfix but never
+runs on save. `fix = "never"` (or `severity = "off"`) hides the rule
+from every autofix surface.
+
 ## Optional: esbuild Integration
 
 If you use esbuild, add build-time enforcement:
