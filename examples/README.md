@@ -37,6 +37,13 @@ targets = ["<target-name>"]
 args.configPath = "./<tool-config-file>"
 ```
 
+A bridge rule may be declared more than once with different `args` (e.g. a
+second `@codepol/plugin/eslint` entry pointing at a different `configPath`, or
+a second `@codepol/plugin/ruff` entry with different `select`/`ignore`).
+Each distinct resolved config runs as its own subprocess invocation over the
+files matched by its policy rule's targets; entries that resolve to identical
+configs are merged into a single invocation.
+
 See [docs/policy-schema.md](../docs/policy-schema.md) for the complete bridge
 rule reference, including Ruff's `select` / `ignore` / `fixable` args and
 Biome's `biomeBin` / `extraArgs` args.

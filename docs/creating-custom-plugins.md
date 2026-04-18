@@ -203,7 +203,7 @@ export const biomeBackedRule = pluginRuleNew({
 });
 ```
 
-When users run `codepol`, the CLI runs `biome lint` only for files matched by this rule’s policy targets that enable the Biome provider. When they run `codepol --fix`, the CLI runs `biome lint --write` for those files. If two policy rules need different Biome invocations (different `configPath` / `extraArgs` / binary), use different provider configs; each distinct config is executed once per run. Do not attach two different Biome provider configs to the **same** rule plugin — that is rejected as a conflict.
+When users run `codepol`, the CLI runs `biome lint` only for files matched by this rule’s policy targets that enable the Biome provider. When they run `codepol --fix`, the CLI runs `biome lint --write` for those files. If two policy rules (or a single rule that declares multiple biome providers) need different Biome invocations (different `configPath` / `extraArgs` / binary), each distinct resolved provider config is executed once per run over the files matched by the policy rule(s) that contributed it. Two providers with identical resolved configs are merged into a single invocation; providers with distinct resolved configs fan out into separate invocations.
 
 Policy `severity` and `ruleArgs` are not forwarded into Biome the way `EslintProviderConfig.ruleOptions` forwards into ESLint; configure Biome via `biome.json` and the provider `config` instead.
 

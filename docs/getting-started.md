@@ -160,7 +160,7 @@ If a loaded rule exposes a `platform = "biome"` lint provider, `codepol` **deleg
 Rules:
 
 - The provider selects how to invoke Biome (`biomeBin`, optional `configPath`, optional `extraArgs`). It does **not** register custom rules inside Biome; enforcement comes from Biome’s own configuration.
-- Distinct provider configs are run as **separate** `biome lint` invocations (grouped by normalized config). The same rule must not declare two conflicting Biome provider configs.
+- Distinct provider configs are run as **separate** `biome lint` invocations (grouped by normalized config). Declaring the same bridge rule multiple times with different `args` is supported: each distinct resolved config runs once over the files matched by its policy rule. The same grouping applies to `@codepol/plugin/eslint` and `@codepol/plugin/ruff`.
 - Policy `severity` and `args` do **not** currently change Biome’s behavior (unlike ESLint, where severity is passed through `overrideConfig`). Configure severity in `biome.json` / Biome CLI options instead.
 
 ## Step 4: Create Your Logger

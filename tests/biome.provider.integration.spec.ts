@@ -400,12 +400,12 @@ describe('biome provider integration', () => {
     }
   });
 
-  it('throws when the same rule declares conflicting Biome provider configs', async () => {
+  it('runs distinct Biome invocations per resolved-config group when one rule declares multiple biome providers', async () => {
     const projectDir = tempProjectCreate();
     createdDirs.push(projectDir);
-    const { biomeBin } = mockBiomeScriptCreate(projectDir);
+    const { biomeBin, tracePath } = mockBiomeScriptCreate(projectDir);
 
-    const conflictRule = pluginRuleNew({
+    const multiConfigRule = pluginRuleNew({
       id: 'conflict-biome',
       capabilities: {
         lintProviders: [
@@ -423,7 +423,7 @@ describe('biome provider integration', () => {
       },
     });
 
-    pluginModuleRegister(TEST_PLUGIN_CONFLICT_ID, { default: [conflictRule] });
+    pluginModuleRegister(TEST_PLUGIN_CONFLICT_ID, { default: [multiConfigRule] });
 
     const config: CodepolConfig = {
       targets: {
@@ -442,13 +442,37 @@ describe('biome provider integration', () => {
     fs.mkdirSync(path.join(projectDir, 'src'), { recursive: true });
     fs.writeFileSync(path.join(projectDir, 'src', 'app.ts'), 'export const x = 1;\n', 'utf8');
 
-    await expect(
-      policyCheck({
-        config,
-        configPath: path.join(projectDir, 'codepol.toml'),
-        fix: false,
-        cwd: projectDir,
-      }),
-    ).rejects.toThrow(/Conflicting Biome lint provider configs/);
+    const originalEnv = process.env.MOCK_BIOME_TRACE;
+    process.env.MOCK_BIOME_TRACE = tracePath;
+    try {
+      await expect(
+        policyCheck({
+          config,
+          configPath: path.join(projectDir, 'codepol.toml'),
+          fix: false,
+          cwd: projectDir,
+        }),
+      ).resolves.toBeDefined();
+
+      const lintArgs = fs
+        .readFileSync(tracePath, 'utf8')
+        .trim()
+        .split('\n')
+        .filter((line) => line.length > 0)
+        .map((line) => JSON.parse(line) as string[])
+        .filter((argv) => argv.includes('lint'));
+      expect(lintArgs).toHaveLength(2);
+      const configPaths = lintArgs.map(
+        (argv) => argv.find((arg) => arg.startsWith('--config-path')) ?? '',
+      );
+      expect(configPaths.some((arg) => arg.includes('a.json'))).toBe(true);
+      expect(configPaths.some((arg) => arg.includes('b.json'))).toBe(true);
+    } finally {
+      if (originalEnv === undefined) {
+        delete process.env.MOCK_BIOME_TRACE;
+      } else {
+        process.env.MOCK_BIOME_TRACE = originalEnv;
+      }
+    }
   });
 });

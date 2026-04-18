@@ -362,4 +362,236 @@ describe('external bridge rules integration', () => {
     );
     expect(hasDebuggerDiag).toBe(true);
   });
+
+  it('@codepol/plugin/ruff: two bridge entries with distinct args each produce their own ruff invocation', async () => {
+    const projectDir = tempProjectCreate('codepol-ext-bridge-ruff-multi-');
+    createdDirs.push(projectDir);
+    fixtureCopy('ruff', projectDir);
+    fs.writeFileSync(path.join(projectDir, 'codepol.toml'), '# fixture\n', 'utf8');
+    const { ruffBin, tracePath } = mockRuffScriptCreate(projectDir);
+    const config: CodepolConfig = {
+      targets: {
+        py: {
+          language: 'python',
+          files: ['src/**/*.py'],
+        },
+      },
+      plugins: [
+        {
+          id: '@codepol/plugin',
+          source: { kind: 'builtin' },
+        },
+      ],
+      rules: [
+        {
+          ruleId: RUFF_BRIDGE_RULE_ID,
+          targets: ['py'],
+          providers: ['ruff'],
+          args: { ruffBin, select: ['E'] },
+        },
+        {
+          ruleId: RUFF_BRIDGE_RULE_ID,
+          targets: ['py'],
+          providers: ['ruff'],
+          args: { ruffBin, select: ['F'] },
+        },
+      ],
+    };
+
+    const originalEnv = process.env.MOCK_RUFF_TRACE;
+    process.env.MOCK_RUFF_TRACE = tracePath;
+    try {
+      await policyCheck({
+        config,
+        configPath: path.join(projectDir, 'codepol.toml'),
+        fix: false,
+        cwd: projectDir,
+        env: {
+          ...process.env,
+          CODEPOL_WORKSPACE_SERVICE_MODE: 'in_process',
+        },
+      });
+
+      const traceLines = fs
+        .readFileSync(tracePath, 'utf8')
+        .trim()
+        .split('\n')
+        .filter((line) => line.length > 0)
+        .map((line) => JSON.parse(line) as string[]);
+      const checkCalls = traceLines.filter((argv) => argv.includes('check'));
+      expect(checkCalls).toHaveLength(2);
+      expect(
+        checkCalls.some((argv) => argv.includes('--select=E')),
+      ).toBe(true);
+      expect(
+        checkCalls.some((argv) => argv.includes('--select=F')),
+      ).toBe(true);
+    } finally {
+      if (originalEnv === undefined) {
+        delete process.env.MOCK_RUFF_TRACE;
+      } else {
+        process.env.MOCK_RUFF_TRACE = originalEnv;
+      }
+    }
+  });
+
+  it('@codepol/plugin/biome: two bridge entries with distinct configPath each produce their own biome invocation (and no conflict throw)', async () => {
+    const projectDir = tempProjectCreate('codepol-ext-bridge-biome-multi-');
+    createdDirs.push(projectDir);
+    fixtureCopy('biome', projectDir);
+    fs.writeFileSync(path.join(projectDir, 'codepol.toml'), '# fixture\n', 'utf8');
+    const { biomeBin, tracePath } = biomeMockScriptCreate(projectDir);
+    const biomeConfigPathA = path.join(projectDir, 'biome.json');
+    const biomeConfigPathB = path.join(projectDir, 'biome-extra.json');
+    fs.writeFileSync(
+      biomeConfigPathB,
+      fs.readFileSync(biomeConfigPathA, 'utf8'),
+      'utf8',
+    );
+    const config: CodepolConfig = {
+      targets: {
+        ts: {
+          language: 'typescript',
+          files: ['src/**/*.ts'],
+        },
+      },
+      plugins: [
+        {
+          id: '@codepol/plugin',
+          source: { kind: 'builtin' },
+        },
+      ],
+      rules: [
+        {
+          ruleId: BIOME_BRIDGE_RULE_ID,
+          targets: ['ts'],
+          providers: ['biome'],
+          args: { biomeBin, configPath: biomeConfigPathA },
+        },
+        {
+          ruleId: BIOME_BRIDGE_RULE_ID,
+          targets: ['ts'],
+          providers: ['biome'],
+          args: { biomeBin, configPath: biomeConfigPathB },
+        },
+      ],
+    };
+
+    const originalEnv = process.env.MOCK_BIOME_TRACE;
+    process.env.MOCK_BIOME_TRACE = tracePath;
+    try {
+      await expect(
+        policyCheck({
+          config,
+          configPath: path.join(projectDir, 'codepol.toml'),
+          fix: false,
+          cwd: projectDir,
+          env: {
+            ...process.env,
+            CODEPOL_WORKSPACE_SERVICE_MODE: 'in_process',
+          },
+        }),
+      ).resolves.toBeDefined();
+
+      const traceLines = fs
+        .readFileSync(tracePath, 'utf8')
+        .trim()
+        .split('\n')
+        .filter((line) => line.length > 0)
+        .map((line) => JSON.parse(line) as string[]);
+      const lintCalls = traceLines.filter((argv) => argv.includes('lint'));
+      expect(lintCalls).toHaveLength(2);
+      const configPaths = lintCalls.map(
+        (argv) => argv.find((arg) => arg.startsWith('--config-path')) ?? '',
+      );
+      expect(
+        configPaths.some((arg) => arg.includes(biomeConfigPathA)),
+      ).toBe(true);
+      expect(
+        configPaths.some((arg) => arg.includes(biomeConfigPathB)),
+      ).toBe(true);
+    } finally {
+      if (originalEnv === undefined) {
+        delete process.env.MOCK_BIOME_TRACE;
+      } else {
+        process.env.MOCK_BIOME_TRACE = originalEnv;
+      }
+    }
+  });
+
+  it('@codepol/plugin/eslint: two bridge entries with distinct configPath each run ESLint against their own config', async () => {
+    const projectDir = tempProjectCreate('codepol-ext-bridge-eslint-multi-');
+    createdDirs.push(projectDir);
+    fixtureCopy('eslint', projectDir);
+    fs.writeFileSync(path.join(projectDir, 'codepol.toml'), '# fixture\n', 'utf8');
+
+    // First config enforces no-debugger (matches the fixture's `debugger;`).
+    // Second config is identical except for rule id, so we can assert that
+    // BOTH configs produced diagnostics — the previous first-entry-wins
+    // behavior would only report one.
+    const secondConfigPath = path.join(projectDir, 'eslint.config.extra.mjs');
+    fs.writeFileSync(
+      secondConfigPath,
+      `export default [
+  {
+    files: ['**/*.ts'],
+    rules: {
+      'no-empty-function': 'error',
+      'no-debugger': 'error',
+    },
+  },
+];
+`,
+      'utf8',
+    );
+
+    const config: CodepolConfig = {
+      targets: {
+        ts: {
+          language: 'typescript',
+          files: ['src/**/*.ts'],
+        },
+      },
+      plugins: [
+        {
+          id: '@codepol/plugin',
+          source: { kind: 'builtin' },
+        },
+      ],
+      rules: [
+        {
+          ruleId: ESLINT_BRIDGE_RULE_ID,
+          targets: ['ts'],
+          args: { configPath: './eslint.config.mjs' },
+        },
+        {
+          ruleId: ESLINT_BRIDGE_RULE_ID,
+          targets: ['ts'],
+          args: { configPath: './eslint.config.extra.mjs' },
+        },
+      ],
+    };
+
+    const result = await policyCheck({
+      config,
+      configPath: path.join(projectDir, 'codepol.toml'),
+      fix: false,
+      cwd: projectDir,
+      env: {
+        ...process.env,
+        CODEPOL_WORKSPACE_SERVICE_MODE: 'in_process',
+      },
+    });
+
+    const eslintDiagnostics = result.workspaceDiagnostics.filter(
+      (diagnostic) => diagnostic.source === 'eslint',
+    );
+    // Previous first-entry-wins behavior would have dropped the second
+    // config's invocation entirely, producing only 1 diagnostic.
+    // With grouping, both configs run and each reports no-debugger once.
+    const debuggerCount = eslintDiagnostics.filter(
+      (diagnostic) => diagnostic.code === 'no-debugger',
+    ).length;
+    expect(debuggerCount).toBe(2);
+  });
 });

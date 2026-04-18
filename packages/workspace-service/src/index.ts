@@ -173,6 +173,37 @@ type LintProviderEntry = {
   ruleId: string;
   ruleArgs?: unknown;
   severity?: LintSeverity;
+  /**
+   * Reference to the source policy rule this entry was derived from. Used for
+   * per-group file scoping in external analyzers: `RuleMatch.rule` is compared
+   * by reference identity against `entry.rule` so two policy rules that share
+   * a ruleId but differ in args/targets remain distinguishable per group.
+   */
+  rule: PolicyRule;
+};
+
+type AnalyzerGroup<TConfig> = {
+  /** Stable key identifying the resolved-config identity of this group. */
+  key: string;
+  /** Resolved provider config shared by every entry in the group. */
+  config: TConfig;
+  /** Entries (policy-rule derived) that share this resolved config. */
+  entries: LintProviderEntry[];
+  /**
+   * Source policy rules contributing to this group, used to select files from
+   * `RuleMatch[]` by reference identity (not ruleId string).
+   */
+  rules: Set<PolicyRule>;
+};
+
+type EslintAnalyzerGroup = {
+  key: string;
+  /** Absolute path to the ESLint config file for this group. */
+  configPath: string;
+  /** Bridge + non-bridge ESLint entries effective for this group. */
+  entries: LintProviderEntry[];
+  /** Only the bridge rules for this group (used for file scoping). */
+  rules: Set<PolicyRule>;
 };
 
 type WorkspaceAnalyzerFixMode = 'none' | 'inline' | 'external';
@@ -1104,22 +1135,6 @@ function biomeProviderConfigKey(config: BiomeProviderConfig | undefined): string
   });
 }
 
-function biomeProviderConfigFromKey(key: string): BiomeProviderConfig {
-  const parsed = JSON.parse(key) as {
-    biomeBin: string;
-    configPath: string | null;
-    extraArgs: string[];
-  };
-  const out: BiomeProviderConfig = { biomeBin: parsed.biomeBin };
-  if (parsed.configPath != null) {
-    out.configPath = parsed.configPath;
-  }
-  if (parsed.extraArgs.length > 0) {
-    out.extraArgs = parsed.extraArgs;
-  }
-  return out;
-}
-
 /**
  * Resolves the effective biome provider config for a policy rule.
  *
@@ -1203,48 +1218,154 @@ function ruffProviderConfigResolve(entry: LintProviderEntry): RuffProviderConfig
   return merged;
 }
 
-function biomeRuleIdToConfigMapBuild(entries: LintProviderEntry[]): Map<string, BiomeProviderConfig> {
-  const map = new Map<string, BiomeProviderConfig>();
+/**
+ * Stable JSON identity for a resolved ruff provider config. Mirrors
+ * `biomeProviderConfigKey`; any two entries that serialize to the same key
+ * can safely share a single ruff invocation.
+ */
+function ruffProviderConfigKey(config: RuffProviderConfig | undefined): string {
+  const c = config ?? {};
+  return JSON.stringify({
+    ruffBin: c.ruffBin ?? 'ruff',
+    configPath: c.configPath ?? null,
+    select: c.select ?? [],
+    ignore: c.ignore ?? [],
+    fixable: c.fixable ?? [],
+    extraArgs: c.extraArgs ?? [],
+  });
+}
+
+/**
+ * Groups biome `LintProviderEntry`s by resolved-config identity. Two entries
+ * that resolve to the same `BiomeProviderConfig` share a group and therefore a
+ * single biome invocation; distinct configs each run in their own group.
+ *
+ * Unlike the prior `biomeRuleIdToConfigMapBuild`, this does NOT throw when the
+ * same ruleId resolves to different configs — that is a legitimate multi-bridge
+ * policy shape.
+ */
+function biomeGroupsBuild(
+  entries: LintProviderEntry[],
+): Map<string, AnalyzerGroup<BiomeProviderConfig>> {
+  const groups = new Map<string, AnalyzerGroup<BiomeProviderConfig>>();
   for (const entry of entries) {
     if (entry.provider.platform !== 'biome') {
       continue;
     }
-    const cfg = biomeProviderConfigResolve(entry);
-    const prev = map.get(entry.ruleId);
-    if (prev !== undefined && biomeProviderConfigKey(prev) !== biomeProviderConfigKey(cfg)) {
-      throw new Error(
-        `Conflicting Biome lint provider configs for rule "${entry.ruleId}". ` +
-          'Use a single Biome provider configuration per rule, or split into separate policy rules.',
-      );
+    const config = biomeProviderConfigResolve(entry);
+    const key = biomeProviderConfigKey(config);
+    let group = groups.get(key);
+    if (!group) {
+      group = { key, config, entries: [], rules: new Set<PolicyRule>() };
+      groups.set(key, group);
     }
-    map.set(entry.ruleId, cfg);
+    group.entries.push(entry);
+    group.rules.add(entry.rule);
   }
-  return map;
+  return groups;
 }
 
-function biomeFilesByConfigKeyCollect(
-  matches: RuleMatch[],
-  ruleIdToBiomeConfig: Map<string, BiomeProviderConfig>,
-): Map<string, Set<string>> {
-  const byKey = new Map<string, Set<string>>();
-  for (const match of matches) {
-    const cfg = ruleIdToBiomeConfig.get(match.rule.ruleId);
-    if (!cfg) {
+/**
+ * Groups ruff `LintProviderEntry`s by resolved-config identity. Replaces the
+ * prior first-entry-wins silent drop; each distinct `RuffProviderConfig`
+ * triggers its own ruff invocation.
+ */
+function ruffGroupsBuild(
+  entries: LintProviderEntry[],
+): Map<string, AnalyzerGroup<RuffProviderConfig>> {
+  const groups = new Map<string, AnalyzerGroup<RuffProviderConfig>>();
+  for (const entry of entries) {
+    if (entry.provider.platform !== 'ruff') {
       continue;
     }
-    const key = biomeProviderConfigKey(cfg);
-    let set = byKey.get(key);
-    if (!set) {
-      set = new Set<string>();
-      byKey.set(key, set);
+    const config = ruffProviderConfigResolve(entry);
+    const key = ruffProviderConfigKey(config);
+    let group = groups.get(key);
+    if (!group) {
+      group = { key, config, entries: [], rules: new Set<PolicyRule>() };
+      groups.set(key, group);
+    }
+    group.entries.push(entry);
+    group.rules.add(entry.rule);
+  }
+  return groups;
+}
+
+/**
+ * Groups eslint `LintProviderEntry`s by the bridge rule's resolved `configPath`.
+ * Non-bridge eslint entries (codepol-defined ESLint rules) are rule-enablement
+ * overrides that are configPath-agnostic, so they're folded into every group so
+ * their overrides apply to whichever eslint config the group runs.
+ *
+ * Bridge entries missing a valid `args.configPath` are dropped; the analyzer
+ * surfaces a migration-pointing error when the resulting group map is empty.
+ */
+function eslintGroupsBuild(
+  entries: LintProviderEntry[],
+  policyConfigPath: string,
+): Map<string, EslintAnalyzerGroup> {
+  const groups = new Map<string, EslintAnalyzerGroup>();
+  const nonBridgeEntries: LintProviderEntry[] = [];
+  for (const entry of entries) {
+    if (entry.provider.platform !== 'eslint') {
+      continue;
+    }
+    if (entry.ruleId !== ESLINT_BRIDGE_RULE_ID) {
+      nonBridgeEntries.push(entry);
+      continue;
+    }
+    const ruleArgs = (entry.ruleArgs ?? {}) as { configPath?: unknown };
+    if (typeof ruleArgs.configPath !== 'string' || ruleArgs.configPath.length === 0) {
+      continue;
+    }
+    const configPath = path.resolve(
+      path.dirname(policyConfigPath),
+      ruleArgs.configPath,
+    );
+    let group = groups.get(configPath);
+    if (!group) {
+      group = {
+        key: configPath,
+        configPath,
+        entries: [],
+        rules: new Set<PolicyRule>(),
+      };
+      groups.set(configPath, group);
+    }
+    group.entries.push(entry);
+    group.rules.add(entry.rule);
+  }
+  for (const group of groups.values()) {
+    for (const entry of nonBridgeEntries) {
+      group.entries.push(entry);
+    }
+  }
+  return groups;
+}
+
+/**
+ * Selects files from `matches` that belong to a group by reference identity on
+ * `RuleMatch.rule`, then filters by the analyzer's file extensions. Reference
+ * identity (not ruleId string) is what lets two policy rules sharing a ruleId
+ * but differing args live in separate groups cleanly.
+ */
+function analyzerGroupFilesCollect(
+  groupRules: ReadonlySet<PolicyRule>,
+  matches: RuleMatch[],
+  extensions: string[],
+): Set<string> {
+  const files = new Set<string>();
+  for (const match of matches) {
+    if (!groupRules.has(match.rule)) {
+      continue;
     }
     for (const filePath of match.files) {
-      if (fileHasExtension(filePath, BIOME_FILE_EXTENSIONS)) {
-        set.add(filePath);
+      if (fileHasExtension(filePath, extensions)) {
+        files.add(filePath);
       }
     }
   }
-  return byKey;
+  return files;
 }
 
 const ESLINT_BRIDGE_MIGRATION_HINT =
@@ -2114,6 +2235,7 @@ function lintProviderEntriesCollect(
         ruleId: lookup.resolvedId,
         ruleArgs: rule.args,
         severity: rule.severity,
+        rule,
       });
     }
   }
@@ -5739,32 +5861,10 @@ function workspaceTreeAnalyzerRun(
   );
 }
 
-/**
- * Resolves the ESLint config path from the bridge entry's `args.configPath`,
- * mirroring how ruff/biome read their per-rule config from `LintProviderEntry`
- * at analyzer time. Returns the empty string when the bridge entry is missing
- * or `args.configPath` is unset; the caller surfaces a migration error.
- *
- * Relative paths are resolved against the policy config file's directory.
- */
-function eslintAnalyzerConfigPathResolve(
-  entries: LintProviderEntry[],
-  policyConfigPath: string,
-): string {
-  const bridgeEntry = entries.find(
-    (entry) =>
-      entry.provider.platform === 'eslint' && entry.ruleId === ESLINT_BRIDGE_RULE_ID,
-  );
-  const ruleArgs = (bridgeEntry?.ruleArgs ?? {}) as { configPath?: unknown };
-  if (typeof ruleArgs.configPath !== 'string' || ruleArgs.configPath.length === 0) {
-    return '';
-  }
-  return path.resolve(path.dirname(policyConfigPath), ruleArgs.configPath);
-}
-
 async function eslintAnalyzerRun(
   input: {
     files: string[];
+    matches: RuleMatch[];
     sourceByFilePath: Map<string, string>;
     policy: PolicyFile;
     configPath: string;
@@ -5811,16 +5911,6 @@ async function eslintAnalyzerRun(
       ESLINT_BRIDGE_MIGRATION_HINT,
     );
   }
-  const eslintConfigPath = eslintAnalyzerConfigPathResolve(
-    eligibleEntries,
-    input.configPath,
-  );
-  if (!eslintConfigPath) {
-    throw new Error(
-      '`@codepol/plugin/eslint` requires `args.configPath` (e.g. "./eslint.config.mjs"). ' +
-      ESLINT_BRIDGE_MIGRATION_HINT,
-    );
-  }
 
   const executableEntries = eligibleEntries.filter(
     (entry) => !workspaceLintProviderEntryIsNativePreferred(entry, input.nativeOwnedWrappedRuleIds),
@@ -5844,7 +5934,58 @@ async function eslintAnalyzerRun(
       }),
     );
   }
-  if (input.files.length === 0) {
+
+  const groups = eslintGroupsBuild(executableEntries, input.configPath);
+  if (groups.size === 0) {
+    throw new Error(
+      '`@codepol/plugin/eslint` requires `args.configPath` (e.g. "./eslint.config.mjs"). ' +
+      ESLINT_BRIDGE_MIGRATION_HINT,
+    );
+  }
+
+  type EslintLintResult = {
+    filePath: string;
+    messages: Array<{
+      ruleId?: string | null;
+      message: string;
+      line: number;
+      column: number;
+      endLine?: number;
+      endColumn?: number;
+      severity?: number;
+    }>;
+    errorCount: number;
+  };
+
+  const groupFiles = new Map<
+    string,
+    { overlay: string[]; closed: string[] }
+  >();
+  const allFiles = new Set<string>();
+  for (const [key, group] of groups) {
+    const raw = analyzerGroupFilesCollect(
+      group.rules,
+      input.matches,
+      BIOME_FILE_EXTENSIONS,
+    );
+    const filtered = input.targetFiles
+      ? new Set([...raw].filter((filePath) => input.targetFiles!.has(filePath)))
+      : raw;
+    const overlay = input.fix
+      ? []
+      : [...filtered].filter((filePath) =>
+          input.sourceByFilePath.has(filePath),
+        );
+    const closed = [...filtered].filter(
+      (filePath) => !input.sourceByFilePath.has(filePath),
+    );
+    groupFiles.set(key, { overlay, closed });
+    for (const filePath of filtered) {
+      allFiles.add(filePath);
+    }
+  }
+
+  if (allFiles.size === 0) {
     return workspaceAnalyzerRunResultCreate(
       workspaceAnalyzerScorecardCreate({
         analyzerId: 'eslint',
@@ -5877,7 +6018,7 @@ async function eslintAnalyzerRun(
         skippedRuleIds,
         diagnosticCount: 0,
         violationCount: 0,
-        fileCount: input.files.length,
+        fileCount: allFiles.size,
         fixMode: 'external',
         status: 'failed',
         issues: [issue.replace('\n', ' ')],
@@ -5886,78 +6027,74 @@ async function eslintAnalyzerRun(
   }
 
   const startedAt = Date.now();
-  const eslint = new ESLintClass({
-    overrideConfigFile: eslintConfigPath,
-    plugins: {
-      codepol: eslintPluginCreate(
-        Array.from(input.pluginRules.values()).map((entry) => entry.pluginRule),
-      ) as unknown as import('eslint').ESLint.Plugin,
-    },
-    overrideConfig: eslintConfigGet(executableEntries, {
-      policy: input.policy,
-      configPath: input.configPath,
+  const lintResults: EslintLintResult[] = [];
+  const formatterOutputs: string[] = [];
+  for (const [key, group] of groups) {
+    const filesForGroup = groupFiles.get(key);
+    if (!filesForGroup) {
+      continue;
+    }
+    if (filesForGroup.overlay.length === 0 && filesForGroup.closed.length === 0) {
+      continue;
+    }
+    const eslint = new ESLintClass({
+      overrideConfigFile: group.configPath,
+      plugins: {
+        codepol: eslintPluginCreate(
+          Array.from(input.pluginRules.values()).map((entry) => entry.pluginRule),
+        ) as unknown as import('eslint').ESLint.Plugin,
+      },
+      overrideConfig: eslintConfigGet(group.entries, {
+        policy: input.policy,
+        configPath: input.configPath,
+        cwd: input.cwd,
+        ruleTargets: input.ruleTargets,
+      }),
+      fix: input.fix,
       cwd: input.cwd,
-      ruleTargets: input.ruleTargets,
-    }),
-    fix: input.fix,
-    cwd: input.cwd,
-  });
+    });
 
-  const targetFilter = (filePath: string): boolean =>
-    input.targetFiles ? input.targetFiles.has(filePath) : true;
-  const overlayFiles =
-    input.fix
-      ? []
-      : input.files.filter(
-          (filePath) => input.sourceByFilePath.has(filePath) && targetFilter(filePath),
-        );
-  const closedFiles = input.files.filter(
-    (filePath) => !input.sourceByFilePath.has(filePath) && targetFilter(filePath),
-  );
+    const groupRunResults: EslintLintResult[] = [];
+    for (const filePath of filesForGroup.overlay) {
+      const source = input.sourceByFilePath.get(filePath)!;
+      const overlayRunResults = (await eslint.lintText(source, {
+        filePath,
+      })) as EslintLintResult[];
+      groupRunResults.push(...overlayRunResults);
+    }
 
-  const overlayResults: Array<{
-    filePath: string;
-    messages: Array<{
-      ruleId?: string | null;
-      message: string;
-      line: number;
-      column: number;
-      endLine?: number;
-      endColumn?: number;
-      severity?: number;
-    }>;
-    errorCount: number;
-  }> = [];
-  for (const filePath of overlayFiles) {
-    const source = input.sourceByFilePath.get(filePath)!;
-    const lintTextResults = await eslint.lintText(source, { filePath });
-    overlayResults.push(...(lintTextResults as typeof overlayResults));
+    if (filesForGroup.closed.length > 0) {
+      const closedRunResults = (await eslint.lintFiles(
+        filesForGroup.closed,
+      )) as EslintLintResult[];
+      groupRunResults.push(...closedRunResults);
+    }
+
+    lintResults.push(...groupRunResults);
+
+    if (input.collectOutput && groupRunResults.length > 0) {
+      const formatter = await eslint.loadFormatter('stylish');
+      const formatted = (
+        await formatter.format(
+          groupRunResults as unknown as Awaited<ReturnType<typeof eslint.lintFiles>>,
+        )
+      ).trim();
+      if (formatted.length > 0) {
+        formatterOutputs.push(formatted);
+      }
+    }
   }
-
-  const fileResults =
-    closedFiles.length > 0
-      ? ((await eslint.lintFiles(closedFiles)) as typeof overlayResults)
-      : [];
-  const lintResults = [...overlayResults, ...fileResults];
 
   if (input.fix) {
-    await ESLintClass.outputFixes(lintResults as unknown as Awaited<
-      ReturnType<typeof eslint.lintFiles>
-    >);
+    type EslintFilesLintResults = Awaited<
+      ReturnType<InstanceType<typeof import('eslint').ESLint>['lintFiles']>
+    >;
+    await ESLintClass.outputFixes(
+      lintResults as unknown as EslintFilesLintResults,
+    );
   }
 
-  let output = '';
-  if (input.collectOutput) {
-    const formatter = await eslint.loadFormatter('stylish');
-    output =
-      lintResults.length > 0
-        ? (
-            await formatter.format(
-              lintResults as unknown as Awaited<ReturnType<typeof eslint.lintFiles>>,
-            )
-          ).trim()
-        : '';
-  }
+  const output = input.collectOutput ? formatterOutputs.join('\n').trim() : '';
 
   const violations: PolicyViolation[] = [];
   const diagnostics: WorkspaceDiagnostic[] = [];
@@ -6007,7 +6144,7 @@ async function eslintAnalyzerRun(
       skippedReason: skippedRuleIds.length > 0 ? 'native_preferred' : undefined,
       diagnosticCount: diagnostics.length,
       violationCount: violations.length,
-      fileCount: overlayFiles.length + closedFiles.length,
+      fileCount: allFiles.size,
       fixMode: 'external',
       status: 'ran',
       latencyMs: Date.now() - startedAt,
@@ -6074,20 +6211,21 @@ async function biomeAnalyzerRun(
     );
   }
 
-  const biomeRuleIdToConfig = biomeRuleIdToConfigMapBuild(executableEntries);
-  const biomeFilesByConfigKeyRaw = biomeFilesByConfigKeyCollect(
-    input.matches,
-    biomeRuleIdToConfig,
-  );
-  const biomeFilesByConfigKey = new Map<string, Set<string>>();
-  for (const [configKey, filesSet] of biomeFilesByConfigKeyRaw) {
+  const groups = biomeGroupsBuild(executableEntries);
+  const groupFiles = new Map<string, Set<string>>();
+  for (const [key, group] of groups) {
+    const raw = analyzerGroupFilesCollect(
+      group.rules,
+      input.matches,
+      BIOME_FILE_EXTENSIONS,
+    );
     const filtered = input.targetFiles
-      ? new Set([...filesSet].filter((filePath) => input.targetFiles!.has(filePath)))
-      : filesSet;
-    biomeFilesByConfigKey.set(configKey, filtered);
+      ? new Set([...raw].filter((filePath) => input.targetFiles!.has(filePath)))
+      : raw;
+    groupFiles.set(key, filtered);
   }
   const fileCount = new Set(
-    [...biomeFilesByConfigKey.values()].flatMap((filesSet) => [...filesSet]),
+    [...groupFiles.values()].flatMap((filesSet) => [...filesSet]),
   ).size;
   if (fileCount === 0) {
     return workspaceAnalyzerRunResultCreate(
@@ -6107,13 +6245,13 @@ async function biomeAnalyzerRun(
   const startedAt = Date.now();
   const violations: PolicyViolation[] = [];
   const issues: string[] = [];
-  for (const [configKey, filesSet] of biomeFilesByConfigKey) {
+  for (const [key, group] of groups) {
     workspaceAbortSignalThrowIfAborted(input.signal);
-    const files = [...filesSet];
+    const files = [...(groupFiles.get(key) ?? new Set<string>())];
     if (files.length === 0) {
       continue;
     }
-    const config = biomeProviderConfigFromKey(configKey);
+    const config = group.config;
 
     if (input.fix) {
       const biomeFixResult = await biomeFixAsync(files, config, {
@@ -6165,6 +6303,7 @@ async function biomeAnalyzerRun(
 async function ruffAnalyzerRun(
   input: {
     files: string[];
+    matches: RuleMatch[];
     lintProviderEntries: LintProviderEntry[];
     nativeOwnedWrappedRuleIds: ReadonlySet<string>;
     fix: boolean;
@@ -6215,12 +6354,23 @@ async function ruffAnalyzerRun(
     );
   }
 
-  const pythonFiles = input.files.filter(
-    (filePath) =>
-      fileHasExtension(filePath, PYTHON_FILE_EXTENSIONS) &&
-      (input.targetFiles ? input.targetFiles.has(filePath) : true),
+  const groups = ruffGroupsBuild(executableEntries);
+  const groupFiles = new Map<string, Set<string>>();
+  for (const [key, group] of groups) {
+    const raw = analyzerGroupFilesCollect(
+      group.rules,
+      input.matches,
+      PYTHON_FILE_EXTENSIONS,
+    );
+    const filtered = input.targetFiles
+      ? new Set([...raw].filter((filePath) => input.targetFiles!.has(filePath)))
+      : raw;
+    groupFiles.set(key, filtered);
+  }
+  const allFiles = new Set(
+    [...groupFiles.values()].flatMap((filesSet) => [...filesSet]),
   );
-  if (pythonFiles.length === 0) {
+  if (allFiles.size === 0) {
     return workspaceAnalyzerRunResultCreate(
       workspaceAnalyzerScorecardCreate({
         analyzerId: 'ruff',
@@ -6235,49 +6385,50 @@ async function ruffAnalyzerRun(
     );
   }
 
-  const config = executableEntries[0]
-    ? ruffProviderConfigResolve(executableEntries[0])
-    : undefined;
   const startedAt = Date.now();
   const issues: string[] = [];
+  const violations: PolicyViolation[] = [];
+  let anyCheckRan = false;
+  for (const [key, group] of groups) {
+    workspaceAbortSignalThrowIfAborted(input.signal);
+    const files = [...(groupFiles.get(key) ?? new Set<string>())];
+    if (files.length === 0) {
+      continue;
+    }
+    const config = group.config;
 
-  if (input.fix) {
-    const ruffFixResult = await ruffFixAsync(pythonFiles, config, {
+    if (input.fix) {
+      const ruffFixResult = await ruffFixAsync(files, config, {
+        signal: input.signal,
+      });
+      if (isErr(ruffFixResult)) {
+        const issue = `Ruff fix failed: ${ruffFixResult.Err}`;
+        console.warn(issue);
+        issues.push(issue);
+      }
+    }
+
+    workspaceAbortSignalThrowIfAborted(input.signal);
+    const ruffResult = await ruffCheckAsync(files, config, {
       signal: input.signal,
     });
-    if (isErr(ruffFixResult)) {
-      const issue = `Ruff fix failed: ${ruffFixResult.Err}`;
+    if (isErr(ruffResult)) {
+      const issue = `Ruff check failed: ${ruffResult.Err}`;
       console.warn(issue);
       issues.push(issue);
+      continue;
     }
+    anyCheckRan = true;
+    violations.push(...ruffResult.Ok);
   }
 
-  workspaceAbortSignalThrowIfAborted(input.signal);
-  const ruffResult = await ruffCheckAsync(pythonFiles, config, {
-    signal: input.signal,
-  });
-  if (isErr(ruffResult)) {
-    const issue = `Ruff check failed: ${ruffResult.Err}`;
-    console.warn(issue);
-    issues.push(issue);
-    return workspaceAnalyzerRunResultCreate(
-      workspaceAnalyzerScorecardCreate({
-        analyzerId: 'ruff',
-        platform: 'ruff',
-        languages: ['python'],
-        ownedRuleIds,
-        skippedRuleIds,
-        skippedReason: skippedRuleIds.length > 0 ? 'native_preferred' : undefined,
-        fileCount: pythonFiles.length,
-        fixMode: 'external',
-        status: 'failed',
-        latencyMs: Date.now() - startedAt,
-        issues,
-      }),
-    );
-  }
-
-  const diagnostics = providerViolationsToDiagnostics(ruffResult.Ok, 'ruff');
+  const diagnostics = providerViolationsToDiagnostics(violations, 'ruff');
+  const fileCount = allFiles.size;
+  const status: WorkspaceAnalyzerStatus = anyCheckRan
+    ? issues.length > 0
+      ? 'failed'
+      : 'ran'
+    : 'failed';
   return workspaceAnalyzerRunResultCreate(
     workspaceAnalyzerScorecardCreate({
       analyzerId: 'ruff',
@@ -6287,16 +6438,16 @@ async function ruffAnalyzerRun(
       skippedRuleIds,
       skippedReason: skippedRuleIds.length > 0 ? 'native_preferred' : undefined,
       diagnosticCount: diagnostics.length,
-      violationCount: ruffResult.Ok.length,
-      fileCount: pythonFiles.length,
+      violationCount: violations.length,
+      fileCount,
       fixMode: 'external',
-      status: issues.length > 0 ? 'failed' : 'ran',
+      status,
       latencyMs: Date.now() - startedAt,
       issues,
     }),
     {
       diagnostics,
-      violations: ruffResult.Ok,
+      violations,
     },
   );
 }
@@ -6731,6 +6882,7 @@ async function workspaceAnalysisRunFullPath(
   const eslintErrorCountByFilePath = new Map<string, number>();
   const eslintResult = await eslintAnalyzerRun({
     files,
+    matches,
     sourceByFilePath,
     policy,
     configPath: workspace.configPath,
@@ -6757,6 +6909,7 @@ async function workspaceAnalysisRunFullPath(
   workspaceAbortSignalThrowIfAborted(options.signal);
   const ruffResult = await ruffAnalyzerRun({
     files,
+    matches,
     lintProviderEntries,
     nativeOwnedWrappedRuleIds,
     fix: options.fix,
@@ -6943,6 +7096,7 @@ async function workspaceAnalysisRunIncremental(
     const startedAt = Date.now();
     eslintFreshResult = await eslintAnalyzerRun({
       files,
+      matches,
       sourceByFilePath,
       policy,
       configPath: workspace.configPath,
@@ -7005,6 +7159,7 @@ async function workspaceAnalysisRunIncremental(
     const startedAt = Date.now();
     ruffFreshResult = await ruffAnalyzerRun({
       files,
+      matches,
       lintProviderEntries,
       nativeOwnedWrappedRuleIds,
       fix: false,

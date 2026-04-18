@@ -82,22 +82,11 @@ Add the package to the root workspace `package.json`, wire `tsconfig.json`, and 
 
 ## Step 3: Write the analyzer
 
-Add an analyzer function to [`packages/workspace-service/src/index.ts`](../packages/workspace-service/src/index.ts) next to `biomeAnalyzerRun` and `ruffAnalyzerRun`. The signature depends on whether your provider takes per-rule config:
+Add an analyzer function to [`packages/workspace-service/src/index.ts`](../packages/workspace-service/src/index.ts) next to `eslintAnalyzerRun`, `biomeAnalyzerRun`, and `ruffAnalyzerRun`. All three in-tree analyzers follow the same shape — accept both `files` (for cache partitioning and skip-path guards) and `matches` (for per-group file scoping), group entries by resolved-config identity, and invoke the tool once per group:
 
 ```typescript
-// Pattern A (ruff-style): flat file list, provider config is global.
 async function denoAnalyzerRun(input: {
   files: string[];
-  lintProviderEntries: LintProviderEntry[];
-  nativeOwnedWrappedRuleIds: ReadonlySet<string>;
-  fix: boolean;
-  signal?: AbortSignal;
-  targetFiles?: ReadonlySet<string>;
-}): Promise<WorkspaceAnalyzerRunResult> { … }
-
-// Pattern B (biome-style): files bucketed by config key so that rules
-// carrying different per-rule options run in separate invocations.
-async function denoAnalyzerRun(input: {
   matches: RuleMatch[];
   lintProviderEntries: LintProviderEntry[];
   nativeOwnedWrappedRuleIds: ReadonlySet<string>;
@@ -107,7 +96,7 @@ async function denoAnalyzerRun(input: {
 }): Promise<WorkspaceAnalyzerRunResult> { … }
 ```
 
-Use Pattern B when rules using your provider can legitimately ship different `config` values (`biomeBin`, `configPath`, …) and you need to group files so the tool is spawned once per config. Otherwise use Pattern A.
+Group the executable entries by a stable JSON key over your provider's resolved config (mirror `biomeProviderConfigKey` / `ruffProviderConfigKey`), then for each group compute the in-scope files with `analyzerGroupFilesCollect(group.rules, input.matches, DENO_FILE_EXTENSIONS)` intersected with `targetFiles` when present. Use `match.rule` reference identity (via the entry's `rule` backref) rather than `ruleId` strings so two policy rules that share a ruleId but differ in `args` remain distinguishable per group. A single-config provider degenerates to one group; a multi-config provider fans out transparently.
 
 ### Required control flow
 
