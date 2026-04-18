@@ -39,6 +39,7 @@ import {
   cliPolicyCheckerResolve,
   type CliWorkspaceServiceResolvedInfo,
 } from './serviceFactory';
+import { graphCommand } from './graph/graphCommand';
 
 type CliOptions = {
   fix: boolean;
@@ -529,9 +530,15 @@ async function main(): Promise<void> {
       '$0 --escalate scope:parser=trace@600:reproduce_wasm_abort',
       'Elevate the parser scope to trace for 10 minutes',
     )
+    .command(graphCommand)
     .help()
     .version()
     .parseAsync();
+
+  const firstPositional = argv._[0];
+  if (typeof firstPositional === 'string' && firstPositional === 'graph') {
+    return;
+  }
 
   const configResult = argv.config
     ? await configGetFromPath(argv.config as string)

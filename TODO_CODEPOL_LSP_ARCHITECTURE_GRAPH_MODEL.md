@@ -421,11 +421,22 @@ Each phase is independently shippable, additive, and testable.
   - `dead-module` runs `moduleDeadModulesCompute` against natural or `args.entries` glob roots, supports `args.ignore`, returns zero violations when an explicit entry glob matches nothing (typo-safety)
   - tests: `noCyclesCheck.spec.ts` (5), `deadModuleCheck.spec.ts` (5), `noLayerViolationCheck.spec.ts` (6), `tests/architecture-policy.spec.ts` end-to-end policy spec exercising all three rules through `policyCheck`
 
-### Phase 4: CLI graph subcommands
+### Phase 4: CLI graph subcommands — _done_
 
 - `apps/cli/src/graph/*.ts`, one file per subcommand
 - JSON output shape equals the workspace query result exactly
 - integration test per subcommand using the existing CLI test harness
+- landed:
+  - one file per subcommand under `apps/cli/src/graph/`: `graphExport.ts`, `graphCycles.ts`, `graphPath.ts`, `graphDead.ts`, `graphFanIn.ts`, `graphFanOut.ts`, `graphImpact.ts`; shared helpers in `graphOutputFormat.ts`, `graphPathResolve.ts`, `graphWorkspaceResolve.ts`
+  - wired under `codepol graph <subcommand>` via `graphCommand.ts`; each subcommand calls one workspace-service query and emits JSON identical to the corresponding `WorkspaceDependency*Result` type by default (`--format text` for humans)
+  - graph subcommands run against an in-process `WorkspaceService` per invocation; daemon-backed graph queries (shared warm graph) are deferred — tracked in Phase 6 alongside diff/baseline work
+  - `codepol graph cycles` / `graph dead` exit non-zero when results are non-empty so CI can gate PRs directly; `graph path` exits non-zero when no path exists
+  - `graph cycles --max <n>` truncates using a deterministic `(-size, first member)` ranking with a `truncated: boolean` payload flag
+  - `graph dead --entry <path>` (repeatable) overrides the natural entry point set; each value is resolved to a `file://` URI via the workspace cwd before the workspace-service call
+  - `graph fan-in [file]` / `graph fan-out [file]` rank nodes by `importerCount` / `importeeCount` with `--top <n>` (default 20); supplying a file restricts output to that file
+  - `graph impact <file>` exposes `queryImpactRadius` with `--direction upstream|downstream|both` and `--depth <n>` so panels and CLI share one payload shape
+  - tests: `tests/e2e.cli.graph.spec.ts` runs the built CLI as a subprocess for each subcommand (10 cases) — happy path + non-zero exit paths + entry override — asserting JSON shape parity with the workspace contract
+  - existing `codepol` (policy check) flow is unchanged; graph dispatch short-circuits `main()` when `argv._[0] === 'graph'`
 
 ### Phase 5: Editor surfaces
 
