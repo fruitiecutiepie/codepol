@@ -2742,16 +2742,32 @@ targets = ["src"]
       {
         uri: appUri,
         workspaceRelativePath: 'src/app.ts',
+        metrics: {
+          importerCount: 0,
+          importeeCount: 1,
+          symbolCount: 2,
+          isEntryPoint: true,
+          isInCycle: false,
+        },
       },
       {
         uri: sharedUri,
         workspaceRelativePath: 'src/shared.ts',
+        metrics: {
+          importerCount: 1,
+          importeeCount: 0,
+          symbolCount: 1,
+          isEntryPoint: false,
+          isInCycle: false,
+        },
       },
     ]);
     expect(dependencyGraph.edges).toEqual([
       {
         fromUri: appUri,
         toUri: sharedUri,
+        kind: 'static',
+        bindingCount: 1,
       },
     ]);
 
@@ -6217,6 +6233,206 @@ fix = "never"
 
       expect(action?.kind).toBe('source.fixAll.rule');
       expect(action?.ruleId).toBe('@codepol/plugin/no-interface');
+    });
+  });
+
+  describe('dependency graph enrichment', () => {
+    it('enriches nodes and edges with metrics, package info, and edge kinds across packages', async () => {
+      const workspaceRoot = tempWorkspaceCreate('codepol-dep-graph-enrich-');
+      createdDirs.push(workspaceRoot);
+
+      fs.mkdirSync(path.join(workspaceRoot, 'packages/lib/src'), { recursive: true });
+      fs.mkdirSync(path.join(workspaceRoot, 'apps/web/src'), { recursive: true });
+
+      fs.writeFileSync(
+        path.join(workspaceRoot, 'package.json'),
+        workspacePackageRootPackageJsonContentCreate(),
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(workspaceRoot, 'packages/lib/package.json'),
+        workspacePackageManifestContentCreate('@acme/lib'),
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(workspaceRoot, 'apps/web/package.json'),
+        workspacePackageManifestContentCreate('@acme/web'),
+        'utf8',
+      );
+
+      const configPath = path.join(workspaceRoot, 'codepol.toml');
+      fs.writeFileSync(configPath, unusedExportsWorkspacePackagesConfigContentCreate(), 'utf8');
+
+      const libPath = path.join(workspaceRoot, 'packages/lib/src/index.ts');
+      // `@acme/web` needs a resolvable entry-point for workspace package
+      // discovery to emit a record, so include the conventional
+      // `src/index.ts` that re-exports the app module.
+      const appPath = path.join(workspaceRoot, 'apps/web/src/index.ts');
+      fs.writeFileSync(libPath, 'export const sharedValue = 1;\n', 'utf8');
+      fs.writeFileSync(
+        appPath,
+        "import { sharedValue } from '@acme/lib';\nexport const value = sharedValue;\n",
+        'utf8',
+      );
+
+      const service = workspaceServiceCreate();
+      const { clientSessionId, workspaceId } = await clientWorkspaceAttach(service, {
+        rootPath: workspaceRoot,
+        configPath,
+      });
+
+      const result = await service.queryDependencyGraph({
+        clientSessionId,
+        workspaceId,
+      });
+
+      const libUri = workspacePathToUri(libPath);
+      const appUri = workspacePathToUri(appPath);
+
+      const libNode = result.nodes.find((node) => node.uri === libUri);
+      const appNode = result.nodes.find((node) => node.uri === appUri);
+
+      expect(libNode).toBeDefined();
+      expect(appNode).toBeDefined();
+
+      expect(libNode?.packageName).toBe('@acme/lib');
+      expect(appNode?.packageName).toBe('@acme/web');
+
+      expect(libNode?.metrics).toMatchObject({
+        importerCount: 1,
+        importeeCount: 0,
+        symbolCount: 1,
+        isEntryPoint: false,
+        isInCycle: false,
+      });
+      expect(appNode?.metrics).toMatchObject({
+        importerCount: 0,
+        importeeCount: 1,
+        symbolCount: 2,
+        isEntryPoint: true,
+        isInCycle: false,
+      });
+
+      expect(result.edges).toHaveLength(1);
+      expect(result.edges[0]).toEqual({
+        fromUri: appUri,
+        toUri: libUri,
+        kind: 'static',
+        bindingCount: 1,
+        crossesPackageBoundary: true,
+      });
+    });
+
+    it('flags cycle members via metrics.isInCycle and omits package fields outside monorepos', async () => {
+      const workspaceRoot = tempWorkspaceCreate('codepol-dep-graph-cycle-');
+      createdDirs.push(workspaceRoot);
+      fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+      const configPath = path.join(workspaceRoot, 'codepol.toml');
+      fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
+
+      const aPath = path.join(workspaceRoot, 'src', 'a.ts');
+      const bPath = path.join(workspaceRoot, 'src', 'b.ts');
+      fs.writeFileSync(
+        aPath,
+        "import { beta } from './b';\nexport function alpha() { return beta(); }\n",
+        'utf8',
+      );
+      fs.writeFileSync(
+        bPath,
+        "import { alpha } from './a';\nexport function beta() { return alpha(); }\n",
+        'utf8',
+      );
+
+      const service = workspaceServiceCreate();
+      const { clientSessionId, workspaceId } = await clientWorkspaceAttach(service, {
+        rootPath: workspaceRoot,
+        configPath,
+      });
+
+      const result = await service.queryDependencyGraph({
+        clientSessionId,
+        workspaceId,
+      });
+
+      const aUri = workspacePathToUri(aPath);
+      const bUri = workspacePathToUri(bPath);
+
+      const aNode = result.nodes.find((node) => node.uri === aUri);
+      const bNode = result.nodes.find((node) => node.uri === bUri);
+
+      expect(aNode?.metrics?.isInCycle).toBe(true);
+      expect(bNode?.metrics?.isInCycle).toBe(true);
+      expect(aNode?.metrics?.isEntryPoint).toBe(false);
+      expect(bNode?.metrics?.isEntryPoint).toBe(false);
+      expect(aNode?.packageName).toBeUndefined();
+      expect(bNode?.packageName).toBeUndefined();
+
+      for (const edge of result.edges) {
+        expect(edge.kind).toBe('static');
+        expect(edge.bindingCount).toBe(1);
+        // No workspace packages declared, so package-boundary crossing is
+        // unknown and the field must be omitted.
+        expect(edge.crossesPackageBoundary).toBeUndefined();
+      }
+
+      expect(result.cycles).toHaveLength(1);
+    });
+
+    it('classifies side-effect and dynamic edges with matching kind/bindingCount', async () => {
+      const workspaceRoot = tempWorkspaceCreate('codepol-dep-graph-kinds-');
+      createdDirs.push(workspaceRoot);
+      fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+      const configPath = path.join(workspaceRoot, 'codepol.toml');
+      fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
+
+      const polyfillPath = path.join(workspaceRoot, 'src', 'polyfill.ts');
+      const lazyPath = path.join(workspaceRoot, 'src', 'lazy.ts');
+      const appPath = path.join(workspaceRoot, 'src', 'app.ts');
+      fs.writeFileSync(polyfillPath, 'export const ready = true;\n', 'utf8');
+      fs.writeFileSync(lazyPath, 'export const lazyValue = 1;\n', 'utf8');
+      fs.writeFileSync(
+        appPath,
+        [
+          "import './polyfill';",
+          'async function loadIt() {',
+          "  const { lazyValue } = await import('./lazy');",
+          '  return lazyValue;',
+          '}',
+          'export const boot = loadIt;',
+        ].join('\n') + '\n',
+        'utf8',
+      );
+
+      const service = workspaceServiceCreate();
+      const { clientSessionId, workspaceId } = await clientWorkspaceAttach(service, {
+        rootPath: workspaceRoot,
+        configPath,
+      });
+
+      const result = await service.queryDependencyGraph({
+        clientSessionId,
+        workspaceId,
+      });
+
+      const appUri = workspacePathToUri(appPath);
+      const polyfillUri = workspacePathToUri(polyfillPath);
+      const lazyUri = workspacePathToUri(lazyPath);
+
+      const sideEffectEdge = result.edges.find(
+        (edge) => edge.fromUri === appUri && edge.toUri === polyfillUri,
+      );
+      expect(sideEffectEdge).toEqual({
+        fromUri: appUri,
+        toUri: polyfillUri,
+        kind: 'side_effect',
+        bindingCount: 0,
+      });
+
+      const dynamicEdge = result.edges.find(
+        (edge) => edge.fromUri === appUri && edge.toUri === lazyUri,
+      );
+      expect(dynamicEdge?.kind).toBe('dynamic');
+      expect(dynamicEdge?.bindingCount).toBeGreaterThanOrEqual(1);
     });
   });
 });

@@ -263,6 +263,20 @@ export type CallsRelation = {
 };
 
 /**
+ * Syntactic style of an import as captured at extraction time.
+ *
+ * - `static`: ES module static import (`import`/`from`) or language-native
+ *   static module import (Python `import`/`from`).
+ * - `dynamic`: ES dynamic import (`import(spec)` or `await import(spec)`),
+ *   including destructured and whole-module bindings.
+ * - `cjs`: CommonJS `require()` call binding.
+ *
+ * The value is advisory metadata for consumers that want to distinguish
+ * edge kinds; omitted values default to `static` for back-compat.
+ */
+export type ImportStyle = 'static' | 'dynamic' | 'cjs';
+
+/**
  * An "ImportBinding" relation: links an imported name to its source module.
  * Used for cross-file symbol resolution.
  */
@@ -286,6 +300,11 @@ export type ImportBindingRelation = {
   isNamespace: boolean;
   /** Byte range of the import statement */
   byteRange: ByteRange;
+  /**
+   * Syntactic style of the import (static/dynamic/cjs). Optional for
+   * backwards compatibility; absent values should be treated as `static`.
+   */
+  importStyle?: ImportStyle;
 };
 
 /**

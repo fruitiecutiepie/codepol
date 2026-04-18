@@ -19,6 +19,56 @@ import type { IndexStore } from './indexStore';
 // ============================================================================
 
 /**
+ * Classification of a single edge in the module dependency graph.
+ *
+ * - `static`: produced by a syntactic static import (ES `import`, Python
+ *   `import`/`from`).
+ * - `dynamic`: produced by a dynamic import (`import(...)` or
+ *   `await import(...)`), regardless of whether the result is bound.
+ * - `cjs`: produced by a CommonJS `require(...)` call.
+ * - `side_effect`: produced by a module-specifier-only import (no binding
+ *   on the source side), e.g. `import "./polyfill"`.
+ * - `type_only`: reserved — not populated in Phase 1; will be set when
+ *   type-only import metadata is captured by adapters.
+ */
+export type ModuleEdgeKind =
+  | 'static'
+  | 'dynamic'
+  | 'side_effect'
+  | 'cjs'
+  | 'type_only';
+
+/**
+ * Per-edge metadata computed from the underlying index relations.
+ */
+export type ModuleEdgeInfo = {
+  /** Dominant kind of this edge. Picked deterministically when sources disagree. */
+  kind: ModuleEdgeKind;
+  /**
+   * Number of distinct `ImportBindingRelation` entries that contributed to
+   * this edge. Zero for pure side-effect edges (no bindings on the
+   * importer side).
+   */
+  bindingCount: number;
+};
+
+/**
+ * Read-only lookup for per-edge metadata on top of a ModuleGraph.
+ * Instances are built by {@link moduleGraphEdgeInfoBuild} and are
+ * independent from the ModuleGraph instance itself so that consumers can
+ * opt-in without paying the cost when they only need topology.
+ */
+export type ModuleGraphEdgeInfo = {
+  /**
+   * Returns metadata for the edge `from → to` if such an edge exists,
+   * otherwise `undefined`. Callers are expected to first confirm the edge
+   * exists via {@link ModuleGraph.moduleGraphImporteesGet}; looking up a
+   * non-existent edge returns `undefined` rather than a default object.
+   */
+  moduleEdgeInfoGet(from: string, to: string): ModuleEdgeInfo | undefined;
+};
+
+/**
  * Module-level dependency graph.
  * All file paths are absolute, matching the paths in IndexStore.
  */
@@ -144,6 +194,118 @@ export function moduleGraphBuild(store: IndexStore): ModuleGraph {
       return cachedEntryPoints;
     },
   };
+}
+
+// ============================================================================
+// Module Graph Edge Info
+// ============================================================================
+
+/**
+ * Build a {@link ModuleGraphEdgeInfo} over the given IndexStore.
+ *
+ * For each `from → to` edge present in the module graph the helper
+ * aggregates information from two relation sources:
+ *
+ * 1. `ImportBindingRelation` entries in `from` whose `resolvedModulePath`
+ *    equals `to`. These carry the authoritative import syntactic style
+ *    (`static`, `dynamic`, `cjs`) and contribute to `bindingCount`.
+ * 2. `ImportsRelation` entries in `from` whose `resolvedModulePath`
+ *    equals `to` when there are no bindings. These represent pure
+ *    side-effect imports (`import "./polyfill"`) and side-effect-only
+ *    dynamic imports (`await import("./x")` without assignment).
+ *
+ * Kind precedence when multiple bindings contribute to the same edge:
+ *
+ * ```
+ *   dynamic > cjs > static
+ * ```
+ *
+ * The precedence intentionally surfaces the most "runtime-flavored" style
+ * so architecture rules can treat any mixed-style coupling as dynamic.
+ *
+ * Edges not present in the underlying graph return `undefined` — see
+ * {@link ModuleGraphEdgeInfo.moduleEdgeInfoGet}.
+ */
+export function moduleGraphEdgeInfoBuild(store: IndexStore): ModuleGraphEdgeInfo {
+  const files = store.filesGet();
+  const fileSet = new Set(files);
+
+  type EdgeAccumulator = {
+    kind: ModuleEdgeKind;
+    bindingCount: number;
+  };
+
+  // edgeKey = `${from}\0${to}`
+  const edges = new Map<string, EdgeAccumulator>();
+
+  const edgeKey = (from: string, to: string): string => `${from}\0${to}`;
+
+  for (const file of files) {
+    const bindings = store.importBindingsInFileGet(file);
+    for (const binding of bindings) {
+      const target = binding.resolvedModulePath;
+      if (!target || !fileSet.has(target) || target === file) continue;
+
+      const key = edgeKey(file, target);
+      const style = binding.importStyle ?? 'static';
+      const bindingKind: ModuleEdgeKind =
+        style === 'dynamic' ? 'dynamic' : style === 'cjs' ? 'cjs' : 'static';
+
+      const existing = edges.get(key);
+      if (!existing) {
+        edges.set(key, { kind: bindingKind, bindingCount: 1 });
+      } else {
+        existing.bindingCount += 1;
+        existing.kind = edgeKindMerge(existing.kind, bindingKind);
+      }
+    }
+
+    const imports = store.importsInFileGet(file);
+    for (const imp of imports) {
+      const target = imp.resolvedModulePath;
+      if (!target || !fileSet.has(target) || target === file) continue;
+
+      const key = edgeKey(file, target);
+      if (edges.has(key)) {
+        // Edge is already described by at least one ImportBindingRelation;
+        // the ImportsRelation here is a duplicate source-specifier capture
+        // and should not downgrade the classification.
+        continue;
+      }
+      edges.set(key, { kind: 'side_effect', bindingCount: 0 });
+    }
+  }
+
+  return {
+    moduleEdgeInfoGet(from: string, to: string): ModuleEdgeInfo | undefined {
+      const entry = edges.get(edgeKey(from, to));
+      if (!entry) return undefined;
+      return { kind: entry.kind, bindingCount: entry.bindingCount };
+    },
+  };
+}
+
+/**
+ * Pick the dominant edge kind when multiple bindings contribute to the
+ * same file→file edge. Precedence is `dynamic > cjs > static` so that any
+ * runtime-style import visible on the edge wins.
+ */
+function edgeKindMerge(existing: ModuleEdgeKind, next: ModuleEdgeKind): ModuleEdgeKind {
+  const rank = (kind: ModuleEdgeKind): number => {
+    switch (kind) {
+      case 'dynamic':
+        return 3;
+      case 'cjs':
+        return 2;
+      case 'static':
+        return 1;
+      case 'side_effect':
+        return 0;
+      case 'type_only':
+        return 0;
+    }
+  };
+  return rank(next) > rank(existing) ? next : existing;
 }
 
 // ============================================================================

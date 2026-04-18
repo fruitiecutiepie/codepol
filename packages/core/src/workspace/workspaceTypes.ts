@@ -441,14 +441,92 @@ export type WorkspaceRenamePreviewResult =
   | WorkspaceRenamePreviewSuccess
   | WorkspaceRenamePreviewFailure;
 
+/**
+ * Structural metrics for a dependency-graph node. All fields are optional
+ * so older clients that only read `uri` / `workspaceRelativePath` keep
+ * working unchanged; values are populated on a best-effort basis by the
+ * workspace service.
+ */
+export type WorkspaceDependencyGraphNodeMetrics = {
+  /** Number of files that import this file (within the indexed set). */
+  importerCount: number;
+  /** Number of files this file imports (within the indexed set). */
+  importeeCount: number;
+  /** Number of declared symbols in this file. */
+  symbolCount: number;
+  /**
+   * Sum of cyclomatic complexity across all function/method symbols in the
+   * file. Omitted when no CFGs are available for any symbol in the file.
+   */
+  aggregateCyclomaticComplexity?: number;
+  /**
+   * Whether this file is a module-graph entry point (no importers in the
+   * indexed set). Duplicates `WorkspaceDependencyGraphResult.entryPoints`
+   * for per-node convenience.
+   */
+  isEntryPoint: boolean;
+  /** Whether this file participates in any strongly-connected cycle. */
+  isInCycle: boolean;
+};
+
 export type WorkspaceDependencyGraphNode = {
   uri: string;
   workspaceRelativePath: string;
+  /**
+   * Structural metrics for this file. Populated by the workspace service
+   * when the index is available. Absent when metrics could not be computed.
+   */
+  metrics?: WorkspaceDependencyGraphNodeMetrics;
+  /**
+   * Architectural layer name this file belongs to. Populated by the
+   * workspace service from policy layer config. Absent in Phase 1 until
+   * layer configuration is wired up.
+   */
+  layer?: string;
+  /**
+   * Monorepo package name that owns this file (from `package.json`).
+   * Absent when the workspace is not a monorepo or the file is outside
+   * any known package.
+   */
+  packageName?: string;
 };
+
+/**
+ * Syntactic classification of a dependency-graph edge. See
+ * `ModuleEdgeKind` in `@codepol/core` for the authoritative definition.
+ */
+export type WorkspaceDependencyGraphEdgeKind =
+  | 'static'
+  | 'dynamic'
+  | 'side_effect'
+  | 'cjs'
+  | 'type_only';
 
 export type WorkspaceDependencyGraphEdge = {
   fromUri: string;
   toUri: string;
+  /**
+   * Dominant syntactic style of the import(s) producing this edge.
+   * Populated when the workspace service has access to edge info.
+   */
+  kind?: WorkspaceDependencyGraphEdgeKind;
+  /**
+   * Number of distinct `ImportBindingRelation` entries contributing to the
+   * edge. Zero for pure side-effect imports.
+   */
+  bindingCount?: number;
+  /**
+   * True when the importer and importee belong to different monorepo
+   * packages. Absent when package membership cannot be determined for
+   * either endpoint.
+   */
+  crossesPackageBoundary?: boolean;
+  /**
+   * True when the importer and importee belong to different architectural
+   * layers. Absent until layer configuration is wired up, or when layer
+   * membership cannot be determined for either endpoint.
+   */
+  crossesLayerBoundary?: boolean;
 };
 
 export type WorkspaceDependencyGraphResult = {

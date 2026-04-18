@@ -1186,6 +1186,24 @@ function importBindingsExtract(
       }
     }
 
+    // Determine import style from the set of captures present in this match.
+    // Dynamic and CommonJS bindings are tagged explicitly so downstream
+    // consumers (ModuleGraphEdgeInfo) can classify graph edges without having
+    // to re-scan the source.
+    const hasDynamicCapture =
+      capturesByName.has('import.dynamic_name') ||
+      capturesByName.has('import.dynamic_binding') ||
+      capturesByName.has('import.dynamic_source');
+    const hasRequireCapture =
+      capturesByName.has('import.require_name') ||
+      capturesByName.has('import.require_binding') ||
+      capturesByName.has('import.require_source');
+    const importStyle: 'static' | 'dynamic' | 'cjs' = hasDynamicCapture
+      ? 'dynamic'
+      : hasRequireCapture
+        ? 'cjs'
+        : 'static';
+
     // Handle named imports: import { foo, bar as baz } from "module"
     const bindingNameNode = capturesByName.get('import.binding_name');
     if (bindingNameNode) {
@@ -1213,6 +1231,7 @@ function importBindingsExtract(
           isDefault: false,
           isNamespace: false,
           byteRange: importRange.end > 0 ? importRange : { start: bindingNameNode.startIndex, end: bindingNameNode.endIndex },
+          importStyle,
         });
       }
     }
@@ -1231,6 +1250,7 @@ function importBindingsExtract(
           isDefault: true,
           isNamespace: false,
           byteRange: importRange.end > 0 ? importRange : { start: defaultNameNode.startIndex, end: defaultNameNode.endIndex },
+          importStyle,
         });
       }
     }
@@ -1249,6 +1269,7 @@ function importBindingsExtract(
           isDefault: false,
           isNamespace: true,
           byteRange: importRange.end > 0 ? importRange : { start: namespaceNameNode.startIndex, end: namespaceNameNode.endIndex },
+          importStyle,
         });
       }
     }
@@ -1267,6 +1288,7 @@ function importBindingsExtract(
           isDefault: true,
           isNamespace: false,
           byteRange: importRange.end > 0 ? importRange : { start: requireNameNode.startIndex, end: requireNameNode.endIndex },
+          importStyle: 'cjs',
         });
       }
     }
@@ -1285,6 +1307,7 @@ function importBindingsExtract(
           isDefault: false,
           isNamespace: false,
           byteRange: importRange.end > 0 ? importRange : { start: requireBindingNode.startIndex, end: requireBindingNode.endIndex },
+          importStyle: 'cjs',
         });
       }
     }
@@ -1304,6 +1327,7 @@ function importBindingsExtract(
           isDefault: false,
           isNamespace: true,
           byteRange: importRange.end > 0 ? importRange : { start: dynamicNameNode.startIndex, end: dynamicNameNode.endIndex },
+          importStyle: 'dynamic',
         });
       }
     }
@@ -1326,6 +1350,7 @@ function importBindingsExtract(
           isDefault: false,
           isNamespace: false,
           byteRange: importRange.end > 0 ? importRange : { start: dynamicBindingNode.startIndex, end: dynamicBindingNode.endIndex },
+          importStyle: 'dynamic',
         });
       }
     }
@@ -1348,6 +1373,7 @@ function importBindingsExtract(
           isDefault: false,
           isNamespace: true,
           byteRange: importRange.end > 0 ? importRange : { start: moduleNameNode.startIndex, end: moduleNameNode.endIndex },
+          importStyle: 'static',
         });
       }
     }

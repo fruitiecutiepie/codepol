@@ -541,4 +541,197 @@ const x = 1;
     const importees = index.moduleImporteesGet(mgStaticSideCaller);
     expect(importees).toContain(mgStaticSideTarget);
   });
+
+  // ==========================================================================
+  // Module Graph Edge Info (kind + bindingCount)
+  // ==========================================================================
+
+  it('should classify a single named static import as a static edge with bindingCount 1', () => {
+    const target = path.join(testDir, 'info_static_target.ts');
+    fs.writeFileSync(target, 'export const value = 1;\n');
+
+    const caller = path.join(testDir, 'info_static_caller.ts');
+    fs.writeFileSync(
+      caller,
+      "import { value } from './info_static_target';\nexport const use = value;\n",
+    );
+
+    const { index } = projectIndexBuildSync({
+      files: [target, caller],
+      dir: testDir,
+    });
+
+    expect(index.moduleEdgeInfoGet(caller, target)).toEqual({
+      kind: 'static',
+      bindingCount: 1,
+    });
+  });
+
+  it('should count every named binding on a shared edge', () => {
+    const target = path.join(testDir, 'info_multi_target.ts');
+    fs.writeFileSync(
+      target,
+      'export const foo = 1;\nexport const bar = 2;\nexport const baz = 3;\n',
+    );
+
+    const caller = path.join(testDir, 'info_multi_caller.ts');
+    fs.writeFileSync(
+      caller,
+      "import { foo, bar, baz } from './info_multi_target';\nexport const use = foo + bar + baz;\n",
+    );
+
+    const { index } = projectIndexBuildSync({
+      files: [target, caller],
+      dir: testDir,
+    });
+
+    expect(index.moduleEdgeInfoGet(caller, target)).toEqual({
+      kind: 'static',
+      bindingCount: 3,
+    });
+  });
+
+  it('should classify a bare side-effect import as a side_effect edge with bindingCount 0', () => {
+    const target = path.join(testDir, 'info_side_target.ts');
+    fs.writeFileSync(target, 'export const ready = true;\n');
+
+    const caller = path.join(testDir, 'info_side_caller.ts');
+    fs.writeFileSync(caller, "import './info_side_target';\nconst x = 1;\n");
+
+    const { index } = projectIndexBuildSync({
+      files: [target, caller],
+      dir: testDir,
+    });
+
+    expect(index.moduleEdgeInfoGet(caller, target)).toEqual({
+      kind: 'side_effect',
+      bindingCount: 0,
+    });
+  });
+
+  it('should classify a destructured dynamic import as a dynamic edge', () => {
+    const target = path.join(testDir, 'info_dyn_target.ts');
+    fs.writeFileSync(
+      target,
+      'export const lazyValue = 1;\n',
+    );
+
+    const caller = path.join(testDir, 'info_dyn_caller.ts');
+    fs.writeFileSync(
+      caller,
+      "async function loadIt() {\n  const { lazyValue } = await import('./info_dyn_target');\n  return lazyValue;\n}\n",
+    );
+
+    const { index } = projectIndexBuildSync({
+      files: [target, caller],
+      dir: testDir,
+    });
+
+    const info = index.moduleEdgeInfoGet(caller, target);
+    expect(info?.kind).toBe('dynamic');
+    expect(info?.bindingCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it('should classify a whole-module dynamic import as a dynamic edge', () => {
+    const target = path.join(testDir, 'info_dynmod_target.ts');
+    fs.writeFileSync(target, 'export const lazyFn = () => 1;\n');
+
+    const caller = path.join(testDir, 'info_dynmod_caller.ts');
+    fs.writeFileSync(
+      caller,
+      "async function loadIt() {\n  const mod = await import('./info_dynmod_target');\n  return mod.lazyFn();\n}\n",
+    );
+
+    const { index } = projectIndexBuildSync({
+      files: [target, caller],
+      dir: testDir,
+    });
+
+    const info = index.moduleEdgeInfoGet(caller, target);
+    expect(info?.kind).toBe('dynamic');
+    expect(info?.bindingCount).toBe(1);
+  });
+
+  it('should classify a bare await import without binding as a side_effect edge', () => {
+    const target = path.join(testDir, 'info_dynside_target.ts');
+    fs.writeFileSync(target, 'export const init = true;\n');
+
+    const caller = path.join(testDir, 'info_dynside_caller.ts');
+    fs.writeFileSync(
+      caller,
+      "async function loadIt() {\n  await import('./info_dynside_target');\n}\n",
+    );
+
+    const { index } = projectIndexBuildSync({
+      files: [target, caller],
+      dir: testDir,
+    });
+
+    // A dynamic import with no binding produces only an ImportsRelation,
+    // so from the graph's perspective it is structurally a side-effect
+    // edge. Higher-precision classification would require the ImportsRelation
+    // to carry its own importStyle tag, which is out of scope for Phase 1.
+    expect(index.moduleEdgeInfoGet(caller, target)).toEqual({
+      kind: 'side_effect',
+      bindingCount: 0,
+    });
+  });
+
+  it('should classify a destructured require call as a cjs edge', () => {
+    const target = path.join(testDir, 'info_cjs_target.ts');
+    fs.writeFileSync(target, 'export const requireMe = 1;\n');
+
+    const caller = path.join(testDir, 'info_cjs_caller.ts');
+    fs.writeFileSync(
+      caller,
+      "const { requireMe } = require('./info_cjs_target');\nexport const use = requireMe;\n",
+    );
+
+    const { index } = projectIndexBuildSync({
+      files: [target, caller],
+      dir: testDir,
+    });
+
+    const info = index.moduleEdgeInfoGet(caller, target);
+    expect(info?.kind).toBe('cjs');
+    expect(info?.bindingCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it('should merge mixed-style imports with dynamic taking precedence over static', () => {
+    const target = path.join(testDir, 'info_merge_target.ts');
+    fs.writeFileSync(
+      target,
+      'export const staticPart = 1;\nexport const dynamicPart = 2;\n',
+    );
+
+    const caller = path.join(testDir, 'info_merge_caller.ts');
+    fs.writeFileSync(
+      caller,
+      "import { staticPart } from './info_merge_target';\nasync function loadIt() {\n  const { dynamicPart } = await import('./info_merge_target');\n  return staticPart + dynamicPart;\n}\n",
+    );
+
+    const { index } = projectIndexBuildSync({
+      files: [target, caller],
+      dir: testDir,
+    });
+
+    const info = index.moduleEdgeInfoGet(caller, target);
+    expect(info?.kind).toBe('dynamic');
+    expect(info?.bindingCount).toBe(2);
+  });
+
+  it('should return undefined for edges that do not exist', () => {
+    const left = path.join(testDir, 'info_missing_left.ts');
+    fs.writeFileSync(left, 'export const l = 1;\n');
+    const right = path.join(testDir, 'info_missing_right.ts');
+    fs.writeFileSync(right, 'export const r = 2;\n');
+
+    const { index } = projectIndexBuildSync({
+      files: [left, right],
+      dir: testDir,
+    });
+
+    expect(index.moduleEdgeInfoGet(left, right)).toBeUndefined();
+    expect(index.moduleEdgeInfoGet(right, left)).toBeUndefined();
+  });
 });

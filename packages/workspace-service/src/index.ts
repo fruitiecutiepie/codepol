@@ -63,6 +63,10 @@ import {
   type WorkspaceApplyResult,
   type WorkspaceArchitectureSummaryResult,
   type WorkspaceCodeAction,
+  type WorkspaceDependencyGraphEdge,
+  type WorkspaceDependencyGraphEdgeKind,
+  type WorkspaceDependencyGraphNode,
+  type WorkspaceDependencyGraphNodeMetrics,
   type WorkspaceDependencyGraphResult,
   type WorkspaceDiagnostic,
   type WorkspaceDiagnosticSeverity,
@@ -4125,31 +4129,148 @@ function workspaceRenameTargetPreviewFailureResolve(
   return workspaceRenamePreviewFailureCreate(prepareFailure.code, prepareFailure.message);
 }
 
+/**
+ * Build a resolver that maps an absolute file path to the monorepo
+ * package that owns it (if any). A file belongs to a package when its
+ * absolute path is a descendant of the package's `package.json`
+ * directory; when multiple packages match, the longest matching prefix
+ * wins so nested workspaces are handled correctly.
+ */
+function workspaceFilePackageNameResolverCreate(
+  records: WorkspacePackageRecord[] | undefined,
+): (filePath: string) => string | undefined {
+  if (!records || records.length === 0) {
+    return () => undefined;
+  }
+  const entries = records
+    .map((record) => ({
+      name: record.name,
+      packageDir: path.dirname(record.packageJsonPath),
+    }))
+    .sort((left, right) => right.packageDir.length - left.packageDir.length);
+  return (filePath: string): string | undefined => {
+    for (const entry of entries) {
+      if (workspacePathIsWithinDirectory(filePath, entry.packageDir)) {
+        return entry.name;
+      }
+    }
+    return undefined;
+  };
+}
+
+/**
+ * Check whether `filePath` is at or below `directory`. Uses `path.relative`
+ * instead of string prefix matching so `foo/barely` is not treated as
+ * inside `foo/bar`.
+ */
+function workspacePathIsWithinDirectory(
+  filePath: string,
+  directory: string,
+): boolean {
+  const relative = path.relative(directory, filePath);
+  if (relative === '') return true;
+  if (relative.startsWith('..')) return false;
+  return !path.isAbsolute(relative);
+}
+
+/**
+ * Aggregate cyclomatic complexity across every function/method symbol in
+ * a file. Returns `undefined` when no symbol in the file has an attached
+ * CFG (the capability is unavailable for that file), so callers can
+ * distinguish "no data" from "complexity of zero".
+ */
+function workspaceFileAggregateCyclomaticComplexityGet(
+  index: ProjectIndex,
+  filePath: string,
+): number | undefined {
+  const symbols = index.symbolsInFileGet(filePath);
+  let aggregate = 0;
+  let counted = 0;
+  for (const symbol of symbols) {
+    if (symbol.kind !== 'function' && symbol.kind !== 'method') continue;
+    const complexity = index.cyclomaticComplexityGet(symbol.id);
+    if (complexity === undefined) continue;
+    aggregate += complexity;
+    counted += 1;
+  }
+  return counted > 0 ? aggregate : undefined;
+}
+
 function workspaceDependencyGraphResultCreate(
   workspace: WorkspaceContextState,
   index: ProjectIndex,
 ): WorkspaceDependencyGraphResult {
   const files = [...index.filesGet()].sort();
-  return {
-    nodes: files.map((filePath) => ({
+  const cycles = index.moduleCyclesGet();
+  const entryPoints = index.moduleEntryPointsGet();
+  const entryPointSet = new Set(entryPoints);
+  const cycleMemberSet = new Set<string>();
+  for (const cycle of cycles) {
+    for (const filePath of cycle) {
+      cycleMemberSet.add(filePath);
+    }
+  }
+
+  const filePackageNameGet = workspaceFilePackageNameResolverCreate(
+    workspace.baseIndexState?.workspacePackageRecords,
+  );
+
+  const nodes: WorkspaceDependencyGraphNode[] = files.map((filePath) => {
+    const importerCount = index.moduleImportersGet(filePath).length;
+    const importeeCount = index.moduleImporteesGet(filePath).length;
+    const symbolCount = index.symbolsInFileGet(filePath).length;
+    const aggregateCyclomaticComplexity =
+      workspaceFileAggregateCyclomaticComplexityGet(index, filePath);
+    const metrics: WorkspaceDependencyGraphNodeMetrics = {
+      importerCount,
+      importeeCount,
+      symbolCount,
+      isEntryPoint: entryPointSet.has(filePath),
+      isInCycle: cycleMemberSet.has(filePath),
+      ...(aggregateCyclomaticComplexity !== undefined
+        ? { aggregateCyclomaticComplexity }
+        : {}),
+    };
+    const packageName = filePackageNameGet(filePath);
+    return {
       uri: workspacePathToUri(filePath),
       workspaceRelativePath: workspaceRelativePathCreate(workspace.rootPath, filePath),
-    })),
-    edges: files.flatMap((filePath) =>
-      index
-        .moduleImporteesGet(filePath)
-        .sort()
-        .map((importeePath) => ({
+      metrics,
+      ...(packageName !== undefined ? { packageName } : {}),
+    };
+  });
+
+  const edges: WorkspaceDependencyGraphEdge[] = files.flatMap((filePath) => {
+    const fromPackage = filePackageNameGet(filePath);
+    return index
+      .moduleImporteesGet(filePath)
+      .sort()
+      .map((importeePath): WorkspaceDependencyGraphEdge => {
+        const edgeInfo = index.moduleEdgeInfoGet(filePath, importeePath);
+        const toPackage = filePackageNameGet(importeePath);
+        const crossesPackageBoundary =
+          fromPackage !== undefined && toPackage !== undefined
+            ? fromPackage !== toPackage
+            : undefined;
+        const kind: WorkspaceDependencyGraphEdgeKind | undefined = edgeInfo?.kind;
+        const bindingCount = edgeInfo?.bindingCount;
+        return {
           fromUri: workspacePathToUri(filePath),
           toUri: workspacePathToUri(importeePath),
-        })),
-    ),
-    entryPoints: index
-      .moduleEntryPointsGet()
-      .map((filePath) => workspacePathToUri(filePath)),
-    cycles: index
-      .moduleCyclesGet()
-      .map((cycle) => cycle.map((filePath) => workspacePathToUri(filePath))),
+          ...(kind !== undefined ? { kind } : {}),
+          ...(bindingCount !== undefined ? { bindingCount } : {}),
+          ...(crossesPackageBoundary !== undefined
+            ? { crossesPackageBoundary }
+            : {}),
+        };
+      });
+  });
+
+  return {
+    nodes,
+    edges,
+    entryPoints: entryPoints.map((filePath) => workspacePathToUri(filePath)),
+    cycles: cycles.map((cycle) => cycle.map((filePath) => workspacePathToUri(filePath))),
   };
 }
 

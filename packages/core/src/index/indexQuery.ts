@@ -21,8 +21,8 @@ import type {
   FlowGraph,
 } from './indexTypes';
 import type { IndexStore } from './indexStore';
-import type { ModuleGraph } from './moduleGraph';
-import { moduleGraphBuild } from './moduleGraph';
+import type { ModuleEdgeInfo, ModuleGraph, ModuleGraphEdgeInfo } from './moduleGraph';
+import { moduleGraphBuild, moduleGraphEdgeInfoBuild } from './moduleGraph';
 
 // ============================================================================
 // ProjectIndex Interface
@@ -225,6 +225,16 @@ export type ProjectIndex = {
    */
   moduleEntryPointsGet(): string[];
 
+  /**
+   * Get per-edge metadata for a directed file→file edge in the module
+   * dependency graph. Returns `undefined` when no such edge exists.
+   *
+   * Meant for consumers (workspace-service, architecture rules) that need
+   * to distinguish static, dynamic, CommonJS, and side-effect imports
+   * without reaching into the underlying relation records.
+   */
+  moduleEdgeInfoGet(from: string, to: string): ModuleEdgeInfo | undefined;
+
   // ============================================================================
   // Control Flow Graph Queries
   // ============================================================================
@@ -283,6 +293,7 @@ export function projectIndexCreate(
 ): ProjectIndex {
   // Lazily built module graph (cached after first access)
   let graph: ModuleGraph | undefined;
+  let edgeInfo: ModuleGraphEdgeInfo | undefined;
 
   return {
     // Symbol queries
@@ -525,6 +536,11 @@ export function projectIndexCreate(
     moduleEntryPointsGet(): string[] {
       if (!graph) graph = moduleGraphBuild(store);
       return graph.moduleGraphEntryPointsGet();
+    },
+
+    moduleEdgeInfoGet(from: string, to: string): ModuleEdgeInfo | undefined {
+      if (!edgeInfo) edgeInfo = moduleGraphEdgeInfoBuild(store);
+      return edgeInfo.moduleEdgeInfoGet(from, to);
     },
 
     // Control flow graph queries

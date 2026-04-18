@@ -774,16 +774,32 @@ describe('CodepolLspServer', () => {
         {
           uri: appUri,
           workspaceRelativePath: 'src/app.ts',
+          metrics: {
+            importerCount: 0,
+            importeeCount: 1,
+            symbolCount: 2,
+            isEntryPoint: true,
+            isInCycle: false,
+          },
         },
         {
           uri: sharedUri,
           workspaceRelativePath: 'src/shared.ts',
+          metrics: {
+            importerCount: 1,
+            importeeCount: 0,
+            symbolCount: 2,
+            isEntryPoint: false,
+            isInCycle: false,
+          },
         },
       ],
       edges: [
         {
           fromUri: appUri,
           toUri: sharedUri,
+          kind: 'static',
+          bindingCount: 1,
         },
       ],
       entryPoints: [appUri],

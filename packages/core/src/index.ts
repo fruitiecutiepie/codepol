@@ -130,7 +130,9 @@ export type {
   WorkspaceRenamePreviewFailure,
   WorkspaceRenamePreviewResult,
   WorkspaceDependencyGraphNode,
+  WorkspaceDependencyGraphNodeMetrics,
   WorkspaceDependencyGraphEdge,
+  WorkspaceDependencyGraphEdgeKind,
   WorkspaceDependencyGraphResult,
   WorkspaceArchitectureSummaryHotspot,
   WorkspaceArchitectureSummaryResult,
@@ -602,6 +604,7 @@ export type {
   ReferencesRelation,
   ReferenceUsageType,
   ImportsRelation,
+  ImportStyle,
   CallsRelation,
   ImportBindingRelation,
   ExportsRelation,
@@ -636,8 +639,16 @@ export {
 } from './index/indexSnapshot';
 
 // Module Graph
-export type { ModuleGraph } from './index/moduleGraph';
-export { moduleGraphBuild } from './index/moduleGraph';
+export type {
+  ModuleGraph,
+  ModuleGraphEdgeInfo,
+  ModuleEdgeInfo,
+  ModuleEdgeKind,
+} from './index/moduleGraph';
+export {
+  moduleGraphBuild,
+  moduleGraphEdgeInfoBuild,
+} from './index/moduleGraph';
 
 // Index builder
 export type { IndexBuildOptions, IndexBuildResult } from './index/indexBuilder';
