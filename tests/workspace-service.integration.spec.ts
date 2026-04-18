@@ -4812,7 +4812,7 @@ targets = ["src"]
     });
   });
 
-  it('discards a stale warm cache when the disk-backed workspace state changes', async () => {
+  it('keeps the warm cache and re-runs only the changed file when one disk-backed file changes', async () => {
     const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
     const runtimeDir = tempWorkspaceCreate('codepol-workspace-cache-');
     createdDirs.push(workspaceRoot, runtimeDir);
@@ -4820,11 +4820,18 @@ targets = ["src"]
     const configPath = path.join(workspaceRoot, 'codepol.toml');
     fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
 
-    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
-    const uri = workspacePathToUri(filePath);
+    const changedFilePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const stableFilePath = path.join(workspaceRoot, 'src', 'stable.ts');
+    const changedUri = workspacePathToUri(changedFilePath);
+    const stableUri = workspacePathToUri(stableFilePath);
     fs.writeFileSync(
-      filePath,
+      changedFilePath,
       'export interface User {\n  name: string;\n}\n',
+      'utf8',
+    );
+    fs.writeFileSync(
+      stableFilePath,
+      'export interface Account {\n  id: string;\n}\n',
       'utf8',
     );
 
@@ -4839,14 +4846,26 @@ targets = ["src"]
       configPath,
       clientInstanceId: 'warm-cache-stale-writer',
     });
-    await writerService.queryDiagnostics({
+    expect(
+      await writerService.queryDiagnostics({
+        clientSessionId: written.clientSessionId,
+        workspaceId: written.workspaceId,
+        uri: changedUri,
+      }),
+    ).toHaveLength(1);
+    expect(
+      await writerService.queryDiagnostics({
+        clientSessionId: written.clientSessionId,
+        workspaceId: written.workspaceId,
+        uri: stableUri,
+      }),
+    ).toHaveLength(1);
+    await writerService.closeClientSession({
       clientSessionId: written.clientSessionId,
-      workspaceId: written.workspaceId,
-      uri,
     });
 
     fs.writeFileSync(
-      filePath,
+      changedFilePath,
       'export type User = {\n  name: string;\n};\n',
       'utf8',
     );
@@ -4870,18 +4889,25 @@ targets = ["src"]
     ).toMatchObject({
       workspaceId: restored.workspaceId,
       workspaceInstanceId: restored.workspaceInstanceId,
-      status: 'cold',
+      status: 'ready',
       replayState: 'pending',
       workspaceReady: false,
-      analysisGeneration: 0,
+      analysisGeneration: 1,
     });
     expect(
       await readerService.queryDiagnostics({
         clientSessionId: restored.clientSessionId,
         workspaceId: restored.workspaceId,
-        uri,
+        uri: changedUri,
       }),
     ).toEqual([]);
+    expect(
+      await readerService.queryDiagnostics({
+        clientSessionId: restored.clientSessionId,
+        workspaceId: restored.workspaceId,
+        uri: stableUri,
+      }),
+    ).toHaveLength(1);
   });
 
   it('discards a warm cache when a configured external tool binary changes', async () => {
@@ -5224,6 +5250,280 @@ targets = ["src"]
       replayState: 'pending',
       workspaceReady: false,
       analysisGeneration: 0,
+    });
+  });
+
+  it('keeps cache for unchanged files and analyzes only the newly added file across warm restore', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    const runtimeDir = tempWorkspaceCreate('codepol-workspace-cache-');
+    createdDirs.push(workspaceRoot, runtimeDir);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
+
+    const stableFilePath = path.join(workspaceRoot, 'src', 'stable.ts');
+    const stableUri = workspacePathToUri(stableFilePath);
+    fs.writeFileSync(
+      stableFilePath,
+      'export interface Account {\n  id: string;\n}\n',
+      'utf8',
+    );
+
+    const warmCache = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const writerService = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine({ warmCache }),
+    });
+    const written = await clientWorkspaceAttach(writerService, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'warm-cache-add-writer',
+    });
+    expect(
+      await writerService.queryDiagnostics({
+        clientSessionId: written.clientSessionId,
+        workspaceId: written.workspaceId,
+        uri: stableUri,
+      }),
+    ).toHaveLength(1);
+    await writerService.closeClientSession({
+      clientSessionId: written.clientSessionId,
+    });
+
+    const addedFilePath = path.join(workspaceRoot, 'src', 'added.ts');
+    const addedUri = workspacePathToUri(addedFilePath);
+    fs.writeFileSync(
+      addedFilePath,
+      'export interface NewModel {\n  id: string;\n}\n',
+      'utf8',
+    );
+
+    const readerService = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine({ warmCache }),
+    });
+    const restored = await clientWorkspaceAttach(readerService, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'warm-cache-add-reader',
+    });
+
+    expect(
+      await readerService.queryIndexStatus({
+        clientSessionId: restored.clientSessionId,
+        workspaceId: restored.workspaceId,
+      }),
+    ).toMatchObject({
+      workspaceId: restored.workspaceId,
+      status: 'ready',
+      replayState: 'pending',
+      analysisGeneration: 1,
+    });
+
+    expect(
+      await readerService.queryDiagnostics({
+        clientSessionId: restored.clientSessionId,
+        workspaceId: restored.workspaceId,
+        uri: stableUri,
+      }),
+    ).toHaveLength(1);
+    expect(
+      await readerService.queryDiagnostics({
+        clientSessionId: restored.clientSessionId,
+        workspaceId: restored.workspaceId,
+        uri: addedUri,
+      }),
+    ).toHaveLength(1);
+  });
+
+  it('drops cache entries for removed files but reuses cache for remaining files across warm restore', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    const runtimeDir = tempWorkspaceCreate('codepol-workspace-cache-');
+    createdDirs.push(workspaceRoot, runtimeDir);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
+
+    const stableFilePath = path.join(workspaceRoot, 'src', 'stable.ts');
+    const removableFilePath = path.join(workspaceRoot, 'src', 'removable.ts');
+    const stableUri = workspacePathToUri(stableFilePath);
+    fs.writeFileSync(
+      stableFilePath,
+      'export interface Account {\n  id: string;\n}\n',
+      'utf8',
+    );
+    fs.writeFileSync(
+      removableFilePath,
+      'export interface Removable {\n  id: string;\n}\n',
+      'utf8',
+    );
+
+    const warmCache = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const writerService = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine({ warmCache }),
+    });
+    const written = await clientWorkspaceAttach(writerService, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'warm-cache-remove-writer',
+    });
+    expect(
+      await writerService.queryDiagnostics({
+        clientSessionId: written.clientSessionId,
+        workspaceId: written.workspaceId,
+      }),
+    ).toHaveLength(2);
+    await writerService.closeClientSession({
+      clientSessionId: written.clientSessionId,
+    });
+
+    fs.unlinkSync(removableFilePath);
+
+    const readerService = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine({ warmCache }),
+    });
+    const restored = await clientWorkspaceAttach(readerService, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'warm-cache-remove-reader',
+    });
+
+    const allDiagnostics = await readerService.queryDiagnostics({
+      clientSessionId: restored.clientSessionId,
+      workspaceId: restored.workspaceId,
+    });
+    expect(allDiagnostics).toHaveLength(1);
+    expect(allDiagnostics[0]!.uri).toBe(stableUri);
+  });
+
+  it('re-runs cross-file analysis on cached files when a new file is added under warm restore', async () => {
+    // Write phase: only the exporter exists, so it has no importers and the
+    // cross-file rule emits an `unused-exports` diagnostic. The warm cache
+    // persists that diagnostic in the tree-analyzer slice.
+    //
+    // Read phase: a new importer file is added on disk, which adds a member
+    // to the file set and bumps `fileKey`. Because `treeIndexFingerprint` is
+    // derived from `fileKey`, every cross-file tree-cache entry — including
+    // the exporter's — misses on the new run, the tree analyzer re-evaluates
+    // the exporter against the post-delta project index, and the diagnostic
+    // disappears. This proves the warm-cache restore does not paper over a
+    // real cross-file invalidation when files are added.
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    const runtimeDir = tempWorkspaceCreate('codepol-workspace-cache-');
+    createdDirs.push(workspaceRoot, runtimeDir);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(configPath, unusedExportsConfigContentCreate(), 'utf8');
+
+    const exporterPath = path.join(workspaceRoot, 'src', 'exporter.ts');
+    const importerPath = path.join(workspaceRoot, 'src', 'importer.ts');
+    const exporterUri = workspacePathToUri(exporterPath);
+
+    fs.writeFileSync(exporterPath, 'export const sharedValue = 1;\n', 'utf8');
+
+    const warmCache = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const writerService = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine({ warmCache }),
+    });
+    const written = await clientWorkspaceAttach(writerService, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'warm-cache-crossfile-add-writer',
+    });
+    const writerExporterDiagnostics = await writerService.queryDiagnostics({
+      clientSessionId: written.clientSessionId,
+      workspaceId: written.workspaceId,
+      uri: exporterUri,
+    });
+    expect(writerExporterDiagnostics).toHaveLength(1);
+    expect(writerExporterDiagnostics[0]?.code).toBe('@codepol/plugin/no-unused-exports');
+    await writerService.closeClientSession({
+      clientSessionId: written.clientSessionId,
+    });
+
+    fs.writeFileSync(
+      importerPath,
+      "import { sharedValue } from './exporter';\nexport const value = sharedValue;\n",
+      'utf8',
+    );
+
+    const readerService = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine({ warmCache }),
+    });
+    const restored = await clientWorkspaceAttach(readerService, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'warm-cache-crossfile-add-reader',
+    });
+
+    const exporterDiagnostics = await readerService.queryDiagnostics({
+      clientSessionId: restored.clientSessionId,
+      workspaceId: restored.workspaceId,
+      uri: exporterUri,
+    });
+    expect(exporterDiagnostics).toEqual([]);
+  });
+
+  it('produces a round-trip-stable warm cache when nothing changes between sessions', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    const runtimeDir = tempWorkspaceCreate('codepol-workspace-cache-');
+    createdDirs.push(workspaceRoot, runtimeDir);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    fs.writeFileSync(
+      filePath,
+      'export interface User {\n  name: string;\n}\n',
+      'utf8',
+    );
+
+    const warmCache = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const firstService = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine({ warmCache }),
+    });
+    const first = await clientWorkspaceAttach(firstService, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'warm-cache-roundtrip-first',
+    });
+    const firstDiagnostics = await firstService.queryDiagnostics({
+      clientSessionId: first.clientSessionId,
+      workspaceId: first.workspaceId,
+    });
+    await firstService.closeClientSession({
+      clientSessionId: first.clientSessionId,
+    });
+
+    const secondService = workspaceServiceCreate({
+      engine: new WorkspaceServiceEngine({ warmCache }),
+    });
+    const second = await clientWorkspaceAttach(secondService, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'warm-cache-roundtrip-second',
+    });
+    const secondDiagnostics = await secondService.queryDiagnostics({
+      clientSessionId: second.clientSessionId,
+      workspaceId: second.workspaceId,
+    });
+    expect(
+      secondDiagnostics
+        .map((diagnostic) => `${diagnostic.uri}:${diagnostic.code}:${diagnostic.message}`)
+        .sort(),
+    ).toEqual(
+      firstDiagnostics
+        .map((diagnostic) => `${diagnostic.uri}:${diagnostic.code}:${diagnostic.message}`)
+        .sort(),
+    );
+    expect(
+      await secondService.queryIndexStatus({
+        clientSessionId: second.clientSessionId,
+        workspaceId: second.workspaceId,
+      }),
+    ).toMatchObject({
+      status: 'ready',
+      replayState: 'pending',
+      analysisGeneration: 1,
     });
   });
 

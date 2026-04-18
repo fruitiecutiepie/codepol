@@ -8,7 +8,11 @@ import type {
   WorkspaceDiagnostic,
 } from '@codepol/core';
 
-export const WORKSPACE_WARM_CACHE_COMPAT_VERSION = 1;
+// Bumped to 2: per-(analyzer, file) cache entries are now persisted alongside
+// the composed `lastAnalysis`. v1 snapshots are dropped on read because they
+// lack `analyzerCache` and would otherwise force an all-or-nothing
+// invalidation on the first file change.
+export const WORKSPACE_WARM_CACHE_COMPAT_VERSION = 2;
 
 const WORKSPACE_WARM_CACHE_ENVIRONMENT_KEYS = [
   'PATH',
@@ -33,6 +37,59 @@ export type WorkspaceWarmCacheBaseIndexStateSnapshot = {
   files: string[];
   fileKey: string;
   workspacePackages: Array<[string, string]>;
+};
+
+export type WorkspaceWarmCacheAnalyzerKey = 'tree' | 'eslint' | 'biome' | 'ruff';
+
+export type WorkspaceWarmCacheAnalyzerKeyTuple = {
+  contentFingerprint: string;
+  configFingerprint: string;
+  pluginFingerprint: string;
+  toolFingerprintKey: string;
+  treeIndexFingerprint: string;
+};
+
+/**
+ * Per-(analyzer, file) cache entry persisted in the warm-cache snapshot. The
+ * `key` carries the same invariants the in-memory cache uses (file content +
+ * config + plugin + tool + treeIndex fingerprints) so restore can reuse a
+ * slice without re-running the analyzer when every invariant still matches.
+ *
+ * `fixableTreeViolationDiagnosticIds` is a parallel id list so the
+ * `Map<diagnosticId, PolicyViolation>` shape used at runtime can be
+ * reconstructed without persisting the Map directly.
+ */
+export type WorkspaceWarmCacheAnalyzerFileEntry = {
+  filePath: string;
+  key: WorkspaceWarmCacheAnalyzerKeyTuple;
+  violations: PolicyViolation[];
+  diagnostics: WorkspaceDiagnostic[];
+  treeViolations: PolicyViolation[];
+  fixableTreeViolationDiagnosticIds: string[];
+  errorCount?: number;
+};
+
+export type WorkspaceWarmCacheAnalyzerScorecardTemplate = {
+  analyzerId: string;
+  platform: 'codepol_tree' | 'eslint' | 'biome' | 'ruff';
+  languages: string[];
+  ownedRuleIds: string[];
+  skippedRuleIds: string[];
+  skippedReason?: 'native_preferred' | 'no_matching_rules' | 'no_matching_files';
+  diagnosticCount: number;
+  violationCount: number;
+  issueCount: number;
+  fileCount: number;
+  fixMode: 'none' | 'inline' | 'external';
+  status: 'ran' | 'skipped' | 'failed';
+  latencyMs: number;
+  issues: string[];
+};
+
+export type WorkspaceWarmCacheAnalyzerEntry = {
+  analyzer: WorkspaceWarmCacheAnalyzerKey;
+  scorecardTemplate: WorkspaceWarmCacheAnalyzerScorecardTemplate;
+  fileResults: WorkspaceWarmCacheAnalyzerFileEntry[];
 };
 
 export type WorkspaceWarmCacheSnapshot = {
@@ -86,6 +143,10 @@ export type WorkspaceWarmCacheSnapshot = {
   toolFingerprints: WorkspaceWarmCacheFileFingerprint[];
   pluginSignature: string;
   pluginFingerprints: WorkspaceWarmCacheFileFingerprint[];
+  // Per-(analyzer, file) cache entries. Optional so very old / corrupt
+  // snapshots stay readable up to the rest of the validation; missing means
+  // restore must treat every file as a miss for that analyzer.
+  analyzerCache?: WorkspaceWarmCacheAnalyzerEntry[];
   createdAtUnixMs: number;
 };
 

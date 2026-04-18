@@ -23,6 +23,7 @@ import {
   policyViolationsGetFromDir,
   projectIndexBuildSync,
   projectIndexCreate,
+  projectIndexRemoveFiles,
   projectIndexStoreRestore,
   projectIndexStoreSnapshotCreate,
   projectIndexUpdateFileFromSource,
@@ -105,6 +106,10 @@ import {
 } from './runtime';
 import {
   WORKSPACE_WARM_CACHE_COMPAT_VERSION,
+  type WorkspaceWarmCacheAnalyzerEntry,
+  type WorkspaceWarmCacheAnalyzerFileEntry,
+  type WorkspaceWarmCacheAnalyzerKey,
+  type WorkspaceWarmCacheAnalyzerKeyTuple,
   type WorkspaceWarmCacheFileFingerprint,
   type WorkspaceWarmCacheSnapshot,
   type WorkspaceWarmCacheStore,
@@ -309,7 +314,9 @@ type WorkspaceAnalyzerCacheEntry = {
 
 type WorkspaceAnalyzerCacheKey = 'tree' | 'eslint' | 'biome' | 'ruff';
 
-type WorkspaceAnalyzerCache = Partial<Record<WorkspaceAnalyzerCacheKey, WorkspaceAnalyzerCacheEntry>>;
+export type WorkspaceAnalyzerCache = Partial<
+  Record<WorkspaceAnalyzerCacheKey, WorkspaceAnalyzerCacheEntry>
+>;
 
 type WorkspaceFileFingerprintCacheEntry = {
   size: number;
@@ -3959,6 +3966,117 @@ function workspaceBaseIndexStateGetOrBuild(
   return baseIndexState;
 }
 
+/**
+ * Decide whether to incrementally re-index just the added/removed files
+ * versus rebuilding the whole project index from scratch. The incremental
+ * path costs roughly `O(|delta|)` per-file parses + cross-file resolves,
+ * while a rebuild is `O(|files|)`. Once the delta exceeds
+ * `WORKSPACE_WARM_CACHE_INCREMENTAL_INDEX_DELTA_THRESHOLD` of the file set,
+ * the rebuild dominates.
+ *
+ * "Same file set" is also affordable (delta size 0, `previousFiles` matches
+ * exactly), but in that case the caller doesn't even reach here because
+ * `fileKey` already matches.
+ */
+function workspaceIndexDeltaIsAffordable(input: {
+  currentFiles: string[];
+  previousFiles: string[];
+}): boolean {
+  if (input.currentFiles.length === 0) {
+    return true;
+  }
+  const previousSet = new Set(input.previousFiles);
+  const currentSet = new Set(input.currentFiles);
+  let added = 0;
+  for (const filePath of currentSet) {
+    if (!previousSet.has(filePath)) {
+      added += 1;
+    }
+  }
+  let removed = 0;
+  for (const filePath of previousSet) {
+    if (!currentSet.has(filePath)) {
+      removed += 1;
+    }
+  }
+  const churn = added + removed;
+  return churn / input.currentFiles.length <= WORKSPACE_WARM_CACHE_INCREMENTAL_INDEX_DELTA_THRESHOLD;
+}
+
+/**
+ * Mutate `indexState` in place so its store / file list reflects the new
+ * `baseIndexState` file set.
+ *
+ * Removals: query the live module graph for each removed file's importers
+ * BEFORE removal so we can re-resolve those importers after the file is
+ * gone (otherwise stale `resolvedModulePath` edges would survive). Then
+ * drop the file from the store.
+ *
+ * Additions: parse + index each added file, then run
+ * `crossFileResolveForFile`, which handles BOTH the outgoing imports of
+ * the added file AND the incoming imports from existing files that
+ * previously could not resolve to it.
+ *
+ * Workspace-package mapping is assumed unchanged (caller verifies via
+ * `workspacePackageMapEquals`); we keep the existing
+ * `indexState.workspacePackages`.
+ */
+function workspaceIndexStateApplyFileDelta(input: {
+  workspace: WorkspaceContextState;
+  indexState: WorkspaceIndexState;
+  baseIndexState: WorkspaceBaseIndexState;
+}): void {
+  const previousSet = new Set(input.indexState.files);
+  const currentSet = new Set(input.baseIndexState.files);
+  const removedFiles: string[] = [];
+  for (const filePath of previousSet) {
+    if (!currentSet.has(filePath)) {
+      removedFiles.push(filePath);
+    }
+  }
+  const addedFiles: string[] = [];
+  for (const filePath of currentSet) {
+    if (!previousSet.has(filePath)) {
+      addedFiles.push(filePath);
+    }
+  }
+
+  const importersToReresolve = new Set<string>();
+  if (removedFiles.length > 0) {
+    for (const removedFile of removedFiles) {
+      for (const importer of input.indexState.index.moduleImportersGet(removedFile)) {
+        if (currentSet.has(importer)) {
+          importersToReresolve.add(importer);
+        }
+      }
+    }
+    projectIndexRemoveFiles(input.indexState.store, removedFiles);
+  }
+
+  const resolveOptions = {
+    baseDir: input.workspace.rootPath,
+    extensions: DEFAULT_EXTENSIONS,
+    workspacePackages: input.indexState.workspacePackages,
+  };
+  for (const filePath of addedFiles) {
+    if (!projectIndexUpdateFileSync(input.indexState.store, filePath)) {
+      continue;
+    }
+    crossFileResolveForFile(input.indexState.store, filePath, resolveOptions);
+    importersToReresolve.delete(filePath);
+  }
+  for (const importer of importersToReresolve) {
+    crossFileResolveForFile(input.indexState.store, importer, resolveOptions);
+  }
+
+  input.indexState.files = input.baseIndexState.files;
+  input.indexState.fileKey = input.baseIndexState.fileKey;
+  input.indexState.index = projectIndexCreate(
+    input.indexState.store,
+    input.indexState.capabilities,
+  );
+}
+
 function workspaceIndexGetOrBuild(
   workspace: WorkspaceContextState,
   state: WorkspaceDocumentsState & WorkspaceAnalysisCacheState,
@@ -3972,10 +4090,21 @@ function workspaceIndexGetOrBuild(
   );
   let indexState = state.indexState;
 
+  const packageMapMatches =
+    indexState && workspacePackageMapEquals(indexState.workspacePackages, effectiveWorkspacePackages);
+  const canApplyDelta =
+    indexState !== undefined &&
+    indexState.fileKey !== baseIndexState.fileKey &&
+    packageMapMatches === true &&
+    workspaceIndexDeltaIsAffordable({
+      currentFiles: baseIndexState.files,
+      previousFiles: indexState.files,
+    });
+
   if (
     !indexState ||
-    indexState.fileKey !== baseIndexState.fileKey ||
-    !workspacePackageMapEquals(indexState.workspacePackages, effectiveWorkspacePackages)
+    (indexState.fileKey !== baseIndexState.fileKey && !canApplyDelta) ||
+    packageMapMatches === false
   ) {
     const store = indexStoreNew();
     const { index } = projectIndexBuildSync({
@@ -3994,6 +4123,12 @@ function workspaceIndexGetOrBuild(
       workspacePackages: effectiveWorkspacePackages,
     };
     state.indexState = indexState;
+  } else if (indexState.fileKey !== baseIndexState.fileKey && canApplyDelta) {
+    workspaceIndexStateApplyFileDelta({
+      workspace,
+      indexState,
+      baseIndexState,
+    });
   }
 
   const indexedFiles = new Set(indexState.files);
@@ -4511,6 +4646,307 @@ function workspaceContentFingerprintForFile(
   return contentFingerprint;
 }
 
+/**
+ * Fraction of `currentFiles` whose disk content (or membership) may diverge
+ * from the snapshot before we abandon incremental restore and rebuild the
+ * project index from scratch. Below the threshold we apply per-file deltas
+ * via the existing core APIs; above it the full rebuild is cheaper.
+ */
+const WORKSPACE_WARM_CACHE_INCREMENTAL_INDEX_DELTA_THRESHOLD = 0.25;
+
+export type WorkspaceWarmCacheFileDelta = {
+  unchangedFiles: string[];
+  changedFiles: string[];
+  addedFiles: string[];
+  removedFiles: string[];
+};
+
+/**
+ * Diff the snapshot's recorded file set + fingerprints against the current
+ * workspace file list (typically produced by `workspaceFilesNormalize` over
+ * `ruleMatchesGet`). Returns disjoint sets so the caller can:
+ *
+ * - reuse cache entries for `unchangedFiles`
+ * - drop entries for `removedFiles` and `changedFiles`
+ * - hand `addedFiles ∪ changedFiles` back to the incremental analysis path
+ *   as the dirty set on the next run
+ *
+ * The diff is fingerprint-strict: even if `currentFiles` matches `snapshot.files`,
+ * any file whose live `(size, mtimeMs)` diverged from the snapshot is treated
+ * as `changed`.
+ */
+export function workspaceWarmCacheFileDeltaCompute(input: {
+  snapshotFiles: string[];
+  snapshotFileFingerprints: WorkspaceWarmCacheFileFingerprint[];
+  currentFiles: string[];
+  currentFileFingerprints: WorkspaceWarmCacheFileFingerprint[];
+}): WorkspaceWarmCacheFileDelta {
+  const snapshotFingerprintByPath = new Map<string, WorkspaceWarmCacheFileFingerprint>();
+  for (const fingerprint of input.snapshotFileFingerprints) {
+    snapshotFingerprintByPath.set(path.resolve(fingerprint.path), fingerprint);
+  }
+  const snapshotFileSet = new Set(input.snapshotFiles.map((filePath) => path.resolve(filePath)));
+  const currentFingerprintByPath = new Map<string, WorkspaceWarmCacheFileFingerprint>();
+  for (const fingerprint of input.currentFileFingerprints) {
+    currentFingerprintByPath.set(path.resolve(fingerprint.path), fingerprint);
+  }
+  const currentFileSet = new Set(input.currentFiles.map((filePath) => path.resolve(filePath)));
+
+  const unchangedFiles: string[] = [];
+  const changedFiles: string[] = [];
+  const addedFiles: string[] = [];
+  const removedFiles: string[] = [];
+
+  for (const filePath of currentFileSet) {
+    if (!snapshotFileSet.has(filePath)) {
+      addedFiles.push(filePath);
+      continue;
+    }
+    const snapshotFingerprint = snapshotFingerprintByPath.get(filePath);
+    const currentFingerprint = currentFingerprintByPath.get(filePath);
+    if (
+      snapshotFingerprint &&
+      currentFingerprint &&
+      workspaceWarmCacheFingerprintEquals(snapshotFingerprint, currentFingerprint)
+    ) {
+      unchangedFiles.push(filePath);
+    } else {
+      changedFiles.push(filePath);
+    }
+  }
+  for (const filePath of snapshotFileSet) {
+    if (!currentFileSet.has(filePath)) {
+      removedFiles.push(filePath);
+    }
+  }
+
+  return {
+    unchangedFiles: unchangedFiles.sort(),
+    changedFiles: changedFiles.sort(),
+    addedFiles: addedFiles.sort(),
+    removedFiles: removedFiles.sort(),
+  };
+}
+
+/**
+ * Restore the in-memory `WorkspaceAnalyzerCache` from a warm-cache snapshot,
+ * keeping only the slice that is provably still valid: files in
+ * `unchangedFiles` whose persisted key tuple matches every current
+ * workspace-wide invariant (config / plugin / tool / treeIndex).
+ *
+ * Per-file `contentFingerprint` divergences are already filtered upstream by
+ * `workspaceWarmCacheFileDeltaCompute` (we only feed `unchangedFiles` here),
+ * but we re-compare it for paranoia in case the disk fingerprint and the
+ * persisted key tuple ever drift.
+ *
+ * Entries for added / changed / removed files are dropped unconditionally,
+ * which is correct: the next analysis run treats them as misses and re-runs
+ * the analyzer on just that delta via `workspaceAnalysisRunIncremental`.
+ */
+export function workspaceAnalyzerCacheRestoreFromSnapshot(input: {
+  snapshotEntries: WorkspaceWarmCacheAnalyzerEntry[] | undefined;
+  unchangedFiles: ReadonlySet<string>;
+  currentConfigFingerprint: string;
+  currentPluginFingerprint: string;
+  currentToolFingerprintKey: string;
+  currentTreeIndexFingerprint: string;
+}): WorkspaceAnalyzerCache {
+  if (!input.snapshotEntries) {
+    return {};
+  }
+  const restored: WorkspaceAnalyzerCache = {};
+  for (const snapshotEntry of input.snapshotEntries) {
+    const fileResults = new Map<string, WorkspaceAnalyzerFileCacheEntry>();
+    const expectedTreeIndexFingerprint =
+      snapshotEntry.analyzer === 'tree' ? input.currentTreeIndexFingerprint : '';
+    for (const fileEntry of snapshotEntry.fileResults) {
+      const filePath = path.resolve(fileEntry.filePath);
+      if (!input.unchangedFiles.has(filePath)) {
+        continue;
+      }
+      if (
+        fileEntry.key.configFingerprint !== input.currentConfigFingerprint ||
+        fileEntry.key.pluginFingerprint !== input.currentPluginFingerprint ||
+        fileEntry.key.toolFingerprintKey !== input.currentToolFingerprintKey ||
+        fileEntry.key.treeIndexFingerprint !== expectedTreeIndexFingerprint
+      ) {
+        continue;
+      }
+      const fixableTreeViolationsByDiagnosticId = new Map<string, PolicyViolation>();
+      const treeViolationsByPosition = new Map<string, PolicyViolation>();
+      for (const violation of fileEntry.treeViolations) {
+        treeViolationsByPosition.set(
+          `${violation.ruleId}\0${violation.line}\0${violation.column}`,
+          violation,
+        );
+      }
+      for (const id of fileEntry.fixableTreeViolationDiagnosticIds) {
+        const matchingDiagnostic = fileEntry.diagnostics.find((diagnostic) => diagnostic.id === id);
+        if (!matchingDiagnostic) {
+          continue;
+        }
+        const matchingViolation = treeViolationsByPosition.get(
+          `${matchingDiagnostic.code}\0${matchingDiagnostic.range.start.line + 1}\0${
+            matchingDiagnostic.range.start.character + 1
+          }`,
+        );
+        if (matchingViolation) {
+          fixableTreeViolationsByDiagnosticId.set(id, matchingViolation);
+        }
+      }
+      fileResults.set(filePath, {
+        key: { ...fileEntry.key },
+        violations: [...fileEntry.violations],
+        diagnostics: [...fileEntry.diagnostics],
+        treeViolations: [...fileEntry.treeViolations],
+        fixableTreeViolationsByDiagnosticId,
+        errorCount: fileEntry.errorCount,
+      });
+    }
+    restored[snapshotEntry.analyzer] = {
+      scorecardTemplate: { ...snapshotEntry.scorecardTemplate },
+      fileResults,
+    };
+  }
+  return restored;
+}
+
+/**
+ * Compose a `WorkspaceAnalysis` from the restored per-(analyzer, file) cache
+ * slice produced by `workspaceAnalyzerCacheRestoreFromSnapshot`. Only files
+ * present in the slice contribute; added / changed files contribute nothing
+ * yet and the caller relies on the next incremental run to fill them in.
+ */
+export function workspaceAnalysisRebuildFromCache(input: {
+  policy: PolicyFile;
+  files: string[];
+  cache: WorkspaceAnalyzerCache;
+  scorecardTemplates: Partial<Record<WorkspaceWarmCacheAnalyzerKey, WorkspaceAnalyzerScorecardEntry>>;
+  analyzerInventory: WorkspaceAnalyzerInventoryEntry[];
+  featureStatus: IndexStatusFeatureStatus;
+}): WorkspaceAnalysis {
+  const analyzerOrder: WorkspaceWarmCacheAnalyzerKey[] = ['tree', 'eslint', 'biome', 'ruff'];
+  const violations: PolicyViolation[] = [];
+  const treeViolations: PolicyViolation[] = [];
+  const diagnostics: WorkspaceDiagnostic[] = [];
+  const fixableTreeViolationsByDiagnosticId = new Map<string, PolicyViolation>();
+  const scorecard: WorkspaceAnalyzerScorecardEntry[] = [];
+  for (const analyzerKey of analyzerOrder) {
+    const entry = input.cache[analyzerKey];
+    const template =
+      input.scorecardTemplates[analyzerKey] ??
+      entry?.scorecardTemplate ??
+      workspaceAnalyzerScorecardTemplateForEmpty(analyzerKey);
+    let analyzerDiagnosticCount = 0;
+    let analyzerViolationCount = 0;
+    let analyzerFileCount = 0;
+    if (entry) {
+      for (const fileEntry of entry.fileResults.values()) {
+        violations.push(...fileEntry.violations);
+        treeViolations.push(...fileEntry.treeViolations);
+        diagnostics.push(...fileEntry.diagnostics);
+        for (const [id, violation] of fileEntry.fixableTreeViolationsByDiagnosticId) {
+          fixableTreeViolationsByDiagnosticId.set(id, violation);
+        }
+        analyzerDiagnosticCount += fileEntry.diagnostics.length;
+        analyzerViolationCount += fileEntry.violations.length;
+        analyzerFileCount += 1;
+      }
+    }
+    scorecard.push(
+      workspaceAnalyzerScorecardCreate({
+        analyzerId: template.analyzerId,
+        platform: template.platform,
+        languages: template.languages,
+        ownedRuleIds: template.ownedRuleIds,
+        skippedRuleIds: template.skippedRuleIds,
+        skippedReason: template.skippedReason,
+        diagnosticCount: analyzerDiagnosticCount,
+        violationCount: analyzerViolationCount,
+        fileCount: analyzerFileCount,
+        fixMode: template.fixMode,
+        status: template.status,
+        latencyMs: 0,
+        issues: [],
+      }),
+    );
+  }
+  return {
+    analyzerInventory: input.analyzerInventory,
+    analyzerScorecard: scorecard,
+    policy: input.policy,
+    files: input.files,
+    violations,
+    treeViolations,
+    diagnostics,
+    featureStatus: input.featureStatus,
+    fixableTreeViolationsByDiagnosticId,
+    eslintOutput: '',
+    eslintHasErrors: false,
+  };
+}
+
+/**
+ * Snapshot-side serialiser for the in-memory `WorkspaceAnalyzerCache`. The
+ * `Map<diagnosticId, PolicyViolation>` shape is reduced to a parallel id list
+ * because Maps don't survive `JSON.stringify`, and the violation itself is
+ * already serialised inside `treeViolations`.
+ */
+export function workspaceAnalyzerCacheSerialize(
+  cache: WorkspaceAnalyzerCache | undefined,
+): WorkspaceWarmCacheAnalyzerEntry[] {
+  if (!cache) {
+    return [];
+  }
+  const analyzerOrder: WorkspaceWarmCacheAnalyzerKey[] = ['tree', 'eslint', 'biome', 'ruff'];
+  const entries: WorkspaceWarmCacheAnalyzerEntry[] = [];
+  for (const analyzer of analyzerOrder) {
+    const cacheEntry = cache[analyzer];
+    if (!cacheEntry) {
+      continue;
+    }
+    const fileResults: WorkspaceWarmCacheAnalyzerFileEntry[] = [];
+    for (const [filePath, fileEntry] of cacheEntry.fileResults) {
+      fileResults.push({
+        filePath: path.resolve(filePath),
+        key: { ...fileEntry.key },
+        violations: fileEntry.violations.map((violation) => ({ ...violation })),
+        diagnostics: fileEntry.diagnostics.map((diagnostic) => ({ ...diagnostic })),
+        treeViolations: fileEntry.treeViolations.map((violation) => ({ ...violation })),
+        fixableTreeViolationDiagnosticIds: [
+          ...fileEntry.fixableTreeViolationsByDiagnosticId.keys(),
+        ],
+        errorCount: fileEntry.errorCount,
+      });
+    }
+    fileResults.sort((left, right) => left.filePath.localeCompare(right.filePath));
+    entries.push({
+      analyzer,
+      scorecardTemplate: { ...cacheEntry.scorecardTemplate },
+      fileResults,
+    });
+  }
+  return entries;
+}
+
+/**
+ * Per-(analyzer) scorecard templates extracted from the analyzer cache, used
+ * by `workspaceAnalysisRebuildFromCache` to keep the recomposed
+ * `analyzerScorecard` consistent with what the writer side recorded.
+ */
+function workspaceAnalyzerCacheScorecardTemplatesGet(
+  cache: WorkspaceAnalyzerCache,
+): Partial<Record<WorkspaceWarmCacheAnalyzerKey, WorkspaceAnalyzerScorecardEntry>> {
+  const templates: Partial<Record<WorkspaceWarmCacheAnalyzerKey, WorkspaceAnalyzerScorecardEntry>> = {};
+  for (const analyzer of ['tree', 'eslint', 'biome', 'ruff'] as const) {
+    const entry = cache[analyzer];
+    if (entry) {
+      templates[analyzer] = entry.scorecardTemplate;
+    }
+  }
+  return templates;
+}
+
 function workspaceWarmCacheBaseIndexSnapshotCreate(
   baseIndexState: WorkspaceBaseIndexState | undefined,
 ) {
@@ -4571,21 +5007,37 @@ function workspaceWarmCacheAnalysisRestore(
   };
 }
 
+/**
+ * Result of a warm-cache restore. The shape is identical to the previous
+ * all-or-nothing return when `dirtyFiles` is empty (i.e. workspace is
+ * pristine vs the snapshot). When `dirtyFiles` is non-empty, the caller is
+ * responsible for handing them off to the next analysis run; the restored
+ * `lastAnalysis` already excludes any contribution from those files (so the
+ * partial output is internally consistent), and the restored `analyzerCache`
+ * carries the still-valid slices for unchanged files.
+ */
+export type WorkspaceWarmCacheRestoreResult = {
+  analysisGeneration: number;
+  workspaceIndexRequired: boolean;
+  lastAnalysis: WorkspaceAnalysis;
+  analyzerCache?: WorkspaceAnalyzerCache;
+  baseIndexState?: WorkspaceBaseIndexState;
+  toolFingerprints: WorkspaceWarmCacheFileFingerprint[];
+  indexState?: WorkspaceIndexState;
+  dirtyFiles?: Set<string>;
+  /**
+   * Files in the snapshot that no longer exist in the workspace. Surfaced
+   * for observability; the index state has already been delta-applied to
+   * exclude them by the time the caller sees this.
+   */
+  removedFiles?: string[];
+};
+
 async function workspaceWarmCacheSnapshotRestore(input: {
   warmCache?: WorkspaceWarmCacheStore;
   workspace: WorkspaceState;
   workspaceIndexRequired?: boolean;
-}): Promise<
-  | {
-      analysisGeneration: number;
-      workspaceIndexRequired: boolean;
-      lastAnalysis: WorkspaceAnalysis;
-      baseIndexState?: WorkspaceBaseIndexState;
-      toolFingerprints: WorkspaceWarmCacheFileFingerprint[];
-      indexState?: WorkspaceIndexState;
-    }
-  | undefined
-> {
+}): Promise<WorkspaceWarmCacheRestoreResult | undefined> {
   if (!input.warmCache) {
     return undefined;
   }
@@ -4626,14 +5078,6 @@ async function workspaceWarmCacheSnapshotRestore(input: {
     );
     const matches = await ruleMatchesGet(policy, input.workspace.rootPath);
     const currentFiles = workspaceFilesNormalize(matches.flatMap((match) => match.files));
-    const snapshotFiles = workspaceFilesNormalize(snapshot.files);
-    if (
-      currentFiles.length !== snapshotFiles.length ||
-      currentFiles.some((filePath, index) => filePath !== snapshotFiles[index])
-    ) {
-      await input.warmCache.delete(cacheKey);
-      return undefined;
-    }
 
     const currentFingerprints = workspaceWarmCacheFingerprintsRead({
       files: currentFiles,
@@ -4645,16 +5089,8 @@ async function workspaceWarmCacheSnapshotRestore(input: {
       return undefined;
     }
 
-    const snapshotFingerprints = workspaceWarmCacheFingerprintsRead({
-      files: snapshot.files,
-      configPath: snapshot.configPath,
-      eslintConfigPath: snapshot.eslintConfigPath,
-    });
-    if (!snapshotFingerprints) {
-      await input.warmCache.delete(cacheKey);
-      return undefined;
-    }
-
+    // Workspace-wide invariants: any divergence forces a full invalidation
+    // because there is no safe per-file reuse for these.
     if (
       !workspaceWarmCacheFingerprintEquals(
         currentFingerprints.configFingerprint,
@@ -4663,14 +5099,7 @@ async function workspaceWarmCacheSnapshotRestore(input: {
       !workspaceWarmCacheFingerprintEquals(
         currentFingerprints.eslintConfigFingerprint,
         snapshot.eslintConfigFingerprint,
-      ) ||
-      currentFingerprints.fileFingerprints.length !== snapshot.fileFingerprints.length ||
-      currentFingerprints.fileFingerprints.some((fingerprint, index) => {
-        return !workspaceWarmCacheFingerprintEquals(
-          fingerprint,
-          snapshot.fileFingerprints[index],
-        );
-      })
+      )
     ) {
       await input.warmCache.delete(cacheKey);
       return undefined;
@@ -4713,31 +5142,139 @@ async function workspaceWarmCacheSnapshotRestore(input: {
       return undefined;
     }
 
+    // Per-file delta. Files whose (size, mtime) match the snapshot are
+    // candidates for cache reuse; everything else feeds into `dirtyFiles`
+    // for the next incremental run.
+    const fileDelta = workspaceWarmCacheFileDeltaCompute({
+      snapshotFiles: snapshot.files,
+      snapshotFileFingerprints: snapshot.fileFingerprints,
+      currentFiles,
+      currentFileFingerprints: currentFingerprints.fileFingerprints,
+    });
+    const unchangedSet = new Set(fileDelta.unchangedFiles);
+    const dirtyFiles = new Set<string>([...fileDelta.addedFiles, ...fileDelta.changedFiles]);
+
+    // Apply the index delta first (if we have a restorable index store) so
+    // that `treeIndexFingerprint` is computed against the post-delta
+    // `fileKey`, matching what the next analysis run will see.
+    let indexState: WorkspaceIndexState | undefined;
+    if (snapshot.projectIndexStoreSnapshot && snapshot.baseIndexState) {
+      const restored = projectIndexStoreRestore(snapshot.projectIndexStoreSnapshot);
+      indexState = {
+        store: restored.store,
+        index: restored.index,
+        capabilities: restored.index.capabilities,
+        files: [...snapshot.baseIndexState.files],
+        fileKey: snapshot.baseIndexState.fileKey,
+        workspacePackages: currentWorkspacePackages,
+      };
+      const baseIndexStateNext = workspaceBaseIndexStateGetOrBuild(input.workspace, currentFiles);
+      if (
+        indexState.fileKey !== baseIndexStateNext.fileKey &&
+        workspaceIndexDeltaIsAffordable({
+          currentFiles: baseIndexStateNext.files,
+          previousFiles: indexState.files,
+        })
+      ) {
+        workspaceIndexStateApplyFileDelta({
+          workspace: input.workspace,
+          indexState,
+          baseIndexState: baseIndexStateNext,
+        });
+      } else if (indexState.fileKey !== baseIndexStateNext.fileKey) {
+        // Delta too large: drop the restored index, the analysis path will
+        // do a full rebuild via `workspaceIndexGetOrBuild` on demand.
+        indexState = undefined;
+      }
+    }
+
+    // Now compute the live `treeIndexFingerprint` so the analyzer cache
+    // restore sees the same value the next analysis run will compute.
+    const documentsState: WorkspaceDocumentsState & WorkspaceAnalysisCacheState = {
+      documents: new Map(),
+      analysisGeneration: snapshot.analysisGeneration,
+      indexState,
+      workspaceIndexRequired: snapshot.workspaceIndexRequired,
+    };
+    const currentTreeIndexFingerprint = workspaceTreeIndexFingerprintCompute(
+      documentsState,
+      snapshot.workspaceIndexRequired,
+    );
+
+    const currentConfigFingerprint = workspaceConfigFingerprintCompute({
+      workspace: input.workspace,
+      policy,
+    });
+    const currentPluginFingerprint = workspacePluginFingerprintCompute(currentPluginCompatibility);
+    const currentToolFingerprintKey = workspaceToolFingerprintKeyCompute(currentToolFingerprints);
+
+    const restoredAnalyzerCache = workspaceAnalyzerCacheRestoreFromSnapshot({
+      snapshotEntries: snapshot.analyzerCache,
+      unchangedFiles: unchangedSet,
+      currentConfigFingerprint,
+      currentPluginFingerprint,
+      currentToolFingerprintKey,
+      currentTreeIndexFingerprint,
+    });
+
+    // Recompose `lastAnalysis` from just the slices that survived. Files in
+    // `dirtyFiles` contribute nothing yet — the next incremental run fills
+    // them in and merges with the restored cache.
+    let restoredLastAnalysis: WorkspaceAnalysis;
+    if (Object.keys(restoredAnalyzerCache).length > 0) {
+      restoredLastAnalysis = workspaceAnalysisRebuildFromCache({
+        policy,
+        files: currentFiles,
+        cache: restoredAnalyzerCache,
+        scorecardTemplates: workspaceAnalyzerCacheScorecardTemplatesGet(restoredAnalyzerCache),
+        analyzerInventory: snapshot.analyzerInventory ?? [],
+        featureStatus: snapshot.featureStatus,
+      });
+    } else {
+      // No reusable per-file cache (e.g. v1 snapshot upgraded in place,
+      // every file dirty). Fall back to the persisted `lastAnalysis` shape
+      // restricted to unchanged files for self-consistency.
+      const allowedUris = new Set(unchangedSet.values());
+      const baseAnalysis = workspaceWarmCacheAnalysisRestore(input.workspace, snapshot);
+      restoredLastAnalysis = {
+        ...baseAnalysis,
+        files: currentFiles,
+        violations: baseAnalysis.violations.filter((violation) =>
+          allowedUris.has(path.resolve(violation.filePath)),
+        ),
+        treeViolations: baseAnalysis.treeViolations.filter((violation) =>
+          allowedUris.has(path.resolve(violation.filePath)),
+        ),
+        diagnostics: baseAnalysis.diagnostics.filter((diagnostic) =>
+          allowedUris.has(path.resolve(workspaceUriToPath(diagnostic.uri))),
+        ),
+      };
+    }
+
+    // Build the base-index state from the live file list so the consumer
+    // (`attachWorkspace`) seeds `workspace.baseIndexState` with the
+    // post-delta `fileKey`. Reaching back to `snapshot.baseIndexState`
+    // would re-publish the stale key and force `workspaceIndexGetOrBuild`
+    // to do a redundant rebuild on the next call.
+    const liveBaseIndexState: WorkspaceBaseIndexState | undefined = snapshot.baseIndexState
+      ? {
+          files: [...currentFiles],
+          fileKey: currentFiles.join('\0'),
+          workspacePackages: currentWorkspacePackages,
+        }
+      : undefined;
+
     return {
       analysisGeneration: snapshot.analysisGeneration,
       workspaceIndexRequired: snapshot.workspaceIndexRequired,
-      lastAnalysis: workspaceWarmCacheAnalysisRestore(input.workspace, snapshot),
-      baseIndexState: snapshot.baseIndexState
-        ? {
-            ...workspaceWarmCacheBaseIndexRestore(snapshot.baseIndexState)!,
-            workspacePackages: currentWorkspacePackages,
-          }
-        : undefined,
+      lastAnalysis: restoredLastAnalysis,
+      analyzerCache:
+        Object.keys(restoredAnalyzerCache).length > 0 ? restoredAnalyzerCache : undefined,
+      baseIndexState: liveBaseIndexState,
       toolFingerprints: currentToolFingerprints,
-      indexState:
-        snapshot.projectIndexStoreSnapshot && snapshot.baseIndexState
-          ? (() => {
-              const restored = projectIndexStoreRestore(snapshot.projectIndexStoreSnapshot);
-              return {
-                store: restored.store,
-                index: restored.index,
-                capabilities: restored.index.capabilities,
-                files: [...snapshot.baseIndexState.files],
-                fileKey: snapshot.baseIndexState.fileKey,
-                workspacePackages: currentWorkspacePackages,
-              };
-            })()
-          : undefined,
+      indexState,
+      dirtyFiles: dirtyFiles.size > 0 ? dirtyFiles : undefined,
+      removedFiles: fileDelta.removedFiles.length > 0 ? fileDelta.removedFiles : undefined,
     };
   } catch {
     return undefined;
@@ -4805,6 +5342,7 @@ async function workspaceWarmCacheSnapshotPersist(input: {
     toolFingerprints: input.workspaceSession.toolFingerprints ?? [],
     pluginSignature: pluginCompatibility.pluginSignature,
     pluginFingerprints: pluginCompatibility.pluginFingerprints,
+    analyzerCache: workspaceAnalyzerCacheSerialize(input.workspaceSession.analyzerCache),
     createdAtUnixMs: Date.now(),
   });
 }
@@ -6755,6 +7293,21 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       if (restoredWarmCache?.baseIndexState) {
         workspace.baseIndexState = restoredWarmCache.baseIndexState;
       }
+      // Status semantics on warm restore:
+      //   - no snapshot at all: 'cold' (first analysis fills everything)
+      //   - snapshot restored AND no per-file delta: 'ready' (the persisted
+      //     `lastAnalysis` is wholly accurate)
+      //   - snapshot restored WITH a per-file delta: 'ready' as well, with
+      //     `dirtyFiles` stashed on the session. The recomposed
+      //     `lastAnalysis` excludes dirty-file contributions, so it is
+      //     internally consistent. The next `queryDiagnostics` triggers
+      //     `workspaceAnalysisRunIncremental`, which sees the dirty set and
+      //     re-runs only those files; cached files still hit via tuple
+      //     match. Surfacing 'ready' (rather than 'warming') matches the
+      //     observable: query callers can read the snapshot's diagnostics
+      //     for unchanged files immediately and pay the analyzer cost only
+      //     for the delta.
+      const restoredDirtyFiles = restoredWarmCache?.dirtyFiles;
       clientSession.workspaces.set(workspaceId, {
         workspaceId,
         workspaceInstanceId: workspace.workspaceInstanceId,
@@ -6770,6 +7323,10 @@ export class WorkspaceServiceEngine implements WorkspaceService {
         lastAnalysis: restoredWarmCache?.lastAnalysis,
         toolFingerprints: restoredWarmCache?.toolFingerprints,
         indexState: restoredWarmCache?.indexState,
+        analyzerCache: restoredWarmCache?.analyzerCache,
+        dirtyFiles: restoredDirtyFiles && restoredDirtyFiles.size > 0
+          ? new Set(restoredDirtyFiles)
+          : undefined,
       });
     } else {
       existingWorkspaceSession.workspaceIndexRequired =
