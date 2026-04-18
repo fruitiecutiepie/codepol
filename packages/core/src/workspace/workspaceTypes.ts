@@ -536,6 +536,59 @@ export type WorkspaceDependencyGraphResult = {
   cycles: string[][];
 };
 
+/**
+ * Direction of an impact-radius neighborhood traversal. Mirrors
+ * `ModuleImpactRadiusDirection` from `@codepol/core` one-for-one so
+ * clients that speak the workspace contract can pass the string straight
+ * through.
+ *
+ * - `upstream`: follow reverse edges (who imports the focus file,
+ *   transitively) — "what breaks if I change this?"
+ * - `downstream`: follow forward edges (what the focus file imports,
+ *   transitively) — "what does this file pull in?"
+ * - `both`: union of upstream and downstream starting at the focus.
+ */
+export type WorkspaceImpactRadiusDirection = 'upstream' | 'downstream' | 'both';
+
+/**
+ * Narrow neighborhood query result. Reuses
+ * {@link WorkspaceDependencyGraphResult} so panels and CLI commands can
+ * render the subgraph with the same code path as the full graph.
+ *
+ * `entryPoints` and `cycles` are filtered to files that appear in the
+ * returned subgraph.
+ */
+export type WorkspaceDependencyPathResult = {
+  /**
+   * Simple paths (no repeated files) from the source to the destination,
+   * sorted by `(length, lexicographic tuple)`. Each path is an array of
+   * workspace URIs and starts with the `fromUri` input and ends with
+   * `toUri`.
+   */
+  paths: string[][];
+  /**
+   * Length of the shortest path in edges (`paths[0].length - 1`). `0`
+   * when the source equals the destination or no path exists.
+   */
+  shortestLength: number;
+  /**
+   * `true` when the enumeration stopped because the `maxPaths` cap was
+   * reached and at least one additional simple path exists.
+   */
+  truncated: boolean;
+};
+
+/**
+ * Files present in the workspace index that are not reachable from any
+ * entry point. Entry points used for the computation are whichever were
+ * passed to `queryDeadModules`; when none are passed, the module graph's
+ * natural entry points are used.
+ */
+export type WorkspaceDeadModulesResult = {
+  /** URIs of unreachable files, sorted lexicographically. */
+  unreachable: string[];
+};
+
 export type WorkspaceArchitectureSummaryHotspot = {
   uri: string;
   workspaceRelativePath: string;

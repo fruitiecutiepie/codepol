@@ -393,12 +393,16 @@ Each phase is independently shippable, additive, and testable.
 - update `workspaceDependencyGraphResultCreate` in `packages/workspace-service/src/index.ts`
 - tests: unit coverage for each new field, including dynamic and side-effect import edges
 
-### Phase 2: Narrow graph queries
+### Phase 2: Narrow graph queries — _done_
 
 - `queryImpactRadius`, `queryDependencyPath`, `queryDeadModules`
 - BFS / DFS helpers live in a new module `packages/core/src/index/moduleGraphQueries.ts`; `moduleGraph.ts` remains focused on construction
 - contracts added to `packages/workspace-service/src/contracts.ts`, wired through daemon + LSP adapters
 - tests: shortest-path correctness, cycle-tolerant reachability, bounded-depth behavior
+- landed:
+  - core helpers: `moduleImpactRadiusCompute` (BFS, upstream/downstream/both, bounded depth), `moduleDependencyPathCompute` (BFS shortest length + DFS simple-path enumeration capped at `maxPaths`, cycle-tolerant), `moduleDeadModulesCompute` (forward reachability from natural or caller-supplied entry points)
+  - workspace contract: `queryImpactRadius` reuses `WorkspaceDependencyGraphResult`; `queryDependencyPath` / `queryDeadModules` introduce `WorkspaceDependencyPathResult` / `WorkspaceDeadModulesResult` with URI paths; daemon round-trip + LSP adapters (`codepol/impactRadius`, `codepol/dependencyPath`, `codepol/deadModules`) are in place
+  - tests: `tests/index.module-graph-queries.spec.ts` (17 unit cases on in-memory graphs) plus workspace-service integration cases and a daemon round-trip case under the existing read-RPC spec
 
 ### Phase 3: Policy capability
 

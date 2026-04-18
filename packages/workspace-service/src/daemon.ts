@@ -14,8 +14,11 @@ import type {
   WorkspaceApplyResult,
   WorkspaceArchitectureSummaryResult,
   WorkspaceCodeAction,
+  WorkspaceDeadModulesResult,
   WorkspaceDependencyGraphResult,
+  WorkspaceDependencyPathResult,
   WorkspaceDiagnostic,
+  WorkspaceImpactRadiusDirection,
   WorkspaceLintRuleDetailsResult,
   WorkspaceLintRulesResult,
   WorkspacePrepareRenameResult,
@@ -398,6 +401,40 @@ type WorkspaceDaemonQueryDependencyGraphRequest = WorkspaceDaemonMessage &
   analysisGeneration?: number;
 };
 
+type WorkspaceDaemonQueryImpactRadiusRequest = WorkspaceDaemonMessage &
+  WorkspaceDaemonClientSessionFreshness &
+  WorkspaceDaemonRequestFreshness &
+  WorkspaceDaemonWorkspaceFreshness & {
+  type: 'query_impact_radius';
+  workspaceId: string;
+  uri: string;
+  direction: WorkspaceImpactRadiusDirection;
+  depth?: number;
+  analysisGeneration?: number;
+};
+
+type WorkspaceDaemonQueryDependencyPathRequest = WorkspaceDaemonMessage &
+  WorkspaceDaemonClientSessionFreshness &
+  WorkspaceDaemonRequestFreshness &
+  WorkspaceDaemonWorkspaceFreshness & {
+  type: 'query_dependency_path';
+  workspaceId: string;
+  fromUri: string;
+  toUri: string;
+  maxPaths?: number;
+  analysisGeneration?: number;
+};
+
+type WorkspaceDaemonQueryDeadModulesRequest = WorkspaceDaemonMessage &
+  WorkspaceDaemonClientSessionFreshness &
+  WorkspaceDaemonRequestFreshness &
+  WorkspaceDaemonWorkspaceFreshness & {
+  type: 'query_dead_modules';
+  workspaceId: string;
+  entryPointUris?: string[];
+  analysisGeneration?: number;
+};
+
 type WorkspaceDaemonQuerySemanticSearchRequest = WorkspaceDaemonMessage &
   WorkspaceDaemonClientSessionFreshness &
   WorkspaceDaemonRequestFreshness &
@@ -575,6 +612,21 @@ type WorkspaceDaemonQueryDependencyGraphAck = {
   result: WorkspaceDependencyGraphResult;
 };
 
+type WorkspaceDaemonQueryImpactRadiusAck = {
+  type: 'query_impact_radius_ack';
+  result: WorkspaceDependencyGraphResult;
+};
+
+type WorkspaceDaemonQueryDependencyPathAck = {
+  type: 'query_dependency_path_ack';
+  result: WorkspaceDependencyPathResult;
+};
+
+type WorkspaceDaemonQueryDeadModulesAck = {
+  type: 'query_dead_modules_ack';
+  result: WorkspaceDeadModulesResult;
+};
+
 type WorkspaceDaemonQuerySemanticSearchAck = {
   type: 'query_semantic_search_ack';
   results: WorkspaceSearchResult[];
@@ -670,6 +722,9 @@ type WorkspaceDaemonServiceResponse =
   | WorkspaceDaemonQueryLintRuleDetailsAck
   | WorkspaceDaemonQueryWorkspaceSymbolsAck
   | WorkspaceDaemonQueryDependencyGraphAck
+  | WorkspaceDaemonQueryImpactRadiusAck
+  | WorkspaceDaemonQueryDependencyPathAck
+  | WorkspaceDaemonQueryDeadModulesAck
   | WorkspaceDaemonQuerySemanticSearchAck
   | WorkspaceDaemonQuerySemanticDefinitionAck
   | WorkspaceDaemonQuerySemanticReferencesAck
@@ -1596,6 +1651,9 @@ export class WorkspaceDaemonSession {
       case 'query_lint_rule_details':
       case 'query_workspace_symbols':
       case 'query_dependency_graph':
+      case 'query_impact_radius':
+      case 'query_dependency_path':
+      case 'query_dead_modules':
       case 'query_semantic_search':
       case 'query_semantic_definition':
       case 'query_semantic_references':
@@ -1619,6 +1677,9 @@ export class WorkspaceDaemonSession {
           | WorkspaceDaemonQueryLintRuleDetailsRequest
           | WorkspaceDaemonQueryWorkspaceSymbolsRequest
           | WorkspaceDaemonQueryDependencyGraphRequest
+          | WorkspaceDaemonQueryImpactRadiusRequest
+          | WorkspaceDaemonQueryDependencyPathRequest
+          | WorkspaceDaemonQueryDeadModulesRequest
           | WorkspaceDaemonQuerySemanticSearchRequest
           | WorkspaceDaemonQuerySemanticDefinitionRequest
           | WorkspaceDaemonQuerySemanticReferencesRequest
@@ -1660,6 +1721,9 @@ export class WorkspaceDaemonSession {
       case 'apply_edit_plan':
       case 'query_lint_rule_details':
       case 'query_dependency_graph':
+      case 'query_impact_radius':
+      case 'query_dependency_path':
+      case 'query_dead_modules':
       case 'query_semantic_references':
       case 'preview_rename':
       case 'query_architecture_summary':
@@ -2522,6 +2586,126 @@ export class WorkspaceDaemonSession {
             result,
           };
         }
+        case 'query_impact_radius': {
+          if (!this.options.service) {
+            return messageErrorCreate(
+              'unsupported_request',
+              `Unsupported daemon request: ${message.type}`,
+            );
+          }
+          const input = message as WorkspaceDaemonQueryImpactRadiusRequest;
+          const daemonSessionError = this.daemonSessionValidate(input);
+          if (daemonSessionError) {
+            return daemonSessionError;
+          }
+          const replayGate = this.replayGateEnsure(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          if (replayGate) {
+            return replayGate;
+          }
+          const state = this.workspaceReplayStateGet(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          const workspaceInstanceError = this.workspaceInstanceValidate(state, input);
+          if (workspaceInstanceError) {
+            return workspaceInstanceError;
+          }
+          const replayEpochError = this.replayEpochValidate(state, input);
+          if (replayEpochError) {
+            return replayEpochError;
+          }
+          const result = await this.options.service.queryImpactRadius({
+            ...input,
+            signal: options.signal,
+          });
+          return {
+            type: 'query_impact_radius_ack',
+            result,
+          };
+        }
+        case 'query_dependency_path': {
+          if (!this.options.service) {
+            return messageErrorCreate(
+              'unsupported_request',
+              `Unsupported daemon request: ${message.type}`,
+            );
+          }
+          const input = message as WorkspaceDaemonQueryDependencyPathRequest;
+          const daemonSessionError = this.daemonSessionValidate(input);
+          if (daemonSessionError) {
+            return daemonSessionError;
+          }
+          const replayGate = this.replayGateEnsure(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          if (replayGate) {
+            return replayGate;
+          }
+          const state = this.workspaceReplayStateGet(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          const workspaceInstanceError = this.workspaceInstanceValidate(state, input);
+          if (workspaceInstanceError) {
+            return workspaceInstanceError;
+          }
+          const replayEpochError = this.replayEpochValidate(state, input);
+          if (replayEpochError) {
+            return replayEpochError;
+          }
+          const result = await this.options.service.queryDependencyPath({
+            ...input,
+            signal: options.signal,
+          });
+          return {
+            type: 'query_dependency_path_ack',
+            result,
+          };
+        }
+        case 'query_dead_modules': {
+          if (!this.options.service) {
+            return messageErrorCreate(
+              'unsupported_request',
+              `Unsupported daemon request: ${message.type}`,
+            );
+          }
+          const input = message as WorkspaceDaemonQueryDeadModulesRequest;
+          const daemonSessionError = this.daemonSessionValidate(input);
+          if (daemonSessionError) {
+            return daemonSessionError;
+          }
+          const replayGate = this.replayGateEnsure(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          if (replayGate) {
+            return replayGate;
+          }
+          const state = this.workspaceReplayStateGet(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          const workspaceInstanceError = this.workspaceInstanceValidate(state, input);
+          if (workspaceInstanceError) {
+            return workspaceInstanceError;
+          }
+          const replayEpochError = this.replayEpochValidate(state, input);
+          if (replayEpochError) {
+            return replayEpochError;
+          }
+          const result = await this.options.service.queryDeadModules({
+            ...input,
+            signal: options.signal,
+          });
+          return {
+            type: 'query_dead_modules_ack',
+            result,
+          };
+        }
         case 'query_semantic_search': {
           if (!this.options.service) {
             return messageErrorCreate(
@@ -3284,6 +3468,89 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
       workspaceId: input.workspaceId,
       workspaceInstanceId: freshness?.workspaceInstanceId,
       replayEpoch: freshness?.replayEpoch,
+      analysisGeneration: input.analysisGeneration,
+    }, {
+      signal: input.signal,
+    }).then((response) => response.result);
+  }
+
+  queryImpactRadius(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    direction: WorkspaceImpactRadiusDirection;
+    depth?: number;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceDependencyGraphResult> {
+    const freshness = this.workspaceFreshnessGet(input);
+    const daemonSessionId = this.daemonSessionIdGet(input.clientSessionId);
+    return this.connection.request<WorkspaceDaemonQueryImpactRadiusAck>({
+      type: 'query_impact_radius',
+      clientSessionId: input.clientSessionId,
+      daemonSessionId,
+      requestId: input.requestId,
+      workspaceId: input.workspaceId,
+      workspaceInstanceId: freshness?.workspaceInstanceId,
+      replayEpoch: freshness?.replayEpoch,
+      uri: input.uri,
+      direction: input.direction,
+      depth: input.depth,
+      analysisGeneration: input.analysisGeneration,
+    }, {
+      signal: input.signal,
+    }).then((response) => response.result);
+  }
+
+  queryDependencyPath(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    fromUri: string;
+    toUri: string;
+    maxPaths?: number;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceDependencyPathResult> {
+    const freshness = this.workspaceFreshnessGet(input);
+    const daemonSessionId = this.daemonSessionIdGet(input.clientSessionId);
+    return this.connection.request<WorkspaceDaemonQueryDependencyPathAck>({
+      type: 'query_dependency_path',
+      clientSessionId: input.clientSessionId,
+      daemonSessionId,
+      requestId: input.requestId,
+      workspaceId: input.workspaceId,
+      workspaceInstanceId: freshness?.workspaceInstanceId,
+      replayEpoch: freshness?.replayEpoch,
+      fromUri: input.fromUri,
+      toUri: input.toUri,
+      maxPaths: input.maxPaths,
+      analysisGeneration: input.analysisGeneration,
+    }, {
+      signal: input.signal,
+    }).then((response) => response.result);
+  }
+
+  queryDeadModules(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    entryPointUris?: string[];
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceDeadModulesResult> {
+    const freshness = this.workspaceFreshnessGet(input);
+    const daemonSessionId = this.daemonSessionIdGet(input.clientSessionId);
+    return this.connection.request<WorkspaceDaemonQueryDeadModulesAck>({
+      type: 'query_dead_modules',
+      clientSessionId: input.clientSessionId,
+      daemonSessionId,
+      requestId: input.requestId,
+      workspaceId: input.workspaceId,
+      workspaceInstanceId: freshness?.workspaceInstanceId,
+      replayEpoch: freshness?.replayEpoch,
+      entryPointUris: input.entryPointUris,
       analysisGeneration: input.analysisGeneration,
     }, {
       signal: input.signal,

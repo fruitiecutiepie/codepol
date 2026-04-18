@@ -8,6 +8,9 @@ export const CODEPOL_LSP_REQUEST_INDEX_STATUS = 'codepol/indexStatus';
 export const CODEPOL_LSP_REQUEST_LINT_RULES = 'codepol/lintRules';
 export const CODEPOL_LSP_REQUEST_LINT_RULE_DETAILS = 'codepol/lintRuleDetails';
 export const CODEPOL_LSP_REQUEST_DEPENDENCY_GRAPH = 'codepol/dependencyGraph';
+export const CODEPOL_LSP_REQUEST_IMPACT_RADIUS = 'codepol/impactRadius';
+export const CODEPOL_LSP_REQUEST_DEPENDENCY_PATH = 'codepol/dependencyPath';
+export const CODEPOL_LSP_REQUEST_DEAD_MODULES = 'codepol/deadModules';
 export const CODEPOL_LSP_REQUEST_SEMANTIC_SEARCH = 'codepol/semanticSearch';
 export const CODEPOL_LSP_REQUEST_SEMANTIC_DEFINITION =
   'codepol/semanticDefinition';

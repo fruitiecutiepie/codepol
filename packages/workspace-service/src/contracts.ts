@@ -8,8 +8,11 @@ import type {
   WorkspaceApplyResult,
   WorkspaceArchitectureSummaryResult,
   WorkspaceCodeAction,
+  WorkspaceDeadModulesResult,
   WorkspaceDependencyGraphResult,
+  WorkspaceDependencyPathResult,
   WorkspaceDiagnostic,
+  WorkspaceImpactRadiusDirection,
   WorkspaceInstanceId,
   WorkspaceLintRuleDetailsResult,
   WorkspaceLintRulesResult,
@@ -180,6 +183,34 @@ export type WorkspaceService = {
     analysisGeneration?: number;
     signal?: AbortSignal;
   }) => Promise<WorkspaceDependencyGraphResult>;
+  queryImpactRadius: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    direction: WorkspaceImpactRadiusDirection;
+    depth?: number;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceDependencyGraphResult>;
+  queryDependencyPath: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    fromUri: string;
+    toUri: string;
+    maxPaths?: number;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceDependencyPathResult>;
+  queryDeadModules: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    entryPointUris?: string[];
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceDeadModulesResult>;
   querySemanticSearch: (input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;

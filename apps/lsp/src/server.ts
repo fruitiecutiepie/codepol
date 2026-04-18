@@ -10,9 +10,12 @@ import {
   type IndexStatusResult,
   type WorkspaceArchitectureSummaryResult,
   type WorkspaceCodeAction,
+  type WorkspaceDeadModulesResult,
   type WorkspaceDependencyGraphResult,
+  type WorkspaceDependencyPathResult,
   type WorkspaceDiagnostic,
   type WorkspaceEditPlan,
+  type WorkspaceImpactRadiusDirection,
   type WorkspaceLintRuleDetailsResult,
   type WorkspaceLintRulesResult,
   type WorkspacePrepareRenameResult,
@@ -33,7 +36,10 @@ import {
   CODEPOL_LSP_COMMAND_REVOKE_DIAGNOSTICS_ESCALATION,
   CODEPOL_LSP_COMMAND_SHOW_ARCHITECTURE_LINKS,
   CODEPOL_LSP_REQUEST_ARCHITECTURE_SUMMARY,
+  CODEPOL_LSP_REQUEST_DEAD_MODULES,
   CODEPOL_LSP_REQUEST_DEPENDENCY_GRAPH,
+  CODEPOL_LSP_REQUEST_DEPENDENCY_PATH,
+  CODEPOL_LSP_REQUEST_IMPACT_RADIUS,
   CODEPOL_LSP_REQUEST_DIAGNOSTICS_CONFIG,
   CODEPOL_LSP_REQUEST_DIAGNOSTICS_ESCALATIONS,
   CODEPOL_LSP_REQUEST_INDEX_STATUS,
@@ -1053,6 +1059,22 @@ export class CodepolLspServer {
         }, context);
       case CODEPOL_LSP_REQUEST_DEPENDENCY_GRAPH:
         return this.dependencyGraphHandle(context);
+      case CODEPOL_LSP_REQUEST_IMPACT_RADIUS:
+        return this.impactRadiusHandle(params as {
+          uri?: string;
+          direction?: WorkspaceImpactRadiusDirection;
+          depth?: number;
+        }, context);
+      case CODEPOL_LSP_REQUEST_DEPENDENCY_PATH:
+        return this.dependencyPathHandle(params as {
+          fromUri?: string;
+          toUri?: string;
+          maxPaths?: number;
+        }, context);
+      case CODEPOL_LSP_REQUEST_DEAD_MODULES:
+        return this.deadModulesHandle(params as {
+          entryPointUris?: string[];
+        }, context);
       case CODEPOL_LSP_REQUEST_SEMANTIC_SEARCH:
         return this.semanticSearchHandle(params as {
           query?: string;
@@ -1721,6 +1743,103 @@ export class CodepolLspServer {
           context.requestId === undefined || context.requestId === null
             ? undefined
             : `lsp-codepol-dependency-graph:${String(context.requestId)}`,
+        signal: context.signal,
+      }), {
+      signal: context.signal,
+    });
+  }
+
+  private async impactRadiusHandle(
+    params: {
+      uri?: string;
+      direction?: WorkspaceImpactRadiusDirection;
+      depth?: number;
+    },
+    context: { requestId?: JsonRpcId; signal?: AbortSignal } = {},
+  ): Promise<WorkspaceDependencyGraphResult | null> {
+    if (
+      !this.registeredClientSessionId ||
+      !this.workspaceId ||
+      !params.uri ||
+      !params.direction
+    ) {
+      return null;
+    }
+    const uri = params.uri;
+    const direction = params.direction;
+
+    return this.serviceCall((service) =>
+      service.queryImpactRadius({
+        clientSessionId: this.registeredClientSessionId!,
+        workspaceId: this.workspaceId!,
+        uri,
+        direction,
+        depth: params.depth,
+        requestId:
+          context.requestId === undefined || context.requestId === null
+            ? undefined
+            : `lsp-codepol-impact-radius:${String(context.requestId)}`,
+        signal: context.signal,
+      }), {
+      signal: context.signal,
+    });
+  }
+
+  private async dependencyPathHandle(
+    params: {
+      fromUri?: string;
+      toUri?: string;
+      maxPaths?: number;
+    },
+    context: { requestId?: JsonRpcId; signal?: AbortSignal } = {},
+  ): Promise<WorkspaceDependencyPathResult | null> {
+    if (
+      !this.registeredClientSessionId ||
+      !this.workspaceId ||
+      !params.fromUri ||
+      !params.toUri
+    ) {
+      return null;
+    }
+    const fromUri = params.fromUri;
+    const toUri = params.toUri;
+
+    return this.serviceCall((service) =>
+      service.queryDependencyPath({
+        clientSessionId: this.registeredClientSessionId!,
+        workspaceId: this.workspaceId!,
+        fromUri,
+        toUri,
+        maxPaths: params.maxPaths,
+        requestId:
+          context.requestId === undefined || context.requestId === null
+            ? undefined
+            : `lsp-codepol-dependency-path:${String(context.requestId)}`,
+        signal: context.signal,
+      }), {
+      signal: context.signal,
+    });
+  }
+
+  private async deadModulesHandle(
+    params: {
+      entryPointUris?: string[];
+    },
+    context: { requestId?: JsonRpcId; signal?: AbortSignal } = {},
+  ): Promise<WorkspaceDeadModulesResult | null> {
+    if (!this.registeredClientSessionId || !this.workspaceId) {
+      return null;
+    }
+
+    return this.serviceCall((service) =>
+      service.queryDeadModules({
+        clientSessionId: this.registeredClientSessionId!,
+        workspaceId: this.workspaceId!,
+        entryPointUris: params.entryPointUris,
+        requestId:
+          context.requestId === undefined || context.requestId === null
+            ? undefined
+            : `lsp-codepol-dead-modules:${String(context.requestId)}`,
         signal: context.signal,
       }), {
       signal: context.signal,

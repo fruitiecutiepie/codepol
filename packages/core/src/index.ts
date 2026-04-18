@@ -134,6 +134,9 @@ export type {
   WorkspaceDependencyGraphEdge,
   WorkspaceDependencyGraphEdgeKind,
   WorkspaceDependencyGraphResult,
+  WorkspaceImpactRadiusDirection,
+  WorkspaceDependencyPathResult,
+  WorkspaceDeadModulesResult,
   WorkspaceArchitectureSummaryHotspot,
   WorkspaceArchitectureSummaryResult,
   WorkspaceApplyFailureReason,
@@ -649,6 +652,22 @@ export {
   moduleGraphBuild,
   moduleGraphEdgeInfoBuild,
 } from './index/moduleGraph';
+
+// Module Graph Queries
+export type {
+  ModuleImpactRadiusDirection,
+  ModuleImpactRadiusInput,
+  ModuleImpactRadiusResult,
+  ModuleDependencyPathInput,
+  ModuleDependencyPathResult,
+  ModuleDeadModulesInput,
+  ModuleDeadModulesResult,
+} from './index/moduleGraphQueries';
+export {
+  moduleImpactRadiusCompute,
+  moduleDependencyPathCompute,
+  moduleDeadModulesCompute,
+} from './index/moduleGraphQueries';
 
 // Index builder
 export type { IndexBuildOptions, IndexBuildResult } from './index/indexBuilder';

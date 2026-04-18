@@ -15,6 +15,9 @@ import {
   isErr,
   diagnosticsRuntimeGet,
   lintDiagnosticToWorkspaceDiagnostic,
+  moduleDeadModulesCompute,
+  moduleDependencyPathCompute,
+  moduleImpactRadiusCompute,
   pluginGetForRule,
   policyPluginsGet,
   policyViolationsGetForFile,
@@ -49,6 +52,7 @@ import {
   type LintDiagnostic,
   type LintProvider,
   type LintSeverity,
+  type ModuleGraph,
   type PolicyFile,
   type PolicyPluginDeclaration,
   type PolicyPluginsMap,
@@ -63,11 +67,14 @@ import {
   type WorkspaceApplyResult,
   type WorkspaceArchitectureSummaryResult,
   type WorkspaceCodeAction,
+  type WorkspaceDeadModulesResult,
   type WorkspaceDependencyGraphEdge,
   type WorkspaceDependencyGraphEdgeKind,
   type WorkspaceDependencyGraphNode,
   type WorkspaceDependencyGraphNodeMetrics,
   type WorkspaceDependencyGraphResult,
+  type WorkspaceDependencyPathResult,
+  type WorkspaceImpactRadiusDirection,
   type WorkspaceDiagnostic,
   type WorkspaceDiagnosticSeverity,
   type WorkspaceFeatureStatus,
@@ -608,6 +615,34 @@ export type WorkspaceService = {
     analysisGeneration?: number;
     signal?: AbortSignal;
   }) => Promise<WorkspaceDependencyGraphResult>;
+  queryImpactRadius: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    direction: WorkspaceImpactRadiusDirection;
+    depth?: number;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceDependencyGraphResult>;
+  queryDependencyPath: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    fromUri: string;
+    toUri: string;
+    maxPaths?: number;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceDependencyPathResult>;
+  queryDeadModules: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    entryPointUris?: string[];
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceDeadModulesResult>;
   querySemanticSearch: (input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;
@@ -4271,6 +4306,174 @@ function workspaceDependencyGraphResultCreate(
     edges,
     entryPoints: entryPoints.map((filePath) => workspacePathToUri(filePath)),
     cycles: cycles.map((cycle) => cycle.map((filePath) => workspacePathToUri(filePath))),
+  };
+}
+
+/**
+ * Expose a {@link ProjectIndex} through the {@link ModuleGraph} interface
+ * without rebuilding the graph. The workspace service already pays the
+ * cost of lazy graph construction inside `ProjectIndex`, so we just
+ * forward each method.
+ *
+ * This adapter keeps the pure graph-query helpers in
+ * `@codepol/core/index/moduleGraphQueries` decoupled from `ProjectIndex`:
+ * the helpers speak only `ModuleGraph`, and the workspace layer is the
+ * only place that knows about project indexes.
+ */
+function moduleGraphFromIndexAdapt(index: ProjectIndex): ModuleGraph {
+  return {
+    moduleGraphImportersGet(file: string): string[] {
+      return index.moduleImportersGet(file);
+    },
+    moduleGraphImporteesGet(file: string): string[] {
+      return index.moduleImporteesGet(file);
+    },
+    moduleGraphDependencyOrderGet(): string[] {
+      return index.moduleDependencyOrderGet();
+    },
+    moduleGraphCyclesGet(): string[][] {
+      return index.moduleCyclesGet();
+    },
+    moduleGraphEntryPointsGet(): string[] {
+      return index.moduleEntryPointsGet();
+    },
+  };
+}
+
+function workspaceImpactRadiusResultCreate(
+  workspace: WorkspaceContextState,
+  index: ProjectIndex,
+  input: {
+    uri: string;
+    direction: WorkspaceImpactRadiusDirection;
+    depth?: number;
+  },
+): WorkspaceDependencyGraphResult {
+  const focusPath = workspaceUriToPath(input.uri);
+  const graph = moduleGraphFromIndexAdapt(index);
+  const impact = moduleImpactRadiusCompute(graph, {
+    file: focusPath,
+    direction: input.direction,
+    depth: input.depth,
+  });
+
+  const includedFiles = new Set(impact.files);
+  const indexedFileSet = new Set(index.filesGet());
+  const cycles = index.moduleCyclesGet();
+  const entryPoints = index.moduleEntryPointsGet();
+  const entryPointSet = new Set(entryPoints);
+  const cycleMemberSet = new Set<string>();
+  for (const cycle of cycles) {
+    for (const filePath of cycle) {
+      cycleMemberSet.add(filePath);
+    }
+  }
+
+  const filePackageNameGet = workspaceFilePackageNameResolverCreate(
+    workspace.baseIndexState?.workspacePackageRecords,
+  );
+
+  const nodes: WorkspaceDependencyGraphNode[] = impact.files.map((filePath) => {
+    if (!indexedFileSet.has(filePath)) {
+      return {
+        uri: workspacePathToUri(filePath),
+        workspaceRelativePath: workspaceRelativePathCreate(workspace.rootPath, filePath),
+      };
+    }
+    const importerCount = index.moduleImportersGet(filePath).length;
+    const importeeCount = index.moduleImporteesGet(filePath).length;
+    const symbolCount = index.symbolsInFileGet(filePath).length;
+    const aggregateCyclomaticComplexity =
+      workspaceFileAggregateCyclomaticComplexityGet(index, filePath);
+    const metrics: WorkspaceDependencyGraphNodeMetrics = {
+      importerCount,
+      importeeCount,
+      symbolCount,
+      isEntryPoint: entryPointSet.has(filePath),
+      isInCycle: cycleMemberSet.has(filePath),
+      ...(aggregateCyclomaticComplexity !== undefined
+        ? { aggregateCyclomaticComplexity }
+        : {}),
+    };
+    const packageName = filePackageNameGet(filePath);
+    return {
+      uri: workspacePathToUri(filePath),
+      workspaceRelativePath: workspaceRelativePathCreate(workspace.rootPath, filePath),
+      metrics,
+      ...(packageName !== undefined ? { packageName } : {}),
+    };
+  });
+
+  const edges: WorkspaceDependencyGraphEdge[] = impact.edges.map((edge) => {
+    const fromPackage = filePackageNameGet(edge.from);
+    const toPackage = filePackageNameGet(edge.to);
+    const crossesPackageBoundary =
+      fromPackage !== undefined && toPackage !== undefined
+        ? fromPackage !== toPackage
+        : undefined;
+    const edgeInfo = index.moduleEdgeInfoGet(edge.from, edge.to);
+    const kind: WorkspaceDependencyGraphEdgeKind | undefined = edgeInfo?.kind;
+    const bindingCount = edgeInfo?.bindingCount;
+    return {
+      fromUri: workspacePathToUri(edge.from),
+      toUri: workspacePathToUri(edge.to),
+      ...(kind !== undefined ? { kind } : {}),
+      ...(bindingCount !== undefined ? { bindingCount } : {}),
+      ...(crossesPackageBoundary !== undefined
+        ? { crossesPackageBoundary }
+        : {}),
+    };
+  });
+
+  const filteredEntryPoints = entryPoints
+    .filter((filePath) => includedFiles.has(filePath))
+    .map((filePath) => workspacePathToUri(filePath));
+  const filteredCycles = cycles
+    .filter((cycle) => cycle.every((filePath) => includedFiles.has(filePath)))
+    .map((cycle) => cycle.map((filePath) => workspacePathToUri(filePath)));
+
+  return {
+    nodes,
+    edges,
+    entryPoints: filteredEntryPoints,
+    cycles: filteredCycles,
+  };
+}
+
+function workspaceDependencyPathResultCreate(
+  index: ProjectIndex,
+  input: {
+    fromUri: string;
+    toUri: string;
+    maxPaths?: number;
+  },
+): WorkspaceDependencyPathResult {
+  const graph = moduleGraphFromIndexAdapt(index);
+  const result = moduleDependencyPathCompute(graph, {
+    fromFile: workspaceUriToPath(input.fromUri),
+    toFile: workspaceUriToPath(input.toUri),
+    maxPaths: input.maxPaths,
+  });
+  return {
+    paths: result.paths.map((path) => path.map((filePath) => workspacePathToUri(filePath))),
+    shortestLength: result.shortestLength,
+    truncated: result.truncated,
+  };
+}
+
+function workspaceDeadModulesResultCreate(
+  index: ProjectIndex,
+  input: {
+    entryPointUris?: string[];
+  },
+): WorkspaceDeadModulesResult {
+  const graph = moduleGraphFromIndexAdapt(index);
+  const entryPoints = input.entryPointUris?.map((uri) => workspaceUriToPath(uri));
+  const result = moduleDeadModulesCompute(graph, {
+    ...(entryPoints !== undefined ? { entryPoints } : {}),
+  });
+  return {
+    unreachable: result.unreachable.map((filePath) => workspacePathToUri(filePath)),
   };
 }
 
@@ -8492,6 +8695,83 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     return workspaceDependencyGraphResultCreate(workspace, index);
   }
 
+  async queryImpactRadius(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    direction: WorkspaceImpactRadiusDirection;
+    depth?: number;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceDependencyGraphResult> {
+    const { workspace, workspaceSession } = workspaceSessionGet(
+      this.workspaces,
+      this.clientSessions,
+      input.clientSessionId,
+      input.workspaceId,
+    );
+    const index = await this.workspaceSessionIndexEnsure(workspace, workspaceSession, {
+      signal: input.signal,
+    });
+    workspaceAnalysisGenerationValidate(workspaceSession, input);
+    return workspaceImpactRadiusResultCreate(workspace, index, {
+      uri: input.uri,
+      direction: input.direction,
+      depth: input.depth,
+    });
+  }
+
+  async queryDependencyPath(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    fromUri: string;
+    toUri: string;
+    maxPaths?: number;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceDependencyPathResult> {
+    const { workspace, workspaceSession } = workspaceSessionGet(
+      this.workspaces,
+      this.clientSessions,
+      input.clientSessionId,
+      input.workspaceId,
+    );
+    const index = await this.workspaceSessionIndexEnsure(workspace, workspaceSession, {
+      signal: input.signal,
+    });
+    workspaceAnalysisGenerationValidate(workspaceSession, input);
+    return workspaceDependencyPathResultCreate(index, {
+      fromUri: input.fromUri,
+      toUri: input.toUri,
+      maxPaths: input.maxPaths,
+    });
+  }
+
+  async queryDeadModules(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    entryPointUris?: string[];
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceDeadModulesResult> {
+    const { workspace, workspaceSession } = workspaceSessionGet(
+      this.workspaces,
+      this.clientSessions,
+      input.clientSessionId,
+      input.workspaceId,
+    );
+    const index = await this.workspaceSessionIndexEnsure(workspace, workspaceSession, {
+      signal: input.signal,
+    });
+    workspaceAnalysisGenerationValidate(workspaceSession, input);
+    return workspaceDeadModulesResultCreate(index, {
+      entryPointUris: input.entryPointUris,
+    });
+  }
+
   async querySemanticSearch(input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;
@@ -8899,6 +9179,43 @@ class InProcessWorkspaceService implements WorkspaceService {
     signal?: AbortSignal;
   }): Promise<WorkspaceDependencyGraphResult> {
     return this.engine.queryDependencyGraph(input);
+  }
+
+  queryImpactRadius(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    direction: WorkspaceImpactRadiusDirection;
+    depth?: number;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceDependencyGraphResult> {
+    return this.engine.queryImpactRadius(input);
+  }
+
+  queryDependencyPath(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    fromUri: string;
+    toUri: string;
+    maxPaths?: number;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceDependencyPathResult> {
+    return this.engine.queryDependencyPath(input);
+  }
+
+  queryDeadModules(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    entryPointUris?: string[];
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceDeadModulesResult> {
+    return this.engine.queryDeadModules(input);
   }
 
   querySemanticSearch(input: {

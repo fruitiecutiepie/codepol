@@ -6435,4 +6435,223 @@ fix = "never"
       expect(dynamicEdge?.bindingCount).toBeGreaterThanOrEqual(1);
     });
   });
+
+  describe('narrow graph queries', () => {
+    /**
+     * Shared helper that stands up a workspace containing the chain
+     * `app.ts -> b.ts -> c.ts -> d.ts`, the side-branch `b.ts -> e.ts`,
+     * and an orphan file `orphan.ts`. The resulting module graph is used
+     * by the impact-radius / dependency-path / dead-module tests below.
+     */
+    function phase2NarrowGraphWorkspaceCreate(): {
+      rootPath: string;
+      configPath: string;
+      files: {
+        app: string;
+        b: string;
+        c: string;
+        d: string;
+        e: string;
+        orphan: string;
+      };
+    } {
+      const rootPath = tempWorkspaceCreate('codepol-phase2-queries-');
+      createdDirs.push(rootPath);
+      fs.mkdirSync(path.join(rootPath, 'src'), { recursive: true });
+      const configPath = path.join(rootPath, 'codepol.toml');
+      fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
+
+      const app = path.join(rootPath, 'src', 'app.ts');
+      const b = path.join(rootPath, 'src', 'b.ts');
+      const c = path.join(rootPath, 'src', 'c.ts');
+      const d = path.join(rootPath, 'src', 'd.ts');
+      const e = path.join(rootPath, 'src', 'e.ts');
+      const orphan = path.join(rootPath, 'src', 'orphan.ts');
+
+      fs.writeFileSync(d, 'export const leaf = 1;\n', 'utf8');
+      fs.writeFileSync(
+        c,
+        "import { leaf } from './d';\nexport const three = leaf;\n",
+        'utf8',
+      );
+      fs.writeFileSync(
+        e,
+        "export const side = 'side';\n",
+        'utf8',
+      );
+      fs.writeFileSync(
+        b,
+        [
+          "import { three } from './c';",
+          "import { side } from './e';",
+          'export const two = three + side;',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      fs.writeFileSync(
+        app,
+        "import { two } from './b';\nexport const entry = two;\n",
+        'utf8',
+      );
+      fs.writeFileSync(orphan, 'export const lonely = true;\n', 'utf8');
+
+      return {
+        rootPath,
+        configPath,
+        files: { app, b, c, d, e, orphan },
+      };
+    }
+
+    it('returns the downstream neighborhood bounded by depth for queryImpactRadius', async () => {
+      const { rootPath, configPath, files } = phase2NarrowGraphWorkspaceCreate();
+      const service = workspaceServiceCreate();
+      const { clientSessionId, workspaceId } = await clientWorkspaceAttach(service, {
+        rootPath,
+        configPath,
+      });
+
+      const appUri = workspacePathToUri(files.app);
+      const bUri = workspacePathToUri(files.b);
+      const cUri = workspacePathToUri(files.c);
+      const eUri = workspacePathToUri(files.e);
+
+      const shallow = await service.queryImpactRadius({
+        clientSessionId,
+        workspaceId,
+        uri: workspacePathToUri(files.app),
+        direction: 'downstream',
+        depth: 2,
+      });
+
+      const shallowNodeUris = shallow.nodes.map((node) => node.uri).sort();
+      // depth 2 from app reaches b and then c/e, but not d.
+      expect(shallowNodeUris).toEqual([appUri, bUri, cUri, eUri].sort());
+
+      // Edges are restricted to edges within the returned subgraph.
+      const shallowEdges = shallow.edges.map((edge) => ({
+        from: edge.fromUri,
+        to: edge.toUri,
+      }));
+      expect(shallowEdges).toEqual(
+        expect.arrayContaining([
+          { from: appUri, to: bUri },
+          { from: bUri, to: cUri },
+          { from: bUri, to: eUri },
+        ]),
+      );
+      expect(shallowEdges).toHaveLength(3);
+
+      // `app.ts` is still the natural entry point of the subgraph.
+      expect(shallow.entryPoints).toContain(appUri);
+    });
+
+    it('returns the upstream set and filters cycles/entry points for queryImpactRadius', async () => {
+      const { rootPath, configPath, files } = phase2NarrowGraphWorkspaceCreate();
+      const service = workspaceServiceCreate();
+      const { clientSessionId, workspaceId } = await clientWorkspaceAttach(service, {
+        rootPath,
+        configPath,
+      });
+
+      const appUri = workspacePathToUri(files.app);
+      const bUri = workspacePathToUri(files.b);
+      const cUri = workspacePathToUri(files.c);
+      const dUri = workspacePathToUri(files.d);
+
+      const upstream = await service.queryImpactRadius({
+        clientSessionId,
+        workspaceId,
+        uri: workspacePathToUri(files.d),
+        direction: 'upstream',
+      });
+      const upstreamNodeUris = upstream.nodes.map((node) => node.uri).sort();
+      // Every ancestor of d: c, b, app (+ d itself).
+      expect(upstreamNodeUris).toEqual([appUri, bUri, cUri, dUri].sort());
+      // No cycles in this workspace, so the subgraph reports none.
+      expect(upstream.cycles).toEqual([]);
+    });
+
+    it('returns the shortest simple path with a bounded number of alternatives for queryDependencyPath', async () => {
+      const { rootPath, configPath, files } = phase2NarrowGraphWorkspaceCreate();
+      const service = workspaceServiceCreate();
+      const { clientSessionId, workspaceId } = await clientWorkspaceAttach(service, {
+        rootPath,
+        configPath,
+      });
+
+      const appUri = workspacePathToUri(files.app);
+      const bUri = workspacePathToUri(files.b);
+      const cUri = workspacePathToUri(files.c);
+      const dUri = workspacePathToUri(files.d);
+
+      const result = await service.queryDependencyPath({
+        clientSessionId,
+        workspaceId,
+        fromUri: workspacePathToUri(files.app),
+        toUri: workspacePathToUri(files.d),
+      });
+      expect(result.paths).toEqual([[appUri, bUri, cUri, dUri]]);
+      expect(result.shortestLength).toBe(3);
+      expect(result.truncated).toBe(false);
+    });
+
+    it('reports no path when the destination is not reachable for queryDependencyPath', async () => {
+      const { rootPath, configPath, files } = phase2NarrowGraphWorkspaceCreate();
+      const service = workspaceServiceCreate();
+      const { clientSessionId, workspaceId } = await clientWorkspaceAttach(service, {
+        rootPath,
+        configPath,
+      });
+
+      const result = await service.queryDependencyPath({
+        clientSessionId,
+        workspaceId,
+        fromUri: workspacePathToUri(files.app),
+        toUri: workspacePathToUri(files.orphan),
+      });
+      expect(result.paths).toEqual([]);
+      expect(result.shortestLength).toBe(0);
+      expect(result.truncated).toBe(false);
+    });
+
+    it('uses natural entry points when none are supplied for queryDeadModules', async () => {
+      const { rootPath, configPath, files } = phase2NarrowGraphWorkspaceCreate();
+      const service = workspaceServiceCreate();
+      const { clientSessionId, workspaceId } = await clientWorkspaceAttach(service, {
+        rootPath,
+        configPath,
+      });
+
+      const orphanUri = workspacePathToUri(files.orphan);
+
+      const result = await service.queryDeadModules({
+        clientSessionId,
+        workspaceId,
+      });
+      // `orphan.ts` and `app.ts` are both natural entry points because
+      // nothing imports them — so nothing is dead.
+      expect(result.unreachable).not.toContain(orphanUri);
+      expect(result.unreachable).toEqual([]);
+    });
+
+    it('restricts reachability to the caller-supplied entry points for queryDeadModules', async () => {
+      const { rootPath, configPath, files } = phase2NarrowGraphWorkspaceCreate();
+      const service = workspaceServiceCreate();
+      const { clientSessionId, workspaceId } = await clientWorkspaceAttach(service, {
+        rootPath,
+        configPath,
+      });
+
+      const orphanUri = workspacePathToUri(files.orphan);
+
+      const restricted = await service.queryDeadModules({
+        clientSessionId,
+        workspaceId,
+        entryPointUris: [workspacePathToUri(files.app)],
+      });
+      // Only `orphan.ts` is unreachable when we anchor reachability at app.ts.
+      expect(restricted.unreachable).toEqual([orphanUri]);
+    });
+  });
 });

@@ -202,6 +202,9 @@ function workspaceReadQueriesStubCreate(): Pick<
   WorkspaceService,
   | 'queryWorkspaceSymbols'
   | 'queryDependencyGraph'
+  | 'queryImpactRadius'
+  | 'queryDependencyPath'
+  | 'queryDeadModules'
   | 'querySemanticSearch'
   | 'querySemanticDefinition'
   | 'querySemanticReferences'
@@ -224,6 +227,26 @@ function workspaceReadQueriesStubCreate(): Pick<
         edges: [],
         entryPoints: [],
         cycles: [],
+      };
+    },
+    async queryImpactRadius() {
+      return {
+        nodes: [],
+        edges: [],
+        entryPoints: [],
+        cycles: [],
+      };
+    },
+    async queryDependencyPath() {
+      return {
+        paths: [],
+        shortestLength: 0,
+        truncated: false,
+      };
+    },
+    async queryDeadModules() {
+      return {
+        unreachable: [],
       };
     },
     async querySemanticSearch() {
