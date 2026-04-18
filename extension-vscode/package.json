@@ -20,6 +20,7 @@
     "onCommand:codepol.extension.showSemanticDefinition",
     "onCommand:codepol.extension.showSemanticSearch",
     "onCommand:codepol.extension.showArchitectureLinks",
+    "onCommand:codepol.architecture.peek",
     "onCommand:codepol.extension.showLintRuleDetails",
     "onCommand:codepol.extension.showLintRuleDiagnosticFixes",
     "onCommand:codepol.extension.renameCodepolEntity",
@@ -56,6 +57,11 @@
       {
         "command": "codepol.extension.showArchitectureLinks",
         "title": "Codepol: Show Architecture Links",
+        "enablement": "codepol.indexBackedCommandsEnabled"
+      },
+      {
+        "command": "codepol.architecture.peek",
+        "title": "Codepol: Peek Architecture",
         "enablement": "codepol.indexBackedCommandsEnabled"
       },
       {

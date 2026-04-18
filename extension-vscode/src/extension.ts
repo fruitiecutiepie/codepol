@@ -20,6 +20,7 @@ import {
 import {
   CODEPOL_EXTENSION_COMMAND_ADD_DIAGNOSTICS_ESCALATION,
   CODEPOL_EXTENSION_COMMAND_CLEAR_DIAGNOSTICS_ESCALATIONS,
+  CODEPOL_EXTENSION_COMMAND_PEEK_ARCHITECTURE,
   CODEPOL_EXTENSION_COMMAND_REFRESH_RENAME_TARGETS,
   CODEPOL_EXTENSION_COMMAND_REFRESH_LINT_RULES,
   CODEPOL_EXTENSION_COMMAND_OPEN_LINT_RULE_LOCATION,
@@ -39,6 +40,7 @@ import {
   CODEPOL_EXTENSION_VIEW_LINT_RULES_ID,
   CODEPOL_EXTENSION_VIEW_RENAME_TARGETS_ID,
 } from './constants';
+import { CodepolArchitectureCodeLensProvider } from './codeLensProvider';
 import {
   renameTargetCandidatesDiscover,
   type RenameTargetCandidate,
@@ -591,11 +593,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     openLocation: locationOpen,
   });
 
+  const codeLensProvider = new CodepolArchitectureCodeLensProvider({
+    protocol,
+    peekCommandId: CODEPOL_EXTENSION_COMMAND_PEEK_ARCHITECTURE,
+  });
+
   context.subscriptions.push(
     panels,
     readiness,
     sidebarProvider,
     statusBarItem,
+    codeLensProvider,
+    vscode.languages.registerCodeLensProvider(
+      { scheme: 'file' },
+      codeLensProvider,
+    ),
     vscode.window.registerWebviewViewProvider(
       CODEPOL_EXTENSION_VIEW_CURRENT_CONTEXT_ID,
       sidebarProvider,
@@ -633,6 +645,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand(
       CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_LINKS,
       async (uri?: string) => controller?.showArchitectureLinks(uri),
+    ),
+    vscode.commands.registerCommand(
+      CODEPOL_EXTENSION_COMMAND_PEEK_ARCHITECTURE,
+      async (uri?: string) => controller?.peekArchitecture(uri),
     ),
     vscode.commands.registerCommand(
       CODEPOL_EXTENSION_COMMAND_SHOW_LINT_RULE_DETAILS,
@@ -848,6 +864,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       statusBarApply(statusBarItem, codepolStatusBarPresentationCreate(snapshot));
       lintRulesProvider.refresh();
       renameTargetsProvider.refresh();
+      codeLensProvider.refresh();
     }),
   );
 

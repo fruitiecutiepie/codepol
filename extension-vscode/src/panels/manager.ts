@@ -17,6 +17,16 @@ import type {
   RenamePreviewPanelViewModel,
   SemanticDefinitionPanelViewModel,
 } from '../viewModels';
+import {
+  dependencyGraphControlMessageIs,
+  dependencyGraphControlStateUpdate,
+  dependencyGraphPanelControlStateInitialArchitectureLinks,
+  dependencyGraphPanelControlStateInitialDependencyGraph,
+  type ArchitectureLinksPanelRebuilder,
+  type DependencyGraphPanelControlMessage,
+  type DependencyGraphPanelControlState,
+  type DependencyGraphPanelRebuilder,
+} from './controls';
 import { codepolHoverActionCommandResolve } from './messages';
 import { codepolPanelHtmlRender, type CodepolPanelViewModel } from './render';
 
@@ -35,7 +45,8 @@ type CodepolPanelMessage =
   | {
       type: 'applyPlan';
       planId?: string;
-    };
+    }
+  | DependencyGraphPanelControlMessage;
 
 type PanelKind =
   | 'semanticDefinition'
@@ -55,9 +66,21 @@ export type CodepolPanelActions = {
   executeCommand(command: string, uri?: string): Promise<void>;
 };
 
+type DependencyGraphPanelControls = {
+  state: DependencyGraphPanelControlState;
+  rebuilder: DependencyGraphPanelRebuilder;
+};
+
+type ArchitectureLinksPanelControls = {
+  state: DependencyGraphPanelControlState;
+  rebuilder: ArchitectureLinksPanelRebuilder;
+};
+
 type ManagedPanel = {
   panel: vscode.WebviewPanel;
   model: CodepolPanelViewModel;
+  dependencyGraphControls?: DependencyGraphPanelControls;
+  architectureLinksControls?: ArchitectureLinksPanelControls;
 };
 
 export class CodepolPanelManager implements vscode.Disposable {
@@ -89,21 +112,53 @@ export class CodepolPanelManager implements vscode.Disposable {
     });
   }
 
-  showDependencyGraph(model: DependencyGraphPanelViewModel): void {
+  showDependencyGraph(
+    model: DependencyGraphPanelViewModel,
+    rebuilder?: DependencyGraphPanelRebuilder,
+  ): void {
     this.panelShow('dependencyGraph', {
       kind: 'dependencyGraph',
       title: 'Codepol: Dependency Graph',
       data: model,
     });
+    if (rebuilder) {
+      const managed = this.panels.get('dependencyGraph');
+      if (managed) {
+        managed.dependencyGraphControls = {
+          state: {
+            filters: model.filters,
+            layoutMode: model.layoutMode,
+            blastRadiusUri: model.blastRadiusUri,
+          },
+          rebuilder,
+        };
+      }
+    }
   }
 
-  showArchitectureLinks(model: ArchitectureLinksPanelViewModel): void {
+  showArchitectureLinks(
+    model: ArchitectureLinksPanelViewModel,
+    rebuilder?: ArchitectureLinksPanelRebuilder,
+  ): void {
     this.panelShow('architectureLinks', {
       kind: 'architectureLinks',
       title: 'Codepol: Architecture Links',
       uri: model.uri,
       data: model,
     });
+    if (rebuilder) {
+      const managed = this.panels.get('architectureLinks');
+      if (managed) {
+        managed.architectureLinksControls = {
+          state: {
+            filters: model.filters,
+            layoutMode: model.layoutMode,
+            blastRadiusUri: model.blastRadiusUri,
+          },
+          rebuilder,
+        };
+      }
+    }
   }
 
   showLintRuleDetails(model: LintRuleDetailsPanelViewModel): void {
@@ -170,10 +225,84 @@ export class CodepolPanelManager implements vscode.Disposable {
     });
   }
 
+  private graphControlMessageHandle(
+    kind: PanelKind,
+    message: DependencyGraphPanelControlMessage,
+  ): void {
+    const managed = this.panels.get(kind);
+    if (!managed) {
+      return;
+    }
+
+    if (
+      kind === 'dependencyGraph' &&
+      managed.dependencyGraphControls &&
+      managed.model.kind === 'dependencyGraph'
+    ) {
+      const controls = managed.dependencyGraphControls;
+      const nextState = dependencyGraphControlStateUpdate(controls.state, message);
+      if (!nextState) {
+        return;
+      }
+      const nextModel = controls.rebuilder(nextState);
+      managed.dependencyGraphControls = {
+        state: {
+          filters: nextModel.filters,
+          layoutMode: nextModel.layoutMode,
+          blastRadiusUri: nextModel.blastRadiusUri,
+        },
+        rebuilder: controls.rebuilder,
+      };
+      managed.model = {
+        ...managed.model,
+        data: nextModel,
+      };
+      managed.panel.webview.html = codepolPanelHtmlRender({
+        nonce: randomBytes(16).toString('hex'),
+        model: managed.model,
+      });
+      return;
+    }
+
+    if (
+      kind === 'architectureLinks' &&
+      managed.architectureLinksControls &&
+      managed.model.kind === 'architectureLinks'
+    ) {
+      const controls = managed.architectureLinksControls;
+      const nextState = dependencyGraphControlStateUpdate(controls.state, message);
+      if (!nextState) {
+        return;
+      }
+      const nextModel = controls.rebuilder(nextState);
+      managed.architectureLinksControls = {
+        state: {
+          filters: nextModel.filters,
+          layoutMode: nextModel.layoutMode,
+          blastRadiusUri: nextModel.blastRadiusUri,
+        },
+        rebuilder: controls.rebuilder,
+      };
+      managed.model = {
+        ...managed.model,
+        data: nextModel,
+      };
+      managed.panel.webview.html = codepolPanelHtmlRender({
+        nonce: randomBytes(16).toString('hex'),
+        model: managed.model,
+      });
+    }
+  }
+
   private async messageHandle(
     kind: PanelKind,
     message: CodepolPanelMessage,
   ): Promise<void> {
+    if (dependencyGraphControlMessageIs(message)) {
+      this.graphControlMessageHandle(kind, message);
+      return;
+    }
+
     if (message.type === 'openLocation' && message.uri) {
       await this.actions.openLocation({
         uri: message.uri,

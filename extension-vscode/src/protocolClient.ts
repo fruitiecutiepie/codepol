@@ -19,7 +19,10 @@ import type {
   EscalationRuleInput,
   IndexStatusResult,
   WorkspaceArchitectureSummaryResult,
+  WorkspaceDeadModulesResult,
   WorkspaceDependencyGraphResult,
+  WorkspaceDependencyPathResult,
+  WorkspaceImpactRadiusDirection,
   WorkspaceLintRuleDetailsResult,
   WorkspaceLintRulesResult,
   WorkspacePrepareRenameResult,
@@ -37,9 +40,12 @@ import {
   CODEPOL_LSP_COMMAND_ESCALATE_DIAGNOSTICS,
   CODEPOL_LSP_COMMAND_REVOKE_DIAGNOSTICS_ESCALATION,
   CODEPOL_LSP_REQUEST_ARCHITECTURE_SUMMARY,
+  CODEPOL_LSP_REQUEST_DEAD_MODULES,
   CODEPOL_LSP_REQUEST_DEPENDENCY_GRAPH,
+  CODEPOL_LSP_REQUEST_DEPENDENCY_PATH,
   CODEPOL_LSP_REQUEST_DIAGNOSTICS_CONFIG,
   CODEPOL_LSP_REQUEST_DIAGNOSTICS_ESCALATIONS,
+  CODEPOL_LSP_REQUEST_IMPACT_RADIUS,
   CODEPOL_LSP_REQUEST_INDEX_STATUS,
   CODEPOL_LSP_REQUEST_LINT_RULE_DETAILS,
   CODEPOL_LSP_REQUEST_LINT_RULES,
@@ -138,6 +144,19 @@ export type CodepolProtocolClient = {
   }): Promise<CodepolProtocolQuickFixAction[]>;
   queryArchitectureSummary(): Promise<WorkspaceArchitectureSummaryResult | null>;
   queryDependencyGraph(): Promise<WorkspaceDependencyGraphResult | null>;
+  queryImpactRadius(input: {
+    uri: string;
+    direction: WorkspaceImpactRadiusDirection;
+    depth?: number;
+  }): Promise<WorkspaceDependencyGraphResult | null>;
+  queryDependencyPath(input: {
+    fromUri: string;
+    toUri: string;
+    maxPaths?: number;
+  }): Promise<WorkspaceDependencyPathResult | null>;
+  queryDeadModules(input: {
+    entryPointUris?: string[];
+  }): Promise<WorkspaceDeadModulesResult | null>;
   querySemanticSearch(query: string): Promise<WorkspaceSearchResult[] | null>;
   querySemanticDefinition(uri: string): Promise<WorkspaceSemanticDefinitionResult | null>;
   querySemanticReferences(uri: string): Promise<WorkspaceSemanticReferencesResult | null>;
@@ -374,6 +393,37 @@ export class VscodeLanguageClientProtocol implements CodepolProtocolClient {
   async queryDependencyGraph(): Promise<WorkspaceDependencyGraphResult | null> {
     return this.requestRun<WorkspaceDependencyGraphResult | null>(
       CODEPOL_LSP_REQUEST_DEPENDENCY_GRAPH,
+    );
+  }
+
+  async queryImpactRadius(input: {
+    uri: string;
+    direction: WorkspaceImpactRadiusDirection;
+    depth?: number;
+  }): Promise<WorkspaceDependencyGraphResult | null> {
+    return this.requestRun<WorkspaceDependencyGraphResult | null>(
+      CODEPOL_LSP_REQUEST_IMPACT_RADIUS,
+      input,
+    );
+  }
+
+  async queryDependencyPath(input: {
+    fromUri: string;
+    toUri: string;
+    maxPaths?: number;
+  }): Promise<WorkspaceDependencyPathResult | null> {
+    return this.requestRun<WorkspaceDependencyPathResult | null>(
+      CODEPOL_LSP_REQUEST_DEPENDENCY_PATH,
+      input,
+    );
+  }
+
+  async queryDeadModules(input: {
+    entryPointUris?: string[];
+  }): Promise<WorkspaceDeadModulesResult | null> {
+    return this.requestRun<WorkspaceDeadModulesResult | null>(
+      CODEPOL_LSP_REQUEST_DEAD_MODULES,
+      input,
     );
   }
 

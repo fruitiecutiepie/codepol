@@ -78,6 +78,15 @@ describe('extension-vscode panel rendering', () => {
               },
             ],
           },
+          controls: {
+            filterChips: [],
+            edgeKindChips: [],
+            layoutOptions: [],
+            blastRadiusUri: null,
+            blastRadiusReachableCount: 0,
+          },
+          filters: {},
+          layoutMode: 'layered',
         },
       },
     });
@@ -149,6 +158,15 @@ describe('extension-vscode panel rendering', () => {
               ],
             },
           ],
+          controls: {
+            filterChips: [],
+            edgeKindChips: [],
+            layoutOptions: [],
+            blastRadiusUri: null,
+            blastRadiusReachableCount: 0,
+          },
+          filters: {},
+          layoutMode: 'radial',
         },
       },
     });
@@ -157,6 +175,88 @@ describe('extension-vscode panel rendering', () => {
     expect(html).toContain('Focused Graph');
     expect(html).toContain('incoming');
     expect(html).toContain('import sharedValue from @acme/lib');
+  });
+
+  it('renders graph controls (filter chips, layout selector, blast-radius row) with active states', () => {
+    const html = codepolPanelHtmlRender({
+      nonce: 'nonce-controls',
+      model: {
+        kind: 'dependencyGraph',
+        title: 'Codepol: Dependency Graph',
+        data: {
+          focusUri: 'file:///workspace/packages/lib/src/index.ts',
+          summaryCard: null,
+          graph: {
+            mode: 'workspace',
+            focusUri: 'file:///workspace/packages/lib/src/index.ts',
+            width: 100,
+            height: 100,
+            emptyMessage: 'No dependency graph data is available for this workspace.',
+            edges: [],
+            nodes: [
+              {
+                uri: 'file:///workspace/packages/lib/src/index.ts',
+                label: 'index.ts',
+                detail: 'packages/lib/src/index.ts',
+                x: 32,
+                y: 24,
+                width: 180,
+                height: 72,
+                isFocus: true,
+                isEntryPoint: false,
+                isCycleMember: false,
+                isDimmed: true,
+              },
+            ],
+          },
+          controls: {
+            filterChips: [
+              {
+                id: 'crossPackageOnly',
+                label: 'Cross-package only',
+                active: true,
+                description: 'Show only edges that cross monorepo package boundaries.',
+              },
+              {
+                id: 'hideTests',
+                label: 'Hide tests',
+                active: false,
+                description: 'Hide files that look like test or spec sources.',
+              },
+            ],
+            edgeKindChips: [
+              {
+                id: 'edgeKind:type_only',
+                label: 'Type-only',
+                active: true,
+              },
+            ],
+            layoutOptions: [
+              { id: 'layered', label: 'Layered', active: false },
+              { id: 'radial', label: 'Radial', active: true },
+              { id: 'force', label: 'Force (alpha)', active: false },
+            ],
+            blastRadiusUri: 'file:///workspace/packages/lib/src/index.ts',
+            blastRadiusReachableCount: 1,
+          },
+          filters: {
+            crossPackageOnly: true,
+            edgeKinds: ['type_only'],
+          },
+          layoutMode: 'radial',
+          blastRadiusUri: 'file:///workspace/packages/lib/src/index.ts',
+        },
+      },
+    });
+
+    expect(html).toContain('data-control-filter="crossPackageOnly"');
+    expect(html).toContain('control-chip active');
+    expect(html).toContain('data-control-edge-kind="edgeKind:type_only"');
+    expect(html).toContain('data-control-layout="radial"');
+    expect(html).toContain('data-control-blast-radius=""');
+    expect(html).toContain('1 reachable');
+    expect(html).toContain('graph-node focus');
+    expect(html).toContain(' dimmed');
   });
 
   it('routes hover actions to the correct Codepol commands', () => {

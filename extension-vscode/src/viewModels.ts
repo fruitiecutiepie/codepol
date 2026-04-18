@@ -1,6 +1,8 @@
 import * as path from 'node:path';
 import type {
   WorkspaceArchitectureSummaryResult,
+  WorkspaceDependencyGraphEdge,
+  WorkspaceDependencyGraphEdgeKind,
   WorkspaceDependencyGraphResult,
   WorkspaceLintRuleDetailsResult,
   WorkspacePrepareRenameResult,
@@ -67,6 +69,7 @@ export type DependencyGraphNodeViewModel = {
   isFocus: boolean;
   isEntryPoint: boolean;
   isCycleMember: boolean;
+  isDimmed?: boolean;
 };
 
 export type DependencyGraphEdgeViewModel = {
@@ -78,6 +81,7 @@ export type DependencyGraphEdgeViewModel = {
   x2: number;
   y2: number;
   isFocus: boolean;
+  isDimmed?: boolean;
 };
 
 export type DependencyGraphCanvasViewModel = {
@@ -88,6 +92,36 @@ export type DependencyGraphCanvasViewModel = {
   nodes: DependencyGraphNodeViewModel[];
   edges: DependencyGraphEdgeViewModel[];
   emptyMessage: string;
+};
+
+export type DependencyGraphLayoutMode = 'force' | 'layered' | 'radial';
+
+export type DependencyGraphFilterState = {
+  edgeKinds?: WorkspaceDependencyGraphEdgeKind[];
+  crossPackageOnly?: boolean;
+  crossLayerOnly?: boolean;
+  hideTests?: boolean;
+};
+
+export type DependencyGraphFilterChipViewModel = {
+  id: string;
+  label: string;
+  active: boolean;
+  description?: string;
+};
+
+export type DependencyGraphLayoutOptionViewModel = {
+  id: DependencyGraphLayoutMode;
+  label: string;
+  active: boolean;
+};
+
+export type DependencyGraphControlsViewModel = {
+  filterChips: DependencyGraphFilterChipViewModel[];
+  edgeKindChips: DependencyGraphFilterChipViewModel[];
+  layoutOptions: DependencyGraphLayoutOptionViewModel[];
+  blastRadiusUri: string | null;
+  blastRadiusReachableCount: number;
 };
 
 export type ArchitectureSummaryPanelViewModel = {
@@ -105,6 +139,10 @@ export type DependencyGraphPanelViewModel = {
   focusUri?: string;
   summaryCard: WorkspaceSummaryCardViewModel | null;
   graph: DependencyGraphCanvasViewModel;
+  controls: DependencyGraphControlsViewModel;
+  filters: DependencyGraphFilterState;
+  layoutMode: DependencyGraphLayoutMode;
+  blastRadiusUri?: string;
 };
 
 export type ArchitectureLinksPanelViewModel = {
@@ -116,6 +154,10 @@ export type ArchitectureLinksPanelViewModel = {
   totalAvailableItems: number;
   truncated: boolean;
   groups: SemanticReferencesPanelGroupViewModel[];
+  controls: DependencyGraphControlsViewModel;
+  filters: DependencyGraphFilterState;
+  layoutMode: DependencyGraphLayoutMode;
+  blastRadiusUri?: string;
 };
 
 export type LintRuleDetailsPanelGroupViewModel = {
@@ -383,6 +425,173 @@ function dependencyGraphLayersResolve(
   return layers;
 }
 
+const TEST_PATH_PATTERNS: RegExp[] = [
+  /\.(test|spec)\.[a-zA-Z0-9]+$/,
+  /(^|\/)__tests__(\/|$)/,
+  /(^|\/)tests?(\/|$)/,
+];
+
+function nodePathIsTest(workspaceRelativePath: string): boolean {
+  return TEST_PATH_PATTERNS.some((pattern) => pattern.test(workspaceRelativePath));
+}
+
+function edgeMatchesFilters(
+  edge: WorkspaceDependencyGraphEdge,
+  filters: DependencyGraphFilterState,
+): boolean {
+  if (filters.edgeKinds && filters.edgeKinds.length > 0) {
+    if (!edge.kind || !filters.edgeKinds.includes(edge.kind)) {
+      return false;
+    }
+  }
+  if (filters.crossPackageOnly === true && edge.crossesPackageBoundary !== true) {
+    return false;
+  }
+  if (filters.crossLayerOnly === true && edge.crossesLayerBoundary !== true) {
+    return false;
+  }
+  return true;
+}
+
+function dependencyGraphFiltersApply(
+  graph: WorkspaceDependencyGraphResult,
+  filters: DependencyGraphFilterState,
+): WorkspaceDependencyGraphResult {
+  const removedNodeUris = new Set<string>();
+  if (filters.hideTests === true) {
+    for (const node of graph.nodes) {
+      if (nodePathIsTest(node.workspaceRelativePath)) {
+        removedNodeUris.add(node.uri);
+      }
+    }
+  }
+  const nodes = graph.nodes.filter((node) => !removedNodeUris.has(node.uri));
+  const edges = graph.edges.filter(
+    (edge) =>
+      !removedNodeUris.has(edge.fromUri) &&
+      !removedNodeUris.has(edge.toUri) &&
+      edgeMatchesFilters(edge, filters),
+  );
+  const cycles = graph.cycles
+    .map((cycle) => cycle.filter((uri) => !removedNodeUris.has(uri)))
+    .filter((cycle) => cycle.length > 1);
+  const entryPoints = graph.entryPoints.filter((uri) => !removedNodeUris.has(uri));
+
+  return {
+    nodes,
+    edges,
+    entryPoints,
+    cycles,
+  };
+}
+
+function blastRadiusReachableFromUriCompute(
+  graph: WorkspaceDependencyGraphResult,
+  blastRadiusUri: string,
+): Set<string> {
+  const reachable = new Set<string>();
+  const adjacency = new Map<string, string[]>();
+  for (const edge of graph.edges) {
+    const list = adjacency.get(edge.fromUri) ?? [];
+    list.push(edge.toUri);
+    adjacency.set(edge.fromUri, list);
+    const reverse = adjacency.get(edge.toUri) ?? [];
+    reverse.push(edge.fromUri);
+    adjacency.set(edge.toUri, reverse);
+  }
+
+  const queue = [blastRadiusUri];
+  reachable.add(blastRadiusUri);
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current) {
+      break;
+    }
+    for (const next of (adjacency.get(current) ?? []).slice().sort()) {
+      if (reachable.has(next)) {
+        continue;
+      }
+      reachable.add(next);
+      queue.push(next);
+    }
+  }
+  return reachable;
+}
+
+const FILTER_CHIP_DEFINITIONS: Array<{
+  id: 'crossPackageOnly' | 'crossLayerOnly' | 'hideTests';
+  label: string;
+  description: string;
+}> = [
+  {
+    id: 'crossPackageOnly',
+    label: 'Cross-package only',
+    description: 'Show only edges that cross monorepo package boundaries.',
+  },
+  {
+    id: 'crossLayerOnly',
+    label: 'Cross-layer only',
+    description: 'Show only edges that cross architectural layer boundaries.',
+  },
+  {
+    id: 'hideTests',
+    label: 'Hide tests',
+    description: 'Hide files that look like test or spec sources.',
+  },
+];
+
+const EDGE_KIND_CHIP_DEFINITIONS: Array<{
+  id: WorkspaceDependencyGraphEdgeKind;
+  label: string;
+}> = [
+  { id: 'static', label: 'Static' },
+  { id: 'dynamic', label: 'Dynamic' },
+  { id: 'side_effect', label: 'Side-effect' },
+  { id: 'cjs', label: 'CJS' },
+  { id: 'type_only', label: 'Type-only' },
+];
+
+const LAYOUT_OPTION_DEFINITIONS: Array<{
+  id: DependencyGraphLayoutMode;
+  label: string;
+}> = [
+  { id: 'layered', label: 'Layered' },
+  { id: 'radial', label: 'Radial' },
+  { id: 'force', label: 'Force (alpha)' },
+];
+
+function dependencyGraphControlsViewModelCreate(input: {
+  filters: DependencyGraphFilterState;
+  layoutMode: DependencyGraphLayoutMode;
+  blastRadiusUri: string | undefined;
+  blastRadiusReachableCount: number;
+}): DependencyGraphControlsViewModel {
+  const activeEdgeKinds = new Set<WorkspaceDependencyGraphEdgeKind>(
+    input.filters.edgeKinds ?? [],
+  );
+
+  return {
+    filterChips: FILTER_CHIP_DEFINITIONS.map((definition) => ({
+      id: definition.id,
+      label: definition.label,
+      description: definition.description,
+      active: input.filters[definition.id] === true,
+    })),
+    edgeKindChips: EDGE_KIND_CHIP_DEFINITIONS.map((definition) => ({
+      id: `edgeKind:${definition.id}`,
+      label: definition.label,
+      active: activeEdgeKinds.has(definition.id),
+    })),
+    layoutOptions: LAYOUT_OPTION_DEFINITIONS.map((definition) => ({
+      id: definition.id,
+      label: definition.label,
+      active: input.layoutMode === definition.id,
+    })),
+    blastRadiusUri: input.blastRadiusUri ?? null,
+    blastRadiusReachableCount: input.blastRadiusReachableCount,
+  };
+}
+
 function dependencyGraphCanvasFromPositionsCreate(input: {
   graph: WorkspaceDependencyGraphResult;
   mode: 'workspace' | 'focus';
@@ -494,6 +703,100 @@ function dependencyGraphWorkspaceCanvasViewModelCreate(input: {
     focusUri: input.focusUri,
     nodes,
     emptyMessage: 'No dependency graph data is available for this workspace.',
+  });
+}
+
+function dependencyGraphForceCanvasViewModelCreate(input: {
+  graph: WorkspaceDependencyGraphResult;
+  focusUri?: string;
+}): DependencyGraphCanvasViewModel {
+  const nodesByUri = dependencyGraphNodesByUriCreate(input.graph);
+  if (nodesByUri.size === 0) {
+    return {
+      mode: 'workspace',
+      focusUri: input.focusUri,
+      width: 0,
+      height: 0,
+      nodes: [],
+      edges: [],
+      emptyMessage: 'No dependency graph data is available for this workspace.',
+    };
+  }
+
+  const ordered = [...nodesByUri.values()].slice().sort(graphNodeSort);
+  const membership = dependencyGraphSetsCreate(input.graph);
+  const columnsCount = Math.max(1, Math.ceil(Math.sqrt(ordered.length)));
+  const nodes: DependencyGraphNodeViewModel[] = ordered.map((node, index) => {
+    const meta = graphNodeMetaCreate(node);
+    const columnIndex = index % columnsCount;
+    const rowIndex = Math.floor(index / columnsCount);
+    return {
+      uri: node.uri,
+      label: meta.label,
+      detail: meta.detail,
+      x: GRAPH_PADDING_X + columnIndex * (GRAPH_NODE_WIDTH + GRAPH_COLUMN_GAP),
+      y: GRAPH_PADDING_Y + rowIndex * (GRAPH_NODE_HEIGHT + GRAPH_ROW_GAP),
+      width: GRAPH_NODE_WIDTH,
+      height: GRAPH_NODE_HEIGHT,
+      isFocus: input.focusUri === node.uri,
+      isEntryPoint: membership.entryPoints.has(node.uri),
+      isCycleMember: membership.cycleMembers.has(node.uri),
+    };
+  });
+
+  return dependencyGraphCanvasFromPositionsCreate({
+    graph: input.graph,
+    mode: 'workspace',
+    focusUri: input.focusUri,
+    nodes,
+    emptyMessage: 'No dependency graph data is available for this workspace.',
+  });
+}
+
+function dependencyGraphCanvasBlastRadiusApply(
+  canvas: DependencyGraphCanvasViewModel,
+  reachableUris: Set<string>,
+): DependencyGraphCanvasViewModel {
+  return {
+    ...canvas,
+    nodes: canvas.nodes.map((node) => ({
+      ...node,
+      isDimmed: !reachableUris.has(node.uri),
+    })),
+    edges: canvas.edges.map((edge) => ({
+      ...edge,
+      isDimmed: !reachableUris.has(edge.fromUri) || !reachableUris.has(edge.toUri),
+    })),
+  };
+}
+
+function dependencyGraphCanvasForLayoutCreate(input: {
+  graph: WorkspaceDependencyGraphResult;
+  focusUri?: string;
+  layoutMode: DependencyGraphLayoutMode;
+  preferFocusForRadial: boolean;
+}): DependencyGraphCanvasViewModel {
+  if (input.layoutMode === 'force') {
+    return dependencyGraphForceCanvasViewModelCreate({
+      graph: input.graph,
+      focusUri: input.focusUri,
+    });
+  }
+  if (input.layoutMode === 'radial' && input.focusUri) {
+    return dependencyGraphFocusCanvasViewModelCreate({
+      graph: input.graph,
+      focusUri: input.focusUri,
+    });
+  }
+  if (input.layoutMode === 'radial' && input.preferFocusForRadial) {
+    return dependencyGraphWorkspaceCanvasViewModelCreate({
+      graph: input.graph,
+      focusUri: input.focusUri,
+    });
+  }
+  return dependencyGraphWorkspaceCanvasViewModelCreate({
+    graph: input.graph,
+    focusUri: input.focusUri,
   });
 }
 
@@ -627,14 +930,42 @@ export function dependencyGraphPanelViewModelCreate(input: {
   graph: WorkspaceDependencyGraphResult;
   summary: WorkspaceArchitectureSummaryResult | null;
   focusUri?: string;
+  filters?: DependencyGraphFilterState;
+  layoutMode?: DependencyGraphLayoutMode;
+  blastRadiusUri?: string;
 }): DependencyGraphPanelViewModel {
+  const filters = input.filters ?? {};
+  const layoutMode = input.layoutMode ?? 'layered';
+  const filteredGraph = dependencyGraphFiltersApply(input.graph, filters);
+  let canvas = dependencyGraphCanvasForLayoutCreate({
+    graph: filteredGraph,
+    focusUri: input.focusUri,
+    layoutMode,
+    preferFocusForRadial: false,
+  });
+  let blastRadiusReachableCount = 0;
+  if (input.blastRadiusUri) {
+    const reachable = blastRadiusReachableFromUriCompute(
+      filteredGraph,
+      input.blastRadiusUri,
+    );
+    blastRadiusReachableCount = reachable.size;
+    canvas = dependencyGraphCanvasBlastRadiusApply(canvas, reachable);
+  }
+
   return {
     focusUri: input.focusUri,
     summaryCard: workspaceSummaryCardViewModelCreate(input.summary),
-    graph: dependencyGraphWorkspaceCanvasViewModelCreate({
-      graph: input.graph,
-      focusUri: input.focusUri,
+    graph: canvas,
+    controls: dependencyGraphControlsViewModelCreate({
+      filters,
+      layoutMode,
+      blastRadiusUri: input.blastRadiusUri,
+      blastRadiusReachableCount,
     }),
+    filters,
+    layoutMode,
+    blastRadiusUri: input.blastRadiusUri,
   };
 }
 
@@ -644,26 +975,50 @@ export function architectureLinksPanelViewModelCreate(input: {
   hover: WorkspaceSemanticHoverResult | null;
   graph: WorkspaceDependencyGraphResult | null;
   summary: WorkspaceArchitectureSummaryResult | null;
+  filters?: DependencyGraphFilterState;
+  layoutMode?: DependencyGraphLayoutMode;
+  blastRadiusUri?: string;
 }): ArchitectureLinksPanelViewModel {
+  const filters = input.filters ?? {};
+  const layoutMode = input.layoutMode ?? 'radial';
+  const filteredGraph =
+    input.graph !== null
+      ? dependencyGraphFiltersApply(input.graph, filters)
+      : null;
+  let canvas: DependencyGraphCanvasViewModel;
+  let blastRadiusReachableCount = 0;
+  if (filteredGraph !== null) {
+    canvas = dependencyGraphCanvasForLayoutCreate({
+      graph: filteredGraph,
+      focusUri: input.uri,
+      layoutMode,
+      preferFocusForRadial: true,
+    });
+    if (input.blastRadiusUri) {
+      const reachable = blastRadiusReachableFromUriCompute(
+        filteredGraph,
+        input.blastRadiusUri,
+      );
+      blastRadiusReachableCount = reachable.size;
+      canvas = dependencyGraphCanvasBlastRadiusApply(canvas, reachable);
+    }
+  } else {
+    canvas = {
+      mode: 'focus',
+      focusUri: input.uri,
+      width: 0,
+      height: 0,
+      nodes: [],
+      edges: [],
+      emptyMessage: 'No dependency graph context is available for this target.',
+    };
+  }
+
   return {
     uri: input.uri,
     hoverCard: semanticHoverCardViewModelCreate(input.hover),
     workspaceSummaryCard: workspaceSummaryCardViewModelCreate(input.summary),
-    graph:
-      input.graph !== null
-        ? dependencyGraphFocusCanvasViewModelCreate({
-            graph: input.graph,
-            focusUri: input.uri,
-          })
-        : {
-            mode: 'focus',
-            focusUri: input.uri,
-            width: 0,
-            height: 0,
-            nodes: [],
-            edges: [],
-            emptyMessage: 'No dependency graph context is available for this target.',
-          },
+    graph: canvas,
     totalItems: input.references?.totalItems ?? 0,
     totalAvailableItems: input.references?.totalAvailableItems ?? 0,
     truncated: input.references?.truncated ?? false,
@@ -682,6 +1037,15 @@ export function architectureLinksPanelViewModelCreate(input: {
           }),
         ),
       })) ?? [],
+    controls: dependencyGraphControlsViewModelCreate({
+      filters,
+      layoutMode,
+      blastRadiusUri: input.blastRadiusUri,
+      blastRadiusReachableCount,
+    }),
+    filters,
+    layoutMode,
+    blastRadiusUri: input.blastRadiusUri,
   };
 }
 

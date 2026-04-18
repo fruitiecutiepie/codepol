@@ -17,6 +17,8 @@ export const CODEPOL_EXTENSION_COMMAND_SHOW_DEPENDENCY_GRAPH =
   'codepol.extension.showDependencyGraph';
 export const CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_LINKS =
   'codepol.extension.showArchitectureLinks';
+export const CODEPOL_EXTENSION_COMMAND_PEEK_ARCHITECTURE =
+  'codepol.architecture.peek';
 export const CODEPOL_EXTENSION_COMMAND_RENAME_CODEPOL_ENTITY =
   'codepol.extension.renameCodepolEntity';
 export const CODEPOL_EXTENSION_COMMAND_REFRESH_RENAME_TARGETS =

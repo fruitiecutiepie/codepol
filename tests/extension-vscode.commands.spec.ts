@@ -92,6 +92,9 @@ function protocolCreate() {
     queryCodeActions: vi.fn(),
     queryArchitectureSummary: vi.fn(),
     queryDependencyGraph: vi.fn(),
+    queryImpactRadius: vi.fn(),
+    queryDependencyPath: vi.fn(),
+    queryDeadModules: vi.fn(),
     querySemanticSearch: vi.fn(),
     querySemanticDefinition: vi.fn(),
     querySemanticReferences: vi.fn(),
@@ -659,7 +662,7 @@ describe('CodepolCommandController', () => {
         }),
       }),
     );
-    expect(panels.showDependencyGraph).toHaveBeenCalledWith(result);
+    expect(panels.showDependencyGraph).toHaveBeenCalledWith(result, expect.any(Function));
   });
 
   it('highlights the active file in the workspace dependency graph when available', async () => {
@@ -794,7 +797,50 @@ describe('CodepolCommandController', () => {
       }),
     );
     expect(result?.graph.nodes).toHaveLength(2);
-    expect(panels.showArchitectureLinks).toHaveBeenCalledWith(result);
+    expect(panels.showArchitectureLinks).toHaveBeenCalledWith(result, expect.any(Function));
+  });
+
+  it('peeks architecture using queryImpactRadius for the active file', async () => {
+    const protocol = protocolCreate();
+    protocol.queryImpactRadius.mockResolvedValue(dependencyGraphResult);
+    protocol.queryArchitectureSummary.mockResolvedValue(architectureSummaryResult);
+    protocol.querySemanticReferences.mockResolvedValue(null);
+    protocol.querySemanticHover.mockResolvedValue(null);
+    const panels = panelsCreate();
+    const host = hostCreate();
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    const result = await controller.peekArchitecture();
+
+    expect(protocol.queryImpactRadius).toHaveBeenCalledWith({
+      uri: 'file:///workspace/packages/lib/src/index.ts',
+      direction: 'both',
+      depth: 2,
+    });
+    expect(protocol.queryDependencyGraph).not.toHaveBeenCalled();
+    expect(result).toEqual(
+      expect.objectContaining({
+        uri: 'file:///workspace/packages/lib/src/index.ts',
+        layoutMode: 'radial',
+      }),
+    );
+    expect(panels.showArchitectureLinks).toHaveBeenCalledWith(
+      result,
+      expect.any(Function),
+    );
+  });
+
+  it('rejects peek architecture without an active file', async () => {
+    const protocol = protocolCreate();
+    const panels = panelsCreate();
+    const host = hostCreate({ activeUriGet: () => undefined });
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    await expect(controller.peekArchitecture()).resolves.toBeNull();
+    expect(host.errorShow).toHaveBeenCalledWith(
+      'Open a workspace file before peeking architecture.',
+    );
+    expect(protocol.queryImpactRadius).not.toHaveBeenCalled();
   });
 
   it('keeps architecture links active-file scoped while workspace commands remain available', async () => {

@@ -1,9 +1,13 @@
 import type {
+  WorkspaceArchitectureSummaryResult,
+  WorkspaceDependencyGraphResult,
   WorkspaceLintRuleDetailsResult,
   WorkspacePrepareRenameResult,
   WorkspaceRange,
   WorkspaceRenamePreviewResult,
   WorkspaceSearchResult,
+  WorkspaceSemanticHoverResult,
+  WorkspaceSemanticReferencesResult,
   WorkspaceSupportedRenameTarget,
 } from '@codepol/core';
 import type { RenameTargetCandidate } from './discovery';
@@ -24,6 +28,8 @@ import {
 import type {
   ArchitectureLinksPanelViewModel,
   ArchitectureSummaryPanelViewModel,
+  DependencyGraphFilterState,
+  DependencyGraphLayoutMode,
   DependencyGraphPanelViewModel,
   LintRuleDetailsPanelViewModel,
   RenamePreviewPanelViewModel,
@@ -62,11 +68,31 @@ export type LintRuleDiagnosticQuickFixCommandInput = {
   range: WorkspaceRange;
 };
 
+export type DependencyGraphPanelControlState = {
+  filters: DependencyGraphFilterState;
+  layoutMode: DependencyGraphLayoutMode;
+  blastRadiusUri?: string;
+};
+
+export type DependencyGraphPanelRebuilder = (
+  state: DependencyGraphPanelControlState,
+) => DependencyGraphPanelViewModel;
+
+export type ArchitectureLinksPanelRebuilder = (
+  state: DependencyGraphPanelControlState,
+) => ArchitectureLinksPanelViewModel;
+
 export type CodepolPanels = {
   showArchitectureSummary(input: ArchitectureSummaryPanelViewModel): void;
-  showDependencyGraph(input: DependencyGraphPanelViewModel): void;
+  showDependencyGraph(
+    input: DependencyGraphPanelViewModel,
+    rebuilder?: DependencyGraphPanelRebuilder,
+  ): void;
   showSemanticDefinition(input: SemanticDefinitionPanelViewModel): void;
-  showArchitectureLinks(input: ArchitectureLinksPanelViewModel): void;
+  showArchitectureLinks(
+    input: ArchitectureLinksPanelViewModel,
+    rebuilder?: ArchitectureLinksPanelRebuilder,
+  ): void;
   showLintRuleDetails(input: LintRuleDetailsPanelViewModel): void;
   showRenamePreview(input: RenamePreviewPanelViewModel): void;
 };
@@ -116,6 +142,26 @@ function namingRulesCreate(prepare: WorkspacePrepareRenameResult): string[] {
     rules.push(`Case: ${prepare.namingRules.casePolicy}`);
   }
   return rules;
+}
+
+function architectureLinksRebuilderCreate(input: {
+  uri: string;
+  references: WorkspaceSemanticReferencesResult | null;
+  hover: WorkspaceSemanticHoverResult | null;
+  graph: WorkspaceDependencyGraphResult | null;
+  summary: WorkspaceArchitectureSummaryResult | null;
+}): ArchitectureLinksPanelRebuilder {
+  return (state) =>
+    architectureLinksPanelViewModelCreate({
+      uri: input.uri,
+      references: input.references,
+      hover: input.hover,
+      graph: input.graph,
+      summary: input.summary,
+      filters: state.filters,
+      layoutMode: state.layoutMode,
+      blastRadiusUri: state.blastRadiusUri,
+    });
 }
 
 function lintRuleQuickFixesSort(
@@ -336,12 +382,21 @@ export class CodepolCommandController {
       return null;
     }
 
-    const model = dependencyGraphPanelViewModelCreate({
-      graph,
-      summary,
-      focusUri,
-    });
-    this.panels.showDependencyGraph(model);
+    const summaryResolved: WorkspaceArchitectureSummaryResult | null =
+      summary ?? null;
+    const buildModel = (
+      state: DependencyGraphPanelControlState,
+    ): DependencyGraphPanelViewModel =>
+      dependencyGraphPanelViewModelCreate({
+        graph,
+        summary: summaryResolved,
+        focusUri,
+        filters: state.filters,
+        layoutMode: state.layoutMode,
+        blastRadiusUri: state.blastRadiusUri,
+      });
+    const model = buildModel({ filters: {}, layoutMode: 'layered' });
+    this.panels.showDependencyGraph(model, buildModel);
     return model;
   }
 
@@ -367,14 +422,61 @@ export class CodepolCommandController {
     if (references === CodepolCommandController.REQUEST_SUPERSEDED) {
       return null;
     }
-    const model = architectureLinksPanelViewModelCreate({
+    const buildModel = architectureLinksRebuilderCreate({
       uri: targetUri,
-      references,
-      hover,
-      graph,
-      summary,
+      references: references ?? null,
+      hover: hover ?? null,
+      graph: graph ?? null,
+      summary: summary ?? null,
     });
-    this.panels.showArchitectureLinks(model);
+    const model = buildModel({ filters: {}, layoutMode: 'radial' });
+    this.panels.showArchitectureLinks(model, buildModel);
+    return model;
+  }
+
+  async peekArchitecture(
+    uri?: string,
+  ): Promise<ArchitectureLinksPanelViewModel | null> {
+    const targetUri = uri ?? this.host.activeUriGet();
+    if (!targetUri) {
+      await this.host.errorShow(
+        'Open a workspace file before peeking architecture.',
+      );
+      return null;
+    }
+
+    const blockedMessage = this.featureBlockedMessageResolve('architectureLinks');
+    if (blockedMessage) {
+      await this.host.errorShow(blockedMessage);
+      return null;
+    }
+
+    const [impactRadius, references, hover, summary] = await Promise.all([
+      this.protocolRequestRun(
+        this.protocol.queryImpactRadius({
+          uri: targetUri,
+          direction: 'both',
+          depth: 2,
+        }),
+      ),
+      this.protocolOptionalRequestRun(
+        this.protocol.querySemanticReferences(targetUri),
+      ),
+      this.protocolOptionalRequestRun(this.protocol.querySemanticHover(targetUri)),
+      this.protocolOptionalRequestRun(this.protocol.queryArchitectureSummary()),
+    ]);
+    if (impactRadius === CodepolCommandController.REQUEST_SUPERSEDED) {
+      return null;
+    }
+    const buildModel = architectureLinksRebuilderCreate({
+      uri: targetUri,
+      references: references ?? null,
+      hover: hover ?? null,
+      graph: impactRadius ?? null,
+      summary: summary ?? null,
+    });
+    const model = buildModel({ filters: {}, layoutMode: 'radial' });
+    this.panels.showArchitectureLinks(model, buildModel);
     return model;
   }
 

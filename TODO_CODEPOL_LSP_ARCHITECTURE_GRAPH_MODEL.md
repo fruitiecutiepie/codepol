@@ -438,12 +438,23 @@ Each phase is independently shippable, additive, and testable.
   - tests: `tests/e2e.cli.graph.spec.ts` runs the built CLI as a subprocess for each subcommand (10 cases) — happy path + non-zero exit paths + entry override — asserting JSON shape parity with the workspace contract
   - existing `codepol` (policy check) flow is unchanged; graph dispatch short-circuits `main()` when `argv._[0] === 'graph'`
 
-### Phase 5: Editor surfaces
+### Phase 5: Editor surfaces — _partial; hover deferred_
 
 - CodeLens provider + hover provider consuming `queryImpactRadius`
 - panel filter chips, layout modes, blast-radius interaction
 - "peek architecture" command on symbols
 - tests: view-model spec + panel render spec per new feature
+- landed:
+  - extension protocol client now exposes `queryImpactRadius`, `queryDependencyPath`, `queryDeadModules` so editor surfaces can call the narrow Phase 2 queries directly (`extension-vscode/src/protocolClient.ts`)
+  - `CodepolArchitectureCodeLensProvider` (`extension-vscode/src/codeLensProvider.ts`) registers a single CodeLens at the head of each `file://` document; it hits `queryImpactRadius({ direction: 'both', depth: 1 })` and renders `Codepol: N importers • M importees` whose click invokes `codepol.architecture.peek` on the focus URI. The lens body is a pure helper (`extension-vscode/src/codeLensViewModels.ts → architectureCodeLensViewModelCreate`) so the formula is unit-testable without a vscode runtime
+  - new `codepol.architecture.peek` command (`extension-vscode/src/extension.ts`, manifest entry + activation event) routes to `CodepolCommandController.peekArchitecture`, which fetches `queryImpactRadius` for the focus URI and feeds the impact-radius subgraph into `ArchitectureLinksPanel` (defaulting to the `radial` layout so the focus stays centered)
+  - `DependencyGraphPanelViewModel` / `ArchitectureLinksPanelViewModel` now carry `controls`, `filters`, `layoutMode`, `blastRadiusUri`. `dependencyGraphPanelViewModelCreate` / `architectureLinksPanelViewModelCreate` apply filters (boolean chips: `crossPackageOnly`, `crossLayerOnly`, `hideTests`; multi-select edge-kind chips), switch between `layered` / `radial` / `force` layouts, and BFS the filtered graph from `blastRadiusUri` to mark unreachable nodes / edges as `isDimmed`
+  - panel render gained a controls strip (`graphControlsHtml`) that emits `data-control-filter`, `data-control-edge-kind`, `data-control-layout`, `data-control-blast-radius` buttons + a blast-radius row; SVG nodes carry `data-blast-radius-uri` so an Alt-click selects the blast-radius origin; node / edge `dimmed` styling lives in the panel CSS
+  - panel manager (`extension-vscode/src/panels/manager.ts`) tracks per-panel control state plus a rebuilder closure handed in by `CodepolCommandController`; control-message updates run through `dependencyGraphControlStateUpdate` (`extension-vscode/src/panels/controls.ts`), call the rebuilder, and re-render in place — no extra LSP round-trips per filter toggle
+  - tests: `tests/extension-vscode.architecture-graph-controls.spec.ts` (10 cases) covers control-state reducer behavior, filter / layout / blast-radius effects on view models, and the `architectureCodeLensViewModelCreate` formula; `tests/extension-vscode.panels-render.spec.ts` adds a control-strip render assertion; `tests/extension-vscode.commands.spec.ts` adds two `peekArchitecture` cases (happy path through `queryImpactRadius`; missing-active-file rejection); existing view-model and render fixtures updated to match the additive panel shape
+- deferred:
+  - hover provider gated by Codepol-owned identity markers — the `TODO_CODEPOL_LSP_HOVER_MODEL.md` rules require an extension-owned decoration on the hovered range before Codepol can return a hover, and that marker pipeline does not exist yet. The CodeLens already counts as explicit Codepol identity, but it does not anchor a text range on the import specifier, so adding a hover provider here would either inherit the wrong identity context or duplicate the editor's existing hover. Shipping the hover provider is folded into a later task that introduces the import-specifier marker layer
+  - cycle-member gutter decorations and the `codepol.diagnostics.showCycleDecorations` setting — these belong with the `codepol/architecture` diagnostic source and are tracked under Phase 6 / Phase 8
 
 ### Phase 6: Diff and diagnostics
 

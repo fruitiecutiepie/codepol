@@ -2,6 +2,7 @@ import type {
   ArchitectureLinksPanelViewModel,
   ArchitectureSummaryPanelViewModel,
   DependencyGraphCanvasViewModel,
+  DependencyGraphControlsViewModel,
   DependencyGraphPanelViewModel,
   HoverCardViewModel,
   LintRuleDetailsPanelViewModel,
@@ -326,6 +327,71 @@ function graphOverviewHtml(summaryCard: WorkspaceSummaryCardViewModel | null): s
   </div>`;
 }
 
+function graphControlsHtml(controls: DependencyGraphControlsViewModel): string {
+  const filterChipsHtml = controls.filterChips
+    .map((chip) => {
+      const title = chip.description ? htmlEscape(chip.description) : htmlEscape(chip.label);
+      return `<button
+        class="control-chip${chip.active ? ' active' : ''}"
+        type="button"
+        data-control-filter="${htmlEscape(chip.id)}"
+        title="${title}"
+        aria-pressed="${chip.active ? 'true' : 'false'}"
+      >${htmlEscape(chip.label)}</button>`;
+    })
+    .join('');
+  const edgeKindChipsHtml = controls.edgeKindChips
+    .map(
+      (chip) => `<button
+        class="control-chip${chip.active ? ' active' : ''}"
+        type="button"
+        data-control-edge-kind="${htmlEscape(chip.id)}"
+        aria-pressed="${chip.active ? 'true' : 'false'}"
+      >${htmlEscape(chip.label)}</button>`,
+    )
+    .join('');
+  const layoutOptionsHtml = controls.layoutOptions
+    .map(
+      (option) => `<button
+        class="control-chip${option.active ? ' active' : ''}"
+        type="button"
+        data-control-layout="${htmlEscape(option.id)}"
+        aria-pressed="${option.active ? 'true' : 'false'}"
+      >${htmlEscape(option.label)}</button>`,
+    )
+    .join('');
+  const blastRadiusHtml = controls.blastRadiusUri
+    ? `<div class="control-row blast-radius-row">
+        <span class="control-label">Blast radius</span>
+        <span class="control-status" title="${htmlEscape(controls.blastRadiusUri)}">
+          ${controls.blastRadiusReachableCount} reachable
+        </span>
+        <button
+          class="control-chip"
+          type="button"
+          data-control-blast-radius=""
+          title="Clear blast-radius selection"
+        >Clear</button>
+      </div>`
+    : '';
+
+  return `<div class="graph-controls mode-micro-hide">
+    <div class="control-row">
+      <span class="control-label">Filters</span>
+      <div class="control-chip-group">${filterChipsHtml}</div>
+    </div>
+    <div class="control-row">
+      <span class="control-label">Edge kinds</span>
+      <div class="control-chip-group">${edgeKindChipsHtml}</div>
+    </div>
+    <div class="control-row">
+      <span class="control-label">Layout</span>
+      <div class="control-chip-group">${layoutOptionsHtml}</div>
+    </div>
+    ${blastRadiusHtml}
+  </div>`;
+}
+
 function graphSvgHtml(graph: DependencyGraphCanvasViewModel): string {
   if (graph.nodes.length === 0) {
     return `<p class="empty">${htmlEscape(graph.emptyMessage)}</p>`;
@@ -340,7 +406,7 @@ function graphSvgHtml(graph: DependencyGraphCanvasViewModel): string {
     ${graph.edges
       .map(
         (edge) => `<line
-          class="graph-edge${edge.isFocus ? ' focus' : ''}"
+          class="graph-edge${edge.isFocus ? ' focus' : ''}${edge.isDimmed ? ' dimmed' : ''}"
           x1="${edge.x1}"
           y1="${edge.y1}"
           x2="${edge.x2}"
@@ -352,10 +418,11 @@ function graphSvgHtml(graph: DependencyGraphCanvasViewModel): string {
     ${graph.nodes
       .map(
         (node) => `<g
-          class="graph-node${node.isFocus ? ' focus' : ''}${node.isEntryPoint ? ' entry' : ''}${node.isCycleMember ? ' cycle' : ''}"
+          class="graph-node${node.isFocus ? ' focus' : ''}${node.isEntryPoint ? ' entry' : ''}${node.isCycleMember ? ' cycle' : ''}${node.isDimmed ? ' dimmed' : ''}"
           data-open-uri="${htmlEscape(node.uri)}"
           data-open-line="0"
           data-open-character="0"
+          data-blast-radius-uri="${htmlEscape(node.uri)}"
         >
           <rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" rx="14" ry="14"></rect>
           <text x="${node.x + 16}" y="${node.y + 28}">
@@ -430,6 +497,7 @@ function dependencyGraphBodyHtml(model: DependencyGraphPanelViewModel): string {
         <h2>Dependency Graph</h2>
         <p class="summary">Showing ${model.graph.nodes.length} nodes and ${model.graph.edges.length} edges.${model.focusUri ? ` Highlighting ${htmlEscape(model.focusUri)}.` : ''}</p>
       </header>
+      ${graphControlsHtml(model.controls)}
       <div class="mode-micro-hide">
         ${graphSvgHtml(model.graph)}
       </div>
@@ -494,6 +562,7 @@ function architectureLinksBodyHtml(model: ArchitectureLinksPanelViewModel): stri
         <p class="summary">Showing ${model.totalItems} of ${model.totalAvailableItems} semantic links.</p>
         ${model.truncated ? '<p class="status">Semantic link results are truncated.</p>' : ''}
       </header>
+      ${graphControlsHtml(model.controls)}
       <div class="mode-micro-hide">
         ${graphOverviewHtml(model.workspaceSummaryCard)}
         ${graphSvgHtml(model.graph)}
@@ -677,6 +746,53 @@ const BASE_SCRIPT = `
     const target = event.target;
     if (!(target instanceof Element)) {
       return;
+    }
+    const filterButton = target.closest('[data-control-filter]');
+    if (filterButton instanceof HTMLElement) {
+      event.preventDefault();
+      vscode.postMessage({
+        type: 'graphFilterToggle',
+        filter: filterButton.dataset.controlFilter,
+      });
+      return;
+    }
+    const edgeKindButton = target.closest('[data-control-edge-kind]');
+    if (edgeKindButton instanceof HTMLElement) {
+      event.preventDefault();
+      vscode.postMessage({
+        type: 'graphEdgeKindToggle',
+        edgeKindChipId: edgeKindButton.dataset.controlEdgeKind,
+      });
+      return;
+    }
+    const layoutButton = target.closest('[data-control-layout]');
+    if (layoutButton instanceof HTMLElement) {
+      event.preventDefault();
+      vscode.postMessage({
+        type: 'graphLayoutSet',
+        layout: layoutButton.dataset.controlLayout,
+      });
+      return;
+    }
+    const blastRadiusClearButton = target.closest('[data-control-blast-radius]');
+    if (blastRadiusClearButton instanceof HTMLElement) {
+      event.preventDefault();
+      vscode.postMessage({
+        type: 'graphBlastRadiusSet',
+        uri: null,
+      });
+      return;
+    }
+    if (event.altKey) {
+      const blastRadiusNode = target.closest('[data-blast-radius-uri]');
+      if (blastRadiusNode instanceof SVGElement || blastRadiusNode instanceof HTMLElement) {
+        event.preventDefault();
+        vscode.postMessage({
+          type: 'graphBlastRadiusSet',
+          uri: blastRadiusNode.dataset.blastRadiusUri,
+        });
+        return;
+      }
     }
     const locationButton = target.closest('[data-open-uri]');
     if (locationButton instanceof HTMLElement || locationButton instanceof SVGElement) {
@@ -1043,6 +1159,64 @@ export function codepolPanelHtmlRender(input: {
         .graph-edge.focus {
           stroke: var(--vscode-textLink-foreground);
           stroke-width: 2.5;
+        }
+        .graph-edge.dimmed {
+          opacity: 0.18;
+        }
+        .graph-node.dimmed {
+          opacity: 0.32;
+        }
+        .graph-controls {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+          margin-bottom: 12px;
+        }
+        .control-row {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+        .control-label {
+          font-size: 11px;
+          text-transform: uppercase;
+          letter-spacing: 0.06em;
+          color: var(--vscode-descriptionForeground);
+          min-width: 84px;
+        }
+        .control-status {
+          font-size: 12px;
+          color: var(--vscode-descriptionForeground);
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .control-chip-group {
+          display: flex;
+          gap: 6px;
+          flex-wrap: wrap;
+        }
+        .control-chip {
+          display: inline-flex;
+          align-items: center;
+          padding: 4px 10px;
+          border-radius: 999px;
+          border: 1px solid var(--vscode-panel-border);
+          background: var(--vscode-input-background);
+          color: var(--vscode-foreground);
+          font-size: 12px;
+          cursor: pointer;
+        }
+        .control-chip.active {
+          background: color-mix(in srgb, var(--vscode-input-background) 60%, var(--vscode-textLink-foreground) 40%);
+          border-color: var(--vscode-textLink-foreground);
+          color: var(--vscode-textLink-foreground);
+        }
+        .blast-radius-row {
+          background: color-mix(in srgb, var(--vscode-input-background) 80%, var(--vscode-textBlockQuote-background) 20%);
+          padding: 6px 10px;
+          border-radius: 8px;
         }
         .graph-marker {
           fill: var(--vscode-panel-border);
