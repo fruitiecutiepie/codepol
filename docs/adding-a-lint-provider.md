@@ -153,7 +153,7 @@ There are two orthogonal fix concepts and new providers touch both:
 
 Almost every new lint provider only needs the first mechanism.
 
-## Step 4: Fingerprint your provider's inputs
+## Step 4: Register a fingerprint extractor
 
 This is the step that's easy to miss and also the one that breaks correctness if skipped.
 
@@ -164,35 +164,45 @@ The per-analyzer cache keys every entry with a tuple:
  toolFingerprintKey, treeIndexFingerprint)
 ```
 
-Your provider's external binary and config file must flow into `toolFingerprintKey`. Update [`workspaceToolFingerprintsRead`](../packages/workspace-service/src/index.ts) to resolve any path-like inputs your provider accepts and add them to the fingerprint set:
+Your provider's external binary, config files, and any Node-loaded package manifest must flow into `toolFingerprintKey`. The workspace-service has a single per-platform registry, `WORKSPACE_PROVIDER_FINGERPRINT_EXTRACTORS` in [`packages/workspace-service/src/index.ts`](../packages/workspace-service/src/index.ts), that maps a `LintProvider.platform` discriminator to the file paths it depends on:
 
 ```typescript
-function workspaceToolFingerprintsRead(
-  workspace: WorkspaceContextState,
-  lintProviderEntries: LintProviderEntry[],
-): WorkspaceWarmCacheFileFingerprint[] {
-  const resolvedPaths = new Set<string>();
-  // ... existing biome / ruff / eslint handling ...
-  for (const entry of lintProviderEntries) {
-    if (entry.provider.platform === 'deno') {
-      const config = entry.provider.config as DenoProviderConfig | undefined;
-      for (const candidate of [config?.denoBin, config?.configPath]) {
-        const resolved = workspaceExternalToolPathResolve(workspace, candidate);
-        if (resolved) {
-          resolvedPaths.add(resolved);
-        }
-      }
-    }
-  }
-  // ... existing eslint package manifest handling ...
-}
+const WORKSPACE_PROVIDER_FINGERPRINT_EXTRACTORS: Record<
+  string,
+  WorkspaceProviderFingerprintExtractor
+> = {
+  eslint: (workspace) => [
+    workspace.eslintConfigPath,
+    workspaceNodeModulePackageManifestResolve(workspace.rootPath, 'eslint'),
+  ],
+  biome: (workspace, providerConfig) => {
+    const config = providerConfig as BiomeProviderConfig | undefined;
+    return [config?.biomeBin, config?.configPath].map((candidate) =>
+      workspaceExternalToolPathResolve(workspace, candidate),
+    );
+  },
+  // ... add yours here ...
+};
 ```
 
-### Which inputs to fingerprint
+Add one entry for your platform. The extractor returns `Array<string | undefined>`; the orchestrator filters undefined entries, resolves to absolute paths, fingerprints them, and folds them into `toolFingerprintKey`. There is no other place in the workspace-service that should know your platform discriminator — `workspaceConfigFingerprintCompute`, `workspacePluginFingerprintCompute`, and the orchestrator are all platform-agnostic by design.
 
-- **External binary** (if the user can override it via config): always fingerprint.
-- **External config file** (e.g. `deno.json`): always fingerprint.
-- **Node-loaded package** (like ESLint): fingerprint its `package.json` via `workspaceNodeModulePackageManifestResolve(workspace.rootPath, 'your-package')`. `package.json` is rewritten on every `npm install`, which flips the fingerprint even when the version string is unchanged.
+```typescript
+// Example for a hypothetical 'deno' provider:
+deno: (workspace, providerConfig) => {
+  const config = providerConfig as DenoProviderConfig | undefined;
+  return [config?.denoBin, config?.configPath].map((candidate) =>
+    workspaceExternalToolPathResolve(workspace, candidate),
+  );
+},
+```
+
+### Which inputs to return from your extractor
+
+- **External binary** (if the user can override it via config): always include.
+- **External config file** (e.g. `deno.json`): always include.
+- **Node-loaded package** (like ESLint): include the resolved `package.json` via `workspaceNodeModulePackageManifestResolve(workspace.rootPath, 'your-package')`. `package.json` is rewritten on every `npm install`, which flips the fingerprint even when the version string is unchanged.
+- **Top-level workspace fields** (like `workspace.eslintConfigPath`): the extractor receives the full `WorkspaceContextState`, so it can pluck whichever field is relevant. There is no need to add a new top-level field unless one already exists.
 - **Rule-level options embedded in `policy.rules[].args`**: already covered by `configFingerprint` (the whole policy is JSON-hashed). You do not need to do anything.
 - **Plugin capability definitions**: already covered by `pluginFingerprint`.
 
@@ -298,8 +308,9 @@ Before merging a new lint provider, confirm:
 - [ ] Languages list aligns with `WORKSPACE_NATIVE_OWNERSHIP_LANGUAGES` for JS/TS overlaps.
 
 ### Cache fingerprints
-- [ ] `workspaceToolFingerprintsRead` fingerprints the binary and any config files.
-- [ ] Node-loaded packages fingerprint their resolved `package.json`.
+- [ ] One entry added to `WORKSPACE_PROVIDER_FINGERPRINT_EXTRACTORS` (the only place the orchestrator should know your platform discriminator).
+- [ ] Extractor returns the binary path, every config file path, and (for Node-loaded packages) the resolved `package.json`.
+- [ ] No platform-specific code added to `workspaceConfigFingerprintCompute` or `workspacePluginFingerprintCompute`.
 
 ### Orchestrator wiring
 - [ ] `*FilesInScope` helper narrows to supported extensions, called from both full-path and incremental branches.

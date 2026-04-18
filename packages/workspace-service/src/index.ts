@@ -4103,9 +4103,9 @@ function workspacePathLikeResolve(baseDir: string, candidate: string | undefined
 
 /**
  * Resolve `<package>/package.json` from the workspace root using Node module
- * resolution. ESLint and its plugins live in the user's `node_modules`, so we
- * fingerprint the package manifest there — `package.json` is rewritten by every
- * `npm install` / `pnpm install`, so a version bump always flips the
+ * resolution. Used to fingerprint Node-loaded lint packages (ESLint and its
+ * plugins live in the user's `node_modules`); `package.json` is rewritten by
+ * every `npm install` / `pnpm install`, so a version bump always flips the
  * fingerprint regardless of whether the package contents themselves moved.
  */
 function workspaceNodeModulePackageManifestResolve(
@@ -4120,48 +4120,59 @@ function workspaceNodeModulePackageManifestResolve(
   }
 }
 
+/**
+ * Pluggable contract for collecting the file paths a lint provider depends on
+ * (binaries, config files, Node-loaded package manifests). Adding a new
+ * provider platform is a one-line entry in `WORKSPACE_PROVIDER_FINGERPRINT_EXTRACTORS`
+ * — there is no other place in the workspace-service that should know about
+ * a specific platform discriminator.
+ *
+ * Returned paths are absolute and may be `undefined` (filtered out by the
+ * caller). The extractor receives the workspace context so it can reach
+ * top-level fields like `eslintConfigPath` that aren't carried in the per-rule
+ * provider config.
+ */
+type WorkspaceProviderFingerprintExtractor = (
+  workspace: WorkspaceContextState,
+  providerConfig: unknown,
+) => Array<string | undefined>;
+
+const WORKSPACE_PROVIDER_FINGERPRINT_EXTRACTORS: Record<
+  string,
+  WorkspaceProviderFingerprintExtractor
+> = {
+  eslint: (workspace) => [
+    workspace.eslintConfigPath,
+    workspaceNodeModulePackageManifestResolve(workspace.rootPath, 'eslint'),
+  ],
+  biome: (workspace, providerConfig) => {
+    const config = providerConfig as BiomeProviderConfig | undefined;
+    return [config?.biomeBin, config?.configPath].map((candidate) =>
+      workspaceExternalToolPathResolve(workspace, candidate),
+    );
+  },
+  ruff: (workspace, providerConfig) => {
+    const config = providerConfig as RuffProviderConfig | undefined;
+    return [config?.ruffBin, config?.configPath].map((candidate) =>
+      workspaceExternalToolPathResolve(workspace, candidate),
+    );
+  },
+};
+
 function workspaceToolFingerprintsRead(
   workspace: WorkspaceContextState,
   lintProviderEntries: LintProviderEntry[],
 ): WorkspaceWarmCacheFileFingerprint[] {
   const resolvedPaths = new Set<string>();
-  let eslintInScope = false;
   for (const entry of lintProviderEntries) {
-    if (entry.provider.platform === 'eslint') {
-      eslintInScope = true;
+    const extractor = WORKSPACE_PROVIDER_FINGERPRINT_EXTRACTORS[entry.provider.platform];
+    if (!extractor) {
       continue;
     }
-    if (entry.provider.platform === 'biome') {
-      const config = entry.provider.config as BiomeProviderConfig | undefined;
-      for (const candidate of [config?.biomeBin, config?.configPath]) {
-        const resolved = workspaceExternalToolPathResolve(workspace, candidate);
-        if (resolved) {
-          resolvedPaths.add(resolved);
-        }
+    for (const candidate of extractor(workspace, entry.provider.config)) {
+      if (candidate) {
+        resolvedPaths.add(path.resolve(candidate));
       }
-      continue;
-    }
-    if (entry.provider.platform === 'ruff') {
-      const config = entry.provider.config as RuffProviderConfig | undefined;
-      for (const candidate of [config?.ruffBin, config?.configPath]) {
-        const resolved = workspaceExternalToolPathResolve(workspace, candidate);
-        if (resolved) {
-          resolvedPaths.add(resolved);
-        }
-      }
-    }
-  }
-  if (eslintInScope) {
-    // ESLint is loaded as a Node module rather than spawned as an external
-    // binary, so we fingerprint the resolved package.json from the workspace
-    // root. Upgrading ESLint via npm/pnpm rewrites this manifest, which flips
-    // toolFingerprintKey and naturally invalidates every ESLint cache entry.
-    const eslintManifest = workspaceNodeModulePackageManifestResolve(
-      workspace.rootPath,
-      'eslint',
-    );
-    if (eslintManifest) {
-      resolvedPaths.add(eslintManifest);
     }
   }
   return [...resolvedPaths]
@@ -4281,6 +4292,13 @@ function workspaceFingerprintListSerialize(
     .join('|');
 }
 
+/**
+ * Hash of the codepol-level inputs that affect every analyzer:
+ * the normalised policy JSON plus the codepol config file. Provider-specific
+ * config files (eslint config, biome.json, ruff.toml, …) intentionally live in
+ * `toolFingerprintKey` via `WORKSPACE_PROVIDER_FINGERPRINT_EXTRACTORS`, so this
+ * function stays free of any per-platform knowledge.
+ */
 function workspaceConfigFingerprintCompute(input: {
   workspace: WorkspaceContextState;
   policy: PolicyFile;
@@ -4289,15 +4307,14 @@ function workspaceConfigFingerprintCompute(input: {
   const codepolConfigFingerprint = workspaceWarmCacheFileFingerprintRead(
     input.workspace.configPath,
   );
-  const eslintConfigFingerprint = workspaceWarmCacheFileFingerprintRead(
-    input.workspace.eslintConfigPath,
-  );
   const hash = createHash('sha1');
   hash.update(policyJson);
   hash.update('\0');
-  hash.update(codepolConfigFingerprint ? workspaceFingerprintListSerialize([codepolConfigFingerprint]) : '');
-  hash.update('\0');
-  hash.update(eslintConfigFingerprint ? workspaceFingerprintListSerialize([eslintConfigFingerprint]) : '');
+  hash.update(
+    codepolConfigFingerprint
+      ? workspaceFingerprintListSerialize([codepolConfigFingerprint])
+      : '',
+  );
   return hash.digest('hex');
 }
 
