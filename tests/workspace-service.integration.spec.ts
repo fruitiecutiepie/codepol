@@ -759,6 +759,92 @@ describe('workspace service integration', () => {
     }
   });
 
+  it('preserves unaffected files\' diagnostics when an overlay change incrementally re-runs analysis', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(workspaceRoot, 'codepol.toml'), noInterfaceConfigContentCreate(), 'utf8');
+
+    const aFilePath = path.join(workspaceRoot, 'src', 'a.ts');
+    const bFilePath = path.join(workspaceRoot, 'src', 'b.ts');
+    const cFilePath = path.join(workspaceRoot, 'src', 'c.ts');
+    const aUri = workspacePathToUri(aFilePath);
+    const bUri = workspacePathToUri(bFilePath);
+    const cUri = workspacePathToUri(cFilePath);
+    fs.writeFileSync(aFilePath, 'export interface A {\n  name: string;\n}\n', 'utf8');
+    fs.writeFileSync(bFilePath, 'export interface B {\n  name: string;\n}\n', 'utf8');
+    fs.writeFileSync(cFilePath, 'export interface C {\n  name: string;\n}\n', 'utf8');
+
+    const service = workspaceServiceCreate();
+    const { clientSessionId, workspaceId } = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath: path.join(workspaceRoot, 'codepol.toml'),
+    });
+
+    const baselineDiagnostics = await service.queryDiagnostics({
+      clientSessionId,
+      workspaceId,
+    });
+    expect(baselineDiagnostics).toHaveLength(3);
+    const baselineByUri = new Map(
+      baselineDiagnostics.map((diagnostic) => [diagnostic.uri, diagnostic.id]),
+    );
+
+    const baselineStatus = await service.queryIndexStatus({
+      clientSessionId,
+      workspaceId,
+    });
+
+    // Edit file `a`: removes the interface so its diagnostic should disappear.
+    // Files `b` and `c` were not touched and must keep their cached diagnostics
+    // verbatim across the incremental rerun.
+    await service.openOverlay({
+      clientSessionId,
+      workspaceId,
+      uri: aUri,
+      version: 1,
+      text: 'export type A = {\n  name: string;\n};\n',
+    });
+
+    const afterEditDiagnostics = await service.queryDiagnostics({
+      clientSessionId,
+      workspaceId,
+    });
+    expect(afterEditDiagnostics).toHaveLength(2);
+    expect(afterEditDiagnostics.find((diagnostic) => diagnostic.uri === aUri)).toBeUndefined();
+    const bDiagnostic = afterEditDiagnostics.find((diagnostic) => diagnostic.uri === bUri);
+    const cDiagnostic = afterEditDiagnostics.find((diagnostic) => diagnostic.uri === cUri);
+    expect(bDiagnostic?.id).toBe(baselineByUri.get(bUri));
+    expect(cDiagnostic?.id).toBe(baselineByUri.get(cUri));
+
+    const incrementalStatus = await service.queryIndexStatus({
+      clientSessionId,
+      workspaceId,
+    });
+    expect(incrementalStatus.analysisGeneration).toBe(
+      baselineStatus.analysisGeneration + 1,
+    );
+
+    // Re-introduce the interface in the overlay; the dropped diagnostic should
+    // come back with the same id as the on-disk baseline.
+    await service.updateOverlay({
+      clientSessionId,
+      workspaceId,
+      uri: aUri,
+      version: 2,
+      text: 'export interface A {\n  name: string;\n}\n',
+    });
+    const reAddedDiagnostics = await service.queryDiagnostics({
+      clientSessionId,
+      workspaceId,
+    });
+    expect(reAddedDiagnostics).toHaveLength(3);
+    const reAddedDiagnosticA = reAddedDiagnostics.find(
+      (diagnostic) => diagnostic.uri === aUri,
+    );
+    expect(reAddedDiagnosticA?.id).toBe(baselineByUri.get(aUri));
+  });
+
   it('uses overlays for diagnostics and reverts to disk on close', async () => {
     const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
     createdDirs.push(workspaceRoot);

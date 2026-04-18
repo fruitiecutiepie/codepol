@@ -55,6 +55,7 @@ const SHOW_ARCHITECTURE_LINKS_COMMAND =
 const STATUS_PROGRESS_TOKEN = 'codepol/index-status';
 const STATUS_POLL_INTERVAL_ACTIVE_MS = 25;
 const STATUS_POLL_INTERVAL_IDLE_MS = 250;
+const PUBLISH_DIAGNOSTICS_DEBOUNCE_MS = 150;
 
 type JsonRpcId = number | string | null;
 
@@ -383,6 +384,8 @@ export class CodepolLspServer {
     active: number;
     idle: number;
   };
+  private readonly publishDebounceMs: number;
+  private readonly debouncedPublishTimers = new Map<string, TimeoutHandle>();
   private supportsWorkDoneProgress = false;
   private statusPollGeneration = 0;
   private statusPollTimer: TimeoutHandle | undefined;
@@ -403,6 +406,7 @@ export class CodepolLspServer {
       active?: number;
       idle?: number;
     };
+    publishDebounceMs?: number;
   }) {
     this.service = options.service;
     this.serviceFactory =
@@ -423,6 +427,8 @@ export class CodepolLspServer {
         options.statusPollIntervalsMs?.active ?? STATUS_POLL_INTERVAL_ACTIVE_MS,
       idle: options.statusPollIntervalsMs?.idle ?? STATUS_POLL_INTERVAL_IDLE_MS,
     };
+    this.publishDebounceMs =
+      options.publishDebounceMs ?? PUBLISH_DIAGNOSTICS_DEBOUNCE_MS;
   }
 
   private async serviceGet(): Promise<WorkspaceService> {
@@ -457,6 +463,48 @@ export class CodepolLspServer {
     const next = (this.diagnosticsStateVersions.get(uri) ?? 0) + 1;
     this.diagnosticsStateVersions.set(uri, next);
     return next;
+  }
+
+  private debouncedPublishCancel(uri: string): void {
+    const handle = this.debouncedPublishTimers.get(uri);
+    if (handle === undefined) {
+      return;
+    }
+    this.timers.clearTimeout(handle);
+    this.debouncedPublishTimers.delete(uri);
+  }
+
+  private debouncedPublishCancelAll(): void {
+    for (const handle of this.debouncedPublishTimers.values()) {
+      this.timers.clearTimeout(handle);
+    }
+    this.debouncedPublishTimers.clear();
+  }
+
+  private async debouncedPublishFire(uri: string): Promise<void> {
+    this.debouncedPublishTimers.delete(uri);
+    const expectedStateVersion = this.diagnosticsStateVersionBump(uri);
+    try {
+      await this.serviceCall((service) =>
+        this.publishDiagnostics(uri, { service, expectedStateVersion }),
+      );
+    } catch {
+      // Swallow so a failed debounced publish never escapes as an unhandled rejection
+      // when the underlying timer is the real Node setTimeout.
+    }
+  }
+
+  private debouncedPublishSchedule(uri: string): void {
+    this.debouncedPublishCancel(uri);
+    if (this.publishDebounceMs <= 0) {
+      void this.debouncedPublishFire(uri);
+      return;
+    }
+    const handle = this.timers.setTimeout(
+      () => this.debouncedPublishFire(uri),
+      this.publishDebounceMs,
+    );
+    this.debouncedPublishTimers.set(uri, handle);
   }
 
   private diagnosticsPublishCurrentIs(input: {
@@ -609,6 +657,7 @@ export class CodepolLspServer {
 
   private async serviceSessionClose(): Promise<void> {
     this.statusPollingStop({ endProgress: true });
+    this.debouncedPublishCancelAll();
     const activeService =
       this.service ??
       (this.servicePromise ? await this.servicePromise.catch(() => undefined) : undefined);
@@ -1108,6 +1157,7 @@ export class CodepolLspServer {
     }
 
     for (const document of this.documents.values()) {
+      this.debouncedPublishCancel(document.uri);
       const expectedStateVersion = this.diagnosticsStateVersionBump(document.uri);
       await this.publishDiagnostics(document.uri, {
         service: input.service,
@@ -1139,6 +1189,7 @@ export class CodepolLspServer {
       version: params.textDocument.version,
       text: params.textDocument.text,
     });
+    this.debouncedPublishCancel(params.textDocument.uri);
     const expectedStateVersion = this.diagnosticsStateVersionBump(
       params.textDocument.uri,
     );
@@ -1182,20 +1233,16 @@ export class CodepolLspServer {
       text: nextText,
     };
     this.documents.set(current.uri, nextDocument);
-    const expectedStateVersion = this.diagnosticsStateVersionBump(current.uri);
-    await this.serviceCall(async (service) => {
-      await service.updateOverlay({
+    await this.serviceCall((service) =>
+      service.updateOverlay({
         clientSessionId: this.registeredClientSessionId!,
         workspaceId: this.workspaceId!,
         uri: current.uri,
         version: nextDocument.version,
         text: nextDocument.text,
-      });
-      await this.publishDiagnostics(current.uri, {
-        service,
-        expectedStateVersion,
-      });
-    });
+      }),
+    );
+    this.debouncedPublishSchedule(current.uri);
   }
 
   private async didCloseHandle(params: {
@@ -1205,6 +1252,7 @@ export class CodepolLspServer {
       return;
     }
     this.documents.delete(params.textDocument.uri);
+    this.debouncedPublishCancel(params.textDocument.uri);
     const expectedStateVersion = this.diagnosticsStateVersionBump(
       params.textDocument.uri,
     );

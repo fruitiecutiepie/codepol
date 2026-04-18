@@ -272,12 +272,36 @@ type WorkspaceDocumentsState = {
   documents: Map<string, WorkspaceDocument>;
 };
 
+type WorkspaceAnalyzerFileCacheEntry = {
+  violations: PolicyViolation[];
+  diagnostics: WorkspaceDiagnostic[];
+  treeViolations: PolicyViolation[];
+  fixableTreeViolationsByDiagnosticId: Map<string, PolicyViolation>;
+};
+
+type WorkspaceAnalyzerCacheEntry = {
+  result: WorkspaceAnalyzerRunResult;
+  fileResults: Map<string, WorkspaceAnalyzerFileCacheEntry>;
+};
+
+type WorkspaceAnalyzerCacheKey = 'tree' | 'eslint' | 'biome' | 'ruff';
+
+type WorkspaceAnalyzerCache = Partial<Record<WorkspaceAnalyzerCacheKey, WorkspaceAnalyzerCacheEntry>>;
+
 type WorkspaceAnalysisCacheState = {
   analysisGeneration: number;
   lastAnalysis?: WorkspaceAnalysis;
   indexState?: WorkspaceIndexState;
   workspaceIndexRequired?: boolean;
   toolFingerprints?: WorkspaceWarmCacheFileFingerprint[];
+  // Narrow-invalidation bookkeeping. dirtyFiles accumulates filePaths whose
+  // overlay or disk content changed; analyzerCache holds per-(analyzer,filePath)
+  // results so workspaceAnalysisRun can rebuild only the dirty subset. A
+  // truthy fullInvalidation forces the next run to drop all caches (used by
+  // config changes, watcher events, and any path that resets indexState).
+  analyzerCache?: WorkspaceAnalyzerCache;
+  dirtyFiles?: Set<string>;
+  fullInvalidation?: boolean;
 };
 
 export type WorkspaceClientKind = 'lsp' | 'cli' | 'test';
@@ -573,9 +597,39 @@ export function severityFromLintSeverity(
   return 'error';
 }
 
-function workspaceStateAnalysisInvalidate(state: WorkspaceAnalysisCacheState): void {
+function workspaceStateAnalysisInvalidateAll(state: WorkspaceAnalysisCacheState): void {
   state.lastAnalysis = undefined;
   state.toolFingerprints = undefined;
+  state.analyzerCache = undefined;
+  state.dirtyFiles = undefined;
+  state.fullInvalidation = true;
+}
+
+function workspaceStateAnalysisInvalidateFiles(
+  state: WorkspaceAnalysisCacheState,
+  filePaths: Iterable<string>,
+): void {
+  // Tool fingerprints describe the on-disk lint config; document edits don't
+  // change them, so we can keep them. The dirty set drives downstream rebuild.
+  let touched = false;
+  if (!state.dirtyFiles) {
+    state.dirtyFiles = new Set();
+  }
+  for (const filePath of filePaths) {
+    if (!filePath) {
+      continue;
+    }
+    state.dirtyFiles.add(filePath);
+    touched = true;
+  }
+  if (!touched) {
+    return;
+  }
+  // If we never had a baseline (cold session), there is nothing to incrementalise;
+  // make sure the next run takes the full path.
+  if (!state.lastAnalysis || !state.analyzerCache) {
+    state.fullInvalidation = true;
+  }
 }
 
 function workspaceFeatureStatusCreate(
@@ -721,6 +775,10 @@ function workspaceSessionInvalidate(
     clearIndexState?: boolean;
     bumpAnalysisRevision?: boolean;
     clearWorkspaceIndexRequirement?: boolean;
+    // When provided, perform narrow invalidation against just these files.
+    // Ignored (treated as full invalidation) when other options force the
+    // session-wide caches to drop, e.g. clearIndexState/clearWorkspaceIndexRequirement.
+    dirtyFiles?: Iterable<string>;
   } = {},
 ): void {
   if (options.clearIndexState) {
@@ -735,7 +793,15 @@ function workspaceSessionInvalidate(
       state.backgroundWarmupQueued = true;
     }
   }
-  workspaceStateAnalysisInvalidate(state);
+  const forceFull =
+    options.clearIndexState === true ||
+    options.clearWorkspaceIndexRequirement === true ||
+    options.dirtyFiles === undefined;
+  if (forceFull || options.dirtyFiles === undefined) {
+    workspaceStateAnalysisInvalidateAll(state);
+  } else {
+    workspaceStateAnalysisInvalidateFiles(state, options.dirtyFiles);
+  }
   state.status = 'cold';
   state.lastError = undefined;
 }
@@ -1098,6 +1164,139 @@ function workspaceAnalyzerRunResultCreate(
     treeViolations: [...(input.treeViolations ?? [])],
     violations: [...(input.violations ?? [])],
   };
+}
+
+function workspaceAnalyzerFileCacheEntryCreate(): WorkspaceAnalyzerFileCacheEntry {
+  return {
+    violations: [],
+    diagnostics: [],
+    treeViolations: [],
+    fixableTreeViolationsByDiagnosticId: new Map(),
+  };
+}
+
+/**
+ * Group an analyzer's run output back into per-file buckets so we can mix
+ * fresh results with cached ones during incremental runs. Files in scope that
+ * produced no violations are seeded with empty entries so a later run can
+ * distinguish "clean" from "never analyzed".
+ *
+ * Each analyzer emits violations and diagnostics in the same order, so we
+ * pair them by index here. Tree-only fields (treeViolations and the fixable
+ * map) are bucketed separately by violation.filePath.
+ */
+function workspaceAnalyzerFileResultsGroup(input: {
+  filesInScope: Iterable<string>;
+  violations: PolicyViolation[];
+  diagnostics: WorkspaceDiagnostic[];
+  treeViolations?: PolicyViolation[];
+  fixableTreeViolationsByDiagnosticId?: Map<string, PolicyViolation>;
+}): Map<string, WorkspaceAnalyzerFileCacheEntry> {
+  const map = new Map<string, WorkspaceAnalyzerFileCacheEntry>();
+  for (const filePath of input.filesInScope) {
+    if (!map.has(filePath)) {
+      map.set(filePath, workspaceAnalyzerFileCacheEntryCreate());
+    }
+  }
+  const ensure = (filePath: string): WorkspaceAnalyzerFileCacheEntry => {
+    let entry = map.get(filePath);
+    if (!entry) {
+      entry = workspaceAnalyzerFileCacheEntryCreate();
+      map.set(filePath, entry);
+    }
+    return entry;
+  };
+  const length = Math.min(input.violations.length, input.diagnostics.length);
+  for (let i = 0; i < length; i++) {
+    const violation = input.violations[i];
+    const diagnostic = input.diagnostics[i];
+    const entry = ensure(violation.filePath);
+    entry.violations.push(violation);
+    entry.diagnostics.push(diagnostic);
+  }
+  if (input.treeViolations) {
+    for (const violation of input.treeViolations) {
+      ensure(violation.filePath).treeViolations.push(violation);
+    }
+  }
+  if (input.fixableTreeViolationsByDiagnosticId) {
+    for (const [id, violation] of input.fixableTreeViolationsByDiagnosticId) {
+      ensure(violation.filePath).fixableTreeViolationsByDiagnosticId.set(id, violation);
+    }
+  }
+  return map;
+}
+
+function workspaceAnalyzerCacheStore(input: {
+  cache: WorkspaceAnalyzerCache;
+  key: WorkspaceAnalyzerCacheKey;
+  result: WorkspaceAnalyzerRunResult;
+  filesInScope: Iterable<string>;
+}): void {
+  input.cache[input.key] = {
+    result: input.result,
+    fileResults: workspaceAnalyzerFileResultsGroup({
+      filesInScope: input.filesInScope,
+      violations: input.result.violations,
+      diagnostics: input.result.diagnostics,
+      treeViolations: input.result.treeViolations,
+      fixableTreeViolationsByDiagnosticId: input.result.fixableTreeViolationsByDiagnosticId,
+    }),
+  };
+}
+
+/**
+ * Rebuild the tree analyzer's run result from a per-file cache (after an
+ * incremental run replaced entries for dirty files).
+ */
+function workspaceTreeAnalyzerResultFromCache(input: {
+  fileResults: Map<string, WorkspaceAnalyzerFileCacheEntry>;
+  ownedRuleIds: string[];
+  issues: string[];
+  latencyMs: number;
+}): WorkspaceAnalyzerRunResult {
+  const violations: PolicyViolation[] = [];
+  const diagnostics: WorkspaceDiagnostic[] = [];
+  const treeViolations: PolicyViolation[] = [];
+  const fixableTreeViolationsByDiagnosticId = new Map<string, PolicyViolation>();
+  let nonEmptyFiles = 0;
+  for (const entry of input.fileResults.values()) {
+    if (
+      entry.violations.length > 0 ||
+      entry.diagnostics.length > 0 ||
+      entry.treeViolations.length > 0
+    ) {
+      nonEmptyFiles += 1;
+    }
+    violations.push(...entry.violations);
+    diagnostics.push(...entry.diagnostics);
+    treeViolations.push(...entry.treeViolations);
+    for (const [id, violation] of entry.fixableTreeViolationsByDiagnosticId) {
+      fixableTreeViolationsByDiagnosticId.set(id, violation);
+    }
+  }
+  void nonEmptyFiles;
+  return workspaceAnalyzerRunResultCreate(
+    workspaceAnalyzerScorecardCreate({
+      analyzerId: 'codepol/tree',
+      platform: 'codepol_tree',
+      languages: [...WORKSPACE_NATIVE_OWNERSHIP_LANGUAGES, 'python'],
+      ownedRuleIds: input.ownedRuleIds,
+      diagnosticCount: diagnostics.length,
+      violationCount: violations.length,
+      fileCount: input.fileResults.size,
+      fixMode: 'inline',
+      status: input.issues.length > 0 ? 'failed' : 'ran',
+      latencyMs: input.latencyMs,
+      issues: input.issues,
+    }),
+    {
+      diagnostics,
+      fixableTreeViolationsByDiagnosticId,
+      treeViolations,
+      violations,
+    },
+  );
 }
 
 function workspaceNativeOwnedWrappedRuleIdsResolve(input: {
@@ -4928,6 +5127,121 @@ async function ruffAnalyzerRun(
   );
 }
 
+function workspaceAnalysisCompose(input: {
+  treeResult: WorkspaceAnalyzerRunResult;
+  eslintResult: WorkspaceAnalyzerRunResult;
+  biomeResult: WorkspaceAnalyzerRunResult;
+  ruffResult: WorkspaceAnalyzerRunResult;
+  policy: PolicyFile;
+  files: string[];
+  pluginRulesMap: Awaited<ReturnType<typeof policyPluginsGet>> extends Result<infer T, string>
+    ? T
+    : never;
+  lintProviderEntries: LintProviderEntry[];
+  ruleTargets: PolicyRuleTargetContext[];
+  projectIndex: ProjectIndex | undefined;
+  workspaceIndexRequired: boolean;
+}): WorkspaceAnalysis {
+  const { treeResult, eslintResult, biomeResult, ruffResult } = input;
+  const analyzerResults = [treeResult, eslintResult, biomeResult, ruffResult];
+  const analyzerIssues = analyzerResults.flatMap((result) => result.issues);
+  return {
+    analyzerInventory: workspaceAnalyzerInventoryBuild({
+      analyzerResults,
+      lintProviderEntries: input.lintProviderEntries,
+      pluginRulesMap: input.pluginRulesMap,
+      policy: input.policy,
+      ruleTargets: input.ruleTargets,
+    }),
+    analyzerScorecard: analyzerResults.map((result) => result.scorecard),
+    policy: input.policy,
+    files: input.files,
+    violations: analyzerResults.flatMap((result) => result.violations),
+    treeViolations: [...treeResult.treeViolations],
+    diagnostics: analyzerResults.flatMap((result) => result.diagnostics),
+    featureStatus: {
+      diagnostics: workspaceFeatureStatusReadyOrDegraded(analyzerIssues),
+      codeActions: workspaceFeatureStatusCreate({
+        readiness: 'ready',
+      }),
+      editPlans: workspaceFeatureStatusCreate({
+        readiness: 'ready',
+      }),
+      workspaceIndex: input.workspaceIndexRequired
+        ? workspaceFeatureStatusCreate({
+            readiness: input.projectIndex ? 'ready' : 'degraded',
+            detail: input.projectIndex
+              ? 'Session-derived index ready'
+              : 'Project index required but unavailable',
+          })
+        : workspaceFeatureStatusCreate({
+            readiness: 'ready',
+            detail: 'Not required by current policy',
+          }),
+      workspaceSymbols: workspaceIndexBackedFeatureStatusCreate({
+        indexReady: input.projectIndex !== undefined,
+        indexRequired: input.workspaceIndexRequired,
+      }),
+      semanticSearch: workspaceIndexBackedFeatureStatusCreate({
+        indexReady: input.projectIndex !== undefined,
+        indexRequired: input.workspaceIndexRequired,
+      }),
+      dependencyGraph: workspaceIndexBackedFeatureStatusCreate({
+        indexReady: input.projectIndex !== undefined,
+        indexRequired: input.workspaceIndexRequired,
+      }),
+      architectureSummary: workspaceIndexBackedFeatureStatusCreate({
+        indexReady: input.projectIndex !== undefined,
+        indexRequired: input.workspaceIndexRequired,
+      }),
+    },
+    fixableTreeViolationsByDiagnosticId: treeResult.fixableTreeViolationsByDiagnosticId,
+    eslintOutput: eslintResult.output,
+    eslintHasErrors: eslintResult.hasErrors,
+  };
+}
+
+/**
+ * Decide whether a `workspaceAnalysisRun` invocation can take the incremental
+ * path (re-run only the analyzers/files affected by `state.dirtyFiles`) or
+ * must take the full path (drop caches and re-run everything).
+ *
+ * Incremental is opt-in only when:
+ *  - the call is a plain analysis (no fix, no eslint output collection),
+ *  - we have a baseline lastAnalysis and analyzerCache to merge against,
+ *  - no upstream code requested a full invalidation,
+ *  - cross-file index analysis is NOT required (single-file edits can flip
+ *    cross-file diagnostics elsewhere; we punt that to incremental projectIndex
+ *    work, see plan).
+ */
+function workspaceAnalysisRunModeDecide(input: {
+  state: WorkspaceAnalysisCacheState;
+  options: { fix: boolean; collectEslintOutput: boolean };
+  workspaceIndexRequired: boolean;
+}): 'full' | 'incremental' | 'reuse' {
+  if (input.options.fix || input.options.collectEslintOutput) {
+    return 'full';
+  }
+  if (!input.state.lastAnalysis || !input.state.analyzerCache) {
+    return 'full';
+  }
+  if (input.state.fullInvalidation) {
+    return 'full';
+  }
+  const dirty = input.state.dirtyFiles;
+  if (!dirty || dirty.size === 0) {
+    return 'reuse';
+  }
+  if (input.workspaceIndexRequired) {
+    return 'full';
+  }
+  const cache = input.state.analyzerCache;
+  if (!cache.tree || !cache.eslint || !cache.biome || !cache.ruff) {
+    return 'full';
+  }
+  return 'incremental';
+}
+
 async function workspaceAnalysisRun(
   workspace: WorkspaceContextState,
   state: WorkspaceDocumentsState & WorkspaceAnalysisCacheState,
@@ -4937,10 +5251,6 @@ async function workspaceAnalysisRun(
     signal?: AbortSignal;
   },
 ): Promise<WorkspaceAnalysis> {
-  if (!options.fix && !options.collectEslintOutput && state.lastAnalysis) {
-    return state.lastAnalysis;
-  }
-
   workspaceAbortSignalThrowIfAborted(options.signal);
   await ensureWorkspaceRuntimeReady();
   builtinPluginsRefresh();
@@ -4966,12 +5276,53 @@ async function workspaceAnalysisRun(
   const workspaceIndexRequired =
     (state.workspaceIndexRequired ?? false) || policyWorkspaceIndexRequired;
   state.workspaceIndexRequired = workspaceIndexRequired;
-  state.toolFingerprints = workspaceToolFingerprintsRead(workspace, lintProviderEntries);
   const nativeOwnedWrappedRuleIds = workspaceNativeOwnedWrappedRuleIdsResolve({
     policy,
     ruleTargets,
     pluginRulesMap,
   });
+
+  const mode = workspaceAnalysisRunModeDecide({
+    state,
+    options,
+    workspaceIndexRequired,
+  });
+
+  if (mode === 'reuse' && state.lastAnalysis) {
+    return state.lastAnalysis;
+  }
+
+  if (mode === 'incremental' && state.lastAnalysis && state.analyzerCache) {
+    workspaceAbortSignalThrowIfAborted(options.signal);
+    const incremental = await workspaceAnalysisRunIncremental({
+      workspace,
+      state,
+      baseline: state.lastAnalysis,
+      analyzerCache: state.analyzerCache,
+      dirtyFiles: state.dirtyFiles ?? new Set<string>(),
+      files,
+      matches,
+      policy,
+      pluginRulesMap,
+      ruleTargets,
+      lintProviderEntries,
+      nativeOwnedWrappedRuleIds,
+      sourceByFilePath,
+      workspaceIndexRequired,
+      signal: options.signal,
+      collectEslintOutput: options.collectEslintOutput,
+    });
+    state.dirtyFiles = undefined;
+    state.fullInvalidation = false;
+    state.analysisGeneration += 1;
+    state.lastAnalysis = incremental;
+    return incremental;
+  }
+
+  // Full path: clear narrow-invalidation bookkeeping; recompute everything.
+  state.dirtyFiles = undefined;
+  state.fullInvalidation = false;
+  state.toolFingerprints = workspaceToolFingerprintsRead(workspace, lintProviderEntries);
 
   workspaceAbortSignalThrowIfAborted(options.signal);
   let projectIndex: ProjectIndex | undefined;
@@ -5060,67 +5411,306 @@ async function workspaceAnalysisRun(
     workspaceAbortSignalThrowIfAborted(options.signal);
     projectIndex = workspaceIndexGetOrBuild(workspace, state, files);
   }
-  const analyzerResults = [treeResult, eslintResult, biomeResult, ruffResult];
-  const analyzerIssues = analyzerResults.flatMap((result) => result.issues);
 
-  const analysis: WorkspaceAnalysis = {
-    analyzerInventory: workspaceAnalyzerInventoryBuild({
-      analyzerResults,
-      lintProviderEntries,
-      pluginRulesMap,
-      policy,
-      ruleTargets,
-    }),
-    analyzerScorecard: analyzerResults.map((result) => result.scorecard),
+  const analysis = workspaceAnalysisCompose({
+    treeResult,
+    eslintResult,
+    biomeResult,
+    ruffResult,
     policy,
     files,
-    violations: analyzerResults.flatMap((result) => result.violations),
-    treeViolations: [...treeResult.treeViolations],
-    diagnostics: analyzerResults.flatMap((result) => result.diagnostics),
-    featureStatus: {
-      diagnostics: workspaceFeatureStatusReadyOrDegraded(analyzerIssues),
-      codeActions: workspaceFeatureStatusCreate({
-        readiness: 'ready',
-      }),
-      editPlans: workspaceFeatureStatusCreate({
-        readiness: 'ready',
-      }),
-      workspaceIndex: workspaceIndexRequired
-        ? workspaceFeatureStatusCreate({
-            readiness: projectIndex ? 'ready' : 'degraded',
-            detail: projectIndex
-              ? 'Session-derived index ready'
-              : 'Project index required but unavailable',
-          })
-        : workspaceFeatureStatusCreate({
-            readiness: 'ready',
-            detail: 'Not required by current policy',
-          }),
-      workspaceSymbols: workspaceIndexBackedFeatureStatusCreate({
-        indexReady: projectIndex !== undefined,
-        indexRequired: workspaceIndexRequired,
-      }),
-      semanticSearch: workspaceIndexBackedFeatureStatusCreate({
-        indexReady: projectIndex !== undefined,
-        indexRequired: workspaceIndexRequired,
-      }),
-      dependencyGraph: workspaceIndexBackedFeatureStatusCreate({
-        indexReady: projectIndex !== undefined,
-        indexRequired: workspaceIndexRequired,
-      }),
-      architectureSummary: workspaceIndexBackedFeatureStatusCreate({
-        indexReady: projectIndex !== undefined,
-        indexRequired: workspaceIndexRequired,
-      }),
-    },
-    fixableTreeViolationsByDiagnosticId: treeResult.fixableTreeViolationsByDiagnosticId,
-    eslintOutput: eslintResult.output,
-    eslintHasErrors: eslintResult.hasErrors,
-  };
+    pluginRulesMap,
+    lintProviderEntries,
+    ruleTargets,
+    projectIndex,
+    workspaceIndexRequired,
+  });
+
+  // Repopulate the per-(analyzer,filePath) cache for future incremental runs.
+  // We seed every analyzer's bucket with the file universe it actually scans
+  // so a subsequent dirty file lookup can distinguish "clean" from "untouched".
+  const cache: WorkspaceAnalyzerCache = {};
+  workspaceAnalyzerCacheStore({
+    cache,
+    key: 'tree',
+    result: treeResult,
+    filesInScope: workspaceTreeAnalyzerFilesInScopeCollect(matches, pluginRulesMap),
+  });
+  workspaceAnalyzerCacheStore({
+    cache,
+    key: 'eslint',
+    result: eslintResult,
+    filesInScope: files,
+  });
+  workspaceAnalyzerCacheStore({
+    cache,
+    key: 'biome',
+    result: biomeResult,
+    filesInScope: workspaceBiomeFilesInScopeCollect(matches),
+  });
+  workspaceAnalyzerCacheStore({
+    cache,
+    key: 'ruff',
+    result: ruffResult,
+    filesInScope: files.filter((filePath) => fileHasExtension(filePath, PYTHON_FILE_EXTENSIONS)),
+  });
+  state.analyzerCache = cache;
 
   state.analysisGeneration += 1;
   state.lastAnalysis = analysis;
   return analysis;
+}
+
+function workspaceTreeAnalyzerFilesInScopeCollect(
+  matches: RuleMatch[],
+  pluginRulesMap: Awaited<ReturnType<typeof policyPluginsGet>> extends Result<infer T, string>
+    ? T
+    : never,
+): string[] {
+  const treeMatches = matches.filter((match) => {
+    if (match.rule.providers && match.rule.providers.length > 0) {
+      return match.rule.providers.includes('tree-sitter');
+    }
+    const lookup = pluginGetForRule(pluginRulesMap, match.rule.ruleId);
+    return Boolean(lookup?.plugin.pluginRule.capabilities.treeCheckProvider);
+  });
+  const set = new Set<string>();
+  for (const match of treeMatches) {
+    for (const filePath of match.files) {
+      set.add(filePath);
+    }
+  }
+  return [...set];
+}
+
+function workspaceBiomeFilesInScopeCollect(matches: RuleMatch[]): string[] {
+  const set = new Set<string>();
+  for (const match of matches) {
+    for (const filePath of match.files) {
+      if (fileHasExtension(filePath, BIOME_FILE_EXTENSIONS)) {
+        set.add(filePath);
+      }
+    }
+  }
+  return [...set];
+}
+
+/**
+ * Incremental path: tree analyzer is re-run on the dirty subset only and merged
+ * with cached file results; ESLint/Biome/Ruff are re-run in full when any dirty
+ * file falls in their scope, otherwise reused whole from the cache.
+ */
+async function workspaceAnalysisRunIncremental(input: {
+  workspace: WorkspaceContextState;
+  state: WorkspaceDocumentsState & WorkspaceAnalysisCacheState;
+  baseline: WorkspaceAnalysis;
+  analyzerCache: WorkspaceAnalyzerCache;
+  dirtyFiles: ReadonlySet<string>;
+  files: string[];
+  matches: RuleMatch[];
+  policy: PolicyFile;
+  pluginRulesMap: Awaited<ReturnType<typeof policyPluginsGet>> extends Result<infer T, string>
+    ? T
+    : never;
+  ruleTargets: PolicyRuleTargetContext[];
+  lintProviderEntries: LintProviderEntry[];
+  nativeOwnedWrappedRuleIds: ReadonlySet<string>;
+  sourceByFilePath: Map<string, string>;
+  workspaceIndexRequired: boolean;
+  signal?: AbortSignal;
+  collectEslintOutput: boolean;
+}): Promise<WorkspaceAnalysis> {
+  const treeCache = input.analyzerCache.tree!;
+  const eslintCache = input.analyzerCache.eslint!;
+  const biomeCache = input.analyzerCache.biome!;
+  const ruffCache = input.analyzerCache.ruff!;
+
+  // -- Tree: re-run per-file for the dirty subset of the tree-eligible files.
+  const treeFilesInScope = workspaceTreeAnalyzerFilesInScopeCollect(
+    input.matches,
+    input.pluginRulesMap,
+  );
+  const treeFilesInScopeSet = new Set(treeFilesInScope);
+  const dirtyTreeFiles = [...input.dirtyFiles].filter((filePath) =>
+    treeFilesInScopeSet.has(filePath),
+  );
+
+  let treeResult: WorkspaceAnalyzerRunResult;
+  if (dirtyTreeFiles.length === 0) {
+    // Even when no tree file changed, the file universe might have shifted
+    // (cache held entries for files no longer in scope). Drop those, then
+    // rebuild the result.
+    const trimmed = new Map<string, WorkspaceAnalyzerFileCacheEntry>();
+    for (const filePath of treeFilesInScope) {
+      trimmed.set(
+        filePath,
+        treeCache.fileResults.get(filePath) ?? workspaceAnalyzerFileCacheEntryCreate(),
+      );
+    }
+    treeCache.fileResults = trimmed;
+    treeResult = workspaceTreeAnalyzerResultFromCache({
+      fileResults: trimmed,
+      ownedRuleIds: treeCache.result.scorecard.ownedRuleIds,
+      issues: treeCache.result.scorecard.issues,
+      latencyMs: treeCache.result.scorecard.latencyMs,
+    });
+    treeCache.result = treeResult;
+  } else {
+    workspaceAbortSignalThrowIfAborted(input.signal);
+    const dirtyMatches = input.matches
+      .map((match) => ({
+        ...match,
+        files: match.files.filter((filePath) => input.dirtyFiles.has(filePath)),
+      }))
+      .filter((match) => match.files.length > 0);
+    const startedAt = Date.now();
+    const freshTree = workspaceTreeAnalyzerRun({
+      configPath: input.workspace.configPath,
+      matches: dirtyMatches,
+      pluginRulesMap: input.pluginRulesMap,
+      policy: input.policy,
+      projectIndex: undefined,
+      rootPath: input.workspace.rootPath,
+      sourceByFilePath: input.sourceByFilePath,
+      strictErrors: false,
+    });
+    const freshGrouped = workspaceAnalyzerFileResultsGroup({
+      filesInScope: dirtyTreeFiles,
+      violations: freshTree.violations,
+      diagnostics: freshTree.diagnostics,
+      treeViolations: freshTree.treeViolations,
+      fixableTreeViolationsByDiagnosticId: freshTree.fixableTreeViolationsByDiagnosticId,
+    });
+    const merged = new Map<string, WorkspaceAnalyzerFileCacheEntry>();
+    for (const filePath of treeFilesInScope) {
+      if (input.dirtyFiles.has(filePath)) {
+        merged.set(
+          filePath,
+          freshGrouped.get(filePath) ?? workspaceAnalyzerFileCacheEntryCreate(),
+        );
+      } else {
+        merged.set(
+          filePath,
+          treeCache.fileResults.get(filePath) ?? workspaceAnalyzerFileCacheEntryCreate(),
+        );
+      }
+    }
+    treeCache.fileResults = merged;
+    // Issues from `workspaceTreeAnalyzerRun` are emitted per (rule, file) when
+    // a tree check fails. For the dirty subset we trust the fresh issues; for
+    // non-dirty files we keep nothing (fix runs already turn strictErrors on
+    // and would have surfaced them). Fresh issues + prior latencyMs spike on
+    // first incremental run is acceptable for step C.
+    treeResult = workspaceTreeAnalyzerResultFromCache({
+      fileResults: merged,
+      ownedRuleIds: treeCache.result.scorecard.ownedRuleIds,
+      issues: freshTree.issues,
+      latencyMs: Date.now() - startedAt,
+    });
+    treeCache.result = treeResult;
+  }
+
+  // -- ESLint: analyzer-level skip when no dirty file falls in scope.
+  let eslintResult: WorkspaceAnalyzerRunResult;
+  const eslintScopeSet = new Set(input.files);
+  const eslintHasDirty = [...input.dirtyFiles].some((filePath) =>
+    eslintScopeSet.has(filePath),
+  );
+  if (eslintHasDirty) {
+    workspaceAbortSignalThrowIfAborted(input.signal);
+    eslintResult = await eslintAnalyzerRun({
+      files: input.files,
+      sourceByFilePath: input.sourceByFilePath,
+      policy: input.policy,
+      configPath: input.workspace.configPath,
+      eslintConfigPath: input.workspace.eslintConfigPath,
+      cwd: input.workspace.rootPath,
+      lintProviderEntries: input.lintProviderEntries,
+      nativeOwnedWrappedRuleIds: input.nativeOwnedWrappedRuleIds,
+      ruleTargets: input.ruleTargets,
+      pluginRules: input.pluginRulesMap,
+      fix: false,
+      collectOutput: input.collectEslintOutput,
+    });
+    workspaceAnalyzerCacheStore({
+      cache: input.analyzerCache,
+      key: 'eslint',
+      result: eslintResult,
+      filesInScope: input.files,
+    });
+  } else {
+    eslintResult = eslintCache.result;
+  }
+
+  // -- Biome: analyzer-level skip when no dirty file falls in its scope.
+  let biomeResult: WorkspaceAnalyzerRunResult;
+  const biomeFilesInScope = workspaceBiomeFilesInScopeCollect(input.matches);
+  const biomeScopeSet = new Set(biomeFilesInScope);
+  const biomeHasDirty = [...input.dirtyFiles].some((filePath) =>
+    biomeScopeSet.has(filePath),
+  );
+  if (biomeHasDirty) {
+    workspaceAbortSignalThrowIfAborted(input.signal);
+    biomeResult = await biomeAnalyzerRun({
+      matches: input.matches,
+      lintProviderEntries: input.lintProviderEntries,
+      nativeOwnedWrappedRuleIds: input.nativeOwnedWrappedRuleIds,
+      fix: false,
+      signal: input.signal,
+    });
+    workspaceAnalyzerCacheStore({
+      cache: input.analyzerCache,
+      key: 'biome',
+      result: biomeResult,
+      filesInScope: biomeFilesInScope,
+    });
+  } else {
+    biomeResult = biomeCache.result;
+  }
+
+  // -- Ruff: analyzer-level skip when no dirty Python file is in the file set.
+  let ruffResult: WorkspaceAnalyzerRunResult;
+  const ruffFilesInScope = input.files.filter((filePath) =>
+    fileHasExtension(filePath, PYTHON_FILE_EXTENSIONS),
+  );
+  const ruffScopeSet = new Set(ruffFilesInScope);
+  const ruffHasDirty = [...input.dirtyFiles].some((filePath) =>
+    ruffScopeSet.has(filePath),
+  );
+  if (ruffHasDirty) {
+    workspaceAbortSignalThrowIfAborted(input.signal);
+    ruffResult = await ruffAnalyzerRun({
+      files: input.files,
+      lintProviderEntries: input.lintProviderEntries,
+      nativeOwnedWrappedRuleIds: input.nativeOwnedWrappedRuleIds,
+      fix: false,
+      signal: input.signal,
+    });
+    workspaceAnalyzerCacheStore({
+      cache: input.analyzerCache,
+      key: 'ruff',
+      result: ruffResult,
+      filesInScope: ruffFilesInScope,
+    });
+  } else {
+    ruffResult = ruffCache.result;
+  }
+
+  // projectIndex is undefined here because incremental requires
+  // !workspaceIndexRequired (decision in workspaceAnalysisRunModeDecide).
+  return workspaceAnalysisCompose({
+    treeResult,
+    eslintResult,
+    biomeResult,
+    ruffResult,
+    policy: input.policy,
+    files: input.files,
+    pluginRulesMap: input.pluginRulesMap,
+    lintProviderEntries: input.lintProviderEntries,
+    ruleTargets: input.ruleTargets,
+    projectIndex: undefined,
+    workspaceIndexRequired: input.workspaceIndexRequired,
+  });
 }
 
 async function workspaceLintRulesResultCreate(input: {
@@ -5604,7 +6194,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       version: input.version,
       text: input.text,
     });
-    workspaceSessionInvalidate(workspaceSession);
+    workspaceSessionInvalidate(workspaceSession, { dirtyFiles: [filePath] });
 
     if (workspaceSession.indexState && workspaceSession.indexState.files.includes(filePath)) {
       const didUpdate = projectIndexUpdateFileFromSource(
@@ -5649,7 +6239,9 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     );
     const filePath = workspaceSession.documents.get(input.uri)?.filePath;
     workspaceSession.documents.delete(input.uri);
-    workspaceSessionInvalidate(workspaceSession);
+    workspaceSessionInvalidate(workspaceSession, {
+      dirtyFiles: filePath ? [filePath] : undefined,
+    });
     if (filePath) {
       workspaceIndexRefreshFromDisk(workspace, workspaceSession, filePath);
     }

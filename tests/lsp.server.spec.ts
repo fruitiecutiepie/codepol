@@ -303,6 +303,7 @@ function manualTimerQueueCreate(): {
   };
   pendingCountGet: () => number;
   runNext: () => Promise<void>;
+  fireNext: () => void;
 } {
   let nextHandle = 1;
   const callbacks = new Map<number, () => void>();
@@ -347,10 +348,25 @@ function manualTimerQueueCreate(): {
       }
       const callback = callbacks.get(handle);
       callbacks.delete(handle);
-      callback?.();
+      const callbackResult = callback?.() as unknown;
+      if (
+        callbackResult &&
+        typeof (callbackResult as { then?: unknown }).then === 'function'
+      ) {
+        await callbackResult;
+      }
       for (let attempt = 0; attempt < 8; attempt += 1) {
         await Promise.resolve();
       }
+    },
+    fireNext() {
+      const handle = queue.shift();
+      if (handle === undefined) {
+        throw new Error('No timer queued');
+      }
+      const callback = callbacks.get(handle);
+      callbacks.delete(handle);
+      void (callback?.() as unknown);
     },
   };
 }
@@ -1838,6 +1854,7 @@ describe('CodepolLspServer', () => {
     const messages: any[] = [];
     let serviceFactoryCalls = 0;
 
+    const timers = manualTimerQueueCreate();
     const server = new CodepolLspServer({
       serviceFactory: async () => {
         serviceFactoryCalls += 1;
@@ -1851,6 +1868,7 @@ describe('CodepolLspServer', () => {
       sendMessage: (message) => {
         messages.push(message);
       },
+      timers: timers.timers,
     });
 
     await server.handleMessage({
@@ -1882,6 +1900,9 @@ describe('CodepolLspServer', () => {
         contentChanges: [{ text: 'export type User = {\n  name: string;\n};\n' }],
       },
     });
+
+    expect(timers.pendingCountGet()).toBe(1);
+    await timers.runNext();
 
     await server.handleMessage({
       jsonrpc: '2.0',
@@ -2179,6 +2200,7 @@ describe('CodepolLspServer', () => {
       },
     };
 
+    const timers = manualTimerQueueCreate();
     const server = new CodepolLspServer({
       clientInstanceId: 'lsp-restart-refresh-instance',
       clientSessionId: 'lsp-restart-refresh-session',
@@ -2206,6 +2228,7 @@ describe('CodepolLspServer', () => {
       sendMessage: (message) => {
         messages.push(message);
       },
+      timers: timers.timers,
     });
 
     await server.handleMessage({
@@ -2238,6 +2261,9 @@ describe('CodepolLspServer', () => {
       },
     });
 
+    expect(timers.pendingCountGet()).toBe(1);
+    await timers.runNext();
+
     const publishMessages = messages.filter(
       (message) => message.method === 'textDocument/publishDiagnostics',
     );
@@ -2249,7 +2275,6 @@ describe('CodepolLspServer', () => {
     expect(secondCalls).toContain('subscribeDiagnostics:workspace');
     expect(secondCalls).toContain(`openOverlay:${uri}@2`);
     expect(secondCalls).toContain('completeReplay');
-    expect(secondCalls).toContain(`updateOverlay:${uri}@2`);
     expect(secondCalls).toContain(`queryDiagnostics:${uri}@2`);
     expect(publishMessages).toHaveLength(2);
     expect(publishMessages[0]?.params.diagnostics).toHaveLength(1);
@@ -2752,10 +2777,12 @@ describe('CodepolLspServer', () => {
     fs.writeFileSync(filePath, 'export interface User {\n  name: string;\n}\n', 'utf8');
 
     const messages: any[] = [];
+    const timers = manualTimerQueueCreate();
     const server = new CodepolLspServer({
       sendMessage: (message) => {
         messages.push(message);
       },
+      timers: timers.timers,
     });
 
     await server.handleMessage({
@@ -2790,6 +2817,12 @@ describe('CodepolLspServer', () => {
         contentChanges: [{ text: 'export type User = {\n  name: string;\n};\n' }],
       },
     });
+
+    expect(
+      messages.filter((message) => message.method === 'textDocument/publishDiagnostics'),
+    ).toHaveLength(1);
+    expect(timers.pendingCountGet()).toBe(1);
+    await timers.runNext();
 
     const publishMessages = messages.filter((message) => message.method === 'textDocument/publishDiagnostics');
     expect(publishMessages[1]?.params.diagnostics).toEqual([]);
@@ -2873,9 +2906,11 @@ describe('CodepolLspServer', () => {
       },
     };
 
+    const timers = manualTimerQueueCreate();
     const server = new CodepolLspServer({
       service,
       sendMessage: () => {},
+      timers: timers.timers,
     });
 
     await server.handleMessage({
@@ -2908,6 +2943,9 @@ describe('CodepolLspServer', () => {
       },
     });
 
+    expect(timers.pendingCountGet()).toBe(1);
+    await timers.runNext();
+
     await server.handleMessage({
       jsonrpc: '2.0',
       method: 'textDocument/didClose',
@@ -2917,6 +2955,285 @@ describe('CodepolLspServer', () => {
     });
 
     expect(seenDocumentVersions).toEqual([1, 2, undefined]);
+  });
+
+  it('coalesces a burst of didChange notifications into a single debounced publishDiagnostics with the latest version', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(workspaceRoot, 'codepol.toml'), noInterfaceConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = pathToFileURL(filePath).href;
+
+    const queriedVersions: Array<number | undefined> = [];
+
+    const service: WorkspaceService = {
+      ...workspaceReadQueriesStubCreate(),
+      async registerClientSession() {
+        return {
+          clientSessionId: 'client-1',
+          daemonSessionId: 'daemon-1',
+        };
+      },
+      async closeClientSession() {},
+      async attachWorkspace() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+        };
+      },
+      async subscribeDiagnostics() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          scope: 'workspace',
+          subscriptionState: 'active',
+        };
+      },
+      async completeReplay() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          replayEpoch: 1,
+          replayState: 'applied',
+        };
+      },
+      async openOverlay() {},
+      async updateOverlay() {},
+      async closeOverlay() {},
+      async queryDiagnostics(input) {
+        queriedVersions.push(input.documentVersion);
+        return [];
+      },
+      async queryCodeActions() {
+        return [];
+      },
+      async applyEditPlan() {
+        return { applied: false, failureReason: 'plan_not_found' };
+      },
+      async queryIndexStatus() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          status: 'cold',
+          indexedFileCount: 0,
+          openDocumentCount: 0,
+          overlayCount: 0,
+          analysisGeneration: 0,
+        };
+      },
+    };
+
+    const messages: any[] = [];
+    const timers = manualTimerQueueCreate();
+    const server = new CodepolLspServer({
+      service,
+      sendMessage: (message) => {
+        messages.push(message);
+      },
+      timers: timers.timers,
+      publishDebounceMs: 50,
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        rootUri: pathToFileURL(workspaceRoot).href,
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      method: 'textDocument/didOpen',
+      params: {
+        textDocument: {
+          uri,
+          version: 1,
+          text: 'a',
+        },
+      },
+    });
+
+    expect(
+      messages.filter((message) => message.method === 'textDocument/publishDiagnostics'),
+    ).toHaveLength(1);
+    expect(queriedVersions).toEqual([1]);
+    expect(timers.pendingCountGet()).toBe(0);
+
+    for (const version of [2, 3, 4]) {
+      await server.handleMessage({
+        jsonrpc: '2.0',
+        method: 'textDocument/didChange',
+        params: {
+          textDocument: { uri, version },
+          contentChanges: [{ text: `a${'b'.repeat(version)}` }],
+        },
+      });
+    }
+
+    expect(timers.pendingCountGet()).toBe(1);
+    expect(
+      messages.filter((message) => message.method === 'textDocument/publishDiagnostics'),
+    ).toHaveLength(1);
+    expect(queriedVersions).toEqual([1]);
+
+    await timers.runNext();
+
+    expect(timers.pendingCountGet()).toBe(0);
+    expect(queriedVersions).toEqual([1, 4]);
+    expect(
+      messages.filter((message) => message.method === 'textDocument/publishDiagnostics'),
+    ).toHaveLength(2);
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      method: 'textDocument/didChange',
+      params: {
+        textDocument: { uri, version: 5 },
+        contentChanges: [{ text: 'final' }],
+      },
+    });
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      method: 'textDocument/didChange',
+      params: {
+        textDocument: { uri, version: 6 },
+        contentChanges: [{ text: 'final-extra' }],
+      },
+    });
+
+    expect(timers.pendingCountGet()).toBe(1);
+    await timers.runNext();
+
+    expect(queriedVersions).toEqual([1, 4, 6]);
+    expect(
+      messages.filter((message) => message.method === 'textDocument/publishDiagnostics'),
+    ).toHaveLength(3);
+    expect(timers.pendingCountGet()).toBe(0);
+  });
+
+  it('cancels a pending debounced publishDiagnostics when textDocument/didClose runs first', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(workspaceRoot, 'codepol.toml'), noInterfaceConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = pathToFileURL(filePath).href;
+
+    const queriedVersions: Array<number | undefined> = [];
+    const service: WorkspaceService = {
+      ...workspaceReadQueriesStubCreate(),
+      async registerClientSession() {
+        return {
+          clientSessionId: 'client-1',
+          daemonSessionId: 'daemon-1',
+        };
+      },
+      async closeClientSession() {},
+      async attachWorkspace() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+        };
+      },
+      async subscribeDiagnostics() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          scope: 'workspace',
+          subscriptionState: 'active',
+        };
+      },
+      async completeReplay() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          replayEpoch: 1,
+          replayState: 'applied',
+        };
+      },
+      async openOverlay() {},
+      async updateOverlay() {},
+      async closeOverlay() {},
+      async queryDiagnostics(input) {
+        queriedVersions.push(input.documentVersion);
+        return [];
+      },
+      async queryCodeActions() {
+        return [];
+      },
+      async applyEditPlan() {
+        return { applied: false, failureReason: 'plan_not_found' };
+      },
+      async queryIndexStatus() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          status: 'cold',
+          indexedFileCount: 0,
+          openDocumentCount: 0,
+          overlayCount: 0,
+          analysisGeneration: 0,
+        };
+      },
+    };
+
+    const messages: any[] = [];
+    const timers = manualTimerQueueCreate();
+    const server = new CodepolLspServer({
+      service,
+      sendMessage: (message) => {
+        messages.push(message);
+      },
+      timers: timers.timers,
+      publishDebounceMs: 50,
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        rootUri: pathToFileURL(workspaceRoot).href,
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      method: 'textDocument/didOpen',
+      params: {
+        textDocument: { uri, version: 1, text: 'a' },
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      method: 'textDocument/didChange',
+      params: {
+        textDocument: { uri, version: 2 },
+        contentChanges: [{ text: 'ab' }],
+      },
+    });
+
+    expect(timers.pendingCountGet()).toBe(1);
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      method: 'textDocument/didClose',
+      params: {
+        textDocument: { uri },
+      },
+    });
+
+    expect(timers.pendingCountGet()).toBe(0);
+    expect(queriedVersions).toEqual([1, undefined]);
+    expect(
+      messages.filter((message) => message.method === 'textDocument/publishDiagnostics'),
+    ).toHaveLength(2);
   });
 
   it('suppresses stale diagnostics when an older query resolves after a newer change', async () => {
@@ -2988,11 +3305,13 @@ describe('CodepolLspServer', () => {
     };
 
     const messages: any[] = [];
+    const timers = manualTimerQueueCreate();
     const server = new CodepolLspServer({
       service,
       sendMessage: (message) => {
         messages.push(message);
       },
+      timers: timers.timers,
     });
 
     await server.handleMessage({
@@ -3021,7 +3340,7 @@ describe('CodepolLspServer', () => {
     }
     expect(diagnosticsResolvers).toHaveLength(1);
 
-    const changePromise = server.handleMessage({
+    await server.handleMessage({
       jsonrpc: '2.0',
       method: 'textDocument/didChange',
       params: {
@@ -3030,13 +3349,15 @@ describe('CodepolLspServer', () => {
       },
     });
 
+    expect(timers.pendingCountGet()).toBe(1);
+    timers.fireNext();
+
     for (let attempt = 0; attempt < 20 && diagnosticsResolvers.length < 2; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
     expect(diagnosticsResolvers).toHaveLength(2);
 
     diagnosticsResolvers[1]!([]);
-    await changePromise;
 
     diagnosticsResolvers[0]!([
       {
@@ -4205,10 +4526,12 @@ describe('CodepolLspServer', () => {
     fs.writeFileSync(configPath, configSource, 'utf8');
 
     const messages: any[] = [];
+    const timers = manualTimerQueueCreate();
     const server = new CodepolLspServer({
       sendMessage: (message) => {
         messages.push(message);
       },
+      timers: timers.timers,
     });
 
     await server.handleMessage({
