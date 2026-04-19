@@ -402,6 +402,37 @@ describe('CLI graph subcommands', () => {
     expect(payload).toEqual({ edges: [] });
   });
 
+  it('graph hierarchy --include-structural returns a WorkspaceDependencyGraphResult', async () => {
+    // Phase 9.4 / Gap 3 happy-path. Symbol-id discovery does not have
+    // a CLI surface today, so we pin the unknown-id contract: the
+    // structural BFS still emits a seed-only subgraph, byte-equal to
+    // the existing call/type-hierarchy unknown-id behavior. The flag
+    // must be accepted without rejection — the regression we guard
+    // against is the CLI failing to forward `--include-structural`.
+    const { projectDir } = linearProjectCreate('codepol-e2e-graph-hierarchy-');
+    createdDirs.push(projectDir);
+
+    const result = await runCli(
+      [
+        'graph',
+        'hierarchy',
+        'symbol-that-does-not-exist',
+        '--include-structural',
+        '--direction',
+        'subtypes',
+      ],
+      projectDir,
+    );
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout);
+    expect(Array.isArray(payload.nodes)).toBe(true);
+    expect(payload.nodes.length).toBe(1);
+    expect(payload.nodes[0].symbolId).toBe('symbol-that-does-not-exist');
+    expect(Array.isArray(payload.edges)).toBe(true);
+    expect(payload.entryPoints).toEqual([]);
+    expect(payload.cycles).toEqual([]);
+  });
+
   it('graph diff --baseline-file accepts a raw graph export payload', async () => {
     const { projectDir, fileUris } = linearProjectCreate('codepol-e2e-graph-diff-file-');
     createdDirs.push(projectDir);

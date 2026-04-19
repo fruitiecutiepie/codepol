@@ -2108,6 +2108,21 @@ describe('workspace daemon control plane', () => {
     expect(typeHierarchy.nodes[0]!.symbolId).toBe('unknown-id');
     expect(typeHierarchy.edges).toEqual([]);
 
+    // Phase 9.4 / Gap 3: queryTypeHierarchy carries the new
+    // `includeStructural` flag through the daemon round-trip. With
+    // an unknown symbol id the result is still seed-only, but the
+    // request/ack pair must accept the flag without rejecting it.
+    const typeHierarchyStructural = await service.queryTypeHierarchy({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      symbolId: 'unknown-id',
+      direction: 'both',
+      includeStructural: true,
+      minConfidence: 'declared',
+    });
+    expect(typeHierarchyStructural.nodes).toHaveLength(1);
+    expect(typeHierarchyStructural.nodes[0]!.symbolId).toBe('unknown-id');
+
     // Phase 9.1 / Gap 1: querySymbolFlow round-trips through the
     // daemon transport. Unknown symbol id ⇒ empty edge list (never
     // null), exercising both the request type registration and the

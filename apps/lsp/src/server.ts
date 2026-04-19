@@ -19,6 +19,7 @@ import {
   type WorkspaceEditPlan,
   type WorkspaceImpactRadiusDirection,
   type WorkspaceTypeHierarchyDirection,
+  type WorkspaceTypeHierarchyEdgeConfidence,
   type WorkspaceSymbolFlowDirection,
   type WorkspaceSymbolFlowResult,
   type WorkspaceLintRuleDetailsResult,
@@ -1112,6 +1113,9 @@ export class CodepolLspServer {
           symbolId?: string;
           direction?: WorkspaceTypeHierarchyDirection;
           depth?: number;
+          includeStructural?: boolean;
+          minConfidence?: WorkspaceTypeHierarchyEdgeConfidence;
+          requireTypeAware?: boolean;
         }, context);
       case CODEPOL_LSP_REQUEST_SEMANTIC_SEARCH:
         return this.semanticSearchHandle(params as {
@@ -2005,6 +2009,9 @@ export class CodepolLspServer {
       symbolId?: string;
       direction?: WorkspaceTypeHierarchyDirection;
       depth?: number;
+      includeStructural?: boolean;
+      minConfidence?: WorkspaceTypeHierarchyEdgeConfidence;
+      requireTypeAware?: boolean;
     },
     context: { requestId?: JsonRpcId; signal?: AbortSignal } = {},
   ): Promise<WorkspaceDependencyGraphResult | null> {
@@ -2026,6 +2033,9 @@ export class CodepolLspServer {
         symbolId,
         direction,
         depth: params.depth,
+        includeStructural: params.includeStructural,
+        minConfidence: params.minConfidence,
+        requireTypeAware: params.requireTypeAware,
         requestId:
           context.requestId === undefined || context.requestId === null
             ? undefined

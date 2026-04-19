@@ -328,6 +328,25 @@ export type ExportsRelation = {
 };
 
 /**
+ * Confidence tier of a {@link TypeRelation}.
+ *
+ * Phase 9.4 / Gap 3.
+ *
+ * - `'declared'`: extracted from a source-level `extends` / `implements`
+ *   clause. The default — absent ⇒ `'declared'`.
+ * - `'structural-shape'`: emitted by the cross-file structural-shape
+ *   resolution pass after comparing public-member shapes between a
+ *   class and an interface (no `implements` clause in source). Always
+ *   relation-kind `'implements'`.
+ *
+ * The default behavior of `subTypesGet` / `typeRelationsGet` returns
+ * only `'declared'` relations (and back-compat for relations with
+ * `confidence === undefined`). Callers must opt into structural-shape
+ * relations via `{ confidence: 'all' }`.
+ */
+export type TypeRelationConfidence = 'declared' | 'structural-shape';
+
+/**
  * A "TypeRelation" relation: captures type hierarchy edges.
  * Records extends/implements relationships between classes and interfaces.
  * `resolvedTargetId` is populated during file-local resolution in
@@ -346,6 +365,75 @@ export type TypeRelation = {
   byteRange: ByteRange;
   /** Resolved target symbol ID (populated during resolution) */
   resolvedTargetId?: SymbolId;
+  /**
+   * Source of the relation. Absent ⇒ `'declared'` (back-compat).
+   * Set to `'structural-shape'` only by the cross-file shape-match
+   * pass added in Phase 9.4. Default queries hide structural-shape
+   * relations; callers opt in via `subTypesGet({ confidence: 'all' })`.
+   */
+  confidence?: TypeRelationConfidence;
+};
+
+/**
+ * Kind of a member captured in a {@link MemberShapeEntry}.
+ *
+ * Phase 9.4 / Gap 3.
+ */
+export type MemberShapeKind = 'method' | 'property' | 'getter' | 'setter';
+
+/**
+ * One public member of a class / interface / type-alias-of-object as
+ * captured by the shape extractor. Members are sorted deterministically
+ * (`name`, then `memberKind`) by the extractor so two runs over
+ * byte-identical input produce byte-identical {@link MemberShapeRelation}s.
+ *
+ * `private` (TypeScript keyword) and `#`-prefixed members are excluded
+ * by the extractor and never appear here.
+ */
+export type MemberShapeEntry = {
+  /** Member name as raw text from source. */
+  name: string;
+  /** Kind of member. */
+  memberKind: MemberShapeKind;
+  /** Parameter count for callable members; undefined for non-callable. */
+  paramArity?: number;
+  /** True when the interface/type marks the member optional (`foo?: T`). */
+  isOptional: boolean;
+  /** True when the member is declared `static`. */
+  isStatic: boolean;
+};
+
+/**
+ * A "MemberShape" relation: captures the public-member shape of a
+ * class, interface, or type-alias-of-object so the cross-file pass
+ * can compare two owners structurally.
+ *
+ * One relation per owner symbol — re-extracting a file produces one
+ * fresh `MemberShapeRelation` per owner; the store keeps the latest.
+ *
+ * Anonymous structural targets (e.g. `function f(x: { read(): string })`
+ * — the `{ read(): string }` inline type) are intentionally NOT
+ * captured. Only named class / interface / type-alias-of-object owners
+ * produce shapes.
+ */
+export type MemberShapeRelation = {
+  kind: 'MemberShape';
+  /** Class, interface, or type-alias-of-object the shape belongs to. */
+  ownerSymbolId: SymbolId;
+  /** Absolute file path of the owner's declaration. */
+  file: string;
+  /** Byte range of the owner's declaration. */
+  byteRange: ByteRange;
+  /** Captured members, sorted by `(name, memberKind)`. */
+  members: ReadonlyArray<MemberShapeEntry>;
+  /**
+   * True when extraction skipped members past
+   * `MEMBER_SHAPE_CAP_PER_TYPE`. The cross-file pass MUST NOT emit
+   * structural-shape edges with a truncated owner on either side
+   * (the comparison would compare against an incomplete picture and
+   * produce false positives).
+   */
+  memberCountTruncated: boolean;
 };
 
 /**
@@ -409,6 +497,7 @@ export type RelationRecord =
   | ImportBindingRelation
   | ExportsRelation
   | TypeRelation
+  | MemberShapeRelation
   | SymbolFlowRelation;
 
 // ============================================================================
@@ -512,6 +601,15 @@ export type IndexCapabilities = {
    * Optional for back-compat: absent ⇒ treat as `false`.
    */
   symbolFlow?: boolean;
+  /**
+   * Whether {@link MemberShapeRelation} extraction is available
+   * (Phase 9.4 / Gap 3). Optional for back-compat: absent ⇒ treat as
+   * `false`. The shape itself is always emitted to the store when the
+   * adapter's pack supports it; the cross-file structural-shape pass
+   * runs unconditionally and is opt-in for callers via
+   * `subTypesGet({ confidence: 'all' })`.
+   */
+  memberShape?: boolean;
   /** Languages that have been indexed */
   supportedLanguages: string[];
 };

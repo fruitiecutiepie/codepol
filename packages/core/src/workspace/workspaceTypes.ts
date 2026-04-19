@@ -637,6 +637,31 @@ export type WorkspaceCallGraphEdgeKind =
   | 'dynamic-dispatch'
   | 'higher-order';
 
+/**
+ * Confidence tier of a type-hierarchy edge produced by
+ * `queryTypeHierarchy` (Phase 9.4 / 9.5 / Gap 3).
+ *
+ * - `'declared'`: derived from a source-level `extends` / `implements`
+ *   clause. The default — absent ⇒ `'declared'`.
+ * - `'structural-shape'`: produced by the cross-file member-shape
+ *   comparison pass. Opt-in via `includeStructural: true` —
+ *   never emitted when the caller leaves `includeStructural` at its
+ *   default `false`. Always represents an `implements` edge.
+ * - `'type-aware'`: produced (or confirmed) by a registered
+ *   {@link TypeAwareTypeHierarchySource} — typically a host-supplied
+ *   binding around a language server. Authoritative when present and
+ *   overrides shape matches on overlap.
+ *
+ * The field name is intentionally distinct from
+ * {@link WorkspaceCallGraphEdgeConfidence} so type-hierarchy edges
+ * and call-graph edges never collide on the same property of
+ * {@link WorkspaceDependencyGraphEdge}.
+ */
+export type WorkspaceTypeHierarchyEdgeConfidence =
+  | 'declared'
+  | 'structural-shape'
+  | 'type-aware';
+
 export type WorkspaceDependencyGraphEdge = {
   fromUri: string;
   toUri: string;
@@ -674,6 +699,18 @@ export type WorkspaceDependencyGraphEdge = {
    * classified the call as `'dynamic-dispatch'` or `'higher-order'`.
    */
   callGraphKind?: WorkspaceCallGraphEdgeKind;
+  /**
+   * For symbol-level type-hierarchy edges (from `queryTypeHierarchy`):
+   * confidence tier. Absent ⇒ `'declared'`. Set to `'structural-shape'`
+   * when the edge came from the Phase 9.4 cross-file member-shape
+   * comparison, or to `'type-aware'` when a
+   * {@link TypeAwareTypeHierarchySource} contributed to or confirmed
+   * the edge (Phase 9.5).
+   *
+   * Distinct from {@link callGraphConfidence} — type-hierarchy and
+   * call-graph confidence never collide on the same edge.
+   */
+  typeRelationConfidence?: WorkspaceTypeHierarchyEdgeConfidence;
 };
 
 export type WorkspaceDependencyGraphResult = {

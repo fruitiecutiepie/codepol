@@ -20,6 +20,7 @@ import type {
   ImportBindingRelation,
   ExportsRelation,
   TypeRelation,
+  MemberShapeRelation,
   SymbolFlowRelation,
   FlowGraph,
 } from './indexTypes';
@@ -84,6 +85,13 @@ export class IndexStore {
   private typeRelationsBySymbol = new Map<SymbolId, TypeRelation[]>();
   private typeRelationsByTargetName = new Map<string, TypeRelation[]>();
   private typeRelationsByFile = new Map<string, TypeRelation[]>();
+
+  // Member-shape indexes (Phase 9.4 / Gap 3: structural typing substrate).
+  // One shape per owner symbol — re-extracting a file replaces the
+  // owner's shape with the latest. Files keep their list of shapes for
+  // efficient `fileRemove` cleanup.
+  private memberShapesBySymbol = new Map<SymbolId, MemberShapeRelation>();
+  private memberShapesByFile = new Map<string, MemberShapeRelation[]>();
 
   // Symbol-flow relation indexes (Phase 9.1: higher-order argument flow)
   private symbolFlowsByFlowingSymbol = new Map<SymbolId, SymbolFlowRelation[]>();
@@ -270,6 +278,32 @@ export class IndexStore {
           this.symbolFlowsByFile.set(relation.file, byFile);
         }
         byFile.push(relation);
+      } else if (relation.kind === 'MemberShape') {
+        // One shape per owner — last write wins. The relation array
+        // still keeps both copies (the cross-file resolver relies on
+        // `relations` only for general iteration, not member-shape
+        // lookups), but the by-symbol index always points at the most
+        // recent shape so structural-shape resolution sees the latest.
+        const previous = this.memberShapesBySymbol.get(relation.ownerSymbolId);
+        this.memberShapesBySymbol.set(relation.ownerSymbolId, relation);
+
+        // Record the shape under the file containing the owner so
+        // `fileRemove` can drop it without scanning the whole index.
+        const ownerSymbol = this.symbolsById.get(relation.ownerSymbolId);
+        const ownerFile = ownerSymbol?.file ?? relation.file;
+        let byFile = this.memberShapesByFile.get(ownerFile);
+        if (!byFile) {
+          byFile = [];
+          this.memberShapesByFile.set(ownerFile, byFile);
+        }
+        // If `previous` lived in the same file, splice it out so we
+        // don't accumulate stale entries when the same file is
+        // re-indexed within the same `filePut` call (defensive).
+        if (previous) {
+          const idx = byFile.indexOf(previous);
+          if (idx !== -1) byFile.splice(idx, 1);
+        }
+        byFile.push(relation);
       } else if (relation.kind === 'TypeRelation') {
         // Index by child symbol
         let bySymbol = this.typeRelationsBySymbol.get(relation.symbolId);
@@ -426,6 +460,23 @@ export class IndexStore {
       this.symbolFlowsByFile.delete(file);
     }
 
+    // Remove member-shape relations for this file (Phase 9.4 / Gap 3).
+    // Drop both the by-owner entry (when the owner lives in this file)
+    // and the by-file bucket so re-indexing produces a clean slate.
+    const memberShapes = this.memberShapesByFile.get(file);
+    if (memberShapes) {
+      for (const shape of memberShapes) {
+        const stored = this.memberShapesBySymbol.get(shape.ownerSymbolId);
+        // Only remove if the stored shape is the same one we recorded
+        // for this file — guards against the (rare) case where a
+        // re-indexed owner's shape now points at a different file.
+        if (stored === shape) {
+          this.memberShapesBySymbol.delete(shape.ownerSymbolId);
+        }
+      }
+      this.memberShapesByFile.delete(file);
+    }
+
     // Remove type relations for this file
     const typeRels = this.typeRelationsByFile.get(file);
     if (typeRels) {
@@ -471,6 +522,12 @@ export class IndexStore {
         if (r.kind === 'TypeRelation') {
           return !symbolIds?.has(r.symbolId);
         }
+        if (r.kind === 'MemberShape') {
+          // Drop shapes whose owner lives in this file — keeps the
+          // relations array consistent with the by-symbol/by-file
+          // member-shape indexes after `fileRemove`.
+          return !symbolIds?.has(r.ownerSymbolId);
+        }
         return true;
       });
     }
@@ -511,6 +568,8 @@ export class IndexStore {
     this.typeRelationsBySymbol.clear();
     this.typeRelationsByTargetName.clear();
     this.typeRelationsByFile.clear();
+    this.memberShapesBySymbol.clear();
+    this.memberShapesByFile.clear();
     this.symbolFlowsByFlowingSymbol.clear();
     this.symbolFlowsByReceivingCallSymbol.clear();
     this.symbolFlowsByFile.clear();
@@ -716,6 +775,37 @@ export class IndexStore {
   }
 
   // ============================================================================
+  // Member-Shape Queries (Phase 9.4 / Gap 3)
+  // ============================================================================
+
+  /**
+   * Get the captured shape of a class / interface / type-alias-of-object.
+   * Returns `undefined` when no shape was extracted (the language pack
+   * doesn't supply a `memberShape` query, or the symbol isn't a shape
+   * owner).
+   */
+  memberShapeForSymbolGet(symbolId: SymbolId): MemberShapeRelation | undefined {
+    return this.memberShapesBySymbol.get(symbolId);
+  }
+
+  /**
+   * Get every {@link MemberShapeRelation} whose owner declaration lives
+   * in the file. Returned in insertion order.
+   */
+  memberShapesInFileGet(file: string): MemberShapeRelation[] {
+    return this.memberShapesByFile.get(file) ?? [];
+  }
+
+  /**
+   * Iterate every owner that has a member shape on file. Used by the
+   * cross-file structural-shape comparison pass to enumerate
+   * candidates without exposing the underlying map.
+   */
+  memberShapesAll(): MemberShapeRelation[] {
+    return [...this.memberShapesBySymbol.values()];
+  }
+
+  // ============================================================================
   // Symbol-Flow Relation Queries (Phase 9.1)
   // ============================================================================
 
@@ -880,6 +970,25 @@ export class IndexStore {
       }
     }
 
+    if (oldRelation.kind === 'MemberShape' && newRelation.kind === 'MemberShape') {
+      // Update the by-owner index (keep last write wins). The owner id
+      // is immutable per relation — re-extracting a file produces a
+      // new relation with the same id, not an update.
+      this.memberShapesBySymbol.set(newRelation.ownerSymbolId, newRelation);
+
+      // Swap the entry in the by-file bucket so identity-based lookups
+      // continue to work after the rewrite.
+      const ownerSymbol = this.symbolsById.get(newRelation.ownerSymbolId);
+      const ownerFile = ownerSymbol?.file ?? newRelation.file;
+      const fileShapes = this.memberShapesByFile.get(ownerFile);
+      if (fileShapes) {
+        const idx = fileShapes.indexOf(oldRelation as MemberShapeRelation);
+        if (idx !== -1) {
+          fileShapes[idx] = newRelation;
+        }
+      }
+    }
+
     if (oldRelation.kind === 'Imports' && newRelation.kind === 'Imports') {
       // Update by-file index (file derived from scope)
       const scope = this.scopesById.get(oldRelation.scopeId);
@@ -994,6 +1103,84 @@ export class IndexStore {
     return this.relations.filter(
       (r): r is Extract<RelationRecord, { kind: K }> => r.kind === kind
     );
+  }
+
+  /**
+   * Drop every {@link TypeRelation} whose `confidence === 'structural-shape'`.
+   *
+   * Used by the cross-file structural-shape resolver
+   * (`structuralShapeResolve` in `indexBuilder`) to make the pass
+   * idempotent — clearing prior synthetic edges before re-emitting
+   * keeps incremental updates honest when a file change can either
+   * produce or invalidate a shape match.
+   */
+  relationsRemoveStructuralShape(): void {
+    this.relations = this.relations.filter(
+      (r) => !(r.kind === 'TypeRelation' && r.confidence === 'structural-shape'),
+    );
+
+    for (const [symbolId, list] of this.typeRelationsBySymbol) {
+      const filtered = list.filter((r) => r.confidence !== 'structural-shape');
+      if (filtered.length === 0) {
+        this.typeRelationsBySymbol.delete(symbolId);
+      } else if (filtered.length !== list.length) {
+        this.typeRelationsBySymbol.set(symbolId, filtered);
+      }
+    }
+    for (const [name, list] of this.typeRelationsByTargetName) {
+      const filtered = list.filter((r) => r.confidence !== 'structural-shape');
+      if (filtered.length === 0) {
+        this.typeRelationsByTargetName.delete(name);
+      } else if (filtered.length !== list.length) {
+        this.typeRelationsByTargetName.set(name, filtered);
+      }
+    }
+    for (const [file, list] of this.typeRelationsByFile) {
+      const filtered = list.filter((r) => r.confidence !== 'structural-shape');
+      if (filtered.length === 0) {
+        this.typeRelationsByFile.delete(file);
+      } else if (filtered.length !== list.length) {
+        this.typeRelationsByFile.set(file, filtered);
+      }
+    }
+  }
+
+  /**
+   * Inject a synthetic relation that did not come from a single file's
+   * extraction (e.g. cross-file structural-shape edges produced by
+   * `structuralShapeResolve` in `indexBuilder`). The relation is
+   * recorded under {@link ownerFile} so `fileRemove(ownerFile)` cleans
+   * it up correctly when the file is re-indexed.
+   *
+   * Currently supports only {@link TypeRelation} — extend the switch
+   * here when new cross-file passes need to inject other relation
+   * kinds.
+   */
+  relationAddSynthetic(ownerFile: string, relation: RelationRecord): void {
+    this.relations.push(relation);
+
+    if (relation.kind === 'TypeRelation') {
+      let bySymbol = this.typeRelationsBySymbol.get(relation.symbolId);
+      if (!bySymbol) {
+        bySymbol = [];
+        this.typeRelationsBySymbol.set(relation.symbolId, bySymbol);
+      }
+      bySymbol.push(relation);
+
+      let byTarget = this.typeRelationsByTargetName.get(relation.targetName);
+      if (!byTarget) {
+        byTarget = [];
+        this.typeRelationsByTargetName.set(relation.targetName, byTarget);
+      }
+      byTarget.push(relation);
+
+      let byFile = this.typeRelationsByFile.get(ownerFile);
+      if (!byFile) {
+        byFile = [];
+        this.typeRelationsByFile.set(ownerFile, byFile);
+      }
+      byFile.push(relation);
+    }
   }
 
   /**

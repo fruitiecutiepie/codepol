@@ -474,6 +474,38 @@ data flow (functions passed as arguments) is exposed *separately* via
 `querySymbolFlow` so the structural call graph stays honest about what
 the source code actually expresses.
 
+### Type-hierarchy fidelity tiers (Phase 9.4 / 9.5)
+
+The workspace surface (`queryTypeHierarchy`) classifies each edge by
+its source. Three tiers are defined and ordered from least to most
+authoritative:
+
+| `typeRelationConfidence` | Where the edge came from |
+| ------------------------ | ------------------------ |
+| `'declared'` *(default)* | A source-level `extends` / `implements` clause, resolved via the cross-file pass. |
+| `'structural-shape'`     | The Phase 9.4 cross-file member-shape comparison: a class whose public members satisfy an interface's required (non-optional) members. Always emitted as `relationKind: 'implements'`. Opt in with `queryTypeHierarchy({ includeStructural: true })`. |
+| `'type-aware'`           | A registered `TypeAwareTypeHierarchySource` (typically a host-supplied binding around a language server) confirmed or contributed the edge. Authoritative — overrides shape matches on overlap. |
+
+The `minConfidence` filter on `queryTypeHierarchy` drops edges below
+the requested tier. Default is `'declared'`, which keeps every tier
+present in the result. Pass `'type-aware'` to verify a language-server
+binding actually contributed edges (typically combined with
+`requireTypeAware: true`, which raises a structured
+`{ code: 'type-aware-source-missing', languageId }` error when no
+source is registered for the seed symbol's language).
+
+The shape-match pass is honest about its limits. It looks at name +
+member kind (method / property / getter / setter) + `static` flag +
+parameter arity (the class may accept extra optional params), and
+nothing else. Anonymous structural targets (e.g.
+`function f(x: { read(): string })`) and type-system-derived
+relationships (`Pick`, `Omit`, mapped types, generics) are *out of
+scope* — those remain the language server's responsibility. Owners
+that exceed `MEMBER_SHAPE_CAP_PER_TYPE` (64 public members) are
+flagged truncated and never participate in shape comparison on either
+side, because comparing against an incomplete picture would silently
+emit false positives.
+
 ## Testing Cross-File Rules
 
 Cross-file rules need multi-file test fixtures. Here is the recommended pattern:

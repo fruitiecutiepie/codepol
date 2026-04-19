@@ -42,6 +42,7 @@ import type {
   WorkspaceSymbolFlowResult,
   WorkspaceSymbolLookupResult,
   WorkspaceTypeHierarchyDirection,
+  WorkspaceTypeHierarchyEdgeConfidence,
 } from '@codepol/core';
 import {
   CODEPOL_LSP_COMMAND_APPLY_EDIT_PLAN,
@@ -186,6 +187,9 @@ export type CodepolProtocolClient = {
     symbolId: string;
     direction: WorkspaceTypeHierarchyDirection;
     depth?: number;
+    includeStructural?: boolean;
+    minConfidence?: WorkspaceTypeHierarchyEdgeConfidence;
+    requireTypeAware?: boolean;
   }): Promise<WorkspaceDependencyGraphResult | null>;
   querySymbolFlow(input: {
     symbolId: string;
@@ -497,6 +501,9 @@ export class VscodeLanguageClientProtocol implements CodepolProtocolClient {
     symbolId: string;
     direction: WorkspaceTypeHierarchyDirection;
     depth?: number;
+    includeStructural?: boolean;
+    minConfidence?: WorkspaceTypeHierarchyEdgeConfidence;
+    requireTypeAware?: boolean;
   }): Promise<WorkspaceDependencyGraphResult | null> {
     return this.requestRun<WorkspaceDependencyGraphResult | null>(
       CODEPOL_LSP_REQUEST_TYPE_HIERARCHY,

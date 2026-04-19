@@ -33,6 +33,7 @@ import type {
   WorkspaceSymbolLookupResult,
   WorkspaceSymbolResult,
   WorkspaceTypeHierarchyDirection,
+  WorkspaceTypeHierarchyEdgeConfidence,
 } from '@codepol/core';
 
 export type WorkspaceClientKind = 'lsp' | 'cli' | 'test';
@@ -299,6 +300,36 @@ export type WorkspaceService = {
     symbolId: string;
     direction: WorkspaceTypeHierarchyDirection;
     depth?: number;
+    /**
+     * Phase 9.4 / Gap 3. When `true`, structural-shape edges from the
+     * cross-file member-shape comparison are included in the result
+     * (tagged `typeRelationConfidence: 'structural-shape'`). Default
+     * `false` — guarantees byte-identical output to today's result for
+     * every existing caller.
+     */
+    includeStructural?: boolean;
+    /**
+     * Phase 9.4 / 9.5. Filter edges by minimum confidence tier. Default
+     * `'declared'`. Values:
+     *
+     * - `'declared'`: keep only declared edges. Equivalent to today's
+     *   default behavior.
+     * - `'structural-shape'`: keep declared and structural-shape edges
+     *   (set `includeStructural: true` first).
+     * - `'type-aware'`: keep only type-aware edges (typically used to
+     *   verify a {@link TypeAwareTypeHierarchySource} contributed
+     *   results).
+     */
+    minConfidence?: WorkspaceTypeHierarchyEdgeConfidence;
+    /**
+     * Phase 9.5. When `true`, fail with a structured error
+     * `{ code: 'type-aware-source-missing', languageId }` when no
+     * {@link TypeAwareTypeHierarchySource} is registered for the seed
+     * symbol's language. When `false` / absent (the default), the
+     * workspace silently falls back to the structural answer (declared
+     * edges + opt-in shape match).
+     */
+    requireTypeAware?: boolean;
     requestId?: string;
     analysisGeneration?: number;
     signal?: AbortSignal;

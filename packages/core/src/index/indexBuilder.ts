@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import type { Language } from 'web-tree-sitter';
-import type { CallsRelation, IndexCapabilities, ImportsRelation, ImportBindingRelation, ReferencesRelation, TypeRelation, SymbolId } from './indexTypes';
+import type { CallsRelation, IndexCapabilities, ImportsRelation, ImportBindingRelation, MemberShapeEntry, MemberShapeRelation, ReferencesRelation, TypeRelation, SymbolId } from './indexTypes';
 import { IndexStore, indexStoreNew } from './indexStore';
 import { projectIndexCreate, type ProjectIndex } from './indexQuery';
 import type { IndexAdapter } from '../adapters/treeSitter/adapterTypes';
@@ -193,6 +193,7 @@ function projectIndexBuildImpl(options: IndexBuildOptions): IndexBuildResult {
     callGraph: 'heuristic',
     controlFlowGraph: true,
     symbolFlow: indexCapabilitiesSymbolFlowCompute(supportedLanguages),
+    memberShape: indexCapabilitiesMemberShapeCompute(supportedLanguages),
     supportedLanguages: Array.from(supportedLanguages),
   };
 
@@ -219,6 +220,21 @@ function indexCapabilitiesSymbolFlowCompute(
     supportedLanguages.has('tsx') ||
     supportedLanguages.has('python')
   );
+}
+
+/**
+ * Whether the index has at least one language adapter that emits
+ * {@link MemberShapeRelation}s (Phase 9.4 / Gap 3). Today only the
+ * TypeScript / TSX pack does; Python and other languages will opt in
+ * once they ship the query + extractor wiring.
+ *
+ * Centralized here so adding a new language with member-shape support
+ * is a one-line change.
+ */
+function indexCapabilitiesMemberShapeCompute(
+  supportedLanguages: Set<string>,
+): boolean {
+  return supportedLanguages.has('typescript') || supportedLanguages.has('tsx');
 }
 
 /**
@@ -629,6 +645,12 @@ export function crossFileResolveForFile(
   // `crossFileResolveForFile` per dirty file (the workspace service does
   // this today) get the correct end state.
   callsCrossFileResolveForFile(store, file);
+
+  // Re-run the structural-shape resolver — a single file's update can
+  // both add and invalidate shape matches across the workspace. The
+  // resolver clears prior structural-shape edges before re-emitting,
+  // so it's safe to call repeatedly. (Phase 9.4 / Gap 3.)
+  structuralShapeResolve(store);
 }
 
 /**
@@ -1020,4 +1042,178 @@ function crossFileResolve(
       }
     }
   }
+
+  // Step 8: Cross-file structural-shape comparison (Phase 9.4 / Gap 3).
+  // Runs *after* declared TypeRelation resolution (Step 6) so the
+  // shape-match pass can skip pairs that already have a declared
+  // `implements` edge. Output relations are tagged
+  // `confidence: 'structural-shape'` and gated behind
+  // `subTypesGet({ confidence: 'all' })` — never visible to existing
+  // callers.
+  structuralShapeResolve(store);
+}
+
+/**
+ * Cross-file structural-shape resolution pass.
+ *
+ * For every interface owner with a {@link MemberShapeRelation}, walk
+ * every class owner that also has a shape and emit one
+ * `TypeRelation` with `relationKind: 'implements'` and
+ * `confidence: 'structural-shape'` when the class's public members
+ * structurally satisfy the interface's required members.
+ *
+ * Honesty rules:
+ *
+ * - Truncated owners (either side) skip — comparing against an
+ *   incomplete picture would silently emit false positives.
+ * - Declared `implements` takes precedence — if the class already
+ *   declares an `implements` relation against the interface (resolved
+ *   to the same `resolvedTargetId`), the shape pass produces no
+ *   duplicate.
+ * - Member match requires `name === name`, `memberKind === memberKind`,
+ *   `isStatic === isStatic`, and (when both sides have `paramArity`)
+ *   `class.paramArity >= interface.paramArity` (the class may accept
+ *   extra optional parameters).
+ * - Optional interface members are ignored entirely — a class need not
+ *   provide them to count as a structural implementer.
+ *
+ * Determinism: iterate symbols in `(ownerSymbolId)` order (lexicographic
+ * on the opaque id) and emit relations in the same order. The store's
+ * by-symbol/by-target indexes pick up the new relations through the
+ * regular `relationUpdate` plumbing.
+ */
+function structuralShapeResolve(store: IndexStore): void {
+  // Clear any structural-shape edges from a prior run so the pass is
+  // idempotent. Only edges with `confidence === 'structural-shape'`
+  // are dropped — declared edges are preserved.
+  store.relationsRemoveStructuralShape();
+
+  const allShapes = store.memberShapesAll();
+  if (allShapes.length === 0) return;
+
+  // Partition shapes into "interface-like" (potential supertypes) and
+  // "class-like" (potential implementers). Type-alias-of-object owners
+  // are treated as supertypes too — they describe a shape contract,
+  // not an implementation.
+  const supertypes: MemberShapeRelation[] = [];
+  const classShapes: MemberShapeRelation[] = [];
+  for (const shape of allShapes) {
+    const symbol = store.symbolGet(shape.ownerSymbolId);
+    if (!symbol) continue;
+    if (symbol.kind === 'interface' || symbol.kind === 'type') {
+      supertypes.push(shape);
+    } else if (symbol.kind === 'class') {
+      classShapes.push(shape);
+    }
+  }
+  if (supertypes.length === 0 || classShapes.length === 0) return;
+
+  // Stable iteration order for determinism.
+  supertypes.sort((left, right) =>
+    left.ownerSymbolId < right.ownerSymbolId ? -1 : left.ownerSymbolId > right.ownerSymbolId ? 1 : 0,
+  );
+  classShapes.sort((left, right) =>
+    left.ownerSymbolId < right.ownerSymbolId ? -1 : left.ownerSymbolId > right.ownerSymbolId ? 1 : 0,
+  );
+
+  for (const supertype of supertypes) {
+    if (supertype.memberCountTruncated) continue;
+    const supertypeSymbol = store.symbolGet(supertype.ownerSymbolId);
+    if (!supertypeSymbol) continue;
+
+    const requiredMembers = supertype.members.filter((m) => !m.isOptional);
+
+    for (const classShape of classShapes) {
+      if (classShape.memberCountTruncated) continue;
+      if (classShape.ownerSymbolId === supertype.ownerSymbolId) continue;
+
+      // Skip when a declared `implements` already resolves to this
+      // supertype — declared takes precedence and we never duplicate.
+      const declared = store.typeRelationsForSymbolGet(classShape.ownerSymbolId);
+      const alreadyDeclared = declared.some(
+        (rel) =>
+          rel.relationKind === 'implements' &&
+          rel.resolvedTargetId === supertype.ownerSymbolId &&
+          (rel.confidence === undefined || rel.confidence === 'declared'),
+      );
+      if (alreadyDeclared) continue;
+
+      if (!classShapeSatisfies(classShape.members, requiredMembers)) continue;
+
+      const classSymbol = store.symbolGet(classShape.ownerSymbolId);
+      if (!classSymbol) continue;
+
+      const newRelation: TypeRelation = {
+        kind: 'TypeRelation',
+        symbolId: classShape.ownerSymbolId,
+        targetName: supertypeSymbol.name,
+        relationKind: 'implements',
+        byteRange: classShape.byteRange,
+        resolvedTargetId: supertype.ownerSymbolId,
+        confidence: 'structural-shape',
+      };
+
+      // Emit through the standard `filePut` path so all by-symbol /
+      // by-target / by-file indexes stay in sync. We piggyback on a
+      // synthetic `filePut` would be heavy; instead inject the
+      // relation directly via `relationInsertSynthetic`.
+      relationInsertSynthetic(store, classSymbol.file, newRelation);
+    }
+  }
+}
+
+/**
+ * Check whether a class's captured public members satisfy every
+ * required (non-optional) member of an interface. Used by
+ * {@link structuralShapeResolve}.
+ *
+ * Match rules per required member `m`:
+ *
+ * - There exists a class member `c` with `c.name === m.name` AND
+ *   `c.memberKind === m.memberKind` AND `c.isStatic === m.isStatic`.
+ * - If both `c` and `m` declare a `paramArity`, then
+ *   `c.paramArity >= m.paramArity` — the class may accept extra
+ *   optional parameters.
+ */
+function classShapeSatisfies(
+  classMembers: ReadonlyArray<MemberShapeEntry>,
+  requiredMembers: ReadonlyArray<MemberShapeEntry>,
+): boolean {
+  for (const required of requiredMembers) {
+    const match = classMembers.find(
+      (candidate) =>
+        candidate.name === required.name &&
+        candidate.memberKind === required.memberKind &&
+        candidate.isStatic === required.isStatic,
+    );
+    if (!match) return false;
+    if (required.paramArity !== undefined && match.paramArity !== undefined) {
+      if (match.paramArity < required.paramArity) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Inject a synthetic relation into the store as if it had been emitted
+ * by the per-file extractor. Used by the structural-shape resolver
+ * because that pass produces edges that don't map to a single file
+ * extraction (the relation depends on shapes from two files).
+ *
+ * The store's `filePut` path is the only public mutation surface, so we
+ * extend it via a private helper here instead of leaking another mutator
+ * to the public API. The relation is recorded on the class's owning
+ * file so `fileRemove` cleans it up correctly when the class file is
+ * re-indexed.
+ */
+function relationInsertSynthetic(
+  store: IndexStore,
+  ownerFile: string,
+  relation: TypeRelation,
+): void {
+  // Re-use `filePut` semantics by reading the file's existing delta and
+  // appending. We have no easy way to read everything back without
+  // duplicating index state, so use the dedicated package-private
+  // back door.
+  store.relationAddSynthetic(ownerFile, relation);
 }

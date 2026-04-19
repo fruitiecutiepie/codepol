@@ -146,6 +146,7 @@ export type {
   WorkspaceCallGraphEdgeConfidence,
   WorkspaceCallGraphEdgeKind,
   WorkspaceTypeHierarchyDirection,
+  WorkspaceTypeHierarchyEdgeConfidence,
   WorkspaceSymbolFlowDirection,
   WorkspaceSymbolFlowEdge,
   WorkspaceSymbolFlowResult,
@@ -641,6 +642,10 @@ export type {
   ImportBindingRelation,
   ExportsRelation,
   TypeRelation,
+  TypeRelationConfidence,
+  MemberShapeKind,
+  MemberShapeEntry,
+  MemberShapeRelation,
   SymbolFilter,
   IndexCapabilities,
   FlowNodeId,
@@ -651,6 +656,7 @@ export type {
 } from './index/indexTypes';
 
 export { ReferenceUsage, SymbolFlags } from './index/indexTypes';
+export { MEMBER_SHAPE_CAP_PER_TYPE } from './index/memberShapeConstants';
 // Module resolution
 export type { ModuleResolveOptions } from './index/moduleResolver';
 export {
@@ -729,6 +735,14 @@ export type {
 } from './index/typeAwareCallGraphSource';
 export type { TypeAwareCallGraphSourceRegistry } from './index/typeAwareCallGraphSourceRegistry';
 export { typeAwareCallGraphSourceRegistryCreate } from './index/typeAwareCallGraphSourceRegistry';
+
+// Type-aware type-hierarchy source seam (Phase 9.5 / Gap 3)
+export type {
+  TypeAwareTypeHierarchyEdge,
+  TypeAwareTypeHierarchySource,
+} from './index/typeAwareTypeHierarchySource';
+export type { TypeAwareTypeHierarchySourceRegistry } from './index/typeAwareTypeHierarchySourceRegistry';
+export { typeAwareTypeHierarchySourceRegistryCreate } from './index/typeAwareTypeHierarchySourceRegistry';
 
 // Symbol-flow relations (Phase 9.1 / Gap 1)
 export type {

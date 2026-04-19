@@ -10,6 +10,8 @@ import { configGet, configGetFromPath } from '@codepol/core';
 import type {
   WorkspaceImpactRadiusDirection,
   WorkspaceSymbolFlowDirection,
+  WorkspaceTypeHierarchyDirection,
+  WorkspaceTypeHierarchyEdgeConfidence,
 } from '@codepol/core';
 import { graphCyclesRun } from './graphCycles';
 import { graphDeadRun } from './graphDead';
@@ -21,6 +23,7 @@ import { graphExportRun } from './graphExport';
 import { graphFanInRun } from './graphFanIn';
 import { graphFanOutRun } from './graphFanOut';
 import { graphFlowRun } from './graphFlow';
+import { graphHierarchyRun } from './graphHierarchy';
 import { graphImpactRun } from './graphImpact';
 import { graphPathRun } from './graphPath';
 import { graphSnapshotRun } from './graphSnapshot';
@@ -401,6 +404,84 @@ const graphFlowCommand: CommandModule<
   },
 };
 
+const graphHierarchyCommand: CommandModule<
+  GraphCommonArgs,
+  GraphCommonArgs & {
+    symbolId: string;
+    direction: WorkspaceTypeHierarchyDirection;
+    depth?: number;
+    'include-structural': boolean;
+    'min-confidence'?: WorkspaceTypeHierarchyEdgeConfidence;
+    'require-type-aware': boolean;
+    format: string;
+  }
+> = {
+  command: 'hierarchy <symbolId>',
+  describe:
+    'Emit the symbol-level type hierarchy (declared, structural-shape, type-aware)',
+  builder: (yargs) =>
+    graphFormatOption(yargs)
+      .positional('symbolId', {
+        type: 'string',
+        demandOption: true,
+        describe: 'Stable id of the class/interface symbol to inspect',
+      })
+      .option('direction', {
+        type: 'string',
+        choices: ['supertypes', 'subtypes', 'both'] as const,
+        default: 'both' as WorkspaceTypeHierarchyDirection,
+        describe:
+          'supertypes = walk parents (extends/implements); subtypes = walk children; both = union',
+      })
+      .option('depth', {
+        type: 'number',
+        describe: 'Maximum hop distance (default: unbounded)',
+      })
+      .option('include-structural', {
+        type: 'boolean',
+        default: false,
+        describe:
+          'Include structural-shape edges from the cross-file member-shape comparison (Phase 9.4)',
+      })
+      .option('min-confidence', {
+        type: 'string',
+        choices: ['declared', 'structural-shape', 'type-aware'] as const,
+        describe:
+          'Filter edges by minimum confidence tier (defaults to "declared", which keeps every tier)',
+      })
+      .option('require-type-aware', {
+        type: 'boolean',
+        default: false,
+        describe:
+          'Exit non-zero when no TypeAwareTypeHierarchySource is registered for the language',
+      }) as unknown as Argv<
+      GraphCommonArgs & {
+        symbolId: string;
+        direction: WorkspaceTypeHierarchyDirection;
+        depth?: number;
+        'include-structural': boolean;
+        'min-confidence'?: WorkspaceTypeHierarchyEdgeConfidence;
+        'require-type-aware': boolean;
+        format: string;
+      }
+    >,
+  handler: async (args) => {
+    const resolved = await graphConfigResolve(args);
+    const exitCode = await graphHierarchyRun({
+      cwd: resolved.cwd,
+      configPath: resolved.configPath,
+      symbolId: args.symbolId,
+      direction: args.direction,
+      depth: args.depth,
+      includeStructural: args['include-structural'],
+      minConfidence: args['min-confidence'],
+      requireTypeAware: args['require-type-aware'],
+      format: args.format,
+    });
+    if (exitCode !== 0) process.exitCode = exitCode;
+  },
+};
+
 export const graphCommand: CommandModule<unknown, GraphCommonArgs> = {
   command: 'graph <subcommand>',
   describe: 'Run workspace dependency-graph queries',
@@ -416,6 +497,7 @@ export const graphCommand: CommandModule<unknown, GraphCommonArgs> = {
       .command(graphSnapshotCommand)
       .command(graphDiffCommand)
       .command(graphFlowCommand)
+      .command(graphHierarchyCommand)
       .demandCommand(1, 'Specify a graph subcommand')
       .strict(),
   handler: () => {

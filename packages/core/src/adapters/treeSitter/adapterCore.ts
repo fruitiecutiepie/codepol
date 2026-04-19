@@ -33,9 +33,11 @@ import type {
   ExportsRelation,
   TypeRelation,
   SymbolFlowRelation,
+  MemberShapeRelation,
 } from '../../index/indexTypes';
 import { ReferenceUsage, SymbolFlags } from '../../index/indexTypes';
 import { symbolFlowExtract } from './symbolFlowExtract';
+import { memberShapeExtract } from './memberShapeExtract';
 import type {
   LangConfig,
   FileIndexDelta,
@@ -1891,6 +1893,41 @@ function typeRelationsExtract(
 }
 
 /**
+ * Glue helper: compile the language pack's member-shape query (when
+ * present) and run {@link memberShapeExtract}. Mirrors the
+ * `symbolFlowRelationsExtract` shape so the wiring stays uniform.
+ *
+ * Phase 9.4 / Gap 3.
+ */
+function memberShapeRelationsExtract(
+  cfg: LangConfig,
+  tree: Parser.Tree,
+  file: string,
+  source: string,
+  symbols: SymbolRecord[],
+): MemberShapeRelation[] {
+  if (!cfg.queries.memberShape) return [];
+
+  let compiled: Parser.Query;
+  try {
+    compiled = cfg.language.query(cfg.queries.memberShape);
+  } catch {
+    // Grammar variant lacks one of the captured node types — skip
+    // extraction silently rather than failing the whole indexing pass.
+    return [];
+  }
+
+  const symbolsByName = symbolsByNameBuild(symbols);
+  return memberShapeExtract({
+    query: compiled,
+    rootNode: tree.rootNode,
+    source,
+    file,
+    symbolsByName,
+  });
+}
+
+/**
  * Glue helper: bridges adapterCore's file-local resolver to
  * `symbolFlowExtract`. Kept here (next to `callsExtract` /
  * `refsExtract`) so the extractor module stays free of
@@ -2065,6 +2102,22 @@ function indexDeltaFromTree(
   // Type relations (extends/implements)
   const typeRelations = typeRelationsExtract(cfg, tree, file, sourceText, allSymbols, diags);
   relations.push(...typeRelations);
+
+  // Member-shape relations (public-member shape per class / interface /
+  // type-alias-of-object). One job: surface a portable, opt-in
+  // structural-shape substrate so the cross-file pass can detect
+  // duck-typed implementers without language-server help. Skipped when
+  // the language pack does not provide a `memberShape` query. The
+  // cross-file structural-shape comparison runs over these relations
+  // in `crossFileResolve`.
+  const memberShapeRelations = memberShapeRelationsExtract(
+    cfg,
+    tree,
+    file,
+    sourceText,
+    allSymbols,
+  );
+  relations.push(...memberShapeRelations);
 
   // Symbol-flow relations (function-as-argument flow). One job: surface
   // higher-order data flow without inventing call-graph edges. Skipped

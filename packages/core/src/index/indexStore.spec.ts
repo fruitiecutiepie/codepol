@@ -6,6 +6,7 @@ import {
   type CallsRelation,
   type ImportBindingRelation,
   type ExportsRelation,
+  type MemberShapeRelation,
   type SymbolFlowRelation,
   type TypeRelation,
   type FlowGraph,
@@ -472,6 +473,176 @@ describe('IndexStore', () => {
       expect(store.typeRelationsForSymbolGet(sym.id)).toHaveLength(0);
       expect(store.typeRelationsByTargetNameGet('Qux')).toHaveLength(0);
       expect(store.typeRelationsInFileGet(file)).toHaveLength(0);
+    });
+  });
+
+  // ============================================================================
+  // Member-Shape Relation Tests (Phase 9.4 / Gap 3)
+  // ============================================================================
+
+  describe('MemberShape', () => {
+    function memberShapeFixtureCreate(
+      file: string,
+      ownerSymbolId = 'sym-owner',
+    ): {
+      file: string;
+      scope: ReturnType<typeof scopeRecordNew>;
+      owner: ReturnType<typeof symbolRecordNew>;
+      shape: MemberShapeRelation;
+    } {
+      const scope = scopeRecordNew(`scope-shape-${ownerSymbolId}`, file);
+      const owner = symbolRecordNew(ownerSymbolId, 'IThing', file, scope.id, 'interface');
+      const shape: MemberShapeRelation = {
+        kind: 'MemberShape',
+        ownerSymbolId: owner.id,
+        file,
+        byteRange: byteRangeGet(0, 80),
+        members: [
+          { name: 'doStuff', memberKind: 'method', paramArity: 1, isOptional: false, isStatic: false },
+          { name: 'value', memberKind: 'property', isOptional: false, isStatic: false },
+        ],
+        memberCountTruncated: false,
+      };
+      return { file, scope, owner, shape };
+    }
+
+    it('filePut / memberShapeForSymbolGet round-trip', () => {
+      const store = indexStoreNew();
+      const { file, scope, owner, shape } = memberShapeFixtureCreate('/src/shape1.ts');
+      store.filePut(fileIndexDeltaNew({
+        file,
+        symbols: [owner],
+        scopes: [scope],
+        relations: [shape],
+      }));
+
+      const stored = store.memberShapeForSymbolGet(owner.id);
+      expect(stored).toBeDefined();
+      expect(stored!.members).toHaveLength(2);
+      expect(stored!.memberCountTruncated).toBe(false);
+    });
+
+    it('memberShapesInFileGet returns shapes per file', () => {
+      const store = indexStoreNew();
+      const { file, scope, owner, shape } = memberShapeFixtureCreate('/src/shape2.ts');
+      store.filePut(fileIndexDeltaNew({
+        file,
+        symbols: [owner],
+        scopes: [scope],
+        relations: [shape],
+      }));
+
+      const shapes = store.memberShapesInFileGet(file);
+      expect(shapes).toHaveLength(1);
+      expect(shapes[0].ownerSymbolId).toBe(owner.id);
+    });
+
+    it('memberShapesAll iterates every owner shape', () => {
+      const store = indexStoreNew();
+      const fixA = memberShapeFixtureCreate('/src/shapeA.ts', 'sym-owner-a');
+      store.filePut(fileIndexDeltaNew({
+        file: fixA.file,
+        symbols: [fixA.owner],
+        scopes: [fixA.scope],
+        relations: [fixA.shape],
+      }));
+      const fixB = memberShapeFixtureCreate('/src/shapeB.ts', 'sym-owner-b');
+      store.filePut(fileIndexDeltaNew({
+        file: fixB.file,
+        symbols: [fixB.owner],
+        scopes: [fixB.scope],
+        relations: [fixB.shape],
+      }));
+
+      const all = store.memberShapesAll();
+      expect(all).toHaveLength(2);
+    });
+
+    it('fileRemove clears the shape and the by-file bucket', () => {
+      const store = indexStoreNew();
+      const { file, scope, owner, shape } = memberShapeFixtureCreate('/src/shape3.ts');
+      store.filePut(fileIndexDeltaNew({
+        file,
+        symbols: [owner],
+        scopes: [scope],
+        relations: [shape],
+      }));
+      expect(store.memberShapeForSymbolGet(owner.id)).toBeDefined();
+
+      store.fileRemove(file);
+
+      expect(store.memberShapeForSymbolGet(owner.id)).toBeUndefined();
+      expect(store.memberShapesInFileGet(file)).toHaveLength(0);
+    });
+
+    it('clear() empties member-shape indexes', () => {
+      const store = indexStoreNew();
+      const { file, scope, owner, shape } = memberShapeFixtureCreate('/src/shape4.ts');
+      store.filePut(fileIndexDeltaNew({
+        file,
+        symbols: [owner],
+        scopes: [scope],
+        relations: [shape],
+      }));
+
+      store.clear();
+
+      expect(store.memberShapeForSymbolGet(owner.id)).toBeUndefined();
+      expect(store.memberShapesInFileGet(file)).toHaveLength(0);
+      expect(store.memberShapesAll()).toHaveLength(0);
+    });
+
+    it('relationUpdate swaps the latest shape in place', () => {
+      const store = indexStoreNew();
+      const { file, scope, owner, shape } = memberShapeFixtureCreate('/src/shape5.ts');
+      store.filePut(fileIndexDeltaNew({
+        file,
+        symbols: [owner],
+        scopes: [scope],
+        relations: [shape],
+      }));
+
+      const updated: MemberShapeRelation = {
+        ...shape,
+        members: [
+          ...shape.members,
+          { name: 'newMember', memberKind: 'method', paramArity: 0, isOptional: true, isStatic: false },
+        ],
+      };
+      store.relationUpdate(shape, updated);
+
+      const stored = store.memberShapeForSymbolGet(owner.id);
+      expect(stored?.members).toHaveLength(3);
+    });
+
+    it('re-extracting the same owner replaces the prior shape (last write wins)', () => {
+      const store = indexStoreNew();
+      const { file, scope, owner, shape } = memberShapeFixtureCreate('/src/shape6.ts');
+      store.filePut(fileIndexDeltaNew({
+        file,
+        symbols: [owner],
+        scopes: [scope],
+        relations: [shape],
+      }));
+
+      // Re-extract the same file with a different shape for the same
+      // owner — the by-symbol index must point at the new shape.
+      const replacement: MemberShapeRelation = {
+        ...shape,
+        members: [
+          { name: 'onlyMember', memberKind: 'method', paramArity: 0, isOptional: false, isStatic: false },
+        ],
+      };
+      store.filePut(fileIndexDeltaNew({
+        file,
+        symbols: [owner],
+        scopes: [scope],
+        relations: [replacement],
+      }));
+
+      const stored = store.memberShapeForSymbolGet(owner.id);
+      expect(stored?.members).toHaveLength(1);
+      expect(stored?.members[0].name).toBe('onlyMember');
     });
   });
 

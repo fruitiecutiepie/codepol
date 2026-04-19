@@ -84,6 +84,7 @@ import {
   type WorkspaceImpactRadiusDirection,
   type WorkspaceCallGraphDirection,
   type WorkspaceTypeHierarchyDirection,
+  type WorkspaceTypeHierarchyEdgeConfidence,
   type WorkspaceDiagnostic,
   type WorkspaceDiagnosticSeverity,
   type WorkspaceFeatureStatus,
@@ -126,8 +127,12 @@ import {
   type TypeAwareCallGraphSource,
   type TypeAwareCallGraphSourceRegistry,
   type TypeAwareCallKind,
+  type TypeAwareTypeHierarchyEdge,
+  type TypeAwareTypeHierarchySource,
+  type TypeAwareTypeHierarchySourceRegistry,
   type BiomeProviderConfig,
   typeAwareCallGraphSourceRegistryCreate,
+  typeAwareTypeHierarchySourceRegistryCreate,
 } from '@codepol/core';
 import { biomeCheckAsync, biomeFixAsync } from '@codepol/plugin-biome';
 import { eslintPluginCreate } from '@codepol/plugin-eslint';
@@ -514,6 +519,13 @@ export type WorkspaceServiceEngineOptions = {
    * instances pass it explicitly.
    */
   typeAwareCallGraphSourceRegistry?: TypeAwareCallGraphSourceRegistry;
+  /**
+   * Type-aware type-hierarchy source registry (Phase 9.5 / Gap 3).
+   * Optional — when omitted, the engine creates a fresh empty
+   * registry. Independent of `typeAwareCallGraphSourceRegistry`;
+   * registering one does not require or affect the other.
+   */
+  typeAwareTypeHierarchySourceRegistry?: TypeAwareTypeHierarchySourceRegistry;
 };
 
 type WorkspaceSessionState = WorkspaceDocumentsState &
@@ -742,6 +754,12 @@ export type WorkspaceService = {
     symbolId: string;
     direction: WorkspaceTypeHierarchyDirection;
     depth?: number;
+    /** Phase 9.4 / Gap 3 — opt-in shape match. Default false. */
+    includeStructural?: boolean;
+    /** Phase 9.4 / 9.5 — minimum confidence tier. Default 'declared'. */
+    minConfidence?: WorkspaceTypeHierarchyEdgeConfidence;
+    /** Phase 9.5 — fail when no type-aware source is registered. */
+    requireTypeAware?: boolean;
     requestId?: string;
     analysisGeneration?: number;
     signal?: AbortSignal;
@@ -5090,19 +5108,137 @@ function workspaceFlowOwnerSymbolGet(
   return undefined;
 }
 
-function workspaceTypeHierarchyResultCreate(
+/**
+ * Structured error raised when `queryTypeHierarchy` is invoked with
+ * `requireTypeAware: true` but no `TypeAwareTypeHierarchySource` is
+ * registered for the seed symbol's language. Mirrors
+ * {@link TypeAwareCallGraphSourceMissingError} (Phase 9.2).
+ */
+export type TypeAwareTypeHierarchySourceMissingError = Error & {
+  code: 'type-aware-source-missing';
+  languageId: string;
+};
+
+function typeAwareTypeHierarchySourceMissingErrorCreate(
+  languageId: string,
+): TypeAwareTypeHierarchySourceMissingError {
+  const error = new Error(
+    `No TypeAwareTypeHierarchySource registered for language "${languageId}"`,
+  ) as TypeAwareTypeHierarchySourceMissingError;
+  error.code = 'type-aware-source-missing';
+  error.languageId = languageId;
+  return error;
+}
+
+/**
+ * Pull the type-aware type-hierarchy edge set for a single seed
+ * symbol, applying the shared timeout/cancellation budget. Returns
+ * `undefined` on no source method, source error, source timeout, or
+ * signal abort — every non-success path collapses to "fall back to the
+ * structural answer".
+ */
+async function workspaceTypeHierarchyTypeAwareEdgesGet(input: {
+  source: TypeAwareTypeHierarchySource;
+  symbolId: SymbolId;
+  direction: WorkspaceTypeHierarchyDirection;
+  signal: AbortSignal | undefined;
+}): Promise<TypeAwareTypeHierarchyEdge[] | undefined> {
+  const wantsImplementers =
+    input.direction === 'subtypes' || input.direction === 'both';
+  const wantsSupertypes =
+    input.direction === 'supertypes' || input.direction === 'both';
+
+  const implementersOp =
+    wantsImplementers && input.source.typeAwareImplementersGet
+      ? workspaceTypeAwareSourceCallWithBudget(
+          () => input.source.typeAwareImplementersGet!(input.symbolId),
+          // Pinned to the same value Phase 9.2 uses for the call-graph
+          // source so the two surfaces share one knob.
+          WORKSPACE_TYPE_AWARE_CALL_GRAPH_SOURCE_TIMEOUT_MS,
+          input.signal,
+        )
+      : Promise.resolve<TypeAwareTypeHierarchyEdge[] | undefined>(undefined);
+  const supertypesOp =
+    wantsSupertypes && input.source.typeAwareSupertypesGet
+      ? workspaceTypeAwareSourceCallWithBudget(
+          () => input.source.typeAwareSupertypesGet!(input.symbolId),
+          WORKSPACE_TYPE_AWARE_CALL_GRAPH_SOURCE_TIMEOUT_MS,
+          input.signal,
+        )
+      : Promise.resolve<TypeAwareTypeHierarchyEdge[] | undefined>(undefined);
+
+  const [implementersResult, supertypesResult] = await Promise.all([
+    implementersOp,
+    supertypesOp,
+  ]);
+
+  if (implementersResult === undefined && supertypesResult === undefined) {
+    return undefined;
+  }
+  return [...(implementersResult ?? []), ...(supertypesResult ?? [])];
+}
+
+/**
+ * Numeric ordering for {@link WorkspaceTypeHierarchyEdgeConfidence} so
+ * `minConfidence` filtering can compare tiers.
+ */
+const WORKSPACE_TYPE_HIERARCHY_CONFIDENCE_RANK: Record<
+  WorkspaceTypeHierarchyEdgeConfidence,
+  number
+> = {
+  declared: 0,
+  'structural-shape': 1,
+  'type-aware': 2,
+};
+
+/**
+ * Pick the confidence label for the merged result, given whether the
+ * edge appeared in the structural set, the structural-shape set, and
+ * the type-aware set. Implements the merge table in Phase 9.5 / Step 3:
+ *
+ * - structural + type-aware → `'type-aware'`
+ * - shape + type-aware     → `'type-aware'`
+ * - type-aware only        → `'type-aware'`
+ * - structural only        → `'declared'`
+ * - shape only             → `'structural-shape'`
+ */
+function workspaceTypeHierarchyEdgeConfidencePick(input: {
+  inDeclared: boolean;
+  inStructuralShape: boolean;
+  inTypeAware: boolean;
+}): WorkspaceTypeHierarchyEdgeConfidence {
+  if (input.inTypeAware) return 'type-aware';
+  if (input.inDeclared) return 'declared';
+  return 'structural-shape';
+}
+
+async function workspaceTypeHierarchyResultCreate(
   workspace: WorkspaceContextState,
   index: ProjectIndex,
+  registry: TypeAwareTypeHierarchySourceRegistry,
   input: {
     symbolId: string;
     direction: WorkspaceTypeHierarchyDirection;
     depth?: number;
+    includeStructural?: boolean;
+    minConfidence?: WorkspaceTypeHierarchyEdgeConfidence;
+    requireTypeAware?: boolean;
+    signal?: AbortSignal;
   },
-): WorkspaceDependencyGraphResult {
+): Promise<WorkspaceDependencyGraphResult> {
+  const includeStructural = input.includeStructural === true;
+
+  // Build the structural answer. Default-mode `subTypesGet` /
+  // `typeRelationsGet` are byte-identical to the pre-Phase-9.4 result
+  // when `includeStructural` is false (the queries default to
+  // `confidence: 'declared'`).
   const view = {
     superTypesGet(symbolId: string): string[] {
       const ids = new Set<string>();
-      for (const relation of index.typeRelationsGet(symbolId)) {
+      const relations = includeStructural
+        ? index.typeRelationsGet(symbolId, { confidence: 'all' })
+        : index.typeRelationsGet(symbolId);
+      for (const relation of relations) {
         if (relation.resolvedTargetId === undefined) continue;
         ids.add(relation.resolvedTargetId);
       }
@@ -5110,24 +5246,154 @@ function workspaceTypeHierarchyResultCreate(
     },
     subTypesGet(symbolId: string): string[] {
       const ids = new Set<string>();
-      for (const relation of index.subTypesGet(symbolId)) {
+      const relations = includeStructural
+        ? index.subTypesGet(symbolId, { confidence: 'all' })
+        : index.subTypesGet(symbolId);
+      for (const relation of relations) {
         if (relation.resolvedTargetId !== symbolId) continue;
         ids.add(relation.symbolId);
       }
       return [...ids].sort();
     },
   };
-  const result = symbolTypeHierarchyCompute(view, {
+  const structural = symbolTypeHierarchyCompute(view, {
     symbolId: input.symbolId,
     direction: input.direction,
     depth: input.depth,
   });
-  return workspaceSymbolGraphResultCreate({
-    workspace,
-    index,
-    symbols: result.symbols,
-    edges: result.edges,
-  });
+
+  // Determine the per-edge confidence label by inspecting the
+  // underlying relation's `confidence` field. The structural BFS
+  // already produced edges oriented `from = subtype`, `to = supertype`;
+  // we re-walk them and tag each one.
+  const declaredKeys = new Set<string>();
+  const structuralShapeKeys = new Set<string>();
+  for (const edge of structural.edges) {
+    const declaredRelations = index.typeRelationsGet(edge.from);
+    if (
+      declaredRelations.some(
+        (rel) =>
+          rel.resolvedTargetId === edge.to &&
+          (rel.confidence === undefined || rel.confidence === 'declared'),
+      )
+    ) {
+      declaredKeys.add(`${edge.from}\u0000${edge.to}`);
+    }
+    if (includeStructural) {
+      const allRelations = index.typeRelationsGet(edge.from, { confidence: 'all' });
+      if (
+        allRelations.some(
+          (rel) =>
+            rel.resolvedTargetId === edge.to &&
+            rel.confidence === 'structural-shape',
+        )
+      ) {
+        structuralShapeKeys.add(`${edge.from}\u0000${edge.to}`);
+      }
+    }
+  }
+
+  // Pull the type-aware overlay (if any).
+  const languageId = workspaceSymbolLanguageIdGet(index, input.symbolId);
+  const source = languageId
+    ? registry.typeAwareTypeHierarchySourceGet(languageId)
+    : undefined;
+
+  if (!source) {
+    if (input.requireTypeAware) {
+      throw typeAwareTypeHierarchySourceMissingErrorCreate(languageId ?? 'unknown');
+    }
+  }
+
+  let typeAwareEdges: TypeAwareTypeHierarchyEdge[] | undefined;
+  if (source) {
+    typeAwareEdges = await workspaceTypeHierarchyTypeAwareEdgesGet({
+      source,
+      symbolId: input.symbolId,
+      direction: input.direction,
+      signal: input.signal,
+    });
+  }
+
+  // Merge: keep the structural symbols set (the BFS already enforced
+  // depth + visited-set) and rebuild the edge list with confidence
+  // labels. Type-aware edges may add new edges (and therefore new
+  // symbols); add those too.
+  const symbolsSet = new Set<string>(structural.symbols);
+  type MergedEdge = {
+    from: string;
+    to: string;
+    confidence: WorkspaceTypeHierarchyEdgeConfidence;
+  };
+  const mergedEdgesByKey = new Map<string, MergedEdge>();
+
+  for (const edge of structural.edges) {
+    const key = `${edge.from}\u0000${edge.to}`;
+    const inDeclared = declaredKeys.has(key);
+    const inStructuralShape = structuralShapeKeys.has(key);
+    mergedEdgesByKey.set(key, {
+      from: edge.from,
+      to: edge.to,
+      confidence: workspaceTypeHierarchyEdgeConfidencePick({
+        inDeclared,
+        inStructuralShape,
+        inTypeAware: false,
+      }),
+    });
+  }
+
+  if (typeAwareEdges) {
+    for (const edge of typeAwareEdges) {
+      const key = `${edge.subtypeSymbolId}\u0000${edge.supertypeSymbolId}`;
+      symbolsSet.add(edge.subtypeSymbolId);
+      symbolsSet.add(edge.supertypeSymbolId);
+      mergedEdgesByKey.set(key, {
+        from: edge.subtypeSymbolId,
+        to: edge.supertypeSymbolId,
+        confidence: 'type-aware',
+      });
+    }
+  }
+
+  // Apply `minConfidence` filter (default `'declared'` keeps all
+  // tiers since `'declared'` is the lowest rank).
+  const minConfidence = input.minConfidence ?? 'declared';
+  const minRank = WORKSPACE_TYPE_HIERARCHY_CONFIDENCE_RANK[minConfidence];
+
+  const filteredEdges: WorkspaceDependencyGraphEdge[] = [];
+  const sortedKeys = [...mergedEdgesByKey.keys()].sort();
+  for (const key of sortedKeys) {
+    const edge = mergedEdgesByKey.get(key)!;
+    if (WORKSPACE_TYPE_HIERARCHY_CONFIDENCE_RANK[edge.confidence] < minRank) continue;
+    filteredEdges.push({
+      fromUri: workspaceSymbolUriCreate(edge.from),
+      toUri: workspaceSymbolUriCreate(edge.to),
+      typeRelationConfidence: edge.confidence,
+    });
+  }
+
+  // Default callers (no `includeStructural`, no source registered)
+  // get an output that matches the legacy shape — strip the optional
+  // `typeRelationConfidence` field so the JSON is byte-identical.
+  if (!includeStructural && !typeAwareEdges) {
+    return workspaceSymbolGraphResultCreate({
+      workspace,
+      index,
+      symbols: structural.symbols,
+      edges: structural.edges,
+    });
+  }
+
+  const symbolsList = [...symbolsSet];
+  const nodes = symbolsList.map((symbolId) =>
+    workspaceSymbolGraphNodeBuild(workspace, index, symbolId),
+  );
+  return {
+    nodes,
+    edges: filteredEdges,
+    entryPoints: [],
+    cycles: [],
+  };
 }
 
 // ============================================================================
@@ -8978,6 +9244,20 @@ export class WorkspaceServiceEngine implements WorkspaceService {
    * Phase 7 baseline.
    */
   private readonly typeAwareCallGraphSourceRegistry: TypeAwareCallGraphSourceRegistry;
+  /**
+   * Type-aware type-hierarchy source registry (Phase 9.5 / Gap 3).
+   *
+   * Constructed once per engine instance. The registry is consulted
+   * from `workspaceTypeHierarchyResultCreate` to upgrade structural
+   * type-hierarchy answers when a host has registered a binding around
+   * a language server. When no binding is registered for a language,
+   * the merge is a no-op and the result equals the structural-only
+   * answer (with optional shape match when `includeStructural: true`).
+   *
+   * Independent of `typeAwareCallGraphSourceRegistry`; registering
+   * one does not require or affect the other.
+   */
+  private readonly typeAwareTypeHierarchySourceRegistry: TypeAwareTypeHierarchySourceRegistry;
   // Per-workspace pending debounced persist. Keyed by `workspaceId` because
   // every attached client session sees the same in-memory workspace state.
   private readonly persistTimers = new Map<string, PersistTimerEntry>();
@@ -8990,6 +9270,9 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     this.typeAwareCallGraphSourceRegistry =
       options.typeAwareCallGraphSourceRegistry
         ?? typeAwareCallGraphSourceRegistryCreate();
+    this.typeAwareTypeHierarchySourceRegistry =
+      options.typeAwareTypeHierarchySourceRegistry
+        ?? typeAwareTypeHierarchySourceRegistryCreate();
     this.backgroundTaskSchedule =
       options.backgroundTaskSchedule ??
       ((task) => {
@@ -9011,6 +9294,22 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     source: TypeAwareCallGraphSource,
   ): void {
     this.typeAwareCallGraphSourceRegistry.typeAwareCallGraphSourceRegister(
+      languageId,
+      source,
+    );
+  }
+
+  /**
+   * Register a {@link TypeAwareTypeHierarchySource} for a language
+   * (Phase 9.5 / Gap 3). Hosts call this once during startup to
+   * upgrade subsequent `queryTypeHierarchy` answers. Independent of
+   * the call-graph registry.
+   */
+  typeAwareTypeHierarchySourceRegister(
+    languageId: string,
+    source: TypeAwareTypeHierarchySource,
+  ): void {
+    this.typeAwareTypeHierarchySourceRegistry.typeAwareTypeHierarchySourceRegister(
       languageId,
       source,
     );
@@ -10142,6 +10441,9 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     symbolId: string;
     direction: WorkspaceTypeHierarchyDirection;
     depth?: number;
+    includeStructural?: boolean;
+    minConfidence?: WorkspaceTypeHierarchyEdgeConfidence;
+    requireTypeAware?: boolean;
     requestId?: string;
     analysisGeneration?: number;
     signal?: AbortSignal;
@@ -10156,11 +10458,20 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       signal: input.signal,
     });
     workspaceAnalysisGenerationValidate(workspaceSession, input);
-    return workspaceTypeHierarchyResultCreate(workspace, index, {
-      symbolId: input.symbolId,
-      direction: input.direction,
-      depth: input.depth,
-    });
+    return await workspaceTypeHierarchyResultCreate(
+      workspace,
+      index,
+      this.typeAwareTypeHierarchySourceRegistry,
+      {
+        symbolId: input.symbolId,
+        direction: input.direction,
+        depth: input.depth,
+        includeStructural: input.includeStructural,
+        minConfidence: input.minConfidence,
+        requireTypeAware: input.requireTypeAware,
+        signal: input.signal,
+      },
+    );
   }
 
   async queryDependencyDiff(input: {

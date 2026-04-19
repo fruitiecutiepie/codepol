@@ -18,6 +18,7 @@ import type {
   ImportBindingRelation,
   ExportsRelation,
   TypeRelation,
+  MemberShapeRelation,
   SymbolFlowRelation,
   FlowGraph,
 } from './indexTypes';
@@ -206,21 +207,60 @@ export type ProjectIndex = {
 
   /**
    * Get type relations for a symbol (what it extends/implements).
-   * Returns empty array if symbol has no type relations.
+   *
+   * Default behavior (no `opts` or `confidence === 'declared'`):
+   * returns only relations whose `confidence` is undefined or
+   * `'declared'`. Byte-identical to the pre-Phase-9.4 result for every
+   * fixture.
+   *
+   * With `opts.confidence === 'all'`: also returns relations whose
+   * `confidence === 'structural-shape'` (produced by the cross-file
+   * structural-shape comparison pass added in Phase 9.4).
+   *
+   * Returns empty array if the symbol has no type relations.
    */
-  typeRelationsGet(symbolId: SymbolId): TypeRelation[];
+  typeRelationsGet(
+    symbolId: SymbolId,
+    opts?: { confidence?: 'declared' | 'all' },
+  ): TypeRelation[];
 
   /**
    * Get symbols that extend/implement a given symbol (reverse lookup).
    * Uses the symbol's name to find children, then filters by resolvedTargetId
    * when available for precision.
+   *
+   * Default behavior (no `opts` or `confidence === 'declared'`):
+   * returns only relations whose `confidence` is undefined or
+   * `'declared'`. Byte-identical to the pre-Phase-9.4 result for every
+   * fixture.
+   *
+   * With `opts.confidence === 'all'`: also returns relations whose
+   * `confidence === 'structural-shape'`. Sorted lexicographically by
+   * `(symbolId, resolvedTargetId)` for determinism.
    */
-  subTypesGet(symbolId: SymbolId): TypeRelation[];
+  subTypesGet(
+    symbolId: SymbolId,
+    opts?: { confidence?: 'declared' | 'all' },
+  ): TypeRelation[];
 
   /**
    * Get all type relations in a file.
    */
   typeRelationsInFileGet(file: string): TypeRelation[];
+
+  /**
+   * Get the captured public-member shape of a class / interface /
+   * type-alias-of-object (Phase 9.4 / Gap 3). Returns `undefined`
+   * when the language pack does not extract member shapes for the
+   * symbol's language, or the symbol is not a shape owner.
+   */
+  memberShapeForSymbolGet(symbolId: SymbolId): MemberShapeRelation | undefined;
+
+  /**
+   * Get every member shape whose owner declaration lives in `file`.
+   * Returns empty array when the file has no shape-bearing owners.
+   */
+  memberShapesInFileGet(file: string): MemberShapeRelation[];
 
   // ============================================================================
   // Symbol-Flow Queries (Phase 9.1: higher-order argument flow)
@@ -608,25 +648,84 @@ export function projectIndexCreate(
     },
 
     // Type relation queries
-    typeRelationsGet(symbolId: SymbolId): TypeRelation[] {
-      return store.typeRelationsForSymbolGet(symbolId);
+    typeRelationsGet(
+      symbolId: SymbolId,
+      opts?: { confidence?: 'declared' | 'all' },
+    ): TypeRelation[] {
+      const all = store.typeRelationsForSymbolGet(symbolId);
+      // Default and explicit `'declared'`: drop structural-shape
+      // relations so today's output is preserved byte-identically.
+      const wantsAll = opts?.confidence === 'all';
+      if (wantsAll) return all;
+      return all.filter(
+        (rel) => rel.confidence === undefined || rel.confidence === 'declared',
+      );
     },
 
-    subTypesGet(symbolId: SymbolId): TypeRelation[] {
+    subTypesGet(
+      symbolId: SymbolId,
+      opts?: { confidence?: 'declared' | 'all' },
+    ): TypeRelation[] {
       const symbol = store.symbolGet(symbolId);
       if (!symbol) return [];
 
-      // Look up by target name
-      const byName = store.typeRelationsByTargetNameGet(symbol.name);
-      // When resolvedTargetId is available, filter for exact match;
-      // otherwise include all name-based matches
-      return byName.filter(
-        rel => rel.resolvedTargetId === symbolId || rel.resolvedTargetId === undefined
-      );
+      const wantsAll = opts?.confidence === 'all';
+
+      // Declared subtypes: name-keyed lookup, filtered to those that
+      // either resolved to this exact symbol or did not resolve at all
+      // (the historical heuristic preserved verbatim — changing it
+      // would break callers who pass no `opts`).
+      const declared = store
+        .typeRelationsByTargetNameGet(symbol.name)
+        .filter(
+          (rel) => rel.resolvedTargetId === symbolId || rel.resolvedTargetId === undefined,
+        )
+        .filter(
+          (rel) => rel.confidence === undefined || rel.confidence === 'declared',
+        );
+
+      if (!wantsAll) return declared;
+
+      // Structural-shape subtypes are produced by `crossFileResolve`
+      // and stored on the per-symbol bucket of the implementer (the
+      // class), keyed by `targetName === interface.name`. Look them up
+      // through the same name index, but accept only relations that
+      // resolved to *this* interface symbol (the cross-file pass
+      // always sets `resolvedTargetId` for shape-match output).
+      const structural = store
+        .typeRelationsByTargetNameGet(symbol.name)
+        .filter(
+          (rel) => rel.confidence === 'structural-shape' && rel.resolvedTargetId === symbolId,
+        );
+
+      const merged = [...declared, ...structural];
+      // Determinism: sort lexicographically by `(symbolId, resolvedTargetId)`
+      // so consumers iterating with `confidence: 'all'` see byte-identical
+      // output across runs.
+      merged.sort((left, right) => {
+        if (left.symbolId !== right.symbolId) {
+          return left.symbolId < right.symbolId ? -1 : 1;
+        }
+        const leftTarget = left.resolvedTargetId ?? '';
+        const rightTarget = right.resolvedTargetId ?? '';
+        if (leftTarget !== rightTarget) {
+          return leftTarget < rightTarget ? -1 : 1;
+        }
+        return 0;
+      });
+      return merged;
     },
 
     typeRelationsInFileGet(file: string): TypeRelation[] {
       return store.typeRelationsInFileGet(file);
+    },
+
+    memberShapeForSymbolGet(symbolId: SymbolId): MemberShapeRelation | undefined {
+      return store.memberShapeForSymbolGet(symbolId);
+    },
+
+    memberShapesInFileGet(file: string): MemberShapeRelation[] {
+      return store.memberShapesInFileGet(file);
     },
 
     // Symbol-flow queries (Phase 9.1)

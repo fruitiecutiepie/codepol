@@ -147,14 +147,17 @@ Default behavior (no source registered) is byte-identical to before
 
 Extends/implements extraction, querying, and cross-file resolution.
 
-- [x] `TypeRelation` type in `indexTypes.ts` — captures `extends` and `implements` relationships with `symbolId`, `targetName`, `relationKind`, `byteRange`, and optional `resolvedTargetId`
+- [x] `TypeRelation` type in `indexTypes.ts` — captures `extends` and `implements` relationships with `symbolId`, `targetName`, `relationKind`, `byteRange`, optional `resolvedTargetId`, and (Phase 9.4) optional `confidence: 'declared' | 'structural-shape'`
 - [x] Tree-sitter query (`typeRelations.ts`) — patterns for class extends, class implements, abstract class extends/implements, interface extends
 - [x] `typeRelationsExtract()` in `adapterCore.ts` — extracts type relations from query captures, resolves file-local targets
 - [x] `IndexStore` indexes — `typeRelationsBySymbol`, `typeRelationsByTargetName`, `typeRelationsByFile` with query methods and proper cleanup in `filePut`/`fileRemove`/`clear`
 - [x] `IndexStore.relationUpdate` TypeRelation branch — updates all three TypeRelation indexes when a relation is modified
-- [x] `ProjectIndex` API — `typeRelationsGet(symbolId)`, `subTypesGet(symbolId)`, `typeRelationsInFileGet(file)`
+- [x] `ProjectIndex` API — `typeRelationsGet(symbolId, opts?)`, `subTypesGet(symbolId, opts?)`, `typeRelationsInFileGet(file)`. The new `opts` parameter defaults to `{ confidence: 'declared' }` — byte-identical to the pre-Phase-9.4 result; pass `{ confidence: 'all' }` to include structural-shape relations.
 - [x] Cross-file `resolvedTargetId` resolution — Step 6 in `crossFileResolve` (`indexBuilder.ts`) follows import bindings to resolve `resolvedTargetId` to the actual exported symbol from the source module. Works with re-export chains and aliased imports.
+- [x] structural-shape resolution: implemented (opt-in via `subTypesGet({ confidence: 'all' })`) — Step 8 in `crossFileResolve` (`structuralShapeResolve` in `indexBuilder.ts`) compares public-member shapes (`MemberShapeRelation`) and emits cross-file `'implements'` edges with `confidence: 'structural-shape'`. Honors `MEMBER_SHAPE_CAP_PER_TYPE`; never duplicates declared `implements` edges; idempotent across incremental rebuilds.
+- [x] type-aware resolution: delegated to `TypeAwareTypeHierarchySource` when registered. Per-language seam in `index/typeAwareTypeHierarchySource.ts` + registry in `index/typeAwareTypeHierarchySourceRegistry.ts`. The workspace merge in `workspaceTypeHierarchyResultCreate` overlays type-aware edges onto the structural answer, tagging overlap as `'type-aware'`. No source registered ⇒ result equals the structural-only answer (with optional shape match when `includeStructural: true`).
 - [x] Unit tests (5 IndexStore + 3 ProjectIndex) and integration tests (15 in `tests/index.type-relations.spec.ts`)
+- [x] Phase 9.4 / 9.5 tests: `tests/index.member-shape-extraction.spec.ts` (TS extractor matrix), `tests/index.structural-shape-resolution.spec.ts` (cross-file shape comparison), `tests/workspace-service.type-hierarchy-structural.spec.ts` (workspace integration), `tests/workspace-service.type-hierarchy-type-aware.spec.ts` (type-aware merge), `packages/core/src/index/typeAwareTypeHierarchySourceRegistry.spec.ts` (registry round-trip), `packages/typescript-language-bridge/src/typeScriptTypeHierarchySource.spec.ts` (binding contract tests)
 
 ---
 

@@ -86,6 +86,12 @@ type QueryPack = {
    * (Phase 9.1 / Gap 1.)
    */
   symbolFlow?: string;
+  /**
+   * Member-shape patterns (public members of class / interface /
+   * type-alias-of-object). Optional — languages without an extractor
+   * simply skip the extraction step. (Phase 9.4 / Gap 3.)
+   */
+  memberShape?: string;
 };
 
 // ============================================================================

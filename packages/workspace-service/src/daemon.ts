@@ -39,6 +39,7 @@ import type {
   WorkspaceSymbolLookupResult,
   WorkspaceSymbolResult,
   WorkspaceTypeHierarchyDirection,
+  WorkspaceTypeHierarchyEdgeConfidence,
 } from '@codepol/core';
 import { diagnosticsRuntimeGet } from '@codepol/core';
 import type {
@@ -494,6 +495,12 @@ type WorkspaceDaemonQueryTypeHierarchyRequest = WorkspaceDaemonMessage &
   symbolId: string;
   direction: WorkspaceTypeHierarchyDirection;
   depth?: number;
+  /** Phase 9.4 / Gap 3 — opt-in shape match. */
+  includeStructural?: boolean;
+  /** Phase 9.4 / 9.5 — minimum confidence tier. */
+  minConfidence?: WorkspaceTypeHierarchyEdgeConfidence;
+  /** Phase 9.5 — fail when no type-aware source is registered. */
+  requireTypeAware?: boolean;
   analysisGeneration?: number;
 };
 
@@ -4094,6 +4101,9 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
     symbolId: string;
     direction: WorkspaceTypeHierarchyDirection;
     depth?: number;
+    includeStructural?: boolean;
+    minConfidence?: WorkspaceTypeHierarchyEdgeConfidence;
+    requireTypeAware?: boolean;
     requestId?: string;
     analysisGeneration?: number;
     signal?: AbortSignal;
@@ -4111,6 +4121,9 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
       symbolId: input.symbolId,
       direction: input.direction,
       depth: input.depth,
+      includeStructural: input.includeStructural,
+      minConfidence: input.minConfidence,
+      requireTypeAware: input.requireTypeAware,
       analysisGeneration: input.analysisGeneration,
     }, {
       signal: input.signal,

@@ -4,3 +4,5 @@ export type {
   PythonCallGraphSourceOptions,
 } from './pythonCallGraphSource';
 export { pythonCallGraphSourceCreate } from './pythonCallGraphSource';
+export type { PythonTypeHierarchySourceOptions } from './pythonTypeHierarchySource';
+export { pythonTypeHierarchySourceCreate } from './pythonTypeHierarchySource';
