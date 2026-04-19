@@ -4393,9 +4393,43 @@ function workspaceFileAggregateCyclomaticComplexityGet(
   return counted > 0 ? aggregate : undefined;
 }
 
+/**
+ * Count the number of lines in a file as it appears in the active
+ * overlay (when present) or on disk. Returns `undefined` when source
+ * cannot be read so a missing file still yields a graph node.
+ *
+ * Counts newline-terminated lines plus a trailing partial line when
+ * the source does not end in `\n`. An empty source produces 0.
+ */
+function workspaceFileLineCountGet(
+  state: WorkspaceDocumentsState,
+  filePath: string,
+): number | undefined {
+  let source: string;
+  try {
+    source = workspaceSourceGet(state, filePath);
+  } catch {
+    return undefined;
+  }
+  if (source.length === 0) {
+    return 0;
+  }
+  let count = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    if (source.charCodeAt(index) === 10) {
+      count += 1;
+    }
+  }
+  if (source.charCodeAt(source.length - 1) !== 10) {
+    count += 1;
+  }
+  return count;
+}
+
 function workspaceDependencyGraphResultCreate(
   workspace: WorkspaceContextState,
   index: ProjectIndex,
+  state: WorkspaceDocumentsState,
 ): WorkspaceDependencyGraphResult {
   const files = [...index.filesGet()].sort();
   const cycles = index.moduleCyclesGet();
@@ -4416,6 +4450,7 @@ function workspaceDependencyGraphResultCreate(
     const importerCount = index.moduleImportersGet(filePath).length;
     const importeeCount = index.moduleImporteesGet(filePath).length;
     const symbolCount = index.symbolsInFileGet(filePath).length;
+    const loc = workspaceFileLineCountGet(state, filePath);
     const aggregateCyclomaticComplexity =
       workspaceFileAggregateCyclomaticComplexityGet(index, filePath);
     const metrics: WorkspaceDependencyGraphNodeMetrics = {
@@ -4424,6 +4459,7 @@ function workspaceDependencyGraphResultCreate(
       symbolCount,
       isEntryPoint: entryPointSet.has(filePath),
       isInCycle: cycleMemberSet.has(filePath),
+      ...(loc !== undefined ? { loc } : {}),
       ...(aggregateCyclomaticComplexity !== undefined
         ? { aggregateCyclomaticComplexity }
         : {}),
@@ -10485,7 +10521,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       signal: input.signal,
     });
     workspaceAnalysisGenerationValidate(workspaceSession, input);
-    return workspaceDependencyGraphResultCreate(workspace, index);
+    return workspaceDependencyGraphResultCreate(workspace, index, workspaceSession);
   }
 
   async queryImpactRadius(input: {
@@ -10696,7 +10732,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     });
     workspaceAnalysisGenerationValidate(workspaceSession, input);
 
-    const current = workspaceDependencyGraphResultCreate(workspace, index);
+    const current = workspaceDependencyGraphResultCreate(workspace, index, workspaceSession);
 
     let baseline: WorkspaceDependencyGraphResult;
     let baselineAnalysisGeneration: number | undefined;

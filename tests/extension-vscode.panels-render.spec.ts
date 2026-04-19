@@ -98,6 +98,98 @@ describe('extension-vscode panel rendering', () => {
     expect(html).toContain('graph-node focus');
   });
 
+  it('renders enriched dependency-graph nodes and edges with tooltips, count line, edge kind, and cross-package styling', () => {
+    const html = codepolPanelHtmlRender({
+      nonce: 'nonce-enriched',
+      model: {
+        kind: 'dependencyGraph',
+        title: 'Codepol: Dependency Graph',
+        data: {
+          summaryCard: null,
+          graph: {
+            mode: 'workspace',
+            width: 480,
+            height: 240,
+            emptyMessage: 'No dependency graph data is available for this workspace.',
+            edges: [
+              {
+                id: 'edge-enriched',
+                fromUri: 'file:///workspace/apps/web/src/app.ts',
+                toUri: 'file:///workspace/packages/lib/src/index.ts',
+                x1: 120,
+                y1: 60,
+                x2: 260,
+                y2: 60,
+                isFocus: false,
+                kind: 'dynamic',
+                bindingCount: 2,
+                crossesPackageBoundary: true,
+                tooltip: 'dynamic · 2 bindings · cross-package',
+              },
+            ],
+            nodes: [
+              {
+                uri: 'file:///workspace/apps/web/src/app.ts',
+                label: 'app.ts',
+                detail: 'apps/web/src/app.ts · 0 importers · 1 importee',
+                x: 32,
+                y: 24,
+                width: 180,
+                height: 72,
+                isFocus: false,
+                isEntryPoint: true,
+                isCycleMember: false,
+                packageName: '@acme/web',
+                countsLine: '0 importers · 1 importee · 4 symbols · 32 LOC · cyc 5',
+                tooltip:
+                  '0 importers · 1 importee · 4 symbols · 32 LOC · cyc 5 · @acme/web',
+              },
+              {
+                uri: 'file:///workspace/packages/lib/src/index.ts',
+                label: 'index.ts',
+                detail: 'packages/lib/src/index.ts · 3 importers · 1 importee',
+                x: 260,
+                y: 24,
+                width: 180,
+                height: 72,
+                isFocus: false,
+                isEntryPoint: false,
+                isCycleMember: false,
+                packageName: '@acme/lib',
+                countsLine: '3 importers · 1 importee · 12 symbols · 84 LOC · cyc 7',
+                tooltip:
+                  '3 importers · 1 importee · 12 symbols · 84 LOC · cyc 7 · @acme/lib',
+              },
+            ],
+          },
+          controls: {
+            filterChips: [],
+            edgeKindChips: [],
+            layoutOptions: [],
+            blastRadiusUri: null,
+            blastRadiusReachableCount: 0,
+          },
+          filters: {},
+          layoutMode: 'layered',
+        },
+      },
+    });
+
+    expect(html).toContain(
+      '<title>3 importers · 1 importee · 12 symbols · 84 LOC · cyc 7 · @acme/lib</title>',
+    );
+    expect(html).toContain('<title>dynamic · 2 bindings · cross-package</title>');
+    expect(html).toContain('data-edge-kind="dynamic"');
+    expect(html).toContain('data-binding-count="2"');
+    expect(html).toContain('data-package="@acme/lib"');
+    expect(html).toContain('data-package="@acme/web"');
+    expect(html).toMatch(/class="graph-edge[^"]*\bkind-dynamic\b[^"]*\bcross-package\b/);
+    expect(html).toContain('class="graph-counts"');
+    expect(html).toContain('.graph-edge.kind-dynamic');
+    expect(html).toContain('.graph-edge.cross-package');
+    expect(html).toContain('.graph-edge.cross-layer');
+  });
+
   it('renders architecture links as a focused graph with grouped evidence', () => {
     const html = codepolPanelHtmlRender({
       nonce: 'nonce-2',

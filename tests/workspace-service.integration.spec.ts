@@ -2748,6 +2748,7 @@ targets = ["src"]
           importerCount: 0,
           importeeCount: 1,
           symbolCount: 2,
+          loc: 2,
           isEntryPoint: true,
           isInCycle: false,
         },
@@ -2759,6 +2760,7 @@ targets = ["src"]
           importerCount: 1,
           importeeCount: 0,
           symbolCount: 1,
+          loc: 1,
           isEntryPoint: false,
           isInCycle: false,
         },
@@ -6796,6 +6798,60 @@ fix = "never"
       );
       expect(dynamicEdge?.kind).toBe('dynamic');
       expect(dynamicEdge?.bindingCount).toBeGreaterThanOrEqual(1);
+    });
+
+    it('populates metrics.loc from disk and reflects overlay text on subsequent reads', async () => {
+      const workspaceRoot = tempWorkspaceCreate('codepol-dep-graph-loc-');
+      createdDirs.push(workspaceRoot);
+      fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+      const configPath = path.join(workspaceRoot, 'codepol.toml');
+      fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
+
+      const targetPath = path.join(workspaceRoot, 'src', 'target.ts');
+      const callerPath = path.join(workspaceRoot, 'src', 'caller.ts');
+      // Three newline-terminated lines on disk: loc must be 3.
+      fs.writeFileSync(targetPath, 'export const a = 1;\nexport const b = 2;\nexport const c = 3;\n', 'utf8');
+      fs.writeFileSync(callerPath, "import { a } from './target';\nexport const use = a;\n", 'utf8');
+
+      const service = workspaceServiceCreate();
+      const { clientSessionId, workspaceId } = await clientWorkspaceAttach(service, {
+        rootPath: workspaceRoot,
+        configPath,
+      });
+
+      const targetUri = workspacePathToUri(targetPath);
+      const callerUri = workspacePathToUri(callerPath);
+
+      const initial = await service.queryDependencyGraph({
+        clientSessionId,
+        workspaceId,
+      });
+      const initialTargetNode = initial.nodes.find((node) => node.uri === targetUri);
+      const initialCallerNode = initial.nodes.find((node) => node.uri === callerUri);
+      expect(initialTargetNode?.metrics?.loc).toBe(3);
+      expect(initialCallerNode?.metrics?.loc).toBe(2);
+
+      // Overlay grows the file from 3 lines to 5 (last line lacks a
+      // trailing newline so the partial-line case is exercised too).
+      await service.openOverlay({
+        clientSessionId,
+        workspaceId,
+        uri: targetUri,
+        version: 1,
+        text:
+          'export const a = 1;\n' +
+          'export const b = 2;\n' +
+          'export const c = 3;\n' +
+          'export const d = 4;\n' +
+          'export const e = 5;',
+      });
+
+      const overlayed = await service.queryDependencyGraph({
+        clientSessionId,
+        workspaceId,
+      });
+      const overlayedTargetNode = overlayed.nodes.find((node) => node.uri === targetUri);
+      expect(overlayedTargetNode?.metrics?.loc).toBe(5);
     });
   });
 

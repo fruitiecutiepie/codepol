@@ -467,33 +467,59 @@ function graphSvgHtml(graph: DependencyGraphCanvasViewModel): string {
       </marker>
     </defs>
     ${graph.edges
-      .map(
-        (edge) => `<line
-          class="graph-edge${edge.isFocus ? ' focus' : ''}${edge.isDimmed ? ' dimmed' : ''}"
-          x1="${edge.x1}"
-          y1="${edge.y1}"
-          x2="${edge.x2}"
-          y2="${edge.y2}"
-          marker-end="url(#arrow)"
-        ></line>`,
-      )
+      .map((edge) => {
+        const kindClass = edge.kind ? ` kind-${edge.kind}` : '';
+        const crossPackageClass = edge.crossesPackageBoundary === true ? ' cross-package' : '';
+        const crossLayerClass = edge.crossesLayerBoundary === true ? ' cross-layer' : '';
+        const dataEdgeKind = edge.kind
+          ? ` data-edge-kind="${htmlEscape(edge.kind)}"`
+          : '';
+        const dataBindingCount =
+          edge.bindingCount !== undefined
+            ? ` data-binding-count="${edge.bindingCount}"`
+            : '';
+        const titleHtml = edge.tooltip
+          ? `<title>${htmlEscape(edge.tooltip)}</title>`
+          : '';
+        return `<g class="graph-edge-group">${titleHtml}<line
+            class="graph-edge${edge.isFocus ? ' focus' : ''}${edge.isDimmed ? ' dimmed' : ''}${kindClass}${crossPackageClass}${crossLayerClass}"
+            x1="${edge.x1}"
+            y1="${edge.y1}"
+            x2="${edge.x2}"
+            y2="${edge.y2}"
+            marker-end="url(#arrow)"${dataEdgeKind}${dataBindingCount}
+          ></line></g>`;
+      })
       .join('')}
     ${graph.nodes
-      .map(
-        (node) => `<g
+      .map((node) => {
+        const dataPackage = node.packageName
+          ? ` data-package="${htmlEscape(node.packageName)}"`
+          : '';
+        const dataLayer = node.layer
+          ? ` data-layer="${htmlEscape(node.layer)}"`
+          : '';
+        const titleHtml = node.tooltip
+          ? `<title>${htmlEscape(node.tooltip)}</title>`
+          : '';
+        const countsTspan = node.countsLine
+          ? `<tspan x="${node.x + 16}" dy="16" class="graph-counts">${htmlEscape(node.countsLine)}</tspan>`
+          : '';
+        return `<g
           class="graph-node${node.isFocus ? ' focus' : ''}${node.isEntryPoint ? ' entry' : ''}${node.isCycleMember ? ' cycle' : ''}${node.isDimmed ? ' dimmed' : ''}"
           data-open-uri="${htmlEscape(node.uri)}"
           data-open-line="0"
           data-open-character="0"
-          data-blast-radius-uri="${htmlEscape(node.uri)}"
-        >
+          data-blast-radius-uri="${htmlEscape(node.uri)}"${dataPackage}${dataLayer}
+        >${titleHtml}
           <rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" rx="14" ry="14"></rect>
           <text x="${node.x + 16}" y="${node.y + 28}">
             <tspan x="${node.x + 16}" dy="0">${htmlEscape(node.label)}</tspan>
             <tspan x="${node.x + 16}" dy="22" class="graph-detail">${htmlEscape(node.detail)}</tspan>
+            ${countsTspan}
           </text>
-        </g>`,
-      )
+        </g>`;
+      })
       .join('')}
   </svg>`;
 }
@@ -1350,6 +1376,32 @@ export function codepolPanelHtmlRender(input: {
         .graph-detail {
           fill: var(--vscode-descriptionForeground);
           font: 400 11px var(--vscode-font-family);
+        }
+        .graph-counts {
+          fill: var(--vscode-descriptionForeground);
+          font: 400 11px var(--vscode-font-family);
+          opacity: 0.85;
+        }
+        .graph-edge.kind-dynamic {
+          stroke-dasharray: 6 4;
+        }
+        .graph-edge.kind-side_effect {
+          stroke-dasharray: 2 4;
+          opacity: 0.7;
+        }
+        .graph-edge.kind-cjs {
+          stroke-dasharray: 4 2 1 2;
+        }
+        .graph-edge.kind-type_only {
+          stroke-opacity: 0.55;
+        }
+        .graph-edge.cross-package {
+          stroke: var(--vscode-charts-orange, currentColor);
+          stroke-width: 2.5;
+        }
+        .graph-edge.cross-layer {
+          stroke: var(--vscode-charts-purple, currentColor);
+          stroke-width: 2.75;
         }
         body[data-mode="micro"] .hover-card[data-micro-hide-details="true"] dl,
         body[data-mode="micro"] .hover-card[data-micro-hide-details="true"] .subtitle,

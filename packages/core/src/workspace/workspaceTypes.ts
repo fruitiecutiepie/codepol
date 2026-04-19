@@ -555,6 +555,12 @@ export type WorkspaceDependencyGraphNodeMetrics = {
   /** Number of declared symbols in this file. */
   symbolCount: number;
   /**
+   * Newline-terminated line count of the file as it appears in the active
+   * overlay (or on disk if no overlay). Omitted when source cannot be
+   * read.
+   */
+  loc?: number;
+  /**
    * Sum of cyclomatic complexity across all function/method symbols in the
    * file. Omitted when no CFGs are available for any symbol in the file.
    */

@@ -3,6 +3,7 @@ import type {
   WorkspaceArchitectureSummaryResult,
   WorkspaceDependencyGraphEdge,
   WorkspaceDependencyGraphEdgeKind,
+  WorkspaceDependencyGraphNode,
   WorkspaceDependencyGraphResult,
   WorkspaceLintRuleDetailsResult,
   WorkspacePrepareRenameResult,
@@ -132,6 +133,27 @@ export type DependencyGraphNodeViewModel = {
   isEntryPoint: boolean;
   isCycleMember: boolean;
   isDimmed?: boolean;
+  /**
+   * Phase 1 enrichment: per-node weight surfaces populated when the
+   * underlying `WorkspaceDependencyGraphNode.metrics` is present.
+   * Absent when the workspace service did not emit metrics for this
+   * node, so older test fixtures that omit metrics keep working.
+   */
+  importerCount?: number;
+  importeeCount?: number;
+  symbolCount?: number;
+  loc?: number;
+  aggregateCyclomaticComplexity?: number;
+  packageName?: string;
+  layer?: string;
+  /**
+   * Pre-formatted summary string the renderer drops into a SVG `<title>`.
+   * Built once by the view model so the renderer never has to know
+   * about pluralization or field ordering. Absent when the node has no
+   * metrics and no package/layer to show.
+   */
+  countsLine?: string;
+  tooltip?: string;
 };
 
 export type DependencyGraphEdgeViewModel = {
@@ -144,6 +166,20 @@ export type DependencyGraphEdgeViewModel = {
   y2: number;
   isFocus: boolean;
   isDimmed?: boolean;
+  /**
+   * Phase 1 enrichment: dominant import style and binding count, plus
+   * cross-boundary flags. All optional so existing fixtures keep
+   * working.
+   */
+  kind?: WorkspaceDependencyGraphEdgeKind;
+  bindingCount?: number;
+  crossesPackageBoundary?: boolean;
+  crossesLayerBoundary?: boolean;
+  /**
+   * Pre-formatted edge tooltip (e.g. `"static · 3 bindings ·
+   * cross-package"`). Absent when the edge has no enrichment.
+   */
+  tooltip?: string;
 };
 
 export type DependencyGraphCanvasViewModel = {
@@ -455,10 +491,13 @@ export function workspaceSummaryCardViewModelCreate(
   return card;
 }
 
-type GraphLayoutNodeInput = {
-  uri: string;
-  workspaceRelativePath: string;
-};
+/**
+ * Layout-time view of a graph node. Aliased to the wire shape so the
+ * three layout helpers can pass the original node through to
+ * `graphNodeMetaCreate` and `dependencyGraphCanvasFromPositionsCreate`
+ * without re-threading per-node metadata maps.
+ */
+type GraphLayoutNodeInput = WorkspaceDependencyGraphNode;
 
 const GRAPH_NODE_WIDTH = 220;
 const GRAPH_NODE_HEIGHT = 72;
@@ -471,14 +510,153 @@ function graphNodeSort(left: GraphLayoutNodeInput, right: GraphLayoutNodeInput):
   return left.workspaceRelativePath.localeCompare(right.workspaceRelativePath);
 }
 
+function nodeCountsLineFormat(
+  metrics: WorkspaceDependencyGraphNode['metrics'],
+): string | undefined {
+  if (!metrics) return undefined;
+  const parts: string[] = [
+    `${metrics.importerCount} ${metrics.importerCount === 1 ? 'importer' : 'importers'}`,
+    `${metrics.importeeCount} ${metrics.importeeCount === 1 ? 'importee' : 'importees'}`,
+    `${metrics.symbolCount} ${metrics.symbolCount === 1 ? 'symbol' : 'symbols'}`,
+  ];
+  if (metrics.loc !== undefined) {
+    parts.push(`${metrics.loc} LOC`);
+  }
+  if (metrics.aggregateCyclomaticComplexity !== undefined) {
+    parts.push(`cyc ${metrics.aggregateCyclomaticComplexity}`);
+  }
+  return parts.join(' · ');
+}
+
+/**
+ * Build the SVG `<title>` text for a graph node. Returns `undefined`
+ * when the node carries no enrichment so the renderer can omit the
+ * `<title>` element entirely.
+ */
+export function dependencyGraphNodeTooltipFormat(
+  node: WorkspaceDependencyGraphNode,
+): string | undefined {
+  const metricsLine = nodeCountsLineFormat(node.metrics);
+  const trailing: string[] = [];
+  if (node.packageName) trailing.push(node.packageName);
+  if (node.layer) trailing.push(`layer: ${node.layer}`);
+  if (!metricsLine && trailing.length === 0) {
+    return undefined;
+  }
+  if (!metricsLine) {
+    return trailing.join(' · ');
+  }
+  return trailing.length > 0
+    ? `${metricsLine} · ${trailing.join(' · ')}`
+    : metricsLine;
+}
+
+/**
+ * Build the SVG `<title>` text for an edge. Returns `undefined` when
+ * the edge has no kind, binding count, and no cross-boundary flags so
+ * back-compat fixtures still render today's bare edges.
+ */
+export function dependencyGraphEdgeTooltipFormat(
+  edge: WorkspaceDependencyGraphEdge,
+): string | undefined {
+  const parts: string[] = [];
+  if (edge.kind) {
+    parts.push(edge.kind);
+  }
+  if (edge.bindingCount !== undefined) {
+    parts.push(`${edge.bindingCount} ${edge.bindingCount === 1 ? 'binding' : 'bindings'}`);
+  }
+  if (edge.crossesPackageBoundary === true) {
+    parts.push('cross-package');
+  }
+  if (edge.crossesLayerBoundary === true) {
+    parts.push('cross-layer');
+  }
+  if (parts.length === 0) {
+    return undefined;
+  }
+  if (!edge.kind) {
+    parts.unshift('import');
+  }
+  return parts.join(' · ');
+}
+
 function graphNodeMetaCreate(node: GraphLayoutNodeInput): {
   label: string;
   detail: string;
+  countsLine?: string;
+  tooltip?: string;
 } {
-  return {
+  const countsLine = nodeCountsLineFormat(node.metrics);
+  const tooltip = dependencyGraphNodeTooltipFormat(node);
+  // Keep `detail` stable when no metrics are present so existing
+  // fixtures (which omit metrics entirely) keep their assertions valid.
+  // When metrics are present, append a short importer / importee
+  // suffix so the detail line carries some weight at a glance even
+  // without relying on the SVG `<title>` tooltip.
+  const detailSuffix =
+    node.metrics !== undefined
+      ? ` · ${node.metrics.importerCount} ${node.metrics.importerCount === 1 ? 'importer' : 'importers'} · ${node.metrics.importeeCount} ${node.metrics.importeeCount === 1 ? 'importee' : 'importees'}`
+      : '';
+  const result: {
+    label: string;
+    detail: string;
+    countsLine?: string;
+    tooltip?: string;
+  } = {
     label: path.basename(node.workspaceRelativePath),
-    detail: node.workspaceRelativePath,
+    detail: `${node.workspaceRelativePath}${detailSuffix}`,
   };
+  if (countsLine !== undefined) {
+    result.countsLine = countsLine;
+  }
+  if (tooltip !== undefined) {
+    result.tooltip = tooltip;
+  }
+  return result;
+}
+
+function nodeEnrichmentFieldsCreate(
+  node: GraphLayoutNodeInput,
+): Pick<
+  DependencyGraphNodeViewModel,
+  | 'importerCount'
+  | 'importeeCount'
+  | 'symbolCount'
+  | 'loc'
+  | 'aggregateCyclomaticComplexity'
+  | 'packageName'
+  | 'layer'
+> {
+  const enrichment: Pick<
+    DependencyGraphNodeViewModel,
+    | 'importerCount'
+    | 'importeeCount'
+    | 'symbolCount'
+    | 'loc'
+    | 'aggregateCyclomaticComplexity'
+    | 'packageName'
+    | 'layer'
+  > = {};
+  if (node.metrics) {
+    enrichment.importerCount = node.metrics.importerCount;
+    enrichment.importeeCount = node.metrics.importeeCount;
+    enrichment.symbolCount = node.metrics.symbolCount;
+    if (node.metrics.loc !== undefined) {
+      enrichment.loc = node.metrics.loc;
+    }
+    if (node.metrics.aggregateCyclomaticComplexity !== undefined) {
+      enrichment.aggregateCyclomaticComplexity =
+        node.metrics.aggregateCyclomaticComplexity;
+    }
+  }
+  if (node.packageName !== undefined) {
+    enrichment.packageName = node.packageName;
+  }
+  if (node.layer !== undefined) {
+    enrichment.layer = node.layer;
+  }
+  return enrichment;
 }
 
 function dependencyGraphSetsCreate(graph: WorkspaceDependencyGraphResult): {
@@ -498,13 +676,7 @@ function dependencyGraphNodesByUriCreate(
     graph.nodes
       .slice()
       .sort(graphNodeSort)
-      .map((node) => [
-        node.uri,
-        {
-          uri: node.uri,
-          workspaceRelativePath: node.workspaceRelativePath,
-        },
-      ]),
+      .map((node) => [node.uri, node]),
   );
 }
 
@@ -768,11 +940,12 @@ function dependencyGraphCanvasFromPositionsCreate(input: {
     ]),
   );
   const sortedEdges = input.graph.edges.slice().sort(dependencyGraphEdgeSort);
-  const edges = sortedEdges
+  const edges: DependencyGraphEdgeViewModel[] = sortedEdges
     .filter((edge) => positions.has(edge.fromUri) && positions.has(edge.toUri))
     .map((edge, index) => {
       const from = positions.get(edge.fromUri)!;
       const to = positions.get(edge.toUri)!;
+      const tooltip = dependencyGraphEdgeTooltipFormat(edge);
       return {
         id: `edge-${index}-${edge.fromUri}-${edge.toUri}`,
         fromUri: edge.fromUri,
@@ -784,6 +957,17 @@ function dependencyGraphCanvasFromPositionsCreate(input: {
         isFocus:
           input.focusUri !== undefined &&
           (edge.fromUri === input.focusUri || edge.toUri === input.focusUri),
+        ...(edge.kind !== undefined ? { kind: edge.kind } : {}),
+        ...(edge.bindingCount !== undefined
+          ? { bindingCount: edge.bindingCount }
+          : {}),
+        ...(edge.crossesPackageBoundary !== undefined
+          ? { crossesPackageBoundary: edge.crossesPackageBoundary }
+          : {}),
+        ...(edge.crossesLayerBoundary !== undefined
+          ? { crossesLayerBoundary: edge.crossesLayerBoundary }
+          : {}),
+        ...(tooltip !== undefined ? { tooltip } : {}),
       };
     });
 
@@ -836,7 +1020,9 @@ function dependencyGraphWorkspaceCanvasViewModelCreate(input: {
   const nodes: DependencyGraphNodeViewModel[] = [];
 
   layerIndices.forEach((layer, columnIndex) => {
-    const layerNodes = (layerEntries.get(layer) ?? []).slice().sort(graphNodeSort);
+    const layerNodes: GraphLayoutNodeInput[] = (layerEntries.get(layer) ?? [])
+      .slice()
+      .sort(graphNodeSort);
     layerNodes.forEach((node, rowIndex) => {
       const meta = graphNodeMetaCreate(node);
       nodes.push({
@@ -850,6 +1036,9 @@ function dependencyGraphWorkspaceCanvasViewModelCreate(input: {
         isFocus: input.focusUri === node.uri,
         isEntryPoint: membership.entryPoints.has(node.uri),
         isCycleMember: membership.cycleMembers.has(node.uri),
+        ...nodeEnrichmentFieldsCreate(node),
+        ...(meta.countsLine !== undefined ? { countsLine: meta.countsLine } : {}),
+        ...(meta.tooltip !== undefined ? { tooltip: meta.tooltip } : {}),
       });
     });
   });
@@ -898,6 +1087,9 @@ function dependencyGraphForceCanvasViewModelCreate(input: {
       isFocus: input.focusUri === node.uri,
       isEntryPoint: membership.entryPoints.has(node.uri),
       isCycleMember: membership.cycleMembers.has(node.uri),
+      ...nodeEnrichmentFieldsCreate(node),
+      ...(meta.countsLine !== undefined ? { countsLine: meta.countsLine } : {}),
+      ...(meta.tooltip !== undefined ? { tooltip: meta.tooltip } : {}),
     };
   });
 
@@ -1009,6 +1201,9 @@ function dependencyGraphFocusCanvasViewModelCreate(input: {
         isFocus: node.uri === input.focusUri,
         isEntryPoint: membership.entryPoints.has(node.uri),
         isCycleMember: membership.cycleMembers.has(node.uri),
+        ...nodeEnrichmentFieldsCreate(node),
+        ...(meta.countsLine !== undefined ? { countsLine: meta.countsLine } : {}),
+        ...(meta.tooltip !== undefined ? { tooltip: meta.tooltip } : {}),
       };
     });
 
@@ -1024,6 +1219,9 @@ function dependencyGraphFocusCanvasViewModelCreate(input: {
     isFocus: true,
     isEntryPoint: membership.entryPoints.has(focusNode.uri),
     isCycleMember: membership.cycleMembers.has(focusNode.uri),
+    ...nodeEnrichmentFieldsCreate(focusNode),
+    ...(meta.countsLine !== undefined ? { countsLine: meta.countsLine } : {}),
+    ...(meta.tooltip !== undefined ? { tooltip: meta.tooltip } : {}),
   };
   const nodes = [
     ...placeColumn(incoming, 0),

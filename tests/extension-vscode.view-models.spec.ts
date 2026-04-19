@@ -472,6 +472,118 @@ describe('extension-vscode view model mapping', () => {
     ]);
   });
 
+  it('enriches dependency-graph view models with metrics, package, edge kind, and tooltip strings', () => {
+    const enrichedGraph = {
+      nodes: [
+        {
+          uri: 'file:///workspace/apps/web/src/app.ts',
+          workspaceRelativePath: 'apps/web/src/app.ts',
+          packageName: '@acme/web',
+          metrics: {
+            importerCount: 0,
+            importeeCount: 1,
+            symbolCount: 4,
+            loc: 32,
+            aggregateCyclomaticComplexity: 5,
+            isEntryPoint: true,
+            isInCycle: false,
+          },
+        },
+        {
+          uri: 'file:///workspace/packages/lib/src/index.ts',
+          workspaceRelativePath: 'packages/lib/src/index.ts',
+          packageName: '@acme/lib',
+          metrics: {
+            importerCount: 3,
+            importeeCount: 1,
+            symbolCount: 12,
+            loc: 84,
+            aggregateCyclomaticComplexity: 7,
+            isEntryPoint: false,
+            isInCycle: false,
+          },
+        },
+      ],
+      edges: [
+        {
+          fromUri: 'file:///workspace/apps/web/src/app.ts',
+          toUri: 'file:///workspace/packages/lib/src/index.ts',
+          kind: 'dynamic' as const,
+          bindingCount: 2,
+          crossesPackageBoundary: true,
+        },
+      ],
+      entryPoints: ['file:///workspace/apps/web/src/app.ts'],
+      cycles: [],
+    };
+
+    const panel = dependencyGraphPanelViewModelCreate({
+      graph: enrichedGraph,
+      summary: null,
+    });
+
+    const libNode = panel.graph.nodes.find(
+      (node) => node.uri === 'file:///workspace/packages/lib/src/index.ts',
+    );
+    expect(libNode).toBeDefined();
+    expect(libNode).toMatchObject({
+      importerCount: 3,
+      importeeCount: 1,
+      symbolCount: 12,
+      loc: 84,
+      aggregateCyclomaticComplexity: 7,
+      packageName: '@acme/lib',
+      detail: 'packages/lib/src/index.ts · 3 importers · 1 importee',
+      countsLine: '3 importers · 1 importee · 12 symbols · 84 LOC · cyc 7',
+      tooltip: '3 importers · 1 importee · 12 symbols · 84 LOC · cyc 7 · @acme/lib',
+    });
+
+    const appNode = panel.graph.nodes.find(
+      (node) => node.uri === 'file:///workspace/apps/web/src/app.ts',
+    );
+    expect(appNode).toMatchObject({
+      packageName: '@acme/web',
+      detail: 'apps/web/src/app.ts · 0 importers · 1 importee',
+    });
+
+    expect(panel.graph.edges).toHaveLength(1);
+    expect(panel.graph.edges[0]).toMatchObject({
+      kind: 'dynamic',
+      bindingCount: 2,
+      crossesPackageBoundary: true,
+      tooltip: 'dynamic · 2 bindings · cross-package',
+    });
+    expect(panel.graph.edges[0].crossesLayerBoundary).toBeUndefined();
+  });
+
+  it('leaves dependency-graph enrichment fields undefined when metrics absent', () => {
+    const panel = dependencyGraphPanelViewModelCreate({
+      graph: dependencyGraphResult,
+      summary: null,
+    });
+    for (const node of panel.graph.nodes) {
+      expect(node.importerCount).toBeUndefined();
+      expect(node.importeeCount).toBeUndefined();
+      expect(node.symbolCount).toBeUndefined();
+      expect(node.loc).toBeUndefined();
+      expect(node.aggregateCyclomaticComplexity).toBeUndefined();
+      expect(node.packageName).toBeUndefined();
+      expect(node.layer).toBeUndefined();
+      expect(node.tooltip).toBeUndefined();
+      expect(node.countsLine).toBeUndefined();
+      // Detail line stays equal to the workspaceRelativePath when no metrics
+      // are present so older fixtures keep their assertions valid.
+      expect(node.detail).toBe(node.detail.split(' · ')[0]);
+    }
+    for (const edge of panel.graph.edges) {
+      expect(edge.kind).toBeUndefined();
+      expect(edge.bindingCount).toBeUndefined();
+      expect(edge.crossesPackageBoundary).toBeUndefined();
+      expect(edge.crossesLayerBoundary).toBeUndefined();
+      expect(edge.tooltip).toBeUndefined();
+    }
+  });
+
   it('maps rename preview payloads into grouped UI models', () => {
     expect(
       renamePreviewPanelViewModelCreate({
