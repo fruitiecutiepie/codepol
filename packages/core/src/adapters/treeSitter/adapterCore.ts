@@ -32,8 +32,10 @@ import type {
   ImportBindingRelation,
   ExportsRelation,
   TypeRelation,
+  SymbolFlowRelation,
 } from '../../index/indexTypes';
 import { ReferenceUsage, SymbolFlags } from '../../index/indexTypes';
+import { symbolFlowExtract } from './symbolFlowExtract';
 import type {
   LangConfig,
   FileIndexDelta,
@@ -1889,6 +1891,43 @@ function typeRelationsExtract(
 }
 
 /**
+ * Glue helper: bridges adapterCore's file-local resolver to
+ * `symbolFlowExtract`. Kept here (next to `callsExtract` /
+ * `refsExtract`) so the extractor module stays free of
+ * adapter-internal helpers.
+ */
+function symbolFlowRelationsExtract(
+  cfg: LangConfig,
+  tree: Parser.Tree,
+  file: string,
+  source: string,
+  scopes: ScopeRecord[],
+  symbols: SymbolRecord[],
+): SymbolFlowRelation[] {
+  if (!cfg.queries.symbolFlow) return [];
+
+  let compiled: Parser.Query;
+  try {
+    compiled = cfg.language.query(cfg.queries.symbolFlow);
+  } catch {
+    // Grammar variant lacks one of the captured node types — skip
+    // extraction silently rather than failing the whole indexing pass.
+    return [];
+  }
+
+  const symbolsByName = symbolsByNameBuild(symbols);
+  return symbolFlowExtract({
+    query: compiled,
+    rootNode: tree.rootNode,
+    source,
+    file,
+    scopes,
+    symbolsByName,
+    resolveLocal: (name, refNode) => resolveLocal(symbolsByName, name, refNode, scopes),
+  });
+}
+
+/**
  * Index a file using Tree-sitter and return the delta.
  *
  * @param cfg - Language configuration
@@ -2026,6 +2065,19 @@ function indexDeltaFromTree(
   // Type relations (extends/implements)
   const typeRelations = typeRelationsExtract(cfg, tree, file, sourceText, allSymbols, diags);
   relations.push(...typeRelations);
+
+  // Symbol-flow relations (function-as-argument flow). One job: surface
+  // higher-order data flow without inventing call-graph edges. Skipped
+  // when the language pack does not provide a `symbolFlow` query.
+  const symbolFlowRelations = symbolFlowRelationsExtract(
+    cfg,
+    tree,
+    file,
+    sourceText,
+    scopes,
+    allSymbols,
+  );
+  relations.push(...symbolFlowRelations);
 
   // Control flow graphs (per function scope)
   const cfgs = cfgsExtractFromTree(tree, file, scopes);

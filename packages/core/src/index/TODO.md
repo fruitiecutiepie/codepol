@@ -107,6 +107,40 @@ Per-function CFG construction, storage, querying, cyclomatic complexity, and all
 - [x] Unit tests (5 IndexStore + 3 ProjectIndex) and integration tests (37 in `tests/index.cfg.spec.ts`)
 - [x] Ternary expressions within CFG — `ternaryExpressionFind` recursively scans statement subtrees for `ternary_expression` nodes; `ternaryProcess` models branch(condition) → true/false paths → merge, with `ternaryBranchProcess` handling nested ternaries recursively via `incomingEdgeLabel` propagation
 
+### 7. Symbol-Flow Relations (Phase 9.1 / Gap 1)
+**Status**: Implemented (TypeScript only; other languages no-op until they ship a `symbolFlow` query)
+
+Tracks "function-as-argument" flow as a *separate* edge stream from the
+call graph so `callersGet` / `calleesGet` stay honest about what the
+source code actually expresses.
+
+- [x] `SymbolFlowRelation` type in `indexTypes.ts` — `flowKind: 'argument' | 'return' | 'assignment' | 'storage'` (MVP emits only `'argument'`); other variants are reserved for the next phase
+- [x] Tree-sitter query (`languages/typescript/queries/symbolFlow.ts`) — captures bare-identifier arguments only; inline arrow / `function () {}` literals are out of scope for the MVP
+- [x] `symbolFlowExtract` in `adapters/treeSitter/symbolFlowExtract.ts` — one job: walk captures, resolve via the same `resolveLocal` pipeline `refsExtract` uses, emit relations
+- [x] `IndexStore` indexes — `symbolFlowsByFlowingSymbol`, `symbolFlowsByReceivingCallSymbol`, `symbolFlowsByFile` with put/remove/clear/`relationUpdate` parity to the existing `typeRelationsBy*` pattern
+- [x] `ProjectIndex` API — `symbolFlowsForSymbolGet`, `symbolFlowsForReceiverGet`, `symbolFlowsInFileGet`
+- [x] Workspace contract — `querySymbolFlow({ symbolId, direction: 'outgoing' | 'incoming' })` → `WorkspaceSymbolFlowResult`; LSP method `codepol/symbolFlow`; CLI `codepol graph flow <symbolId>`
+- [x] `IndexCapabilities.symbolFlow` flag — `true` when the index has at least one language adapter that emits `SymbolFlowRelation` (today: TypeScript / TSX)
+- [x] Tests: `packages/core/src/index/indexStore.spec.ts` (round-trip + `relationUpdate`), `tests/index.symbol-flow-extraction.spec.ts` (extraction matrix), `tests/workspace-service.symbol-flow.spec.ts` (engine integration), `tests/e2e.cli.graph.spec.ts` (CLI happy-path)
+
+### 8. Type-Aware Call Graph Source (Phase 9.2 / Gap 1)
+**Status**: Implemented — interface + registry + workspace merge; binding lives in `@codepol/typescript-language-bridge`
+
+Per-language seam the workspace consults to upgrade `queryCallGraph`
+results when a host registers a binding around a language server.
+Default behavior (no source registered) is byte-identical to before
+— the merge is purely additive.
+
+- [x] `TypeAwareCallGraphSource` interface in `index/typeAwareCallGraphSource.ts` — `typeAwareCallersGet?` / `typeAwareCalleesGet?` returning `TypeAwareCallEdge[]` with `callKind: 'direct' | 'dynamic-dispatch' | 'higher-order'`
+- [x] `TypeAwareCallGraphSourceRegistry` in `index/typeAwareCallGraphSourceRegistry.ts` — last-write-wins per-language registration; constructed once per `WorkspaceServiceEngine`, no module-level singleton
+- [x] Independent of `TypeAwareTypeHierarchySource` (Phase 9.5) — registering one does not require or affect the other
+- [x] Workspace merge in `workspaceCallGraphResultCreate` (`packages/workspace-service/src/index.ts`) — implements the conflict-resolution table from Phase 9.2 / Step 4 with the "type-aware never demotes structural" guarantee
+- [x] Additive workspace contract fields — `WorkspaceDependencyGraphEdge.callGraphConfidence?: 'structural' | 'type-aware'`, `WorkspaceDependencyGraphEdge.callGraphKind?: 'direct' | 'dynamic-dispatch' | 'higher-order'`; both absent ⇒ legacy structural-only output
+- [x] Additive `queryCallGraph` input — `requireTypeAware?: boolean` fails with structured error `{ code: 'type-aware-source-missing', languageId }` when no source is registered
+- [x] Daemon round-trip — `query_call_graph` request/ack carry `requireTypeAware`; LSP / extension client pass it through additively
+- [x] TypeScript binding — `@codepol/typescript-language-bridge` package supplies `typeScriptCallGraphSourceCreate({ transport, symbolLocate, symbolIdResolve })`. The bridge does NOT spawn `tsserver` itself; the host owns the transport lifecycle.
+- [x] Tests: `packages/core/src/index/typeAwareCallGraphSourceRegistry.spec.ts` (registry round-trip), `tests/workspace-service.call-graph-type-aware.spec.ts` (every row of the conflict-resolution table + source-rejection / `requireTypeAware` paths), `packages/typescript-language-bridge/src/typeScriptCallGraphSource.spec.ts` (contract tests against a fake transport), daemon round-trip extended in `packages/workspace-service/src/daemon.spec.ts`
+
 ### 6. Type Relations
 **Status**: Implemented
 

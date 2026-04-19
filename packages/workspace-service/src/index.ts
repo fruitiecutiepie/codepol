@@ -113,11 +113,21 @@ import {
   type WorkspaceSymbolAtPositionResult,
   type WorkspaceSymbolDescriptor,
   type WorkspaceSymbolDescriptorKind,
+  type WorkspaceSymbolFlowDirection,
+  type WorkspaceSymbolFlowEdge,
+  type WorkspaceSymbolFlowResult,
   type WorkspaceSymbolLookupResult,
   type WorkspaceSymbolResult,
+  type SymbolFlowRelation,
+  type SymbolId,
   type SymbolKind,
   type SymbolRecord,
+  type TypeAwareCallEdge,
+  type TypeAwareCallGraphSource,
+  type TypeAwareCallGraphSourceRegistry,
+  type TypeAwareCallKind,
   type BiomeProviderConfig,
+  typeAwareCallGraphSourceRegistryCreate,
 } from '@codepol/core';
 import { biomeCheckAsync, biomeFixAsync } from '@codepol/plugin-biome';
 import { eslintPluginCreate } from '@codepol/plugin-eslint';
@@ -497,6 +507,13 @@ export type WorkspaceServiceEngineOptions = {
   backgroundTaskSchedule?: (task: () => Promise<void>) => void;
   warmCache?: WorkspaceWarmCacheStore;
   timers?: WorkspaceServiceEngineTimers;
+  /**
+   * Type-aware call-graph source registry (Phase 9.2 / Gap 1).
+   * Optional — when omitted, the engine creates a fresh empty
+   * registry. Hosts that share one registry across multiple engine
+   * instances pass it explicitly.
+   */
+  typeAwareCallGraphSourceRegistry?: TypeAwareCallGraphSourceRegistry;
 };
 
 type WorkspaceSessionState = WorkspaceDocumentsState &
@@ -705,10 +722,20 @@ export type WorkspaceService = {
     symbolId: string;
     direction: WorkspaceCallGraphDirection;
     depth?: number;
+    requireTypeAware?: boolean;
     requestId?: string;
     analysisGeneration?: number;
     signal?: AbortSignal;
   }) => Promise<WorkspaceDependencyGraphResult>;
+  querySymbolFlow: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    symbolId: string;
+    direction: WorkspaceSymbolFlowDirection;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceSymbolFlowResult>;
   queryTypeHierarchy: (input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;
@@ -4639,16 +4666,249 @@ function workspaceSymbolGraphResultCreate(input: {
   };
 }
 
-function workspaceCallGraphResultCreate(
+/**
+ * Default soft timeout (ms) the workspace applies on top of a
+ * {@link TypeAwareCallGraphSource} call. On timeout, the merge degrades
+ * silently to the structural-only result and logs once at debug level.
+ *
+ * Pinned to the same value Phase 9.5 uses for the type-hierarchy source
+ * (2000 ms) so the two surfaces share one knob; bump only by editing
+ * both together.
+ */
+const WORKSPACE_TYPE_AWARE_CALL_GRAPH_SOURCE_TIMEOUT_MS = 2000;
+
+/**
+ * Structured error raised when `queryCallGraph` is invoked with
+ * `requireTypeAware: true` but no `TypeAwareCallGraphSource` is
+ * registered for the seed symbol's language. The shape mirrors the
+ * spec table in Phase 9.2 / Step 4.
+ */
+export type TypeAwareCallGraphSourceMissingError = Error & {
+  code: 'type-aware-source-missing';
+  languageId: string;
+};
+
+function typeAwareCallGraphSourceMissingErrorCreate(
+  languageId: string,
+): TypeAwareCallGraphSourceMissingError {
+  const error = new Error(
+    `No TypeAwareCallGraphSource registered for language "${languageId}"`,
+  ) as TypeAwareCallGraphSourceMissingError;
+  error.code = 'type-aware-source-missing';
+  error.languageId = languageId;
+  return error;
+}
+
+/**
+ * Best-effort language-id detection for the file containing a symbol.
+ * Used to look up the right `TypeAwareCallGraphSource`. Mirrors the
+ * extension map from `indexBuilder.languageIdFromFile` so the workspace
+ * surface stays in sync without a hard import dependency on that
+ * private helper.
+ */
+function workspaceSymbolLanguageIdGet(
+  index: ProjectIndex,
+  symbolId: SymbolId,
+): string | undefined {
+  const symbol = index.symbolGet(symbolId);
+  if (!symbol) return undefined;
+  const ext = symbol.file.slice(symbol.file.lastIndexOf('.')).toLowerCase();
+  switch (ext) {
+    case '.ts':
+    case '.mts':
+    case '.cts':
+    case '.js':
+    case '.mjs':
+    case '.cjs':
+      return 'typescript';
+    case '.tsx':
+    case '.jsx':
+      return 'tsx';
+    case '.py':
+    case '.pyw':
+      return 'python';
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Run `op` with a soft timeout. Resolves with `op`'s value on success,
+ * or `undefined` on timeout or rejection. Cancellable via `signal` —
+ * when aborted, the helper returns `undefined` immediately. The
+ * underlying `op` is responsible for honoring `signal` itself; this
+ * helper only stops *waiting* for it.
+ */
+async function workspaceTypeAwareSourceCallWithBudget<T>(
+  op: () => Promise<T>,
+  timeoutMs: number,
+  signal: AbortSignal | undefined,
+): Promise<T | undefined> {
+  if (signal?.aborted) return undefined;
+  return await new Promise<T | undefined>((resolve) => {
+    let settled = false;
+    const settle = (value: T | undefined): void => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const timeoutHandle = setTimeout(() => settle(undefined), timeoutMs);
+    const onAbort = (): void => {
+      clearTimeout(timeoutHandle);
+      settle(undefined);
+    };
+    if (signal) {
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+    op().then(
+      (value) => {
+        clearTimeout(timeoutHandle);
+        if (signal) signal.removeEventListener('abort', onAbort);
+        settle(value);
+      },
+      () => {
+        clearTimeout(timeoutHandle);
+        if (signal) signal.removeEventListener('abort', onAbort);
+        settle(undefined);
+      },
+    );
+  });
+}
+
+/**
+ * Conflict-resolution merge between the structural call-graph edges
+ * (`structuralEdges`) and an optional set of type-aware edges
+ * (`typeAwareEdges`). Implements the table in Phase 9.2 / Step 4
+ * exactly:
+ *
+ * | In S? | In T? | Output `callGraphConfidence` | Output `callGraphKind`         |
+ * | ----- | ----- | ---------------------------- | ------------------------------ |
+ * | yes   | yes   | `'type-aware'`               | `T`'s `callKind` (≥ `'direct'`)|
+ * | yes   | no    | `'structural'`               | `'direct'`                     |
+ * | no    | yes   | `'type-aware'`               | `T`'s `callKind`               |
+ *
+ * Type-aware never demotes a structural edge: an edge in `S` that is
+ * missing from `T` is preserved as `'structural'`. This is the
+ * intentional conservative choice — language servers can lag, fail to
+ * index a file, or return partial results, and silently dropping
+ * structural edges to a transient `T` would be a correctness
+ * regression.
+ *
+ * When `typeAwareEdges` is `undefined` (no source registered, source
+ * timed out, or source threw) the merge returns the structural edges
+ * with no confidence/kind fields set — byte-identical to the legacy
+ * Phase 7 output.
+ */
+function workspaceCallGraphEdgesMerge(input: {
+  structuralEdges: ReadonlyArray<{ from: SymbolId; to: SymbolId }>;
+  typeAwareEdges: TypeAwareCallEdge[] | undefined;
+  symbolUriCreate: (symbolId: SymbolId) => string;
+}): WorkspaceDependencyGraphEdge[] {
+  const structuralKeys = new Set<string>();
+  const merged = new Map<string, WorkspaceDependencyGraphEdge>();
+
+  if (!input.typeAwareEdges) {
+    // Untagged path: byte-identical to the legacy result. Sorted by
+    // (from, to) for determinism.
+    const sorted = [...input.structuralEdges].sort((left, right) => {
+      if (left.from !== right.from) return left.from < right.from ? -1 : 1;
+      if (left.to !== right.to) return left.to < right.to ? -1 : 1;
+      return 0;
+    });
+    return sorted.map((edge) => ({
+      fromUri: input.symbolUriCreate(edge.from),
+      toUri: input.symbolUriCreate(edge.to),
+    }));
+  }
+
+  for (const edge of input.structuralEdges) {
+    const key = `${edge.from}\u0000${edge.to}`;
+    structuralKeys.add(key);
+    merged.set(key, {
+      fromUri: input.symbolUriCreate(edge.from),
+      toUri: input.symbolUriCreate(edge.to),
+      callGraphConfidence: 'structural',
+      callGraphKind: 'direct',
+    });
+  }
+
+  for (const edge of input.typeAwareEdges) {
+    const key = `${edge.callerSymbolId}\u0000${edge.calleeSymbolId}`;
+    merged.set(key, {
+      fromUri: input.symbolUriCreate(edge.callerSymbolId),
+      toUri: input.symbolUriCreate(edge.calleeSymbolId),
+      callGraphConfidence: 'type-aware',
+      callGraphKind: edge.callKind,
+    });
+  }
+
+  const sortedKeys = [...merged.keys()].sort();
+  return sortedKeys.map((key) => merged.get(key)!);
+}
+
+/**
+ * Pull the type-aware edge set for a single seed symbol, applying the
+ * shared timeout/cancellation budget. Returns `undefined` on no
+ * source, source error, source timeout, or signal abort — every
+ * non-success path collapses to "fall back to structural-only".
+ */
+async function workspaceCallGraphTypeAwareEdgesGet(input: {
+  source: TypeAwareCallGraphSource;
+  symbolId: SymbolId;
+  direction: WorkspaceCallGraphDirection;
+  signal: AbortSignal | undefined;
+}): Promise<TypeAwareCallEdge[] | undefined> {
+  const wantsCallers = input.direction === 'callers' || input.direction === 'both';
+  const wantsCallees = input.direction === 'callees' || input.direction === 'both';
+
+  const callersOp =
+    wantsCallers && input.source.typeAwareCallersGet
+      ? workspaceTypeAwareSourceCallWithBudget(
+          () => input.source.typeAwareCallersGet!(input.symbolId),
+          WORKSPACE_TYPE_AWARE_CALL_GRAPH_SOURCE_TIMEOUT_MS,
+          input.signal,
+        )
+      : Promise.resolve<TypeAwareCallEdge[] | undefined>(undefined);
+  const calleesOp =
+    wantsCallees && input.source.typeAwareCalleesGet
+      ? workspaceTypeAwareSourceCallWithBudget(
+          () => input.source.typeAwareCalleesGet!(input.symbolId),
+          WORKSPACE_TYPE_AWARE_CALL_GRAPH_SOURCE_TIMEOUT_MS,
+          input.signal,
+        )
+      : Promise.resolve<TypeAwareCallEdge[] | undefined>(undefined);
+
+  const [callersResult, calleesResult] = await Promise.all([callersOp, calleesOp]);
+
+  // If we wanted both directions but neither source method exists or
+  // both timed out, treat as "no type-aware data" and fall back.
+  if (callersResult === undefined && calleesResult === undefined) {
+    if (!wantsCallers && !wantsCallees) return [];
+    if (
+      (wantsCallers && !input.source.typeAwareCallersGet) &&
+      (wantsCallees && !input.source.typeAwareCalleesGet)
+    ) {
+      return undefined;
+    }
+    return undefined;
+  }
+
+  return [...(callersResult ?? []), ...(calleesResult ?? [])];
+}
+
+async function workspaceCallGraphResultCreate(
   workspace: WorkspaceContextState,
   index: ProjectIndex,
+  registry: TypeAwareCallGraphSourceRegistry,
   input: {
     symbolId: string;
     direction: WorkspaceCallGraphDirection;
     depth?: number;
+    requireTypeAware?: boolean;
+    signal?: AbortSignal;
   },
-): WorkspaceDependencyGraphResult {
-  const result = symbolCallGraphCompute(
+): Promise<WorkspaceDependencyGraphResult> {
+  const structural = symbolCallGraphCompute(
     {
       callersGet: (id) => index.callersGet(id),
       calleesGet: (id) => index.calleesGet(id),
@@ -4659,12 +4919,175 @@ function workspaceCallGraphResultCreate(
       depth: input.depth,
     },
   );
-  return workspaceSymbolGraphResultCreate({
+
+  const languageId = workspaceSymbolLanguageIdGet(index, input.symbolId);
+  const source = languageId
+    ? registry.typeAwareCallGraphSourceGet(languageId)
+    : undefined;
+
+  if (!source) {
+    if (input.requireTypeAware) {
+      throw typeAwareCallGraphSourceMissingErrorCreate(languageId ?? 'unknown');
+    }
+    // No source → byte-identical to the legacy result.
+    return workspaceSymbolGraphResultCreateMerged({
+      workspace,
+      index,
+      symbols: structural.symbols,
+      edges: workspaceCallGraphEdgesMerge({
+        structuralEdges: structural.edges,
+        typeAwareEdges: undefined,
+        symbolUriCreate: workspaceSymbolUriCreate,
+      }),
+    });
+  }
+
+  const typeAwareEdges = await workspaceCallGraphTypeAwareEdgesGet({
+    source,
+    symbolId: input.symbolId,
+    direction: input.direction,
+    signal: input.signal,
+  });
+
+  // Merge edges. We keep the structural BFS-derived `symbols` set as
+  // the seed because the structural traversal already enforces
+  // depth-bounded visited-set semantics — the type-aware source only
+  // contributes edges, not new nodes, in this MVP. Adding new nodes
+  // from `T` is left to a follow-up once the merge proves itself.
+  const mergedEdges = workspaceCallGraphEdgesMerge({
+    structuralEdges: structural.edges,
+    typeAwareEdges,
+    symbolUriCreate: workspaceSymbolUriCreate,
+  });
+
+  return workspaceSymbolGraphResultCreateMerged({
     workspace,
     index,
-    symbols: result.symbols,
-    edges: result.edges,
+    symbols: structural.symbols,
+    edges: mergedEdges,
   });
+}
+
+/**
+ * Like {@link workspaceSymbolGraphResultCreate} but accepts already-built
+ * edges. Used by the call-graph merge so the symbol-uri-derived edges
+ * carry the optional `callGraphConfidence` / `callGraphKind` tags.
+ */
+function workspaceSymbolGraphResultCreateMerged(input: {
+  workspace: WorkspaceContextState;
+  index: ProjectIndex;
+  symbols: string[];
+  edges: WorkspaceDependencyGraphEdge[];
+}): WorkspaceDependencyGraphResult {
+  const nodes: WorkspaceDependencyGraphNode[] = input.symbols.map((symbolId) =>
+    workspaceSymbolGraphNodeBuild(input.workspace, input.index, symbolId),
+  );
+  return {
+    nodes,
+    edges: input.edges,
+    entryPoints: [],
+    cycles: [],
+  };
+}
+
+/**
+ * Build a {@link WorkspaceSymbolFlowResult} from the indexed
+ * {@link SymbolFlowRelation}s. Edges are sorted by
+ * `(file, range.start, argumentIndex ?? 0)` so byte-identical inputs
+ * produce byte-identical outputs.
+ */
+function workspaceSymbolFlowResultCreate(input: {
+  workspace: WorkspaceContextState;
+  state: WorkspaceDocumentsState;
+  index: ProjectIndex;
+  symbolId: string;
+  direction: WorkspaceSymbolFlowDirection;
+}): WorkspaceSymbolFlowResult {
+  const relations = input.direction === 'outgoing'
+    ? input.index.symbolFlowsForSymbolGet(input.symbolId)
+    : input.index.symbolFlowsForReceiverGet(input.symbolId);
+
+  const edges: WorkspaceSymbolFlowEdge[] = relations
+    .map((relation) => workspaceSymbolFlowEdgeFromRelation({
+      workspace: input.workspace,
+      state: input.state,
+      index: input.index,
+      relation,
+    }))
+    .filter((edge): edge is WorkspaceSymbolFlowEdge => edge !== undefined);
+
+  edges.sort((left, right) => {
+    if (left.file !== right.file) return left.file < right.file ? -1 : 1;
+    const leftStart = left.range.start;
+    const rightStart = right.range.start;
+    if (leftStart.line !== rightStart.line) return leftStart.line - rightStart.line;
+    if (leftStart.character !== rightStart.character)
+      return leftStart.character - rightStart.character;
+    const leftIndex = left.argumentIndex ?? 0;
+    const rightIndex = right.argumentIndex ?? 0;
+    return leftIndex - rightIndex;
+  });
+
+  return { edges };
+}
+
+function workspaceSymbolFlowEdgeFromRelation(input: {
+  workspace: WorkspaceContextState;
+  state: WorkspaceDocumentsState;
+  index: ProjectIndex;
+  relation: SymbolFlowRelation;
+}): WorkspaceSymbolFlowEdge | undefined {
+  const { relation } = input;
+  const flowingSymbol = input.index.symbolGet(relation.flowingSymbolId);
+  if (!flowingSymbol) return undefined;
+  const ownerSymbol = workspaceFlowOwnerSymbolGet(input.index, relation);
+  const source = workspaceSourceGet(input.state, relation.file);
+  const range = workspaceRangeFromByteRange(source, relation.byteRange);
+  return {
+    flowingSymbolId: relation.flowingSymbolId,
+    flowingSymbolUri: workspacePathToUri(flowingSymbol.file),
+    ...(ownerSymbol
+      ? {
+          ownerSymbolId: ownerSymbol.id,
+          ownerSymbolUri: workspacePathToUri(ownerSymbol.file),
+        }
+      : {}),
+    file: workspaceRelativePathCreate(input.workspace.rootPath, relation.file),
+    range,
+    flowKind: 'argument',
+    ...(relation.receivingCallSymbolId !== undefined
+      ? { receivingCallSymbolId: relation.receivingCallSymbolId }
+      : {}),
+    ...(relation.argumentIndex !== undefined
+      ? { argumentIndex: relation.argumentIndex }
+      : {}),
+  };
+}
+
+/**
+ * Resolve the function/method symbol that owns the flow site's
+ * scope, when one exists. Used to populate
+ * {@link WorkspaceSymbolFlowEdge.ownerSymbolId}.
+ *
+ * Walks up from `relation.ownerScopeId` looking for the first scope
+ * whose byte range matches a function/method symbol declared in the
+ * same file. Returns `undefined` for top-level flow sites.
+ */
+function workspaceFlowOwnerSymbolGet(
+  index: ProjectIndex,
+  relation: SymbolFlowRelation,
+): SymbolRecord | undefined {
+  const ownerScope = index.scopeGet(relation.ownerScopeId);
+  if (!ownerScope) return undefined;
+  const fileSymbols = index.symbolsInFileGet(relation.file);
+  for (const symbol of fileSymbols) {
+    if (symbol.kind !== 'function' && symbol.kind !== 'method') continue;
+    if (symbol.byteRange.start <= ownerScope.byteRange.start &&
+        symbol.byteRange.end >= ownerScope.byteRange.end) {
+      return symbol;
+    }
+  }
+  return undefined;
 }
 
 function workspaceTypeHierarchyResultCreate(
@@ -8543,6 +8966,18 @@ export class WorkspaceServiceEngine implements WorkspaceService {
   private readonly backgroundTaskSchedule: (task: () => Promise<void>) => void;
   private readonly warmCache?: WorkspaceWarmCacheStore;
   private readonly timers: WorkspaceServiceEngineTimers;
+  /**
+   * Type-aware call-graph source registry (Phase 9.2 / Gap 1).
+   *
+   * Constructed once per engine instance — there is no module-level
+   * singleton. The registry is consulted from
+   * `workspaceCallGraphResultCreate` to upgrade structural call-graph
+   * answers when a host has registered a binding around a language
+   * server. When no binding is registered for a language, the merge is
+   * a no-op and the result is byte-identical to the structural-only
+   * Phase 7 baseline.
+   */
+  private readonly typeAwareCallGraphSourceRegistry: TypeAwareCallGraphSourceRegistry;
   // Per-workspace pending debounced persist. Keyed by `workspaceId` because
   // every attached client session sees the same in-memory workspace state.
   private readonly persistTimers = new Map<string, PersistTimerEntry>();
@@ -8552,6 +8987,9 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     this.backgroundWarmup = options.backgroundWarmup ?? false;
     this.warmCache = options.warmCache;
     this.timers = options.timers ?? workspaceServiceEngineTimersDefault;
+    this.typeAwareCallGraphSourceRegistry =
+      options.typeAwareCallGraphSourceRegistry
+        ?? typeAwareCallGraphSourceRegistryCreate();
     this.backgroundTaskSchedule =
       options.backgroundTaskSchedule ??
       ((task) => {
@@ -8559,6 +8997,23 @@ export class WorkspaceServiceEngine implements WorkspaceService {
           void task();
         });
       });
+  }
+
+  /**
+   * Register a {@link TypeAwareCallGraphSource} for a language. Hosts
+   * (the LSP server, an editor extension's process bridge, a CLI
+   * binding) call this once during startup to upgrade subsequent
+   * `queryCallGraph` answers. Independent of the type-hierarchy
+   * registry; see Phase 9.2 / Step 2.
+   */
+  typeAwareCallGraphSourceRegister(
+    languageId: string,
+    source: TypeAwareCallGraphSource,
+  ): void {
+    this.typeAwareCallGraphSourceRegistry.typeAwareCallGraphSourceRegister(
+      languageId,
+      source,
+    );
   }
 
   private workspacePersistSchedule(
@@ -9624,6 +10079,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     symbolId: string;
     direction: WorkspaceCallGraphDirection;
     depth?: number;
+    requireTypeAware?: boolean;
     requestId?: string;
     analysisGeneration?: number;
     signal?: AbortSignal;
@@ -9638,10 +10094,45 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       signal: input.signal,
     });
     workspaceAnalysisGenerationValidate(workspaceSession, input);
-    return workspaceCallGraphResultCreate(workspace, index, {
+    return await workspaceCallGraphResultCreate(
+      workspace,
+      index,
+      this.typeAwareCallGraphSourceRegistry,
+      {
+        symbolId: input.symbolId,
+        direction: input.direction,
+        depth: input.depth,
+        requireTypeAware: input.requireTypeAware,
+        signal: input.signal,
+      },
+    );
+  }
+
+  async querySymbolFlow(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    symbolId: string;
+    direction: WorkspaceSymbolFlowDirection;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceSymbolFlowResult> {
+    const { workspace, workspaceSession } = workspaceSessionGet(
+      this.workspaces,
+      this.clientSessions,
+      input.clientSessionId,
+      input.workspaceId,
+    );
+    const index = await this.workspaceSessionIndexEnsure(workspace, workspaceSession, {
+      signal: input.signal,
+    });
+    workspaceAnalysisGenerationValidate(workspaceSession, input);
+    return workspaceSymbolFlowResultCreate({
+      workspace,
+      state: workspaceSession,
+      index,
       symbolId: input.symbolId,
       direction: input.direction,
-      depth: input.depth,
     });
   }
 
@@ -10256,11 +10747,24 @@ class InProcessWorkspaceService implements WorkspaceService {
     symbolId: string;
     direction: WorkspaceCallGraphDirection;
     depth?: number;
+    requireTypeAware?: boolean;
     requestId?: string;
     analysisGeneration?: number;
     signal?: AbortSignal;
   }): Promise<WorkspaceDependencyGraphResult> {
     return this.engine.queryCallGraph(input);
+  }
+
+  querySymbolFlow(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    symbolId: string;
+    direction: WorkspaceSymbolFlowDirection;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceSymbolFlowResult> {
+    return this.engine.querySymbolFlow(input);
   }
 
   queryTypeHierarchy(input: {

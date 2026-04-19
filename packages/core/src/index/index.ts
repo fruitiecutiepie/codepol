@@ -24,6 +24,8 @@ export type {
   ImportsRelation,
   CallsRelation,
   TypeRelation,
+  SymbolFlowKind,
+  SymbolFlowRelation,
   SymbolFilter,
   IndexCapabilities,
   FlowNodeId,
@@ -51,3 +53,12 @@ export {
   projectIndexRemoveFiles,
   adapterRegister,
 } from './indexBuilder';
+
+// Type-aware call-graph source (Phase 9.2 / Gap 1)
+export type {
+  TypeAwareCallEdge,
+  TypeAwareCallKind,
+  TypeAwareCallGraphSource,
+} from './typeAwareCallGraphSource';
+export type { TypeAwareCallGraphSourceRegistry } from './typeAwareCallGraphSourceRegistry';
+export { typeAwareCallGraphSourceRegistryCreate } from './typeAwareCallGraphSourceRegistry';

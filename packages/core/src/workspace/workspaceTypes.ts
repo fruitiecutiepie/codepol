@@ -598,6 +598,45 @@ export type WorkspaceDependencyGraphEdgeKind =
   | 'cjs'
   | 'type_only';
 
+/**
+ * Confidence tier of a call-graph edge produced by `queryCallGraph`.
+ *
+ * - `'structural'`: derived from the tree-sitter index (direct,
+ *   name-resolved invocation). The default — absent ⇒ `'structural'`.
+ * - `'type-aware'`: confirmed (or contributed) by a registered
+ *   {@link TypeAwareCallGraphSource}, typically a host-supplied
+ *   binding around a language server. Authoritative when present.
+ *
+ * The tier never demotes a structural edge: when a structural edge
+ * exists but the type-aware source did not return it, the edge stays
+ * `'structural'` rather than being silently dropped.
+ *
+ * The field name is intentionally distinct from
+ * {@link WorkspaceCallGraphEdgeKind} — it sits next to it on
+ * `WorkspaceDependencyGraphEdge` so the two axes (confidence / kind)
+ * stay orthogonal.
+ */
+export type WorkspaceCallGraphEdgeConfidence = 'structural' | 'type-aware';
+
+/**
+ * Kind of call expressed by a call-graph edge produced by
+ * `queryCallGraph`.
+ *
+ * - `'direct'`: a named callee resolved at the call site. The default —
+ *   absent ⇒ `'direct'`. All structural edges always carry `'direct'`
+ *   because the structural index can only see direct invocations.
+ * - `'dynamic-dispatch'`: a method call where the receiver type admits
+ *   multiple implementations (interface- or union-typed receiver).
+ *   Reported only by type-aware sources.
+ * - `'higher-order'`: a call site where the callee is an argument or
+ *   computed value rather than a named symbol. Reported only by
+ *   type-aware sources.
+ */
+export type WorkspaceCallGraphEdgeKind =
+  | 'direct'
+  | 'dynamic-dispatch'
+  | 'higher-order';
+
 export type WorkspaceDependencyGraphEdge = {
   fromUri: string;
   toUri: string;
@@ -623,6 +662,18 @@ export type WorkspaceDependencyGraphEdge = {
    * membership cannot be determined for either endpoint.
    */
   crossesLayerBoundary?: boolean;
+  /**
+   * For symbol-level call-graph edges (from `queryCallGraph`):
+   * confidence tier. Absent ⇒ `'structural'`. Set only when a
+   * type-aware source contributed to or confirmed the edge.
+   */
+  callGraphConfidence?: WorkspaceCallGraphEdgeConfidence;
+  /**
+   * For symbol-level call-graph edges (from `queryCallGraph`): the
+   * kind of call. Absent ⇒ `'direct'`. Set when a type-aware source
+   * classified the call as `'dynamic-dispatch'` or `'higher-order'`.
+   */
+  callGraphKind?: WorkspaceCallGraphEdgeKind;
 };
 
 export type WorkspaceDependencyGraphResult = {
@@ -764,6 +815,76 @@ export type WorkspaceTypeHierarchyDirection =
   | 'supertypes'
   | 'subtypes'
   | 'both';
+
+// ============================================================================
+// Symbol-flow surface (Phase 9.1 / Gap 1)
+// ============================================================================
+
+/**
+ * Direction of a {@link WorkspaceSymbolFlowResult} query.
+ *
+ * - `outgoing`: list flow sites where the focus symbol *flows out* —
+ *   appears as an argument value somewhere in the codebase. Answers
+ *   "where is this function passed as a callback?".
+ * - `incoming`: list flow sites that flow *into* the focus symbol —
+ *   functions passed as arguments to a call whose receiver resolves to
+ *   the focus symbol. Answers "what callbacks does this function
+ *   accept?".
+ */
+export type WorkspaceSymbolFlowDirection = 'outgoing' | 'incoming';
+
+/**
+ * One "function-as-argument" flow edge surfaced to the workspace API.
+ *
+ * Distinct from {@link WorkspaceDependencyGraphEdge}: a flow is *not* a
+ * call-graph edge. The two are intentionally separate to keep the
+ * structural call graph honest about what the source code actually
+ * expresses (see Phase 9.1 design notes).
+ *
+ * MVP only emits `flowKind: 'argument'`. Future extensions
+ * (`return`, `assignment`, `storage`) will appear here as additional
+ * literals once the extractor supports them.
+ */
+export type WorkspaceSymbolFlowEdge = {
+  /** Stable id of the function/method symbol flowing through the source. */
+  flowingSymbolId: string;
+  /** Declaration URI of the flowing symbol. */
+  flowingSymbolUri: string;
+  /**
+   * Stable id of the function whose body contains the flow site, when
+   * the owning scope can be resolved to a function/method symbol.
+   * Absent for top-level flow sites (e.g., a callback registered at
+   * module scope).
+   */
+  ownerSymbolId?: string;
+  /** Declaration URI of {@link ownerSymbolId}, when present. */
+  ownerSymbolUri?: string;
+  /** Workspace-relative path of the flow site. */
+  file: string;
+  /** Range of the flow site in the file. */
+  range: WorkspaceRange;
+  /** How the symbol flows. MVP emits only `'argument'`. */
+  flowKind: 'argument';
+  /**
+   * When the receiving call resolved to a known symbol, the function
+   * the value is passed to. Absent when the receiver is unresolved.
+   */
+  receivingCallSymbolId?: string;
+  /** 0-based argument index. */
+  argumentIndex?: number;
+};
+
+/**
+ * Result type for `querySymbolFlow`. Always returns an array (never
+ * `undefined`); empty when the symbol does not appear in any flow site
+ * for the requested direction.
+ *
+ * Sorted by `(file, range.start, argumentIndex)` for byte-identical
+ * output across runs.
+ */
+export type WorkspaceSymbolFlowResult = {
+  edges: WorkspaceSymbolFlowEdge[];
+};
 
 export type WorkspaceArchitectureSummaryHotspot = {
   uri: string;

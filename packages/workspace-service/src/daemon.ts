@@ -34,6 +34,8 @@ import type {
   WorkspacePosition,
   WorkspaceSymbolAtPositionResult,
   WorkspaceSymbolDescriptorKind,
+  WorkspaceSymbolFlowDirection,
+  WorkspaceSymbolFlowResult,
   WorkspaceSymbolLookupResult,
   WorkspaceSymbolResult,
   WorkspaceTypeHierarchyDirection,
@@ -462,6 +464,24 @@ type WorkspaceDaemonQueryCallGraphRequest = WorkspaceDaemonMessage &
   symbolId: string;
   direction: WorkspaceCallGraphDirection;
   depth?: number;
+  /**
+   * Phase 9.2 / Gap 1: ask the workspace to fail with a structured
+   * error when no `TypeAwareCallGraphSource` is registered. Optional
+   * for back-compat — older daemon clients omit it and get the
+   * structural-only result.
+   */
+  requireTypeAware?: boolean;
+  analysisGeneration?: number;
+};
+
+type WorkspaceDaemonQuerySymbolFlowRequest = WorkspaceDaemonMessage &
+  WorkspaceDaemonClientSessionFreshness &
+  WorkspaceDaemonRequestFreshness &
+  WorkspaceDaemonWorkspaceFreshness & {
+  type: 'query_symbol_flow';
+  workspaceId: string;
+  symbolId: string;
+  direction: WorkspaceSymbolFlowDirection;
   analysisGeneration?: number;
 };
 
@@ -708,6 +728,11 @@ type WorkspaceDaemonQueryTypeHierarchyAck = {
   result: WorkspaceDependencyGraphResult;
 };
 
+type WorkspaceDaemonQuerySymbolFlowAck = {
+  type: 'query_symbol_flow_ack';
+  result: WorkspaceSymbolFlowResult;
+};
+
 type WorkspaceDaemonQuerySemanticSearchAck = {
   type: 'query_semantic_search_ack';
   results: WorkspaceSearchResult[];
@@ -819,6 +844,7 @@ type WorkspaceDaemonServiceResponse =
   | WorkspaceDaemonQueryDependencyDiffAck
   | WorkspaceDaemonQueryCallGraphAck
   | WorkspaceDaemonQueryTypeHierarchyAck
+  | WorkspaceDaemonQuerySymbolFlowAck
   | WorkspaceDaemonQuerySemanticSearchAck
   | WorkspaceDaemonQuerySemanticDefinitionAck
   | WorkspaceDaemonQuerySemanticReferencesAck
@@ -1819,6 +1845,7 @@ export class WorkspaceDaemonSession {
       case 'query_dependency_diff':
       case 'query_call_graph':
       case 'query_type_hierarchy':
+      case 'query_symbol_flow':
       case 'query_semantic_search':
       case 'query_semantic_definition':
       case 'query_semantic_references':
@@ -1850,6 +1877,7 @@ export class WorkspaceDaemonSession {
           | WorkspaceDaemonQueryDependencyDiffRequest
           | WorkspaceDaemonQueryCallGraphRequest
           | WorkspaceDaemonQueryTypeHierarchyRequest
+          | WorkspaceDaemonQuerySymbolFlowRequest
           | WorkspaceDaemonQuerySemanticSearchRequest
           | WorkspaceDaemonQuerySemanticDefinitionRequest
           | WorkspaceDaemonQuerySemanticReferencesRequest
@@ -1901,6 +1929,7 @@ export class WorkspaceDaemonSession {
       case 'query_dependency_diff':
       case 'query_call_graph':
       case 'query_type_hierarchy':
+      case 'query_symbol_flow':
       case 'query_semantic_references':
       case 'preview_rename':
       case 'query_architecture_summary':
@@ -3003,6 +3032,46 @@ export class WorkspaceDaemonSession {
             result,
           };
         }
+        case 'query_symbol_flow': {
+          if (!this.options.service) {
+            return messageErrorCreate(
+              'unsupported_request',
+              `Unsupported daemon request: ${message.type}`,
+            );
+          }
+          const input = message as WorkspaceDaemonQuerySymbolFlowRequest;
+          const daemonSessionError = this.daemonSessionValidate(input);
+          if (daemonSessionError) {
+            return daemonSessionError;
+          }
+          const replayGate = this.replayGateEnsure(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          if (replayGate) {
+            return replayGate;
+          }
+          const state = this.workspaceReplayStateGet(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          const workspaceInstanceError = this.workspaceInstanceValidate(state, input);
+          if (workspaceInstanceError) {
+            return workspaceInstanceError;
+          }
+          const replayEpochError = this.replayEpochValidate(state, input);
+          if (replayEpochError) {
+            return replayEpochError;
+          }
+          const result = await this.options.service.querySymbolFlow({
+            ...input,
+            signal: options.signal,
+          });
+          return {
+            type: 'query_symbol_flow_ack',
+            result,
+          };
+        }
         case 'query_semantic_search': {
           if (!this.options.service) {
             return messageErrorCreate(
@@ -3967,6 +4036,7 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
     symbolId: string;
     direction: WorkspaceCallGraphDirection;
     depth?: number;
+    requireTypeAware?: boolean;
     requestId?: string;
     analysisGeneration?: number;
     signal?: AbortSignal;
@@ -3984,6 +4054,34 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
       symbolId: input.symbolId,
       direction: input.direction,
       depth: input.depth,
+      requireTypeAware: input.requireTypeAware,
+      analysisGeneration: input.analysisGeneration,
+    }, {
+      signal: input.signal,
+    }).then((response) => response.result);
+  }
+
+  querySymbolFlow(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    symbolId: string;
+    direction: WorkspaceSymbolFlowDirection;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceSymbolFlowResult> {
+    const freshness = this.workspaceFreshnessGet(input);
+    const daemonSessionId = this.daemonSessionIdGet(input.clientSessionId);
+    return this.connection.request<WorkspaceDaemonQuerySymbolFlowAck>({
+      type: 'query_symbol_flow',
+      clientSessionId: input.clientSessionId,
+      daemonSessionId,
+      requestId: input.requestId,
+      workspaceId: input.workspaceId,
+      workspaceInstanceId: freshness?.workspaceInstanceId,
+      replayEpoch: freshness?.replayEpoch,
+      symbolId: input.symbolId,
+      direction: input.direction,
       analysisGeneration: input.analysisGeneration,
     }, {
       signal: input.signal,

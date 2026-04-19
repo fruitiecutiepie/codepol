@@ -1,0 +1,39 @@
+{
+  "name": "@codepol/typescript-language-bridge",
+  "version": "1.0.0",
+  "description": "TypeScript language-server bindings (TypeAwareCallGraphSource, etc.) for codepol. The transport is supplied by the host; this package never spawns tsserver itself.",
+  "type": "commonjs",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@codepol/core": "^1.0.0"
+  },
+  "devDependencies": {
+    "@codepol/core": "workspace:*",
+    "@types/node": "^25.0.3",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fruitiecutiepie/codepol",
+    "directory": "packages/typescript-language-bridge"
+  },
+  "license": "MIT"
+}

@@ -192,6 +192,7 @@ function projectIndexBuildImpl(options: IndexBuildOptions): IndexBuildResult {
     crossFileResolution: doCrossFileResolution,
     callGraph: 'heuristic',
     controlFlowGraph: true,
+    symbolFlow: indexCapabilitiesSymbolFlowCompute(supportedLanguages),
     supportedLanguages: Array.from(supportedLanguages),
   };
 
@@ -199,6 +200,21 @@ function projectIndexBuildImpl(options: IndexBuildOptions): IndexBuildResult {
   const index = projectIndexCreate(store, capabilities);
 
   return { index, stats };
+}
+
+/**
+ * Whether the index has at least one language adapter that emits
+ * {@link SymbolFlowRelation}s. Today only the TypeScript pack does;
+ * Python and other languages will opt in once they ship the query +
+ * extractor wiring.
+ *
+ * Centralized here so adding a new language with symbol-flow support
+ * is a one-line change.
+ */
+function indexCapabilitiesSymbolFlowCompute(
+  supportedLanguages: Set<string>,
+): boolean {
+  return supportedLanguages.has('typescript') || supportedLanguages.has('tsx');
 }
 
 /**

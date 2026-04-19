@@ -6,6 +6,7 @@ import {
   type CallsRelation,
   type ImportBindingRelation,
   type ExportsRelation,
+  type SymbolFlowRelation,
   type TypeRelation,
   type FlowGraph,
 } from './indexTypes';
@@ -471,6 +472,163 @@ describe('IndexStore', () => {
       expect(store.typeRelationsForSymbolGet(sym.id)).toHaveLength(0);
       expect(store.typeRelationsByTargetNameGet('Qux')).toHaveLength(0);
       expect(store.typeRelationsInFileGet(file)).toHaveLength(0);
+    });
+  });
+
+  // ============================================================================
+  // Symbol-Flow Relation Tests (Phase 9.1 / Gap 1)
+  // ============================================================================
+
+  describe('SymbolFlow', () => {
+    function symbolFlowFixtureCreate(file: string): {
+      file: string;
+      scope: ReturnType<typeof scopeRecordNew>;
+      flowing: ReturnType<typeof symbolRecordNew>;
+      receiver: ReturnType<typeof symbolRecordNew>;
+      flow: SymbolFlowRelation;
+    } {
+      const scope = scopeRecordNew('scope-flow', file, 'function');
+      const flowing = symbolRecordNew('sym-flowing', 'handler', file, scope.id, 'function');
+      const receiver = symbolRecordNew('sym-receiver', 'forEach', file, scope.id, 'method');
+      const flow: SymbolFlowRelation = {
+        kind: 'SymbolFlow',
+        flowingSymbolId: flowing.id,
+        ownerScopeId: scope.id,
+        file,
+        byteRange: byteRangeGet(120, 127),
+        flowKind: 'argument',
+        receivingCallSymbolId: receiver.id,
+        argumentIndex: 0,
+      };
+      return { file, scope, flowing, receiver, flow };
+    }
+
+    it('filePut / symbolFlowsForFlowingSymbolGet round-trip', () => {
+      const store = indexStoreNew();
+      const { file, scope, flowing, receiver, flow } = symbolFlowFixtureCreate(
+        '/src/flow1.ts',
+      );
+      store.filePut(fileIndexDeltaNew({
+        file,
+        symbols: [flowing, receiver],
+        scopes: [scope],
+        relations: [flow],
+      }));
+
+      const flows = store.symbolFlowsForFlowingSymbolGet(flowing.id);
+      expect(flows).toHaveLength(1);
+      expect(flows[0].argumentIndex).toBe(0);
+      expect(flows[0].flowKind).toBe('argument');
+      expect(flows[0].receivingCallSymbolId).toBe(receiver.id);
+    });
+
+    it('symbolFlowsForReceivingCallSymbolGet returns flows by receiver', () => {
+      const store = indexStoreNew();
+      const { file, scope, flowing, receiver, flow } = symbolFlowFixtureCreate(
+        '/src/flow2.ts',
+      );
+      store.filePut(fileIndexDeltaNew({
+        file,
+        symbols: [flowing, receiver],
+        scopes: [scope],
+        relations: [flow],
+      }));
+
+      const incoming = store.symbolFlowsForReceivingCallSymbolGet(receiver.id);
+      expect(incoming).toHaveLength(1);
+      expect(incoming[0].flowingSymbolId).toBe(flowing.id);
+    });
+
+    it('symbolFlowsInFileGet returns all flows in a file', () => {
+      const store = indexStoreNew();
+      const { file, scope, flowing, receiver, flow } = symbolFlowFixtureCreate(
+        '/src/flow3.ts',
+      );
+      const second: SymbolFlowRelation = {
+        kind: 'SymbolFlow',
+        flowingSymbolId: flowing.id,
+        ownerScopeId: scope.id,
+        file,
+        byteRange: byteRangeGet(200, 207),
+        flowKind: 'argument',
+        argumentIndex: 1,
+      };
+      store.filePut(fileIndexDeltaNew({
+        file,
+        symbols: [flowing, receiver],
+        scopes: [scope],
+        relations: [flow, second],
+      }));
+
+      const flows = store.symbolFlowsInFileGet(file);
+      expect(flows).toHaveLength(2);
+    });
+
+    it('fileRemove clears all symbol-flow indexes for the file', () => {
+      const store = indexStoreNew();
+      const { file, scope, flowing, receiver, flow } = symbolFlowFixtureCreate(
+        '/src/flow4.ts',
+      );
+      store.filePut(fileIndexDeltaNew({
+        file,
+        symbols: [flowing, receiver],
+        scopes: [scope],
+        relations: [flow],
+      }));
+
+      expect(store.symbolFlowsForFlowingSymbolGet(flowing.id)).toHaveLength(1);
+      expect(store.symbolFlowsForReceivingCallSymbolGet(receiver.id)).toHaveLength(1);
+      expect(store.symbolFlowsInFileGet(file)).toHaveLength(1);
+
+      store.fileRemove(file);
+
+      expect(store.symbolFlowsForFlowingSymbolGet(flowing.id)).toHaveLength(0);
+      expect(store.symbolFlowsForReceivingCallSymbolGet(receiver.id)).toHaveLength(0);
+      expect(store.symbolFlowsInFileGet(file)).toHaveLength(0);
+    });
+
+    it('clear() empties symbol-flow relations', () => {
+      const store = indexStoreNew();
+      const { file, scope, flowing, receiver, flow } = symbolFlowFixtureCreate(
+        '/src/flow5.ts',
+      );
+      store.filePut(fileIndexDeltaNew({
+        file,
+        symbols: [flowing, receiver],
+        scopes: [scope],
+        relations: [flow],
+      }));
+
+      store.clear();
+
+      expect(store.symbolFlowsForFlowingSymbolGet(flowing.id)).toHaveLength(0);
+      expect(store.symbolFlowsForReceivingCallSymbolGet(receiver.id)).toHaveLength(0);
+      expect(store.symbolFlowsInFileGet(file)).toHaveLength(0);
+    });
+
+    it('relationUpdate moves a flow between flowing-symbol buckets when the id changes', () => {
+      const store = indexStoreNew();
+      const { file, scope, flowing, receiver, flow } = symbolFlowFixtureCreate(
+        '/src/flow6.ts',
+      );
+      store.filePut(fileIndexDeltaNew({
+        file,
+        symbols: [flowing, receiver],
+        scopes: [scope],
+        relations: [flow],
+      }));
+
+      const updated: SymbolFlowRelation = {
+        ...flow,
+        flowingSymbolId: 'sym-rewritten',
+      };
+      store.relationUpdate(flow, updated);
+
+      expect(store.symbolFlowsForFlowingSymbolGet(flowing.id)).toHaveLength(0);
+      expect(store.symbolFlowsForFlowingSymbolGet('sym-rewritten')).toHaveLength(1);
+      // The by-receiving-call index keeps the same edge because the
+      // receiver did not change.
+      expect(store.symbolFlowsForReceivingCallSymbolGet(receiver.id)).toHaveLength(1);
     });
   });
 

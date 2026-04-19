@@ -360,6 +360,7 @@ function workspaceReadQueriesStubCreate(): Pick<
   | 'queryDependencyDiff'
   | 'queryCallGraph'
   | 'queryTypeHierarchy'
+  | 'querySymbolFlow'
   | 'querySemanticSearch'
   | 'querySemanticDefinition'
   | 'querySemanticReferences'
@@ -440,6 +441,11 @@ function workspaceReadQueriesStubCreate(): Pick<
         edges: [],
         entryPoints: [],
         cycles: [],
+      };
+    },
+    async querySymbolFlow() {
+      return {
+        edges: [],
       };
     },
     async querySemanticSearch() {
@@ -2101,6 +2107,39 @@ describe('workspace daemon control plane', () => {
     expect(typeHierarchy.nodes).toHaveLength(1);
     expect(typeHierarchy.nodes[0]!.symbolId).toBe('unknown-id');
     expect(typeHierarchy.edges).toEqual([]);
+
+    // Phase 9.1 / Gap 1: querySymbolFlow round-trips through the
+    // daemon transport. Unknown symbol id ⇒ empty edge list (never
+    // null), exercising both the request type registration and the
+    // ack shape.
+    const symbolFlow = await service.querySymbolFlow({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      symbolId: 'unknown-id',
+      direction: 'outgoing',
+    });
+    expect(symbolFlow).toEqual({ edges: [] });
+
+    // Phase 9.2 / Gap 1: queryCallGraph honours `requireTypeAware`
+    // when no source is registered — the daemon round-trip surfaces
+    // the structured error as a thrown Error message containing the
+    // `type-aware-source-missing` code so the LSP / CLI can detect it.
+    let typeAwareError: unknown;
+    try {
+      await service.queryCallGraph({
+        clientSessionId: registered.clientSessionId,
+        workspaceId: attached.workspaceId,
+        symbolId: 'unknown-id',
+        direction: 'callees',
+        requireTypeAware: true,
+      });
+    } catch (error) {
+      typeAwareError = error;
+    }
+    expect(typeAwareError).toBeDefined();
+    expect(String((typeAwareError as Error).message)).toContain(
+      'TypeAwareCallGraphSource',
+    );
 
     // Phase 7 follow-up: symbol-id discovery RPCs round-trip through
     // the daemon transport. We use a name that has no chance of

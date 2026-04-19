@@ -20,6 +20,7 @@ import type {
   ImportBindingRelation,
   ExportsRelation,
   TypeRelation,
+  SymbolFlowRelation,
   FlowGraph,
 } from './indexTypes';
 
@@ -83,6 +84,11 @@ export class IndexStore {
   private typeRelationsBySymbol = new Map<SymbolId, TypeRelation[]>();
   private typeRelationsByTargetName = new Map<string, TypeRelation[]>();
   private typeRelationsByFile = new Map<string, TypeRelation[]>();
+
+  // Symbol-flow relation indexes (Phase 9.1: higher-order argument flow)
+  private symbolFlowsByFlowingSymbol = new Map<SymbolId, SymbolFlowRelation[]>();
+  private symbolFlowsByReceivingCallSymbol = new Map<SymbolId, SymbolFlowRelation[]>();
+  private symbolFlowsByFile = new Map<string, SymbolFlowRelation[]>();
 
   // Control flow graph storage (per function scope)
   private cfgByScope = new Map<string, FlowGraph>();
@@ -233,6 +239,37 @@ export class IndexStore {
           this.exportsByName.set(relation.exportedName, byName);
         }
         byName.set(file, relation);
+      } else if (relation.kind === 'SymbolFlow') {
+        // Index by the flowing function/method symbol
+        let byFlowing = this.symbolFlowsByFlowingSymbol.get(relation.flowingSymbolId);
+        if (!byFlowing) {
+          byFlowing = [];
+          this.symbolFlowsByFlowingSymbol.set(relation.flowingSymbolId, byFlowing);
+        }
+        byFlowing.push(relation);
+
+        // Index by the receiving-call symbol when the receiver resolved
+        if (relation.receivingCallSymbolId) {
+          let byReceiver = this.symbolFlowsByReceivingCallSymbol.get(
+            relation.receivingCallSymbolId,
+          );
+          if (!byReceiver) {
+            byReceiver = [];
+            this.symbolFlowsByReceivingCallSymbol.set(
+              relation.receivingCallSymbolId,
+              byReceiver,
+            );
+          }
+          byReceiver.push(relation);
+        }
+
+        // Index by the flow site's file
+        let byFile = this.symbolFlowsByFile.get(relation.file);
+        if (!byFile) {
+          byFile = [];
+          this.symbolFlowsByFile.set(relation.file, byFile);
+        }
+        byFile.push(relation);
       } else if (relation.kind === 'TypeRelation') {
         // Index by child symbol
         let bySymbol = this.typeRelationsBySymbol.get(relation.symbolId);
@@ -361,6 +398,34 @@ export class IndexStore {
       this.exportsByFile.delete(file);
     }
 
+    // Remove symbol-flow relations for this file
+    const flows = this.symbolFlowsByFile.get(file);
+    if (flows) {
+      for (const flow of flows) {
+        // Remove from by-flowing-symbol index
+        const byFlowing = this.symbolFlowsByFlowingSymbol.get(flow.flowingSymbolId);
+        if (byFlowing) {
+          const idx = byFlowing.indexOf(flow);
+          if (idx !== -1) byFlowing.splice(idx, 1);
+          if (byFlowing.length === 0)
+            this.symbolFlowsByFlowingSymbol.delete(flow.flowingSymbolId);
+        }
+        // Remove from by-receiving-call index
+        if (flow.receivingCallSymbolId) {
+          const byReceiver = this.symbolFlowsByReceivingCallSymbol.get(
+            flow.receivingCallSymbolId,
+          );
+          if (byReceiver) {
+            const idx = byReceiver.indexOf(flow);
+            if (idx !== -1) byReceiver.splice(idx, 1);
+            if (byReceiver.length === 0)
+              this.symbolFlowsByReceivingCallSymbol.delete(flow.receivingCallSymbolId);
+          }
+        }
+      }
+      this.symbolFlowsByFile.delete(file);
+    }
+
     // Remove type relations for this file
     const typeRels = this.typeRelationsByFile.get(file);
     if (typeRels) {
@@ -387,6 +452,12 @@ export class IndexStore {
     // Remove relations from main array (rebuild without file's relations)
     if (scopeIds && scopeIds.size > 0) {
       this.relations = this.relations.filter(r => {
+        if (r.kind === 'SymbolFlow') {
+          // SymbolFlow carries its own `file` — drop by file directly
+          // rather than by scope (the scope id used here is the
+          // owning function scope, which lives in the same file).
+          return r.file !== file;
+        }
         if ('scopeId' in r) {
           return !scopeIds.has(r.scopeId);
         }
@@ -440,6 +511,9 @@ export class IndexStore {
     this.typeRelationsBySymbol.clear();
     this.typeRelationsByTargetName.clear();
     this.typeRelationsByFile.clear();
+    this.symbolFlowsByFlowingSymbol.clear();
+    this.symbolFlowsByReceivingCallSymbol.clear();
+    this.symbolFlowsByFile.clear();
     this.cfgByScope.clear();
     this.cfgsByFile.clear();
     this.fileRevisions.clear();
@@ -641,6 +715,33 @@ export class IndexStore {
     return this.typeRelationsByFile.get(file) ?? [];
   }
 
+  // ============================================================================
+  // Symbol-Flow Relation Queries (Phase 9.1)
+  // ============================================================================
+
+  /**
+   * Get all flow sites where the given function/method symbol appears
+   * as a value (e.g. passed as an argument).
+   */
+  symbolFlowsForFlowingSymbolGet(symbolId: SymbolId): SymbolFlowRelation[] {
+    return this.symbolFlowsByFlowingSymbol.get(symbolId) ?? [];
+  }
+
+  /**
+   * Get all flow sites whose receiving call resolved to the given
+   * function/method symbol — answers "which functions are passed to this?".
+   */
+  symbolFlowsForReceivingCallSymbolGet(symbolId: SymbolId): SymbolFlowRelation[] {
+    return this.symbolFlowsByReceivingCallSymbol.get(symbolId) ?? [];
+  }
+
+  /**
+   * Get all symbol-flow relations in a file.
+   */
+  symbolFlowsInFileGet(file: string): SymbolFlowRelation[] {
+    return this.symbolFlowsByFile.get(file) ?? [];
+  }
+
   /**
    * Build an export map for cross-file resolution.
    * Returns: Map<filePath, Map<exportedName, SymbolId>>
@@ -790,6 +891,80 @@ export class IndexStore {
             fileImports[impIdx] = newRelation as ImportsRelation;
           }
         }
+      }
+    }
+
+    if (oldRelation.kind === 'SymbolFlow' && newRelation.kind === 'SymbolFlow') {
+      // Update by-flowing-symbol index. The flowing symbol id can be
+      // rewritten by cross-file resolve when the flowing identifier was
+      // a re-export proxy; move the entry between buckets if needed.
+      if (oldRelation.flowingSymbolId !== newRelation.flowingSymbolId) {
+        const oldBucket = this.symbolFlowsByFlowingSymbol.get(oldRelation.flowingSymbolId);
+        if (oldBucket) {
+          const idx = oldBucket.indexOf(oldRelation);
+          if (idx !== -1) oldBucket.splice(idx, 1);
+          if (oldBucket.length === 0)
+            this.symbolFlowsByFlowingSymbol.delete(oldRelation.flowingSymbolId);
+        }
+        let newBucket = this.symbolFlowsByFlowingSymbol.get(newRelation.flowingSymbolId);
+        if (!newBucket) {
+          newBucket = [];
+          this.symbolFlowsByFlowingSymbol.set(newRelation.flowingSymbolId, newBucket);
+        }
+        newBucket.push(newRelation);
+      } else {
+        const bucket = this.symbolFlowsByFlowingSymbol.get(oldRelation.flowingSymbolId);
+        if (bucket) {
+          const idx = bucket.indexOf(oldRelation);
+          if (idx !== -1) bucket[idx] = newRelation;
+        }
+      }
+
+      // Update by-receiving-call index, accounting for changes in
+      // receivingCallSymbolId (including transitions to/from undefined).
+      if (oldRelation.receivingCallSymbolId !== newRelation.receivingCallSymbolId) {
+        if (oldRelation.receivingCallSymbolId) {
+          const oldBucket = this.symbolFlowsByReceivingCallSymbol.get(
+            oldRelation.receivingCallSymbolId,
+          );
+          if (oldBucket) {
+            const idx = oldBucket.indexOf(oldRelation);
+            if (idx !== -1) oldBucket.splice(idx, 1);
+            if (oldBucket.length === 0)
+              this.symbolFlowsByReceivingCallSymbol.delete(
+                oldRelation.receivingCallSymbolId,
+              );
+          }
+        }
+        if (newRelation.receivingCallSymbolId) {
+          let newBucket = this.symbolFlowsByReceivingCallSymbol.get(
+            newRelation.receivingCallSymbolId,
+          );
+          if (!newBucket) {
+            newBucket = [];
+            this.symbolFlowsByReceivingCallSymbol.set(
+              newRelation.receivingCallSymbolId,
+              newBucket,
+            );
+          }
+          newBucket.push(newRelation);
+        }
+      } else if (newRelation.receivingCallSymbolId) {
+        const bucket = this.symbolFlowsByReceivingCallSymbol.get(
+          newRelation.receivingCallSymbolId,
+        );
+        if (bucket) {
+          const idx = bucket.indexOf(oldRelation);
+          if (idx !== -1) bucket[idx] = newRelation;
+        }
+      }
+
+      // Update by-file index — file is immutable per relation but swap
+      // the entry in place so identity-based lookups keep working.
+      const fileBucket = this.symbolFlowsByFile.get(oldRelation.file);
+      if (fileBucket) {
+        const idx = fileBucket.indexOf(oldRelation);
+        if (idx !== -1) fileBucket[idx] = newRelation;
       }
     }
 

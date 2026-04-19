@@ -19,6 +19,8 @@ import {
   type WorkspaceEditPlan,
   type WorkspaceImpactRadiusDirection,
   type WorkspaceTypeHierarchyDirection,
+  type WorkspaceSymbolFlowDirection,
+  type WorkspaceSymbolFlowResult,
   type WorkspaceLintRuleDetailsResult,
   type WorkspaceLintRulesResult,
   type WorkspacePrepareRenameResult,
@@ -44,6 +46,7 @@ import {
   CODEPOL_LSP_COMMAND_SHOW_ARCHITECTURE_LINKS,
   CODEPOL_LSP_REQUEST_ARCHITECTURE_SUMMARY,
   CODEPOL_LSP_REQUEST_CALL_GRAPH,
+  CODEPOL_LSP_REQUEST_SYMBOL_FLOW,
   CODEPOL_LSP_REQUEST_DEAD_MODULES,
   CODEPOL_LSP_REQUEST_DEPENDENCY_DIFF,
   CODEPOL_LSP_REQUEST_DEPENDENCY_GRAPH,
@@ -1097,6 +1100,12 @@ export class CodepolLspServer {
           symbolId?: string;
           direction?: WorkspaceCallGraphDirection;
           depth?: number;
+          requireTypeAware?: boolean;
+        }, context);
+      case CODEPOL_LSP_REQUEST_SYMBOL_FLOW:
+        return this.symbolFlowHandle(params as {
+          symbolId?: string;
+          direction?: WorkspaceSymbolFlowDirection;
         }, context);
       case CODEPOL_LSP_REQUEST_TYPE_HIERARCHY:
         return this.typeHierarchyHandle(params as {
@@ -1924,6 +1933,7 @@ export class CodepolLspServer {
       symbolId?: string;
       direction?: WorkspaceCallGraphDirection;
       depth?: number;
+      requireTypeAware?: boolean;
     },
     context: { requestId?: JsonRpcId; signal?: AbortSignal } = {},
   ): Promise<WorkspaceDependencyGraphResult | null> {
@@ -1945,10 +1955,45 @@ export class CodepolLspServer {
         symbolId,
         direction,
         depth: params.depth,
+        requireTypeAware: params.requireTypeAware,
         requestId:
           context.requestId === undefined || context.requestId === null
             ? undefined
             : `lsp-codepol-call-graph:${String(context.requestId)}`,
+        signal: context.signal,
+      }), {
+      signal: context.signal,
+    });
+  }
+
+  private async symbolFlowHandle(
+    params: {
+      symbolId?: string;
+      direction?: WorkspaceSymbolFlowDirection;
+    },
+    context: { requestId?: JsonRpcId; signal?: AbortSignal } = {},
+  ): Promise<WorkspaceSymbolFlowResult | null> {
+    if (
+      !this.registeredClientSessionId ||
+      !this.workspaceId ||
+      !params.symbolId ||
+      !params.direction
+    ) {
+      return null;
+    }
+    const symbolId = params.symbolId;
+    const direction = params.direction;
+
+    return this.serviceCall((service) =>
+      service.querySymbolFlow({
+        clientSessionId: this.registeredClientSessionId!,
+        workspaceId: this.workspaceId!,
+        symbolId,
+        direction,
+        requestId:
+          context.requestId === undefined || context.requestId === null
+            ? undefined
+            : `lsp-codepol-symbol-flow:${String(context.requestId)}`,
         signal: context.signal,
       }), {
       signal: context.signal,

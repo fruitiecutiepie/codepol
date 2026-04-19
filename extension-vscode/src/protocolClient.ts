@@ -38,6 +38,8 @@ import type {
   WorkspaceSearchResult,
   WorkspaceSymbolAtPositionResult,
   WorkspaceSymbolDescriptorKind,
+  WorkspaceSymbolFlowDirection,
+  WorkspaceSymbolFlowResult,
   WorkspaceSymbolLookupResult,
   WorkspaceTypeHierarchyDirection,
 } from '@codepol/core';
@@ -56,6 +58,7 @@ import {
   CODEPOL_LSP_REQUEST_DIAGNOSTICS_ESCALATIONS,
   CODEPOL_LSP_REQUEST_IMPACT_RADIUS,
   CODEPOL_LSP_REQUEST_TYPE_HIERARCHY,
+  CODEPOL_LSP_REQUEST_SYMBOL_FLOW,
   CODEPOL_LSP_REQUEST_INDEX_STATUS,
   CODEPOL_LSP_REQUEST_LINT_RULE_DETAILS,
   CODEPOL_LSP_REQUEST_LINT_RULES,
@@ -177,12 +180,17 @@ export type CodepolProtocolClient = {
     symbolId: string;
     direction: WorkspaceCallGraphDirection;
     depth?: number;
+    requireTypeAware?: boolean;
   }): Promise<WorkspaceDependencyGraphResult | null>;
   queryTypeHierarchy(input: {
     symbolId: string;
     direction: WorkspaceTypeHierarchyDirection;
     depth?: number;
   }): Promise<WorkspaceDependencyGraphResult | null>;
+  querySymbolFlow(input: {
+    symbolId: string;
+    direction: WorkspaceSymbolFlowDirection;
+  }): Promise<WorkspaceSymbolFlowResult | null>;
   querySemanticSearch(query: string): Promise<WorkspaceSearchResult[] | null>;
   querySemanticDefinition(uri: string): Promise<WorkspaceSemanticDefinitionResult | null>;
   querySemanticReferences(uri: string): Promise<WorkspaceSemanticReferencesResult | null>;
@@ -477,6 +485,7 @@ export class VscodeLanguageClientProtocol implements CodepolProtocolClient {
     symbolId: string;
     direction: WorkspaceCallGraphDirection;
     depth?: number;
+    requireTypeAware?: boolean;
   }): Promise<WorkspaceDependencyGraphResult | null> {
     return this.requestRun<WorkspaceDependencyGraphResult | null>(
       CODEPOL_LSP_REQUEST_CALL_GRAPH,
@@ -491,6 +500,16 @@ export class VscodeLanguageClientProtocol implements CodepolProtocolClient {
   }): Promise<WorkspaceDependencyGraphResult | null> {
     return this.requestRun<WorkspaceDependencyGraphResult | null>(
       CODEPOL_LSP_REQUEST_TYPE_HIERARCHY,
+      input,
+    );
+  }
+
+  async querySymbolFlow(input: {
+    symbolId: string;
+    direction: WorkspaceSymbolFlowDirection;
+  }): Promise<WorkspaceSymbolFlowResult | null> {
+    return this.requestRun<WorkspaceSymbolFlowResult | null>(
+      CODEPOL_LSP_REQUEST_SYMBOL_FLOW,
       input,
     );
   }

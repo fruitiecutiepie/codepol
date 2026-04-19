@@ -385,6 +385,23 @@ describe('CLI graph subcommands', () => {
     expect(cycleSet.has(fileUris.leaf)).toBe(true);
   });
 
+  it('graph flow returns a WorkspaceSymbolFlowResult with an empty edge list for an unknown symbol id', async () => {
+    // Phase 9.1 / Gap 1 happy-path. Symbol-id discovery does not have a
+    // CLI surface today, so pinning the unknown-id behavior is the
+    // narrowest test that still exercises the full daemon-less wiring
+    // (querySymbolFlow → workspace engine → CLI JSON shape).
+    const { projectDir } = linearProjectCreate('codepol-e2e-graph-flow-');
+    createdDirs.push(projectDir);
+
+    const result = await runCli(
+      ['graph', 'flow', 'symbol-that-does-not-exist'],
+      projectDir,
+    );
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout);
+    expect(payload).toEqual({ edges: [] });
+  });
+
   it('graph diff --baseline-file accepts a raw graph export payload', async () => {
     const { projectDir, fileUris } = linearProjectCreate('codepol-e2e-graph-diff-file-');
     createdDirs.push(projectDir);

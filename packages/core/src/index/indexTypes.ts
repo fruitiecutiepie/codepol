@@ -349,6 +349,54 @@ export type TypeRelation = {
 };
 
 /**
+ * How a function/method symbol flows through source code (i.e. is used
+ * as a value, not as the callee of a call expression). Used by
+ * {@link SymbolFlowRelation} to surface higher-order data flow without
+ * fabricating call-graph edges.
+ *
+ * MVP only emits `argument`. The other variants are reserved for the
+ * next phase and must not be emitted today.
+ */
+export type SymbolFlowKind = 'argument' | 'return' | 'assignment' | 'storage';
+
+/**
+ * A `SymbolFlow` relation: a function/method symbol appears as a *value*
+ * at a flow site (e.g. passed as an argument to another call) without
+ * being directly invoked at that site.
+ *
+ * Distinct from {@link CallsRelation}: a flow is *not* a call edge. It
+ * answers the separate question "where does this function flow as an
+ * argument?" so consumers can reason about higher-order code without
+ * the structural call graph silently inventing edges that the source
+ * does not express.
+ *
+ * Inline arrow functions and `function(){}` literals are explicitly out
+ * of scope for the MVP extractor — only bare identifier references that
+ * resolve to a function/method symbol produce flow relations.
+ */
+export type SymbolFlowRelation = {
+  kind: 'SymbolFlow';
+  /** The function/method symbol flowing through the source code. */
+  flowingSymbolId: SymbolId;
+  /** Scope that owns the flow site (the function whose body contains it). */
+  ownerScopeId: ScopeId;
+  /** File of the flow site. */
+  file: string;
+  /** Byte range of the flowing identifier reference. */
+  byteRange: ByteRange;
+  /** How the symbol flows. MVP emits only 'argument'. */
+  flowKind: SymbolFlowKind;
+  /**
+   * When `flowKind === 'argument'` and the receiving call resolves to a
+   * known symbol, the function the value is passed to. Undefined when
+   * the receiver is unresolved or when `flowKind !== 'argument'`.
+   */
+  receivingCallSymbolId?: SymbolId;
+  /** 0-based argument index when `flowKind === 'argument'`, else undefined. */
+  argumentIndex?: number;
+};
+
+/**
  * Union of all relation types.
  * Relations are append-only facts extracted by adapters.
  */
@@ -360,7 +408,8 @@ export type RelationRecord =
   | CallsRelation
   | ImportBindingRelation
   | ExportsRelation
-  | TypeRelation;
+  | TypeRelation
+  | SymbolFlowRelation;
 
 // ============================================================================
 // Control Flow Graph
@@ -458,6 +507,11 @@ export type IndexCapabilities = {
   callGraph: 'none' | 'heuristic' | 'precise';
   /** Whether control flow graphs are available */
   controlFlowGraph: boolean;
+  /**
+   * Whether {@link SymbolFlowRelation} extraction is available.
+   * Optional for back-compat: absent ⇒ treat as `false`.
+   */
+  symbolFlow?: boolean;
   /** Languages that have been indexed */
   supportedLanguages: string[];
 };

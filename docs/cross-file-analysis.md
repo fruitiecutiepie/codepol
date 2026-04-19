@@ -447,7 +447,32 @@ Quick reference for the most useful methods when writing cross-file rules. See t
 | | `subTypesGet(symbolId)` | `TypeRelation[]` | What extends/implements a symbol |
 | **Call graph** | `callersGet(symbolId)` | `SymbolId[]` | Symbols that call this symbol |
 | | `calleesGet(symbolId)` | `SymbolId[]` | Symbols called by this function |
+| **Symbol flow** | `symbolFlowsForSymbolGet(id)` | `SymbolFlowRelation[]` | Sites where a function flows as a value (e.g. passed as a callback) |
+| | `symbolFlowsForReceiverGet(id)` | `SymbolFlowRelation[]` | Sites whose receiving call resolves to this symbol |
 | **Control flow** | `cyclomaticComplexityGet(id)` | `number?` | Cyclomatic complexity of a function |
+
+### Call-graph fidelity tiers (Phase 9.2)
+
+The workspace surface (`queryCallGraph`) classifies each edge along two
+orthogonal axes:
+
+| Axis | Values | Default (absent) |
+| ---- | ------ | ---------------- |
+| `callGraphConfidence` | `'structural'` (from the index) · `'type-aware'` (from a registered language-server binding) | `'structural'` |
+| `callGraphKind` | `'direct'` · `'dynamic-dispatch'` · `'higher-order'` | `'direct'` |
+
+Hosts (the LSP server, an editor extension, a CLI binding) opt in to
+type-aware answers by registering a `TypeAwareCallGraphSource` with the
+`WorkspaceServiceEngine`. When no source is registered the result is
+byte-identical to before — the merge is purely additive. The merge
+itself is conservative: a structural edge missing from the type-aware
+source is *preserved as `'structural'`* rather than dropped, because
+language servers can lag, fail to index a file, or return partial
+results, and silently dropping structural edges to a transient
+type-aware response would be a correctness regression. Higher-order
+data flow (functions passed as arguments) is exposed *separately* via
+`querySymbolFlow` so the structural call graph stays honest about what
+the source code actually expresses.
 
 ## Testing Cross-File Rules
 

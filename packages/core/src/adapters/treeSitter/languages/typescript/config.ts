@@ -15,6 +15,7 @@ import { CALLS_QUERY } from './queries/calls';
 import { IMPORTS_QUERY } from './queries/imports';
 import { EXPORTS_QUERY } from './queries/exports';
 import { TYPE_RELATIONS_QUERY } from './queries/typeRelations';
+import { SYMBOL_FLOW_QUERY } from './queries/symbolFlow';
 
 /**
  * Reference filter for TypeScript.
@@ -75,6 +76,7 @@ export function typescriptConfigCreate(language: Language): LangConfig {
       imports: IMPORTS_QUERY,
       exports: EXPORTS_QUERY,
       typeRelations: TYPE_RELATIONS_QUERY,
+      symbolFlow: SYMBOL_FLOW_QUERY,
     },
     captures: CAPTURE_NAMES_DEFAULT,
     symbolKinds: {

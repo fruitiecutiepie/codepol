@@ -7,7 +7,10 @@
  */
 import type { Argv, CommandModule } from 'yargs';
 import { configGet, configGetFromPath } from '@codepol/core';
-import type { WorkspaceImpactRadiusDirection } from '@codepol/core';
+import type {
+  WorkspaceImpactRadiusDirection,
+  WorkspaceSymbolFlowDirection,
+} from '@codepol/core';
 import { graphCyclesRun } from './graphCycles';
 import { graphDeadRun } from './graphDead';
 import {
@@ -17,6 +20,7 @@ import {
 import { graphExportRun } from './graphExport';
 import { graphFanInRun } from './graphFanIn';
 import { graphFanOutRun } from './graphFanOut';
+import { graphFlowRun } from './graphFlow';
 import { graphImpactRun } from './graphImpact';
 import { graphPathRun } from './graphPath';
 import { graphSnapshotRun } from './graphSnapshot';
@@ -353,6 +357,50 @@ const graphDiffCommand: CommandModule<
   },
 };
 
+const graphFlowCommand: CommandModule<
+  GraphCommonArgs,
+  GraphCommonArgs & {
+    symbolId: string;
+    direction: WorkspaceSymbolFlowDirection;
+    format: string;
+  }
+> = {
+  command: 'flow <symbolId>',
+  describe:
+    'Emit "function-as-argument" flow sites for a symbol (Phase 9.1 / Gap 1)',
+  builder: (yargs) =>
+    graphFormatOption(yargs)
+      .positional('symbolId', {
+        type: 'string',
+        demandOption: true,
+        describe: 'Stable id of the function/method symbol to inspect',
+      })
+      .option('direction', {
+        type: 'string',
+        choices: ['outgoing', 'incoming'] as const,
+        default: 'outgoing' as WorkspaceSymbolFlowDirection,
+        describe:
+          'outgoing = flow sites where this symbol is passed as an argument; incoming = flow sites whose receiver resolves to this symbol',
+      }) as unknown as Argv<
+      GraphCommonArgs & {
+        symbolId: string;
+        direction: WorkspaceSymbolFlowDirection;
+        format: string;
+      }
+    >,
+  handler: async (args) => {
+    const resolved = await graphConfigResolve(args);
+    const exitCode = await graphFlowRun({
+      cwd: resolved.cwd,
+      configPath: resolved.configPath,
+      symbolId: args.symbolId,
+      direction: args.direction,
+      format: args.format,
+    });
+    if (exitCode !== 0) process.exitCode = exitCode;
+  },
+};
+
 export const graphCommand: CommandModule<unknown, GraphCommonArgs> = {
   command: 'graph <subcommand>',
   describe: 'Run workspace dependency-graph queries',
@@ -367,6 +415,7 @@ export const graphCommand: CommandModule<unknown, GraphCommonArgs> = {
       .command(graphImpactCommand)
       .command(graphSnapshotCommand)
       .command(graphDiffCommand)
+      .command(graphFlowCommand)
       .demandCommand(1, 'Specify a graph subcommand')
       .strict(),
   handler: () => {

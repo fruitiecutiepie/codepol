@@ -18,6 +18,7 @@ import type {
   ImportBindingRelation,
   ExportsRelation,
   TypeRelation,
+  SymbolFlowRelation,
   FlowGraph,
 } from './indexTypes';
 import type { IndexStore } from './indexStore';
@@ -220,6 +221,34 @@ export type ProjectIndex = {
    * Get all type relations in a file.
    */
   typeRelationsInFileGet(file: string): TypeRelation[];
+
+  // ============================================================================
+  // Symbol-Flow Queries (Phase 9.1: higher-order argument flow)
+  // ============================================================================
+
+  /**
+   * Get every flow site where the given function/method symbol appears
+   * as a value (e.g. passed as an argument). Returns empty when the
+   * symbol does not flow anywhere or is not a function/method.
+   *
+   * Distinct from {@link callersGet}: a flow site is *not* a call site.
+   * The two surfaces answer different questions and must not be merged
+   * in the structural call graph.
+   */
+  symbolFlowsForSymbolGet(symbolId: SymbolId): SymbolFlowRelation[];
+
+  /**
+   * Get every flow site whose receiving call resolved to the given
+   * function/method symbol — answers "which functions are passed to
+   * this one?". Returns empty when the receiver is not the target of
+   * any indexed flow or is not a function/method.
+   */
+  symbolFlowsForReceiverGet(receivingCallSymbolId: SymbolId): SymbolFlowRelation[];
+
+  /**
+   * Get all symbol-flow relations whose flow site lives in the given file.
+   */
+  symbolFlowsInFileGet(file: string): SymbolFlowRelation[];
 
   // ============================================================================
   // Module Graph Queries
@@ -598,6 +627,19 @@ export function projectIndexCreate(
 
     typeRelationsInFileGet(file: string): TypeRelation[] {
       return store.typeRelationsInFileGet(file);
+    },
+
+    // Symbol-flow queries (Phase 9.1)
+    symbolFlowsForSymbolGet(symbolId: SymbolId): SymbolFlowRelation[] {
+      return store.symbolFlowsForFlowingSymbolGet(symbolId);
+    },
+
+    symbolFlowsForReceiverGet(receivingCallSymbolId: SymbolId): SymbolFlowRelation[] {
+      return store.symbolFlowsForReceivingCallSymbolGet(receivingCallSymbolId);
+    },
+
+    symbolFlowsInFileGet(file: string): SymbolFlowRelation[] {
+      return store.symbolFlowsInFileGet(file);
     },
 
     // Module graph queries (lazily built, cached)

@@ -80,6 +80,12 @@ type QueryPack = {
   exports?: string;
   /** Type relation patterns (extends/implements) (optional) */
   typeRelations?: string;
+  /**
+   * Symbol-flow patterns (function-as-argument flow sites). Optional —
+   * languages without an extractor simply skip the extraction step.
+   * (Phase 9.1 / Gap 1.)
+   */
+  symbolFlow?: string;
 };
 
 // ============================================================================

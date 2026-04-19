@@ -28,6 +28,8 @@ import type {
   WorkspaceSemanticReferencesResult,
   WorkspaceSymbolAtPositionResult,
   WorkspaceSymbolDescriptorKind,
+  WorkspaceSymbolFlowDirection,
+  WorkspaceSymbolFlowResult,
   WorkspaceSymbolLookupResult,
   WorkspaceSymbolResult,
   WorkspaceTypeHierarchyDirection,
@@ -264,6 +266,15 @@ export type WorkspaceService = {
     symbolId: string;
     direction: WorkspaceCallGraphDirection;
     depth?: number;
+    /**
+     * When true, fail with a structured error
+     * `{ code: 'type-aware-source-missing', languageId }` when no
+     * `TypeAwareCallGraphSource` is registered for the seed symbol's
+     * language. When false / absent (the default), the workspace
+     * silently falls back to the structural-only result so behavior is
+     * byte-identical to today.
+     */
+    requireTypeAware?: boolean;
     requestId?: string;
     analysisGeneration?: number;
     signal?: AbortSignal;
@@ -349,6 +360,31 @@ export type WorkspaceService = {
     analysisGeneration?: number;
     signal?: AbortSignal;
   }) => Promise<WorkspaceArchitectureSummaryResult>;
+  /**
+   * "Function-as-argument" flow surface (Phase 9.1 / Gap 1).
+   *
+   * Surfaces the `SymbolFlowRelation` data the index extracts as a
+   * separate edge stream from the call graph. Answers two distinct
+   * questions depending on `direction`:
+   *
+   * - `'outgoing'`: list flow sites where `symbolId` is passed as an
+   *   argument (e.g. `arr.forEach(handler)` ⇒ `handler` flows out).
+   * - `'incoming'`: list flow sites whose receiving call resolves to
+   *   `symbolId` (e.g. callbacks passed to this function).
+   *
+   * Distinct from `queryCallGraph` — the flow surface does NOT
+   * fabricate call-graph edges from argument flow, and the call graph
+   * does NOT include flow sites in its edges.
+   */
+  querySymbolFlow: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    symbolId: string;
+    direction: WorkspaceSymbolFlowDirection;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceSymbolFlowResult>;
   /**
    * Symbol-id discovery by name (with optional kind / file scope).
    *

@@ -143,7 +143,12 @@ export type {
   WorkspaceDependencyGraphResult,
   WorkspaceImpactRadiusDirection,
   WorkspaceCallGraphDirection,
+  WorkspaceCallGraphEdgeConfidence,
+  WorkspaceCallGraphEdgeKind,
   WorkspaceTypeHierarchyDirection,
+  WorkspaceSymbolFlowDirection,
+  WorkspaceSymbolFlowEdge,
+  WorkspaceSymbolFlowResult,
   WorkspaceDependencyPathResult,
   WorkspaceDeadModulesResult,
   WorkspaceDependencyDiffNode,
@@ -715,6 +720,21 @@ export {
   symbolCallGraphCompute,
   symbolTypeHierarchyCompute,
 } from './index/symbolGraphQueries';
+
+// Type-aware call-graph source seam (Phase 9.2 / Gap 1)
+export type {
+  TypeAwareCallEdge,
+  TypeAwareCallKind,
+  TypeAwareCallGraphSource,
+} from './index/typeAwareCallGraphSource';
+export type { TypeAwareCallGraphSourceRegistry } from './index/typeAwareCallGraphSourceRegistry';
+export { typeAwareCallGraphSourceRegistryCreate } from './index/typeAwareCallGraphSourceRegistry';
+
+// Symbol-flow relations (Phase 9.1 / Gap 1)
+export type {
+  SymbolFlowKind,
+  SymbolFlowRelation,
+} from './index/indexTypes';
 
 // Index builder
 export type { IndexBuildOptions, IndexBuildResult } from './index/indexBuilder';
