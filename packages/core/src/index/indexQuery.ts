@@ -84,14 +84,46 @@ export type ProjectIndex = {
   // ============================================================================
 
   /**
+   * Resolve a symbol id to its canonical declaration id.
+   *
+   * When `symbolId` is a local import-binding symbol (the local handle
+   * created by `import { foo } from './a'`), this follows the binding's
+   * `resolvedExportId` until a declaration is reached and returns the
+   * canonical declaration's id. When `symbolId` already names a
+   * declaration the input is returned unchanged.
+   *
+   * Idempotent and cycle-safe: a symbol that participates in a
+   * pathological re-export cycle terminates by visited-set tracking
+   * and returns the last symbol the chain produced.
+   *
+   * Used by `callersGet` and `calleesGet` to normalize re-export proxy
+   * ids so the call graph collapses to one node per logical
+   * declaration. Callers that want the un-normalized chain (e.g., to
+   * enumerate "every file that re-exports `helper`") should use
+   * `exportLocationsGet` against the canonical id.
+   */
+  symbolCanonicalIdGet(symbolId: SymbolId): SymbolId;
+
+  /**
    * Get symbols that call a given symbol.
-   * Based on heuristic call detection; may have false positives/negatives.
+   *
+   * Both the input and the resulting caller ids are normalized through
+   * {@link symbolCanonicalIdGet} so the result is one entry per logical
+   * declaration regardless of how many re-export hops the call site
+   * traversed.
+   *
+   * Heuristic: dynamic dispatch and higher-order calls are not tracked.
    */
   callersGet(symbolId: SymbolId): SymbolId[];
 
   /**
    * Get symbols called by a given symbol (function/method).
-   * Based on heuristic call detection; may have false positives/negatives.
+   *
+   * Both the input and the resulting callee ids are normalized through
+   * {@link symbolCanonicalIdGet} so re-export proxies collapse onto the
+   * canonical declaration.
+   *
+   * Heuristic: dynamic dispatch and higher-order calls are not tracked.
    */
   calleesGet(symbolId: SymbolId): SymbolId[];
 
@@ -295,6 +327,41 @@ export function projectIndexCreate(
   let graph: ModuleGraph | undefined;
   let edgeInfo: ModuleGraphEdgeInfo | undefined;
 
+  // Cache for `symbolCanonicalIdGet`. Populated on first use per
+  // ProjectIndex instance; the cache is discarded with the instance,
+  // which the workspace service rebuilds on every store mutation.
+  const canonicalIdCache = new Map<SymbolId, SymbolId>();
+
+  function symbolCanonicalIdResolve(symbolId: SymbolId): SymbolId {
+    const cached = canonicalIdCache.get(symbolId);
+    if (cached !== undefined) return cached;
+
+    // Walk the import-binding chain. Every step rewrites `current` to
+    // the binding's `resolvedExportId`, which is already the
+    // collapsed-chain canonical id (`exportMapAddReexportedSymbols`
+    // ran during cross-file resolve and resolved re-export hops to the
+    // origin declaration). The `while` loop is therefore at most one
+    // hop in the common case; the visited set is belt-and-suspenders
+    // for pathological inputs (e.g., a binding that points back at
+    // itself when the source module is unindexed and the resolution
+    // produced a self-loop).
+    const visited: SymbolId[] = [];
+    let current = symbolId;
+    while (!canonicalIdCache.has(current)) {
+      visited.push(current);
+      const binding = store.importBindingForSymbolGet(current);
+      const next = binding?.resolvedExportId;
+      if (!next || next === current) break;
+      if (visited.includes(next)) break;
+      current = next;
+    }
+    const canonical = canonicalIdCache.get(current) ?? current;
+    for (const id of visited) {
+      canonicalIdCache.set(id, canonical);
+    }
+    return canonical;
+  }
+
   return {
     // Symbol queries
     symbolsGet(filter?: SymbolFilter): SymbolRecord[] {
@@ -322,16 +389,32 @@ export function projectIndexCreate(
       return store.referencesInFileGet(file);
     },
 
+    // Symbol canonical-id (re-export chain follower)
+    symbolCanonicalIdGet(symbolId: SymbolId): SymbolId {
+      return symbolCanonicalIdResolve(symbolId);
+    },
+
     // Call graph queries
     callersGet(symbolId: SymbolId): SymbolId[] {
-      // Find all Calls relations that resolved to this symbol
+      // Normalize the focus id so callers that pass a local re-export
+      // proxy (e.g., the import-binding symbol in `c.ts` for `helper`)
+      // see the same callers as callers that passed the canonical
+      // declaration id.
+      const canonicalFocus = symbolCanonicalIdResolve(symbolId);
+
+      // Find all Calls relations that resolve (after canonicalization)
+      // to this symbol. Cross-file resolve in `crossFileResolve` already
+      // rewrites `Calls.resolvedSymbolId` to the canonical declaration
+      // for the common single-hop case, but we re-canonicalize defensively
+      // so the helper is correct against snapshots / partial rebuilds
+      // that pre-date the rewrite.
       const calls = store.callsGet();
       const callerScopes = new Set<ScopeId>();
 
       for (const call of calls) {
-        if (call.resolvedSymbolId === symbolId) {
-          callerScopes.add(call.scopeId);
-        }
+        if (!call.resolvedSymbolId) continue;
+        if (symbolCanonicalIdResolve(call.resolvedSymbolId) !== canonicalFocus) continue;
+        callerScopes.add(call.scopeId);
       }
 
       // Map scopes to their containing function/method symbols
@@ -356,7 +439,7 @@ export function projectIndexCreate(
                 sym.byteRange.start <= current.byteRange.start &&
                 sym.byteRange.end >= current.byteRange.end
               ) {
-                callers.push(sym.id);
+                callers.push(symbolCanonicalIdResolve(sym.id));
                 break;
               }
             }
@@ -374,7 +457,10 @@ export function projectIndexCreate(
     },
 
     calleesGet(symbolId: SymbolId): SymbolId[] {
-      const symbol = store.symbolGet(symbolId);
+      // Normalize so callers that pass a re-export proxy id get the
+      // same callees as callers that pass the canonical declaration.
+      const canonicalFocus = symbolCanonicalIdResolve(symbolId);
+      const symbol = store.symbolGet(canonicalFocus);
       if (!symbol) return [];
 
       // Only functions/methods have callees
@@ -396,13 +482,15 @@ export function projectIndexCreate(
         }
       }
 
-      // Get all calls within these scopes
+      // Get all calls within these scopes; canonicalize each callee so
+      // the result has one entry per logical declaration, regardless of
+      // whether the call site resolved through a re-export hop.
       const callees = new Set<SymbolId>();
       for (const scopeId of relevantScopes) {
         const calls = store.callsInScopeGet(scopeId);
         for (const call of calls) {
           if (call.resolvedSymbolId) {
-            callees.add(call.resolvedSymbolId);
+            callees.add(symbolCanonicalIdResolve(call.resolvedSymbolId));
           }
         }
       }

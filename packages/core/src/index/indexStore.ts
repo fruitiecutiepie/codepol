@@ -792,6 +792,22 @@ export class IndexStore {
         }
       }
     }
+
+    if (oldRelation.kind === 'Calls' && newRelation.kind === 'Calls') {
+      // Update by-scope index. The scope key is unchanged (callsExtract
+      // keys by the innermost scope and updates only `resolvedSymbolId`),
+      // so we just swap the entry in place. Without this, `callsInScopeGet`
+      // returns the stale relation while `callsGet` (which iterates
+      // `relations`) returns the new one — used to be the source of a
+      // visible mismatch in `calleesGet`.
+      const scopeCalls = this.callsByScope.get(oldRelation.scopeId);
+      if (scopeCalls) {
+        const callIdx = scopeCalls.indexOf(oldRelation as CallsRelation);
+        if (callIdx !== -1) {
+          scopeCalls[callIdx] = newRelation as CallsRelation;
+        }
+      }
+    }
   }
 
   /**

@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import type { Language } from 'web-tree-sitter';
-import type { IndexCapabilities, ImportsRelation, ImportBindingRelation, ReferencesRelation, TypeRelation, SymbolId } from './indexTypes';
+import type { CallsRelation, IndexCapabilities, ImportsRelation, ImportBindingRelation, ReferencesRelation, TypeRelation, SymbolId } from './indexTypes';
 import { IndexStore, indexStoreNew } from './indexStore';
 import { projectIndexCreate, type ProjectIndex } from './indexQuery';
 import type { IndexAdapter } from '../adapters/treeSitter/adapterTypes';
@@ -599,6 +599,75 @@ export function crossFileResolveForFile(
       store.relationUpdate(binding, updatedBinding);
     }
   }
+
+  // Bindings in this file may have changed `resolvedExportId` — re-run
+  // the call rewrite so cross-file call edges stay current. Bindings in
+  // *other* files that target this file have also been touched above;
+  // their call sites are caught by re-running the per-file resolver on
+  // those files. Tracking which other files were touched would over-fit
+  // to the rewrite shape, so we keep the cheap path: callers that re-run
+  // `crossFileResolveForFile` per dirty file (the workspace service does
+  // this today) get the correct end state.
+  callsCrossFileResolveForFile(store, file);
+}
+
+/**
+ * Resolve cross-file `Calls.resolvedSymbolId` by name-matching unresolved
+ * call sites against the file's import bindings. Members and dotted
+ * callees are skipped (they need namespace-aware resolution that the
+ * Step 5 reference pass already performs against `References`). Already
+ * resolved calls are left untouched so file-local function/method
+ * resolution from the adapter wins over import-binding fallback —
+ * matching ECMAScript scoping rules where a same-file declaration
+ * shadows an import of the same name.
+ *
+ * Idempotent and cycle-safe: the rewrite only sets `resolvedSymbolId` to
+ * the binding's already-canonicalized `resolvedExportId`, so running this
+ * pass twice produces no change.
+ */
+function callsCrossFileResolve(
+  store: IndexStore,
+  indexedFiles: Set<string>,
+): void {
+  for (const file of indexedFiles) {
+    callsCrossFileResolveForFile(store, file);
+  }
+}
+
+/**
+ * Per-file companion to {@link callsCrossFileResolve}. Used by both the
+ * full-build pass and the incremental {@link crossFileResolveForFile}
+ * path so overlay re-resolves keep call edges in sync.
+ */
+function callsCrossFileResolveForFile(store: IndexStore, file: string): void {
+  const bindings = store.importBindingsInFileGet(file);
+  if (bindings.length === 0) return;
+
+  const bindingsByName = new Map<string, ImportBindingRelation>();
+  for (const binding of bindings) {
+    if (!binding.resolvedExportId) continue;
+    const localSymbol = store.symbolGet(binding.localSymbolId);
+    if (!localSymbol) continue;
+    if (bindingsByName.has(localSymbol.name)) continue;
+    bindingsByName.set(localSymbol.name, binding);
+  }
+  if (bindingsByName.size === 0) return;
+
+  const scopes = store.scopesInFileGet(file);
+  for (const scope of scopes) {
+    const calls = store.callsInScopeGet(scope.id);
+    for (const call of calls) {
+      if (call.resolvedSymbolId !== undefined) continue;
+      if (call.calleeName.includes('.')) continue;
+      const binding = bindingsByName.get(call.calleeName);
+      if (!binding || !binding.resolvedExportId) continue;
+      const updatedCall: CallsRelation = {
+        ...call,
+        resolvedSymbolId: binding.resolvedExportId,
+      };
+      store.relationUpdate(call, updatedCall);
+    }
+  }
 }
 
 // ============================================================================
@@ -871,6 +940,20 @@ function crossFileResolve(
       }
     }
   }
+
+  // Step 5b: Resolve cross-file Calls.
+  // The adapter resolves a `Calls` site only when the callee name matches
+  // a function/method declared in the same file. For cross-file calls
+  // (`import { helper } from './a'; helper()`) `Calls.resolvedSymbolId`
+  // is left undefined because the local binding is a variable (kind
+  // 'variable', binding 'import'), not a function. Mirror the References
+  // pass: walk every unresolved call and try to match the callee name
+  // against an import binding in the same file. When found, point the
+  // call directly at the canonical exported symbol so `callersGet` /
+  // `calleesGet` see one node per logical declaration regardless of how
+  // many re-export hops the call traversed (`exportMapAddReexportedSymbols`
+  // already collapsed re-export chains into `binding.resolvedExportId`).
+  callsCrossFileResolve(store, indexedFiles);
 
   // Step 6: Resolve cross-file TypeRelation targets
   // When a class extends/implements an imported symbol, resolvedTargetId currently
