@@ -45,6 +45,8 @@ import {
 } from './constants';
 import { CodepolArchitectureCodeLensProvider } from './codeLensProvider';
 import { CodepolArchitectureHoverProvider } from './architectureHoverProvider';
+import { CodepolImportSpecifierHoverProvider } from './importSpecifierHoverProvider';
+import { ImportSpecifierMarkerController } from './importSpecifierMarkerController';
 import { CodepolSymbolCodeLensProvider } from './symbolCodeLensProvider';
 import { CodepolTypeHierarchyCodeLensProvider } from './typeHierarchyCodeLensProvider';
 import {
@@ -669,6 +671,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     protocol,
     peekCommandId: CODEPOL_EXTENSION_COMMAND_PEEK_ARCHITECTURE,
   });
+  const importSpecifierMarkerController = new ImportSpecifierMarkerController({
+    protocol,
+  });
+  const importSpecifierHoverProvider = new CodepolImportSpecifierHoverProvider({
+    protocol,
+    markers: importSpecifierMarkerController,
+    peekCommandId: CODEPOL_EXTENSION_COMMAND_PEEK_ARCHITECTURE,
+  });
+  if (vscode.window.activeTextEditor) {
+    importSpecifierMarkerController.attachToEditor(
+      vscode.window.activeTextEditor,
+    );
+  }
   const symbolCodeLensProvider = new CodepolSymbolCodeLensProvider({
     protocol,
     showCallGraphCommandId: CODEPOL_EXTENSION_COMMAND_SHOW_CALL_GRAPH,
@@ -686,6 +701,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     codeLensProvider,
     symbolCodeLensProvider,
     typeHierarchyCodeLensProvider,
+    importSpecifierMarkerController,
     vscode.languages.registerCodeLensProvider(
       { scheme: 'file' },
       codeLensProvider,
@@ -697,6 +713,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.languages.registerHoverProvider(
       { scheme: 'file' },
       architectureHoverProvider,
+    ),
+    // Phase 5 (deferred) hover provider — fires on import specifiers
+    // that the ImportSpecifierMarkerController has decorated. The
+    // marker is the extension-owned identity required by
+    // TODO_CODEPOL_LSP_HOVER_MODEL.md.
+    vscode.languages.registerHoverProvider(
+      { scheme: 'file' },
+      importSpecifierHoverProvider,
     ),
     vscode.languages.registerCodeLensProvider(
       { scheme: 'file' },

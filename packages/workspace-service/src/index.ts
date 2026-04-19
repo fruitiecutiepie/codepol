@@ -89,6 +89,8 @@ import {
   type WorkspaceDependencyGraphResult,
   type WorkspaceDependencyPathResult,
   type WorkspaceImpactRadiusDirection,
+  type WorkspaceImportSpecifierDescriptor,
+  type WorkspaceImportSpecifiersInFileResult,
   type WorkspaceCallGraphDirection,
   type WorkspaceTypeHierarchyDirection,
   type WorkspaceTypeHierarchyEdgeConfidence,
@@ -858,6 +860,14 @@ export type WorkspaceService = {
     analysisGeneration?: number;
     signal?: AbortSignal;
   }) => Promise<WorkspaceSymbolsInFileWithCallCountsResult>;
+  queryImportSpecifiersInFile: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceImportSpecifiersInFileResult>;
 };
 
 export type WorkspaceServiceCreateOptions = {
@@ -5656,6 +5666,232 @@ function workspaceSymbolsInFileWithCallCountsResultCreate(
     return left.symbol.symbolId.localeCompare(right.symbol.symbolId);
   });
   return { items };
+}
+
+// ============================================================================
+// Per-file import specifier discovery (queryImportSpecifiersInFile)
+// ============================================================================
+
+/**
+ * Build the per-file import-specifier descriptors used by the editor's
+ * import-specifier hover marker layer.
+ *
+ * Walks `ImportBindingRelation` and `ImportsRelation` for one file,
+ * groups the bindings by their import statement byte range, and emits
+ * one {@link WorkspaceImportSpecifierDescriptor} per statement whose
+ * target resolves to a file inside the indexed workspace. External /
+ * unresolved specifiers are dropped because the per-file metric the
+ * hover card surfaces (importer / importee counts, layer / package
+ * boundary) is meaningful only for in-workspace targets.
+ *
+ * Edge-kind precedence when multiple bindings on the same statement
+ * disagree mirrors `moduleGraphEdgeInfoBuild`: `dynamic > cjs >
+ * static`. A statement with no bindings (pure side-effect import or
+ * dynamic import without assignment) falls through to the
+ * `ImportsRelation` walk and emits with `edgeKind: 'side_effect'` and
+ * `bindingCount: 0`.
+ *
+ * Sort order is `(range.start.line, range.start.character)` so two
+ * runs over byte-identical input produce byte-identical output. The
+ * marker layer applies the order directly.
+ *
+ * Returns `{ specifiers: [] }` (never `undefined`) for unindexed
+ * files, malformed URIs, or files with no workspace-resolved imports.
+ */
+function workspaceImportSpecifiersInFileResultCreate(
+  workspace: WorkspaceContextState,
+  state: WorkspaceDocumentsState,
+  index: ProjectIndex,
+  input: { uri: string },
+): WorkspaceImportSpecifiersInFileResult {
+  let filePath: string;
+  try {
+    filePath = workspaceUriToPath(input.uri);
+  } catch {
+    return { specifiers: [] };
+  }
+
+  const indexedFiles = new Set(index.filesGet());
+  if (!indexedFiles.has(filePath)) {
+    return { specifiers: [] };
+  }
+
+  const filePackageNameGet = workspaceFilePackageNameResolverCreate(
+    workspace.baseIndexState?.workspacePackageRecords,
+  );
+  const fromPackage = filePackageNameGet(filePath);
+
+  type SpecifierAccumulator = {
+    byteRange: WorkspaceByteRange;
+    resolvedModulePath: string;
+    edgeKind: WorkspaceDependencyGraphEdgeKind;
+    bindingCount: number;
+  };
+  // Keyed by `${byteRange.start}\0${byteRange.end}\0${target}` — the
+  // import-binding extractor stamps every binding on the same
+  // statement with the same `importRange`, so multi-binding statements
+  // (`import { a, b, c } from './util'`) collapse to one accumulator
+  // with `bindingCount = 3`.
+  const accumulators = new Map<string, SpecifierAccumulator>();
+  // For each `(file, target)` pair, the byte ranges of statements
+  // already covered by an `ImportBindingRelation`. Used below to
+  // suppress redundant `ImportsRelation` entries for the same
+  // statement: the imports query emits *several* captures per
+  // statement (e.g. `@import.source` is just the module-string node),
+  // so without this the side-effect walk would emit a second marker
+  // for every binding statement.
+  const bindingStatementRangesByTarget = new Map<string, WorkspaceByteRange[]>();
+
+  const bindings = index.importBindingsGet(filePath);
+  for (const binding of bindings) {
+    const target = binding.resolvedModulePath;
+    if (!target || !indexedFiles.has(target) || target === filePath) {
+      continue;
+    }
+    const style = binding.importStyle ?? 'static';
+    const bindingKind: WorkspaceDependencyGraphEdgeKind =
+      style === 'dynamic'
+        ? 'dynamic'
+        : style === 'cjs'
+          ? 'cjs'
+          : 'static';
+    const key = `${binding.byteRange.start}\0${binding.byteRange.end}\0${target}`;
+    const existing = accumulators.get(key);
+    if (existing) {
+      existing.bindingCount += 1;
+      existing.edgeKind = workspaceImportSpecifierEdgeKindMerge(
+        existing.edgeKind,
+        bindingKind,
+      );
+      continue;
+    }
+    accumulators.set(key, {
+      byteRange: binding.byteRange,
+      resolvedModulePath: target,
+      edgeKind: bindingKind,
+      bindingCount: 1,
+    });
+    let coveredRanges = bindingStatementRangesByTarget.get(target);
+    if (!coveredRanges) {
+      coveredRanges = [];
+      bindingStatementRangesByTarget.set(target, coveredRanges);
+    }
+    coveredRanges.push(binding.byteRange);
+  }
+
+  const imports = index.importsGet(filePath);
+  for (const imp of imports) {
+    const target = imp.resolvedModulePath;
+    if (!target || !indexedFiles.has(target) || target === filePath) {
+      continue;
+    }
+    if (
+      workspaceImportSpecifierIsCoveredByBinding(
+        imp.byteRange,
+        bindingStatementRangesByTarget.get(target),
+      )
+    ) {
+      // A binding for the same target already covers this statement —
+      // the `ImportsRelation` here is one of the auxiliary captures
+      // (e.g. `@import.source` for the module specifier) and would
+      // otherwise emit a duplicate marker on the same line.
+      continue;
+    }
+    const key = `${imp.byteRange.start}\0${imp.byteRange.end}\0${target}`;
+    if (accumulators.has(key)) continue;
+    accumulators.set(key, {
+      byteRange: imp.byteRange,
+      resolvedModulePath: target,
+      edgeKind: 'side_effect',
+      bindingCount: 0,
+    });
+  }
+
+  if (accumulators.size === 0) {
+    return { specifiers: [] };
+  }
+
+  const source = workspaceSourceGet(state, filePath);
+  const specifiers: WorkspaceImportSpecifierDescriptor[] = [];
+  for (const accumulator of accumulators.values()) {
+    const range = workspaceRangeFromByteRange(source, accumulator.byteRange);
+    const resolvedModuleUri = workspacePathToUri(accumulator.resolvedModulePath);
+    const resolvedModuleWorkspaceRelativePath = workspaceRelativePathCreate(
+      workspace.rootPath,
+      accumulator.resolvedModulePath,
+    );
+    const toPackage = filePackageNameGet(accumulator.resolvedModulePath);
+    const crossesPackageBoundary =
+      fromPackage !== undefined && toPackage !== undefined
+        ? fromPackage !== toPackage
+        : undefined;
+    specifiers.push({
+      range,
+      resolvedModuleUri,
+      resolvedModuleWorkspaceRelativePath,
+      edgeKind: accumulator.edgeKind,
+      bindingCount: accumulator.bindingCount,
+      ...(crossesPackageBoundary !== undefined
+        ? { crossesPackageBoundary }
+        : {}),
+    });
+  }
+
+  specifiers.sort((left, right) => {
+    const lineDifference = left.range.start.line - right.range.start.line;
+    if (lineDifference !== 0) return lineDifference;
+    return left.range.start.character - right.range.start.character;
+  });
+
+  return { specifiers };
+}
+
+/**
+ * True when {@link candidate} falls inside (or exactly matches) any of
+ * the binding statement ranges. Used to suppress redundant
+ * {@link ImportsRelation} entries that the imports query emits as
+ * auxiliary captures around a binding statement (e.g. the
+ * `@import.source` capture covers just the module specifier substring
+ * of a binding statement).
+ */
+function workspaceImportSpecifierIsCoveredByBinding(
+  candidate: WorkspaceByteRange,
+  bindingRanges: readonly WorkspaceByteRange[] | undefined,
+): boolean {
+  if (!bindingRanges) return false;
+  for (const range of bindingRanges) {
+    if (candidate.start >= range.start && candidate.end <= range.end) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Pick the dominant edge kind when multiple bindings on the same
+ * import statement disagree. Mirrors `edgeKindMerge` in
+ * `moduleGraph.ts` so the workspace surface and the dependency-graph
+ * surface report the same kind for the same statement.
+ */
+function workspaceImportSpecifierEdgeKindMerge(
+  existing: WorkspaceDependencyGraphEdgeKind,
+  next: WorkspaceDependencyGraphEdgeKind,
+): WorkspaceDependencyGraphEdgeKind {
+  const rank = (kind: WorkspaceDependencyGraphEdgeKind): number => {
+    switch (kind) {
+      case 'dynamic':
+        return 3;
+      case 'cjs':
+        return 2;
+      case 'static':
+        return 1;
+      case 'side_effect':
+        return 0;
+      case 'type_only':
+        return 0;
+    }
+  };
+  return rank(next) > rank(existing) ? next : existing;
 }
 
 /**
@@ -11073,6 +11309,32 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       uri: input.uri,
     });
   }
+
+  async queryImportSpecifiersInFile(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceImportSpecifiersInFileResult> {
+    const { workspace, workspaceSession } = workspaceSessionGet(
+      this.workspaces,
+      this.clientSessions,
+      input.clientSessionId,
+      input.workspaceId,
+    );
+    const index = await this.workspaceSessionIndexEnsure(workspace, workspaceSession, {
+      signal: input.signal,
+    });
+    workspaceAnalysisGenerationValidate(workspaceSession, input);
+    return workspaceImportSpecifiersInFileResultCreate(
+      workspace,
+      workspaceSession,
+      index,
+      { uri: input.uri },
+    );
+  }
 }
 
 class InProcessWorkspaceService implements WorkspaceService {
@@ -11456,6 +11718,17 @@ class InProcessWorkspaceService implements WorkspaceService {
     signal?: AbortSignal;
   }): Promise<WorkspaceSymbolsInFileWithCallCountsResult> {
     return this.engine.querySymbolsInFileWithCallCounts(input);
+  }
+
+  queryImportSpecifiersInFile(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceImportSpecifiersInFileResult> {
+    return this.engine.queryImportSpecifiersInFile(input);
   }
 }
 

@@ -25,6 +25,7 @@ import type {
   WorkspaceDependencyGraphResult,
   WorkspaceDependencyPathResult,
   WorkspaceImpactRadiusDirection,
+  WorkspaceImportSpecifiersInFileResult,
   WorkspaceLintRuleDetailsResult,
   WorkspaceLintRulesResult,
   WorkspacePosition,
@@ -59,6 +60,7 @@ import {
   CODEPOL_LSP_REQUEST_DIAGNOSTICS_CONFIG,
   CODEPOL_LSP_REQUEST_DIAGNOSTICS_ESCALATIONS,
   CODEPOL_LSP_REQUEST_IMPACT_RADIUS,
+  CODEPOL_LSP_REQUEST_IMPORT_SPECIFIERS_IN_FILE,
   CODEPOL_LSP_REQUEST_TYPE_HIERARCHY,
   CODEPOL_LSP_REQUEST_SYMBOL_FLOW,
   CODEPOL_LSP_REQUEST_INDEX_STATUS,
@@ -214,6 +216,9 @@ export type CodepolProtocolClient = {
   querySymbolsInFileWithCallCounts(input: {
     uri: string;
   }): Promise<WorkspaceSymbolsInFileWithCallCountsResult | null>;
+  queryImportSpecifiersInFile(input: {
+    uri: string;
+  }): Promise<WorkspaceImportSpecifiersInFileResult | null>;
   prepareRename(
     target: WorkspaceRenameTarget,
   ): Promise<WorkspacePrepareRenameResult | null>;
@@ -589,6 +594,15 @@ export class VscodeLanguageClientProtocol implements CodepolProtocolClient {
   }): Promise<WorkspaceSymbolsInFileWithCallCountsResult | null> {
     return this.requestRun<WorkspaceSymbolsInFileWithCallCountsResult | null>(
       CODEPOL_LSP_REQUEST_SYMBOLS_IN_FILE_WITH_CALL_COUNTS,
+      input,
+    );
+  }
+
+  async queryImportSpecifiersInFile(input: {
+    uri: string;
+  }): Promise<WorkspaceImportSpecifiersInFileResult | null> {
+    return this.requestRun<WorkspaceImportSpecifiersInFileResult | null>(
+      CODEPOL_LSP_REQUEST_IMPORT_SPECIFIERS_IN_FILE,
       input,
     );
   }

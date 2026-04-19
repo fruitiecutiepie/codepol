@@ -15,6 +15,7 @@ import type {
   WorkspaceDependencyPathResult,
   WorkspaceDiagnostic,
   WorkspaceImpactRadiusDirection,
+  WorkspaceImportSpecifiersInFileResult,
   WorkspaceInstanceId,
   WorkspaceLintRuleDetailsResult,
   WorkspaceLintRulesResult,
@@ -466,6 +467,29 @@ export type WorkspaceService = {
     analysisGeneration?: number;
     signal?: AbortSignal;
   }) => Promise<WorkspaceSymbolAtPositionResult>;
+  /**
+   * Per-file import-specifier descriptors used by the editor's
+   * import-specifier hover marker layer.
+   *
+   * Returns one descriptor per import statement whose target resolves
+   * to a file inside the indexed workspace; external / unresolved
+   * specifiers are dropped because the per-file metric the hover card
+   * surfaces (importer / importee counts, layer / package boundary)
+   * is meaningful only for in-workspace targets.
+   *
+   * Sorted by `(range.start.line, range.start.character)` so two runs
+   * over byte-identical input produce byte-identical output. The
+   * marker layer applies the order directly when laying out
+   * decorations.
+   */
+  queryImportSpecifiersInFile: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceImportSpecifiersInFileResult>;
   /**
    * Per-symbol structural caller/callee counts for every function or
    * method declared in `uri`. One round-trip backs the editor's

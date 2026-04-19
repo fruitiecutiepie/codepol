@@ -141,6 +141,8 @@ export type {
   WorkspaceDependencyGraphEdge,
   WorkspaceDependencyGraphEdgeKind,
   WorkspaceDependencyGraphResult,
+  WorkspaceImportSpecifierDescriptor,
+  WorkspaceImportSpecifiersInFileResult,
   WorkspaceImpactRadiusDirection,
   WorkspaceCallGraphDirection,
   WorkspaceCallGraphEdgeConfidence,

@@ -371,6 +371,7 @@ function workspaceReadQueriesStubCreate(): Pick<
   | 'querySymbolLookup'
   | 'querySymbolAtPosition'
   | 'querySymbolsInFileWithCallCounts'
+  | 'queryImportSpecifiersInFile'
   | 'planSourceFixAll'
   | 'planFileFixAll'
 > {
@@ -495,6 +496,9 @@ function workspaceReadQueriesStubCreate(): Pick<
     },
     async querySymbolsInFileWithCallCounts() {
       return { items: [] };
+    },
+    async queryImportSpecifiersInFile() {
+      return { specifiers: [] };
     },
     async planSourceFixAll() {
       return null;
@@ -2191,6 +2195,21 @@ describe('workspace daemon control plane', () => {
       uri: appUri,
     });
     expect(codelensCounts).toEqual({ items: [] });
+
+    // Phase 5 (deferred) hover marker layer round-trip. `appUri` is
+    // the importer file in the test workspace (it imports `shared`),
+    // so the daemon should round-trip exactly one specifier descriptor
+    // pointing at the in-workspace target.
+    const importSpecifiers = await service.queryImportSpecifiersInFile({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      uri: appUri,
+    });
+    expect(importSpecifiers.specifiers).toHaveLength(1);
+    expect(importSpecifiers.specifiers[0]!.resolvedModuleWorkspaceRelativePath).toBe(
+      'src/shared.ts',
+    );
+    expect(importSpecifiers.specifiers[0]!.edgeKind).toBe('static');
   });
 
   it('rejects stale analysisGeneration for workspace symbol reads through the daemon service client', async () => {

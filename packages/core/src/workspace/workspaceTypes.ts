@@ -763,6 +763,71 @@ export type WorkspaceDependencyGraphResult = {
 };
 
 /**
+ * One in-file import specifier, narrowed to the data the editor needs
+ * to anchor a Codepol-owned hover marker on the import range.
+ *
+ * Only emitted for imports whose target resolves to an indexed file in
+ * the same workspace — external / unresolved specifiers are dropped at
+ * the workspace-service layer because the per-file metric (importer /
+ * importee counts, cross-layer / cross-package boundary) is meaningful
+ * only for in-workspace targets.
+ *
+ * Multiple `ImportBindingRelation` entries that share the same import
+ * statement byte range collapse to one descriptor; the count is
+ * exposed as {@link bindingCount}. Pure side-effect imports
+ * (`import "./polyfill"`) have `bindingCount: 0` and `edgeKind:
+ * 'side_effect'`.
+ */
+export type WorkspaceImportSpecifierDescriptor = {
+  /** Range of the import statement in the importer file. */
+  range: WorkspaceRange;
+  /** `file://` URI of the resolved imported module. */
+  resolvedModuleUri: string;
+  /**
+   * Workspace-relative path of the resolved module. Provided so the
+   * hover card can render a friendly label without re-resolving.
+   */
+  resolvedModuleWorkspaceRelativePath: string;
+  /**
+   * Dominant syntactic style of the import. Mirrors
+   * {@link WorkspaceDependencyGraphEdgeKind} one-for-one so the hover
+   * card can reuse the same kind labels as the dependency-graph view.
+   */
+  edgeKind: WorkspaceDependencyGraphEdgeKind;
+  /**
+   * Number of distinct `ImportBindingRelation` entries that contributed
+   * to this descriptor. Zero for pure side-effect imports.
+   */
+  bindingCount: number;
+  /**
+   * True when the importer and importee belong to different monorepo
+   * packages. Absent when package membership cannot be determined for
+   * either endpoint.
+   */
+  crossesPackageBoundary?: boolean;
+  /**
+   * True when the importer and importee belong to different
+   * architectural layers. Absent until layer configuration is wired up,
+   * or when layer membership cannot be determined for either endpoint.
+   */
+  crossesLayerBoundary?: boolean;
+};
+
+/**
+ * Result type for `queryImportSpecifiersInFile`. Always returns an
+ * array (never `undefined`); empty when the file has no
+ * workspace-resolved imports.
+ *
+ * Sort order is `(range.start.line, range.start.character)` so two
+ * runs over byte-identical input produce byte-identical output. The
+ * marker layer consumes the order directly when laying out
+ * decorations.
+ */
+export type WorkspaceImportSpecifiersInFileResult = {
+  specifiers: WorkspaceImportSpecifierDescriptor[];
+};
+
+/**
  * Direction of an impact-radius neighborhood traversal. Mirrors
  * `ModuleImpactRadiusDirection` from `@codepol/core` one-for-one so
  * clients that speak the workspace contract can pass the string straight

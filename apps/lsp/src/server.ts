@@ -18,6 +18,7 @@ import {
   type WorkspaceDiagnostic,
   type WorkspaceEditPlan,
   type WorkspaceImpactRadiusDirection,
+  type WorkspaceImportSpecifiersInFileResult,
   type WorkspaceTypeHierarchyDirection,
   type WorkspaceTypeHierarchyEdgeConfidence,
   type WorkspaceSymbolFlowDirection,
@@ -54,6 +55,7 @@ import {
   CODEPOL_LSP_REQUEST_DEPENDENCY_GRAPH,
   CODEPOL_LSP_REQUEST_DEPENDENCY_PATH,
   CODEPOL_LSP_REQUEST_IMPACT_RADIUS,
+  CODEPOL_LSP_REQUEST_IMPORT_SPECIFIERS_IN_FILE,
   CODEPOL_LSP_REQUEST_TYPE_HIERARCHY,
   CODEPOL_LSP_REQUEST_DIAGNOSTICS_CONFIG,
   CODEPOL_LSP_REQUEST_DIAGNOSTICS_ESCALATIONS,
@@ -1161,6 +1163,10 @@ export class CodepolLspServer {
         }, context);
       case CODEPOL_LSP_REQUEST_SYMBOLS_IN_FILE_WITH_CALL_COUNTS:
         return this.symbolsInFileWithCallCountsHandle(params as {
+          uri?: string;
+        }, context);
+      case CODEPOL_LSP_REQUEST_IMPORT_SPECIFIERS_IN_FILE:
+        return this.importSpecifiersInFileHandle(params as {
           uri?: string;
         }, context);
       default:
@@ -2330,6 +2336,34 @@ export class CodepolLspServer {
           context.requestId === undefined || context.requestId === null
             ? undefined
             : `lsp-codepol-symbols-in-file-with-call-counts:${String(context.requestId)}`,
+        signal: context.signal,
+      }), {
+      signal: context.signal,
+    });
+  }
+
+  private async importSpecifiersInFileHandle(
+    params: { uri?: string },
+    context: { requestId?: JsonRpcId; signal?: AbortSignal } = {},
+  ): Promise<WorkspaceImportSpecifiersInFileResult | null> {
+    if (
+      !this.registeredClientSessionId ||
+      !this.workspaceId ||
+      !params.uri
+    ) {
+      return null;
+    }
+    const uri = params.uri;
+
+    return this.serviceCall((service) =>
+      service.queryImportSpecifiersInFile({
+        clientSessionId: this.registeredClientSessionId!,
+        workspaceId: this.workspaceId!,
+        uri,
+        requestId:
+          context.requestId === undefined || context.requestId === null
+            ? undefined
+            : `lsp-codepol-import-specifiers-in-file:${String(context.requestId)}`,
         signal: context.signal,
       }), {
       signal: context.signal,
