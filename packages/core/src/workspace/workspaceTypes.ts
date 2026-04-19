@@ -966,6 +966,51 @@ export type WorkspaceArchitectureSummaryHotspot = {
   importeeCount: number;
 };
 
+/**
+ * Robert Martin's instability metric (`I = Ce / (Ca + Ce)`) projected
+ * onto a single file. `value` is in `[0, 1]` and is rounded to 6
+ * fractional digits so JSON output stays byte-stable across runtimes.
+ *
+ * Files with `Ca + Ce === 0` (no incoming and no outgoing import edges)
+ * are omitted from {@link WorkspaceArchitectureSummaryInstability.values}
+ * because instability is undefined for an isolated node.
+ */
+export type WorkspaceArchitectureSummaryInstability = {
+  uri: string;
+  workspaceRelativePath: string;
+  value: number;
+  importerCount: number;
+  importeeCount: number;
+};
+
+/**
+ * Files that combine high fan-in with high internal cyclomatic
+ * complexity — "the most dangerous things to change". `score` is
+ * `aggregateCyclomaticComplexity * importerCount` and is the field used
+ * for ranking; both contributing values are echoed back so callers can
+ * label hotspots without recomputing.
+ */
+export type WorkspaceArchitectureSummaryComplexityHotspot = {
+  uri: string;
+  workspaceRelativePath: string;
+  aggregateCyclomaticComplexity: number;
+  importerCount: number;
+  score: number;
+};
+
+/**
+ * Longest acyclic dependency chain in the workspace, computed over the
+ * SCC condensation of the module graph (each cycle collapses to one
+ * representative file). `length` is the number of import hops
+ * (`uriPath.length - 1`); both `uriPath` and `workspaceRelativePathPath`
+ * are non-empty when the graph is non-empty.
+ */
+export type WorkspaceArchitectureSummaryLongestChain = {
+  length: number;
+  uriPath: string[];
+  workspaceRelativePathPath: string[];
+};
+
 export type WorkspaceArchitectureSummaryResult = {
   summary: string;
   indexedFileCount: number;
@@ -975,6 +1020,32 @@ export type WorkspaceArchitectureSummaryResult = {
   entryPointCount: number;
   cycleCount: number;
   hotspots: WorkspaceArchitectureSummaryHotspot[];
+  /**
+   * Top-N (default 10) most unstable files, sorted by
+   * `(value desc, workspaceRelativePath asc)`. Omitted when no file in
+   * the workspace participates in any import edge.
+   */
+  instability?: WorkspaceArchitectureSummaryInstability[];
+  /**
+   * Longest dependency chain over the SCC-condensed module graph.
+   * Omitted when the workspace has no indexed files.
+   */
+  longestChain?: WorkspaceArchitectureSummaryLongestChain;
+  /**
+   * Histogram of cycle sizes. Keys are SCC sizes (number of files in the
+   * cycle, always >= 2), values are the number of cycles of that size.
+   * Omitted when the workspace has no cycles.
+   */
+  sccSizeDistribution?: Record<number, number>;
+  /**
+   * Top-N (default 5) files that combine fan-in with internal
+   * cyclomatic complexity. Sorted by
+   * `(score desc, importerCount desc, aggregateCyclomaticComplexity desc, workspaceRelativePath asc)`.
+   * Omitted when no file in the workspace exposes a cyclomatic
+   * complexity number (typical for non-TS/JS-only workspaces or
+   * workspaces with no fan-in).
+   */
+  complexityHotspots?: WorkspaceArchitectureSummaryComplexityHotspot[];
 };
 
 export type WorkspaceApplyFailureReason =

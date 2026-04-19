@@ -52,10 +52,29 @@ export type WorkspaceSummaryHotspotViewModel = PanelLocationViewModel & {
   importeeCount: number;
 };
 
+/**
+ * Phase 8 health hotspot displayed alongside the fan-in `hotspots` list.
+ * Carries the same `PanelLocationViewModel` shape as a regular hotspot
+ * so it can flow through the existing rendering helpers, plus the three
+ * raw values needed to reconstruct the ranking.
+ */
+export type WorkspaceSummaryComplexityHotspotViewModel = PanelLocationViewModel & {
+  aggregateCyclomaticComplexity: number;
+  importerCount: number;
+  score: number;
+};
+
 export type WorkspaceSummaryCardViewModel = {
   summary: string;
   metrics: WorkspaceSummaryMetricViewModel[];
   hotspots: WorkspaceSummaryHotspotViewModel[];
+  /**
+   * Phase 8 complexity hotspots. Omitted when the underlying summary
+   * had no complexityHotspots data so the existing equality-based view
+   * model tests stay valid for workspaces that emit only the legacy
+   * shape.
+   */
+  complexityHotspots?: WorkspaceSummaryComplexityHotspotViewModel[];
 };
 
 export type DependencyGraphNodeViewModel = {
@@ -272,30 +291,77 @@ export function workspaceSummaryCardViewModelCreate(
     return null;
   }
 
-  return {
+  const baseMetrics: WorkspaceSummaryMetricViewModel[] = [
+    { label: 'Indexed Files', value: String(summary.indexedFileCount) },
+    { label: 'Symbols', value: String(summary.symbolCount) },
+    { label: 'Scopes', value: String(summary.scopeCount) },
+    { label: 'Relations', value: String(summary.relationCount) },
+    { label: 'Entry Points', value: String(summary.entryPointCount) },
+    { label: 'Cycles', value: String(summary.cycleCount) },
+  ];
+  const phase8Metrics: WorkspaceSummaryMetricViewModel[] = [];
+  if (summary.longestChain && summary.longestChain.length > 0) {
+    phase8Metrics.push({
+      label: 'Longest Chain',
+      value: countLabelCreate(summary.longestChain.length, 'hop', 'hops'),
+    });
+  }
+  if (summary.sccSizeDistribution) {
+    const sizes = Object.keys(summary.sccSizeDistribution)
+      .map((key) => Number(key))
+      .filter((size) => Number.isFinite(size))
+      .sort((left, right) => right - left);
+    if (sizes.length > 0) {
+      const largestSize = sizes[0];
+      const largestCount = summary.sccSizeDistribution[largestSize] ?? 0;
+      phase8Metrics.push({
+        label: 'Largest Cycle',
+        value: `${largestSize} files${largestCount > 1 ? ` (${largestCount} cycles)` : ''}`,
+      });
+    }
+  }
+  if (summary.instability && summary.instability.length > 0) {
+    const mostUnstable = summary.instability[0];
+    phase8Metrics.push({
+      label: 'Most Unstable',
+      value: `${mostUnstable.workspaceRelativePath} (${mostUnstable.value.toFixed(2)})`,
+    });
+  }
+
+  const hotspots: WorkspaceSummaryHotspotViewModel[] = summary.hotspots.map((hotspot) => ({
+    ...locationViewModelCreate({
+      uri: hotspot.uri,
+      line: 0,
+      character: 0,
+      label: hotspot.workspaceRelativePath,
+      detail: `${countLabelCreate(hotspot.importerCount, 'importer', 'importers')} • ${countLabelCreate(hotspot.importeeCount, 'importee', 'importees')}`,
+    }),
+    importerCount: hotspot.importerCount,
+    importeeCount: hotspot.importeeCount,
+  }));
+
+  const card: WorkspaceSummaryCardViewModel = {
     summary: summary.summary,
-    metrics: [
-      { label: 'Indexed Files', value: String(summary.indexedFileCount) },
-      { label: 'Symbols', value: String(summary.symbolCount) },
-      { label: 'Scopes', value: String(summary.scopeCount) },
-      { label: 'Relations', value: String(summary.relationCount) },
-      { label: 'Entry Points', value: String(summary.entryPointCount) },
-      { label: 'Cycles', value: String(summary.cycleCount) },
-    ],
-    hotspots: summary.hotspots.map((hotspot) =>
-      locationViewModelCreate({
+    metrics: [...baseMetrics, ...phase8Metrics],
+    hotspots,
+  };
+
+  if (summary.complexityHotspots && summary.complexityHotspots.length > 0) {
+    card.complexityHotspots = summary.complexityHotspots.map((hotspot) => ({
+      ...locationViewModelCreate({
         uri: hotspot.uri,
         line: 0,
         character: 0,
         label: hotspot.workspaceRelativePath,
-        detail: `${countLabelCreate(hotspot.importerCount, 'importer', 'importers')} • ${countLabelCreate(hotspot.importeeCount, 'importee', 'importees')}`,
+        detail: `complexity ${hotspot.aggregateCyclomaticComplexity} × ${countLabelCreate(hotspot.importerCount, 'importer', 'importers')}`,
       }),
-    ).map((hotspot, index) => ({
-      ...hotspot,
-      importerCount: summary.hotspots[index]?.importerCount ?? 0,
-      importeeCount: summary.hotspots[index]?.importeeCount ?? 0,
-    })),
-  };
+      aggregateCyclomaticComplexity: hotspot.aggregateCyclomaticComplexity,
+      importerCount: hotspot.importerCount,
+      score: hotspot.score,
+    }));
+  }
+
+  return card;
 }
 
 type GraphLayoutNodeInput = {

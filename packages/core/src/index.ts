@@ -158,6 +158,9 @@ export type {
   WorkspaceDependencyDiffEdge,
   WorkspaceDependencyDiffResult,
   WorkspaceArchitectureSummaryHotspot,
+  WorkspaceArchitectureSummaryInstability,
+  WorkspaceArchitectureSummaryComplexityHotspot,
+  WorkspaceArchitectureSummaryLongestChain,
   WorkspaceArchitectureSummaryResult,
   WorkspaceApplyFailureReason,
   WorkspaceApplyResult,
@@ -713,6 +716,17 @@ export type {
   ModuleDependencyDiffResult,
 } from './index/moduleGraphDiff';
 export { moduleDependencyDiffCompute } from './index/moduleGraphDiff';
+export type {
+  ModuleInstabilityValue,
+  ModuleInstabilityResult,
+  ModuleLongestChainResult,
+  ModuleSccSizeDistributionResult,
+} from './index/moduleGraphMetrics';
+export {
+  moduleInstabilityCompute,
+  moduleLongestChainCompute,
+  moduleSccSizeDistributionCompute,
+} from './index/moduleGraphMetrics';
 
 // Symbol-level graph queries (Phase 7: call graph, type hierarchy)
 export type {

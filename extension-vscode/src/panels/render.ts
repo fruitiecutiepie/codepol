@@ -303,6 +303,15 @@ function workspaceSummaryCardHtml(
       : locationsHtml(summaryCard.hotspots, {
           listClass: 'summary-hotspots micro-limit-3',
         });
+  const complexityHotspotsSectionHtml =
+    summaryCard.complexityHotspots && summaryCard.complexityHotspots.length > 0
+      ? `<div class="section complexity-hotspots-section">
+          <h3>Complexity Hotspots</h3>
+          ${locationsHtml(summaryCard.complexityHotspots, {
+            listClass: 'summary-complexity-hotspots micro-limit-3',
+          })}
+        </div>`
+      : '';
 
   return `<section class="card summary-card">
     <header>
@@ -321,6 +330,7 @@ function workspaceSummaryCardHtml(
       <h3>Hotspots</h3>
       ${hotspotsHtml}
     </div>
+    ${complexityHotspotsSectionHtml}
   </section>`;
 }
 

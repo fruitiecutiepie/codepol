@@ -19,6 +19,9 @@ import {
   moduleDependencyDiffCompute,
   moduleDependencyPathCompute,
   moduleImpactRadiusCompute,
+  moduleInstabilityCompute,
+  moduleLongestChainCompute,
+  moduleSccSizeDistributionCompute,
   symbolCallGraphCompute,
   symbolTypeHierarchyCompute,
   policyArchitectureViolationsGetFromDir,
@@ -71,6 +74,10 @@ import {
   type RuleMatch,
   type WorkspacePackageRecord,
   type WorkspaceApplyResult,
+  type WorkspaceArchitectureSummaryComplexityHotspot,
+  type WorkspaceArchitectureSummaryHotspot,
+  type WorkspaceArchitectureSummaryInstability,
+  type WorkspaceArchitectureSummaryLongestChain,
   type WorkspaceArchitectureSummaryResult,
   type WorkspaceCodeAction,
   type WorkspaceDeadModulesResult,
@@ -5729,12 +5736,26 @@ function workspaceDependencyDiffResultCreate(input: {
   };
 }
 
+/**
+ * Maximum number of files the {@link WorkspaceArchitectureSummaryResult.instability}
+ * panel field returns. The underlying core helper computes one entry per
+ * non-isolated file, so a cap is necessary to keep the summary payload
+ * bounded on monorepos with thousands of modules.
+ */
+const WORKSPACE_ARCHITECTURE_INSTABILITY_TOP_N = 10;
+/**
+ * Maximum number of files the {@link WorkspaceArchitectureSummaryResult.complexityHotspots}
+ * panel field returns. Mirrors the existing fan-in `hotspots` cap so the
+ * UI hotspot card stays visually balanced.
+ */
+const WORKSPACE_ARCHITECTURE_COMPLEXITY_HOTSPOT_TOP_N = 5;
+
 function workspaceArchitectureSummaryResultCreate(
   workspace: WorkspaceContextState,
   index: ProjectIndex,
 ): WorkspaceArchitectureSummaryResult {
   const stats = index.statsGet();
-  const hotspots = index
+  const allFilesByImporters: WorkspaceArchitectureSummaryHotspot[] = index
     .filesGet()
     .map((filePath) => ({
       uri: workspacePathToUri(filePath),
@@ -5752,14 +5773,16 @@ function workspaceArchitectureSummaryResultCreate(
         return importeeDifference;
       }
       return left.workspaceRelativePath.localeCompare(right.workspaceRelativePath);
-    })
-    .slice(0, 5);
+    });
+  const hotspots = allFilesByImporters.slice(0, 5);
   const cycleCount = index.moduleCyclesGet().length;
   const entryPointCount = index.moduleEntryPointsGet().length;
   const hottestModule = hotspots[0];
   const hottestModuleSummary = hottestModule
     ? ` Hotspot: ${hottestModule.workspaceRelativePath} (${hottestModule.importerCount} importers, ${hottestModule.importeeCount} importees).`
     : '';
+
+  const phase8Metrics = workspaceArchitectureSummaryPhase8MetricsCompute(workspace, index);
 
   return {
     summary:
@@ -5773,6 +5796,107 @@ function workspaceArchitectureSummaryResultCreate(
     entryPointCount,
     cycleCount,
     hotspots,
+    ...(phase8Metrics.instability !== undefined
+      ? { instability: phase8Metrics.instability }
+      : {}),
+    ...(phase8Metrics.longestChain !== undefined
+      ? { longestChain: phase8Metrics.longestChain }
+      : {}),
+    ...(phase8Metrics.sccSizeDistribution !== undefined
+      ? { sccSizeDistribution: phase8Metrics.sccSizeDistribution }
+      : {}),
+    ...(phase8Metrics.complexityHotspots !== undefined
+      ? { complexityHotspots: phase8Metrics.complexityHotspots }
+      : {}),
+  };
+}
+
+/**
+ * Compute the Phase 8 health metrics on top of the live `ProjectIndex`.
+ *
+ * Each field is independently optional: a workspace with no edges and no
+ * cycles legitimately returns no instability values, no longest chain,
+ * no SCC distribution, and no complexity hotspots — every field is
+ * omitted from the result rather than set to an empty payload, so older
+ * consumers that key off `field !== undefined` keep working.
+ */
+function workspaceArchitectureSummaryPhase8MetricsCompute(
+  workspace: WorkspaceContextState,
+  index: ProjectIndex,
+): {
+  instability?: WorkspaceArchitectureSummaryInstability[];
+  longestChain?: WorkspaceArchitectureSummaryLongestChain;
+  sccSizeDistribution?: Record<number, number>;
+  complexityHotspots?: WorkspaceArchitectureSummaryComplexityHotspot[];
+} {
+  const graph = moduleGraphFromIndexAdapt(index);
+
+  const instabilityRaw = moduleInstabilityCompute(graph).values;
+  const instability =
+    instabilityRaw.length === 0
+      ? undefined
+      : instabilityRaw.slice(0, WORKSPACE_ARCHITECTURE_INSTABILITY_TOP_N).map((entry) => ({
+          uri: workspacePathToUri(entry.file),
+          workspaceRelativePath: workspaceRelativePathCreate(workspace.rootPath, entry.file),
+          value: entry.value,
+          importerCount: entry.importerCount,
+          importeeCount: entry.importeeCount,
+        }));
+
+  const longestChainRaw = moduleLongestChainCompute(graph);
+  const longestChain =
+    longestChainRaw.path.length === 0
+      ? undefined
+      : {
+          length: longestChainRaw.length,
+          uriPath: longestChainRaw.path.map((file) => workspacePathToUri(file)),
+          workspaceRelativePathPath: longestChainRaw.path.map((file) =>
+            workspaceRelativePathCreate(workspace.rootPath, file),
+          ),
+        };
+
+  const sccDistribution = moduleSccSizeDistributionCompute(graph).bySize;
+  const sccSizeDistribution =
+    Object.keys(sccDistribution).length === 0 ? undefined : sccDistribution;
+
+  const complexityHotspotsRaw: WorkspaceArchitectureSummaryComplexityHotspot[] = [];
+  for (const filePath of index.filesGet()) {
+    const aggregateCyclomaticComplexity = workspaceFileAggregateCyclomaticComplexityGet(
+      index,
+      filePath,
+    );
+    if (aggregateCyclomaticComplexity === undefined) continue;
+    const importerCount = index.moduleImportersGet(filePath).length;
+    const score = aggregateCyclomaticComplexity * importerCount;
+    if (score === 0) continue;
+    complexityHotspotsRaw.push({
+      uri: workspacePathToUri(filePath),
+      workspaceRelativePath: workspaceRelativePathCreate(workspace.rootPath, filePath),
+      aggregateCyclomaticComplexity,
+      importerCount,
+      score,
+    });
+  }
+  complexityHotspotsRaw.sort((left, right) => {
+    if (left.score !== right.score) return right.score - left.score;
+    if (left.importerCount !== right.importerCount) {
+      return right.importerCount - left.importerCount;
+    }
+    if (left.aggregateCyclomaticComplexity !== right.aggregateCyclomaticComplexity) {
+      return right.aggregateCyclomaticComplexity - left.aggregateCyclomaticComplexity;
+    }
+    return left.workspaceRelativePath.localeCompare(right.workspaceRelativePath);
+  });
+  const complexityHotspots =
+    complexityHotspotsRaw.length === 0
+      ? undefined
+      : complexityHotspotsRaw.slice(0, WORKSPACE_ARCHITECTURE_COMPLEXITY_HOTSPOT_TOP_N);
+
+  return {
+    instability,
+    longestChain,
+    sccSizeDistribution,
+    complexityHotspots,
   };
 }
 
