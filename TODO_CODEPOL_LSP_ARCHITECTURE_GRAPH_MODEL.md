@@ -380,6 +380,83 @@ A narrow adapter in `packages/workspace-service` converts `moduleGraph.moduleGra
 
 Respects existing diagnostic subscription machinery; no new subscription scope.
 
+## User-Visible Capabilities Per Phase
+
+A phase-by-phase reference of what each expansion enables for end users (engineers, architects, plugin authors, CI). Use this when prioritizing or writing release notes.
+
+### Phase 1 — Enriched node / edge metadata enables
+
+- per-file weight at a glance: importer / importee / symbol / LOC counts on every node turn the panel from a topology view into a "where is the gravity?" view
+- visual distinction between edge kinds: static / dynamic / side-effect / CJS / type-only no longer collapse into a single edge style
+- immediate spotting of cross-package and cross-layer imports because edges carry `crossesPackageBoundary` / `crossesLayerBoundary`
+- aggregate cyclomatic complexity per file, so hotspot detection can mean "lots of branching that everyone depends on", not just "lots of importers"
+- meaningful edge tooltips: counts of bindings crossing each edge answer "is this a real dependency or a single import?"
+
+### Phase 2 — Narrow graph queries enable
+
+- "what breaks if I touch this file?" via `queryImpactRadius({ direction: 'upstream' })` — only the dependents, no full-graph dump
+- "why does A depend on B?" via `queryDependencyPath` — actual chain of imports plus parallel paths up to a configurable max
+- "what code is unreachable?" via `queryDeadModules` — concrete cleanup target list rather than guesswork
+- "what changed?" via `queryDependencyDiff` — added / removed nodes, edges, and cycles between two generations; foundation for PR-level architecture review
+- bounded responses on huge codebases: every query takes a `depth`, so monorepos return useful subgraphs in milliseconds
+
+### Phase 3 — `ArchitectureCheckProvider` policy capability enables
+
+- `no-cycles` / `max-cycle-size`: block new cyclic dependencies in CI, cap legacy cycle damage
+- `no-layer-violation`: declare `domain → ui` is forbidden in `codepol.toml`, get a violation when someone imports a UI helper from a domain module
+- `no-cross-package-internal-import`: enforce that monorepo packages only consume each other's public entrypoints
+- `max-fan-in` / `max-fan-out`: coupling budgets per directory or per layer; flag "god module" growth before it lands
+- `dead-module`: warn on files unreachable from declared entry points; dead code shows up in the editor instead of waiting for an audit
+- `entry-point-allowlist`: only declared roots are allowed to be roots; surprises (a forgotten experiment file with no importers) get caught
+- a real capability for plugin authors: custom architecture rules become a one-liner instead of bolting onto `treeCheckProvider`; user-land patterns from `docs/cross-file-analysis.md` collapse to a few lines
+
+### Phase 4 — CLI `graph` subcommands enable
+
+- `codepol graph export --format dot|mermaid|graphml|json`: drop the workspace graph into Graphviz / Mermaid / Gephi / docs sites without writing custom export code
+- `codepol graph cycles`: fast cycle audit from any shell, scriptable, scrubable to a file for tracking debt
+- `codepol graph path A B`: answer "why does A depend on B" from the terminal during code review or refactors
+- `codepol graph fan-in / fan-out --top N`: hotspot tables for status meetings or quarterly architecture reviews
+- `codepol graph dead --entry "bin/**"`: automated unused-module reports
+- `codepol graph diff <baseRef>`: PR-level diff of the architecture, suitable for CI gates and PR-comment bots
+- CI gating without a custom job: non-zero exit codes on `cycles` / `dead` / `diff --fail-on-new-cycle` plug into existing pipelines
+
+### Phase 5 — Editor / LSP surfaces enable
+
+- CodeLens above exports: "3 importers" right above the declaration; click to peek the impact radius without leaving the file
+- hover enrichment on import specifiers: see importer / importee count, edge kind, and "this crosses a layer boundary" inline
+- `codepol.architecture.peek` command: right-click a symbol → see its callers / dependents in the panel focused on that symbol, not just the file
+- cycle gutter markers: subtle indicator on every file in a cycle, hover lists the cycle members; continuous awareness instead of waiting for a CI run
+- rename preview enrichment (when prereqs land): rename dialog shows "this changes 4 cross-package edges" so risky renames are obvious before applying
+
+### Phase 6 — Diff and diagnostics enable
+
+- `codepol/architecture` diagnostic source in the Problems panel: cycles and dead modules behave like compiler warnings, actionable from the editor's existing UI
+- "show full cycle" code action: click the lightbulb on a cycle warning → panel opens with all members highlighted
+- PR-aware diagnostics: with baseline persistence, the editor can show "this cycle is new since main" vs "pre-existing"
+- CI gate on architectural regressions: `--fail-on-new-cycle` blocks merges that introduce cycles even when individual files all type-check fine
+
+### Phase 7 — Symbol-level graphs enable
+
+- call graph view: "who calls this exported function?" rendered in the same panel as the module graph, with the same filters and layout
+- type hierarchy view: an interface's implementers / a class's ancestors as a graph, navigable to source
+- symbol-focused impact radius: "if I change the signature of `userAuthenticate`, what's downstream?" with structural confidence (clearly labeled — see Q5 trade-offs)
+- one panel, multiple lenses: users learn the architecture panel once and reuse it for module, call, and type questions
+
+### Phase 8 — Metrics / health enable
+
+- instability metric per file (`Ce / (Ca + Ce)`): identifies files that depend on a lot but aren't depended on (typical entry-point shape) and the inverse
+- longest dependency chain: "your deepest import path is 14 hops" — a single number that captures architectural debt over time
+- SCC size distribution: "you have 3 cycles of size 2 and one cycle of size 17" — the size-17 SCC is the real problem
+- complexity hotspots = importers × cyclomatic complexity: files that are both heavily depended on and internally complex — the most dangerous things to change
+- dashboard-ready summary: all numbers come back in `WorkspaceArchitectureSummaryResult`, so a status panel or doc-site widget can render project health without recomputing
+
+### Cross-cutting wins (not phase-specific)
+
+- one mental model across editor, CLI, and CI: same query shapes, same JSON, same rules — knowledge transfers between contexts
+- architecture becomes enforceable, not just observable: the current panel is read-only; the additions above turn the same data into rules, diagnostics, and gates
+- scales with the codebase: bounded queries plus granularity roll-ups mean the feature works on a 50-file project and a 50,000-file monorepo with the same UX
+- plugin authors get leverage: `ArchitectureCheckProvider` plus the enriched node / edge model lets third parties express domain-specific architecture rules ("no React component imports a controller") without rebuilding the graph
+
 ## Phased Sequencing
 
 Each phase is independently shippable, additive, and testable.
