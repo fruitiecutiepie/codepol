@@ -64,6 +64,30 @@ export type WorkspaceSummaryComplexityHotspotViewModel = PanelLocationViewModel 
   score: number;
 };
 
+/**
+ * Phase 8 instability row. Each row mirrors a single
+ * `WorkspaceArchitectureSummaryInstability` entry but carries a
+ * pre-formatted `valueLabel` so the rendering layer never has to know
+ * about `toFixed` precision rules.
+ */
+export type WorkspaceSummaryInstabilityRowViewModel = PanelLocationViewModel & {
+  value: number;
+  valueLabel: string;
+  importerCount: number;
+  importeeCount: number;
+};
+
+/**
+ * Phase 8 SCC size distribution row. The histogram is materialized as
+ * a list of rows so the view model can carry a render-friendly `label`
+ * while preserving the structured `size` / `count` for tests.
+ */
+export type WorkspaceSummarySccDistributionRowViewModel = {
+  size: number;
+  count: number;
+  label: string;
+};
+
 export type WorkspaceSummaryCardViewModel = {
   summary: string;
   metrics: WorkspaceSummaryMetricViewModel[];
@@ -75,6 +99,25 @@ export type WorkspaceSummaryCardViewModel = {
    * shape.
    */
   complexityHotspots?: WorkspaceSummaryComplexityHotspotViewModel[];
+  /**
+   * Phase 8 full instability table (top-N rows from the workspace
+   * service). Each entry is clickable in the panel via the inherited
+   * `PanelLocationViewModel` shape. Omitted when the underlying summary
+   * has no instability data.
+   */
+  instabilityRows?: WorkspaceSummaryInstabilityRowViewModel[];
+  /**
+   * Phase 8 longest dependency chain rendered as a clickable list of
+   * file rows in import-root → leaf order. Each row's `detail` carries
+   * the position label ("hop N of M") so the panel can display it
+   * inline. Omitted when the workspace has no chain to report.
+   */
+  longestChainPath?: PanelLocationViewModel[];
+  /**
+   * Phase 8 cycle size histogram rendered as a sorted list (largest
+   * size first). Omitted when the workspace has no cycles.
+   */
+  sccDistributionRows?: WorkspaceSummarySccDistributionRowViewModel[];
 };
 
 export type DependencyGraphNodeViewModel = {
@@ -353,12 +396,60 @@ export function workspaceSummaryCardViewModelCreate(
         line: 0,
         character: 0,
         label: hotspot.workspaceRelativePath,
-        detail: `complexity ${hotspot.aggregateCyclomaticComplexity} × ${countLabelCreate(hotspot.importerCount, 'importer', 'importers')}`,
+        detail: `complexity ${hotspot.aggregateCyclomaticComplexity} × ${countLabelCreate(hotspot.importerCount, 'importer', 'importers')} = score ${hotspot.score}`,
       }),
       aggregateCyclomaticComplexity: hotspot.aggregateCyclomaticComplexity,
       importerCount: hotspot.importerCount,
       score: hotspot.score,
     }));
+  }
+
+  if (summary.instability && summary.instability.length > 0) {
+    card.instabilityRows = summary.instability.map((row) => ({
+      ...locationViewModelCreate({
+        uri: row.uri,
+        line: 0,
+        character: 0,
+        label: row.workspaceRelativePath,
+        detail: `I=${row.value.toFixed(2)} • Ce=${row.importeeCount} Ca=${row.importerCount}`,
+      }),
+      value: row.value,
+      valueLabel: row.value.toFixed(2),
+      importerCount: row.importerCount,
+      importeeCount: row.importeeCount,
+    }));
+  }
+
+  if (summary.longestChain && summary.longestChain.uriPath.length > 0) {
+    const totalSteps = summary.longestChain.uriPath.length;
+    card.longestChainPath = summary.longestChain.uriPath.map((uri, index) => {
+      const relativePath =
+        summary.longestChain!.workspaceRelativePathPath[index] ?? uri;
+      return locationViewModelCreate({
+        uri,
+        line: 0,
+        character: 0,
+        label: relativePath,
+        detail: `hop ${index + 1} of ${totalSteps}`,
+      });
+    });
+  }
+
+  if (summary.sccSizeDistribution) {
+    const rows: WorkspaceSummarySccDistributionRowViewModel[] = Object.entries(
+      summary.sccSizeDistribution,
+    )
+      .map(([key, count]) => ({ size: Number(key), count }))
+      .filter((row) => Number.isFinite(row.size) && row.count > 0)
+      .sort((left, right) => right.size - left.size)
+      .map((row) => ({
+        size: row.size,
+        count: row.count,
+        label: `${row.size}-file SCC × ${countLabelCreate(row.count, 'cycle', 'cycles')}`,
+      }));
+    if (rows.length > 0) {
+      card.sccDistributionRows = rows;
+    }
   }
 
   return card;

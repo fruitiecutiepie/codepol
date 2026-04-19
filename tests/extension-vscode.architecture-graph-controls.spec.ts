@@ -309,4 +309,92 @@ describe('architectureCodeLensViewModelCreate', () => {
     });
     expect(zero?.title).toBe('Codepol: 0 importers • 0 importees');
   });
+
+  it('appends Phase 8 instability and complexity to the title when the focus file is in the summary', () => {
+    const focusUri = 'file:///workspace/packages/lib/src/index.ts';
+    const viewModel = architectureCodeLensViewModelCreate({
+      graph: baseGraph,
+      focusUri,
+      summary: {
+        summary: 'Indexed 4 files, 8 symbols, 1 entry points, 0 cycles.',
+        indexedFileCount: 4,
+        symbolCount: 8,
+        scopeCount: 4,
+        relationCount: 6,
+        entryPointCount: 2,
+        cycleCount: 0,
+        hotspots: [],
+        instability: [
+          {
+            uri: focusUri,
+            workspaceRelativePath: 'packages/lib/src/index.ts',
+            value: 0.5,
+            importerCount: 1,
+            importeeCount: 1,
+          },
+        ],
+        complexityHotspots: [
+          {
+            uri: focusUri,
+            workspaceRelativePath: 'packages/lib/src/index.ts',
+            aggregateCyclomaticComplexity: 14,
+            importerCount: 1,
+            score: 14,
+          },
+        ],
+      },
+    });
+    expect(viewModel).toEqual({
+      title:
+        'Codepol: 1 importer • 1 importee • I=0.50 • complexity 14',
+      tooltip: 'Peek Codepol architecture for packages/lib/src/index.ts',
+      commandKind: 'peekArchitecture',
+      commandArgument: { uri: focusUri },
+      importerCount: 1,
+      importeeCount: 1,
+      instabilityValue: 0.5,
+      aggregateCyclomaticComplexity: 14,
+    });
+  });
+
+  it('falls back to the legacy title when the summary is null or omits the focus file', () => {
+    const focusUri = 'file:///workspace/packages/lib/src/index.ts';
+    const fromNullSummary = architectureCodeLensViewModelCreate({
+      graph: baseGraph,
+      focusUri,
+      summary: null,
+    });
+    expect(fromNullSummary?.title).toBe('Codepol: 1 importer • 1 importee');
+    expect(fromNullSummary?.instabilityValue).toBeUndefined();
+    expect(fromNullSummary?.aggregateCyclomaticComplexity).toBeUndefined();
+
+    const fromOtherFileSummary = architectureCodeLensViewModelCreate({
+      graph: baseGraph,
+      focusUri,
+      summary: {
+        summary: 'Indexed 4 files',
+        indexedFileCount: 4,
+        symbolCount: 8,
+        scopeCount: 4,
+        relationCount: 6,
+        entryPointCount: 2,
+        cycleCount: 0,
+        hotspots: [],
+        instability: [
+          {
+            uri: 'file:///workspace/somewhere/else.ts',
+            workspaceRelativePath: 'somewhere/else.ts',
+            value: 0.9,
+            importerCount: 0,
+            importeeCount: 9,
+          },
+        ],
+      },
+    });
+    expect(fromOtherFileSummary?.title).toBe(
+      'Codepol: 1 importer • 1 importee',
+    );
+    expect(fromOtherFileSummary?.instabilityValue).toBeUndefined();
+    expect(fromOtherFileSummary?.aggregateCyclomaticComplexity).toBeUndefined();
+  });
 });

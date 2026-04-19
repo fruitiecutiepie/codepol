@@ -192,6 +192,158 @@ describe('extension-vscode view model mapping', () => {
     });
   });
 
+  it('maps Phase 8 metrics into instability, longest chain, SCC distribution, and complexity hotspot view-model fields', () => {
+    const card = architectureSummaryPanelViewModelCreate({
+      summary: {
+        summary: 'Indexed 4 files, 8 symbols, 1 entry points, 1 cycles.',
+        indexedFileCount: 4,
+        symbolCount: 8,
+        scopeCount: 4,
+        relationCount: 6,
+        entryPointCount: 1,
+        cycleCount: 1,
+        hotspots: [],
+        instability: [
+          {
+            uri: 'file:///workspace/src/entry.ts',
+            workspaceRelativePath: 'src/entry.ts',
+            value: 1,
+            importerCount: 0,
+            importeeCount: 2,
+          },
+          {
+            uri: 'file:///workspace/src/lib/a.ts',
+            workspaceRelativePath: 'src/lib/a.ts',
+            value: 0.5,
+            importerCount: 1,
+            importeeCount: 1,
+          },
+        ],
+        longestChain: {
+          length: 3,
+          uriPath: [
+            'file:///workspace/src/entry.ts',
+            'file:///workspace/src/lib/a.ts',
+            'file:///workspace/src/lib/b.ts',
+            'file:///workspace/src/lib/utils.ts',
+          ],
+          workspaceRelativePathPath: [
+            'src/entry.ts',
+            'src/lib/a.ts',
+            'src/lib/b.ts',
+            'src/lib/utils.ts',
+          ],
+        },
+        sccSizeDistribution: { 2: 2, 4: 1 },
+        complexityHotspots: [
+          {
+            uri: 'file:///workspace/src/utils.ts',
+            workspaceRelativePath: 'src/utils.ts',
+            aggregateCyclomaticComplexity: 14,
+            importerCount: 2,
+            score: 28,
+          },
+        ],
+      },
+    }).summaryCard!;
+
+    // Three Phase 8 metric pills append in this order: Longest Chain,
+    // Largest Cycle, Most Unstable.
+    const phase8MetricLabels = card.metrics.slice(-3).map((metric) => metric.label);
+    expect(phase8MetricLabels).toEqual(['Longest Chain', 'Largest Cycle', 'Most Unstable']);
+
+    // Instability rows: top entries pre-formatted with valueLabel and a
+    // panel-friendly detail string. Order matches the source array
+    // (already sorted by value desc).
+    expect(card.instabilityRows).toEqual([
+      {
+        uri: 'file:///workspace/src/entry.ts',
+        line: 0,
+        character: 0,
+        label: 'src/entry.ts',
+        detail: 'I=1.00 • Ce=2 Ca=0',
+        value: 1,
+        valueLabel: '1.00',
+        importerCount: 0,
+        importeeCount: 2,
+      },
+      {
+        uri: 'file:///workspace/src/lib/a.ts',
+        line: 0,
+        character: 0,
+        label: 'src/lib/a.ts',
+        detail: 'I=0.50 • Ce=1 Ca=1',
+        value: 0.5,
+        valueLabel: '0.50',
+        importerCount: 1,
+        importeeCount: 1,
+      },
+    ]);
+
+    // Longest chain path: each row carries the import position label.
+    expect(card.longestChainPath).toEqual([
+      {
+        uri: 'file:///workspace/src/entry.ts',
+        line: 0,
+        character: 0,
+        label: 'src/entry.ts',
+        detail: 'hop 1 of 4',
+      },
+      {
+        uri: 'file:///workspace/src/lib/a.ts',
+        line: 0,
+        character: 0,
+        label: 'src/lib/a.ts',
+        detail: 'hop 2 of 4',
+      },
+      {
+        uri: 'file:///workspace/src/lib/b.ts',
+        line: 0,
+        character: 0,
+        label: 'src/lib/b.ts',
+        detail: 'hop 3 of 4',
+      },
+      {
+        uri: 'file:///workspace/src/lib/utils.ts',
+        line: 0,
+        character: 0,
+        label: 'src/lib/utils.ts',
+        detail: 'hop 4 of 4',
+      },
+    ]);
+
+    // SCC distribution: largest size first.
+    expect(card.sccDistributionRows).toEqual([
+      { size: 4, count: 1, label: '4-file SCC × 1 cycle' },
+      { size: 2, count: 2, label: '2-file SCC × 2 cycles' },
+    ]);
+
+    // Complexity hotspot row detail now carries the explicit score so
+    // the panel does not have to recompute the ranking math.
+    expect(card.complexityHotspots).toEqual([
+      {
+        uri: 'file:///workspace/src/utils.ts',
+        line: 0,
+        character: 0,
+        label: 'src/utils.ts',
+        detail: 'complexity 14 × 2 importers = score 28',
+        aggregateCyclomaticComplexity: 14,
+        importerCount: 2,
+        score: 28,
+      },
+    ]);
+  });
+
+  it('omits Phase 8 view-model fields when the underlying summary lacks them', () => {
+    const card = architectureSummaryPanelViewModelCreate({
+      summary: architectureSummaryResult,
+    }).summaryCard!;
+    expect(card.instabilityRows).toBeUndefined();
+    expect(card.longestChainPath).toBeUndefined();
+    expect(card.sccDistributionRows).toBeUndefined();
+    expect(card.complexityHotspots).toBeUndefined();
+  });
+
   it('maps workspace and focused dependency graphs with deterministic highlighting', () => {
     const workspaceGraph = dependencyGraphPanelViewModelCreate({
       graph: dependencyGraphResult,

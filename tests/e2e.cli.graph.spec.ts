@@ -433,6 +433,86 @@ describe('CLI graph subcommands', () => {
     expect(payload.cycles).toEqual([]);
   });
 
+  it('graph metrics emits a WorkspaceArchitectureSummaryResult JSON payload with Phase 8 fields', async () => {
+    const { projectDir, fileUris } = linearProjectCreate(
+      'codepol-e2e-graph-metrics-shape-',
+    );
+    createdDirs.push(projectDir);
+
+    const result = await runCli(['graph', 'metrics'], projectDir);
+
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout);
+    // Base summary fields (from the legacy shape) are always present.
+    expect(typeof payload.summary).toBe('string');
+    expect(payload.indexedFileCount).toBeGreaterThan(0);
+    expect(typeof payload.symbolCount).toBe('number');
+    expect(typeof payload.entryPointCount).toBe('number');
+    expect(typeof payload.cycleCount).toBe('number');
+    expect(Array.isArray(payload.hotspots)).toBe(true);
+    // Phase 8 fields populate when there is graph data to support them.
+    expect(Array.isArray(payload.instability)).toBe(true);
+    const instabilityUris = (payload.instability as { uri: string }[]).map(
+      (entry) => entry.uri,
+    );
+    // `entry.ts` imports mid → leaf with no incoming edges, so I=1 and
+    // it appears in the instability ranking.
+    expect(instabilityUris).toContain(fileUris.entry);
+    expect(payload.longestChain).toBeDefined();
+    expect(payload.longestChain.length).toBeGreaterThanOrEqual(1);
+    expect(payload.longestChain.uriPath.length).toBe(
+      payload.longestChain.length + 1,
+    );
+    // No cycles in the linear fixture, so the histogram is omitted.
+    expect(payload.sccSizeDistribution).toBeUndefined();
+  });
+
+  it('graph metrics --fail-on-cycle exits 1 when the workspace has a cycle', async () => {
+    const { projectDir } = cyclicProjectCreate('codepol-e2e-graph-metrics-cycle-');
+    createdDirs.push(projectDir);
+
+    const result = await runCli(
+      ['graph', 'metrics', '--fail-on-cycle'],
+      projectDir,
+    );
+
+    expect(result.exitCode).toBe(1);
+    const payload = JSON.parse(result.stdout);
+    expect(payload.cycleCount).toBeGreaterThan(0);
+    // The Phase 8 SCC distribution carries the cycle that triggered the
+    // exit code.
+    expect(payload.sccSizeDistribution).toBeDefined();
+    const sizes = Object.keys(payload.sccSizeDistribution).map(Number);
+    expect(sizes.some((size) => size >= 2)).toBe(true);
+  });
+
+  it('graph metrics --format text emits grouped sections with deterministic placeholders', async () => {
+    const { projectDir } = linearProjectCreate(
+      'codepol-e2e-graph-metrics-text-',
+    );
+    createdDirs.push(projectDir);
+
+    const result = await runCli(['graph', 'metrics', '--format', 'text'], projectDir);
+
+    expect(result.exitCode).toBe(0);
+    // Header is the first line of the text output.
+    const lines = result.stdout.trimEnd().split('\n');
+    expect(lines[0]).toMatch(/^Indexed files: \d+\tSymbols: \d+\tCycles: \d+$/);
+    // Every Phase 8 section header is present, even when its body
+    // collapses to `(none)` — that is the grep-stable contract that
+    // CI scripts depend on.
+    expect(result.stdout).toContain('Instability (top 10):');
+    expect(result.stdout).toContain('Longest chain (');
+    expect(result.stdout).toContain('SCC size distribution:');
+    expect(result.stdout).toContain('Complexity hotspots (top 5):');
+    // The linear fixture has no cycles, so the SCC distribution
+    // reports `(none)` rather than disappearing.
+    expect(result.stdout).toContain('SCC size distribution:\n  (none)');
+    // Instability rows for the linear fixture include `entry.ts` with
+    // `Ce > 0`, so the `I=` prefix appears at least once.
+    expect(result.stdout).toMatch(/I=\d\.\d{2}\tCe=/);
+  });
+
   it('graph diff --baseline-file accepts a raw graph export payload', async () => {
     const { projectDir, fileUris } = linearProjectCreate('codepol-e2e-graph-diff-file-');
     createdDirs.push(projectDir);

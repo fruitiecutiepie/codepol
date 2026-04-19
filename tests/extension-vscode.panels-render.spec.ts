@@ -259,6 +259,148 @@ describe('extension-vscode panel rendering', () => {
     expect(html).toContain(' dimmed');
   });
 
+  it('renders Phase 8 metrics sections (instability table, longest chain, SCC distribution, complexity hotspots) when present', () => {
+    const html = codepolPanelHtmlRender({
+      nonce: 'nonce-phase-8',
+      model: {
+        kind: 'architectureSummary',
+        title: 'Codepol: Architecture Summary',
+        data: {
+          summaryCard: {
+            summary: 'Indexed 4 files, 8 symbols, 1 entry points, 1 cycles.',
+            metrics: [
+              { label: 'Indexed Files', value: '4' },
+              { label: 'Cycles', value: '1' },
+              { label: 'Longest Chain', value: '3 hops' },
+            ],
+            hotspots: [
+              {
+                uri: 'file:///workspace/src/utils.ts',
+                line: 0,
+                character: 0,
+                label: 'src/utils.ts',
+                detail: '2 importers • 0 importees',
+                importerCount: 2,
+                importeeCount: 0,
+              },
+            ],
+            complexityHotspots: [
+              {
+                uri: 'file:///workspace/src/utils.ts',
+                line: 0,
+                character: 0,
+                label: 'src/utils.ts',
+                detail: 'complexity 14 × 2 importers = score 28',
+                aggregateCyclomaticComplexity: 14,
+                importerCount: 2,
+                score: 28,
+              },
+            ],
+            instabilityRows: [
+              {
+                uri: 'file:///workspace/src/entry.ts',
+                line: 0,
+                character: 0,
+                label: 'src/entry.ts',
+                detail: 'I=1.00 • Ce=2 Ca=0',
+                value: 1,
+                valueLabel: '1.00',
+                importerCount: 0,
+                importeeCount: 2,
+              },
+              {
+                uri: 'file:///workspace/src/lib/a.ts',
+                line: 0,
+                character: 0,
+                label: 'src/lib/a.ts',
+                detail: 'I=0.50 • Ce=1 Ca=1',
+                value: 0.5,
+                valueLabel: '0.50',
+                importerCount: 1,
+                importeeCount: 1,
+              },
+            ],
+            longestChainPath: [
+              {
+                uri: 'file:///workspace/src/entry.ts',
+                line: 0,
+                character: 0,
+                label: 'src/entry.ts',
+                detail: 'hop 1 of 4',
+              },
+              {
+                uri: 'file:///workspace/src/lib/a.ts',
+                line: 0,
+                character: 0,
+                label: 'src/lib/a.ts',
+                detail: 'hop 2 of 4',
+              },
+              {
+                uri: 'file:///workspace/src/lib/b.ts',
+                line: 0,
+                character: 0,
+                label: 'src/lib/b.ts',
+                detail: 'hop 3 of 4',
+              },
+              {
+                uri: 'file:///workspace/src/lib/utils.ts',
+                line: 0,
+                character: 0,
+                label: 'src/lib/utils.ts',
+                detail: 'hop 4 of 4',
+              },
+            ],
+            sccDistributionRows: [
+              { size: 4, count: 1, label: '4-file SCC × 1 cycle' },
+              { size: 2, count: 2, label: '2-file SCC × 2 cycles' },
+            ],
+          },
+        },
+      },
+    });
+
+    // Complexity hotspots section now exposes the score in the row detail.
+    expect(html).toContain('Complexity Hotspots');
+    expect(html).toContain('= score 28');
+    // Full instability table renders as a clickable list with the
+    // pre-formatted detail string.
+    expect(html).toContain('Instability (top 2)');
+    expect(html).toContain('I=1.00 • Ce=2 Ca=0');
+    // Longest chain section header reports the hop count and lists each
+    // step.
+    expect(html).toContain('Longest Chain (3 hops)');
+    expect(html).toContain('hop 1 of 4');
+    expect(html).toContain('hop 4 of 4');
+    // SCC distribution lists the largest cycle first and carries the
+    // structured data attributes for downstream styling.
+    expect(html).toContain('Cycle Size Distribution');
+    expect(html).toContain('data-scc-size="4"');
+    expect(html).toContain('4-file SCC × 1 cycle');
+    expect(html).toContain('2-file SCC × 2 cycles');
+  });
+
+  it('omits Phase 8 sections when the summary view model does not provide them', () => {
+    const html = codepolPanelHtmlRender({
+      nonce: 'nonce-phase-8-empty',
+      model: {
+        kind: 'architectureSummary',
+        title: 'Codepol: Architecture Summary',
+        data: {
+          summaryCard: {
+            summary: 'Indexed 1 files, 0 symbols, 0 entry points, 0 cycles.',
+            metrics: [{ label: 'Indexed Files', value: '1' }],
+            hotspots: [],
+          },
+        },
+      },
+    });
+
+    expect(html).not.toContain('Instability (top');
+    expect(html).not.toContain('Longest Chain (');
+    expect(html).not.toContain('Cycle Size Distribution');
+    expect(html).not.toContain('Complexity Hotspots');
+  });
+
   it('routes hover actions to the correct Codepol commands', () => {
     expect(codepolHoverActionCommandResolve('find_references')).toBe(
       CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_LINKS,

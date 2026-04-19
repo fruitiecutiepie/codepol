@@ -7,7 +7,10 @@ import type { CodepolProtocolClient } from './protocolClient';
 import { codepolRequestSupersededErrorIs } from './readiness';
 
 export type CodepolArchitectureCodeLensProviderHost = {
-  protocol: Pick<CodepolProtocolClient, 'queryImpactRadius'>;
+  protocol: Pick<
+    CodepolProtocolClient,
+    'queryImpactRadius' | 'queryArchitectureSummary'
+  >;
   peekCommandId: string;
 };
 
@@ -37,17 +40,31 @@ export class CodepolArchitectureCodeLensProvider
     const focusUri = document.uri.toString();
     let viewModel: ArchitectureCodeLensViewModel | null;
     try {
-      const result = await this.host.protocol.queryImpactRadius({
-        uri: focusUri,
-        direction: 'both',
-        depth: 1,
-      });
-      if (token.isCancellationRequested || !result) {
+      // Fan out impact radius and architecture summary in parallel so
+      // the lens still fires once per document. The summary is
+      // optional: when it is not yet ready (or the workspace exposes no
+      // metrics), the lens degrades to the legacy importer/importee
+      // title.
+      const [graphResult, summaryResult] = await Promise.all([
+        this.host.protocol.queryImpactRadius({
+          uri: focusUri,
+          direction: 'both',
+          depth: 1,
+        }),
+        this.host.protocol
+          .queryArchitectureSummary()
+          .catch((error) => {
+            if (codepolRequestSupersededErrorIs(error)) return null;
+            throw error;
+          }),
+      ]);
+      if (token.isCancellationRequested || !graphResult) {
         return [];
       }
       viewModel = architectureCodeLensViewModelCreate({
-        graph: result,
+        graph: graphResult,
         focusUri,
+        summary: summaryResult ?? null,
       });
     } catch (error) {
       if (codepolRequestSupersededErrorIs(error)) {

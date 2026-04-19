@@ -25,6 +25,7 @@ import { graphFanOutRun } from './graphFanOut';
 import { graphFlowRun } from './graphFlow';
 import { graphHierarchyRun } from './graphHierarchy';
 import { graphImpactRun } from './graphImpact';
+import { graphMetricsRun } from './graphMetrics';
 import { graphPathRun } from './graphPath';
 import { graphSnapshotRun } from './graphSnapshot';
 
@@ -482,6 +483,40 @@ const graphHierarchyCommand: CommandModule<
   },
 };
 
+const graphMetricsCommand: CommandModule<
+  GraphCommonArgs,
+  GraphCommonArgs & { format: string; top?: number; 'fail-on-cycle': boolean }
+> = {
+  command: 'metrics',
+  describe:
+    'Emit Phase 8 architecture health metrics (instability, longest chain, SCC distribution, complexity hotspots)',
+  builder: (yargs) =>
+    graphFormatOption(yargs)
+      .option('top', {
+        type: 'number',
+        describe:
+          'Cap top-N rows in text output for instability and complexity hotspots (no effect on JSON)',
+      })
+      .option('fail-on-cycle', {
+        type: 'boolean',
+        default: false,
+        describe: 'Exit non-zero when the workspace has any cycle',
+      }) as unknown as Argv<
+      GraphCommonArgs & { format: string; top?: number; 'fail-on-cycle': boolean }
+    >,
+  handler: async (args) => {
+    const resolved = await graphConfigResolve(args);
+    const exitCode = await graphMetricsRun({
+      cwd: resolved.cwd,
+      configPath: resolved.configPath,
+      format: args.format,
+      top: args.top,
+      failOnCycle: args['fail-on-cycle'],
+    });
+    if (exitCode !== 0) process.exitCode = exitCode;
+  },
+};
+
 export const graphCommand: CommandModule<unknown, GraphCommonArgs> = {
   command: 'graph <subcommand>',
   describe: 'Run workspace dependency-graph queries',
@@ -498,6 +533,7 @@ export const graphCommand: CommandModule<unknown, GraphCommonArgs> = {
       .command(graphDiffCommand)
       .command(graphFlowCommand)
       .command(graphHierarchyCommand)
+      .command(graphMetricsCommand)
       .demandCommand(1, 'Specify a graph subcommand')
       .strict(),
   handler: () => {

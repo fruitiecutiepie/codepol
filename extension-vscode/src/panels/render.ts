@@ -305,11 +305,47 @@ function workspaceSummaryCardHtml(
         });
   const complexityHotspotsSectionHtml =
     summaryCard.complexityHotspots && summaryCard.complexityHotspots.length > 0
-      ? `<div class="section complexity-hotspots-section">
+      ? `<div class="section complexity-hotspots-section mode-micro-hide">
           <h3>Complexity Hotspots</h3>
           ${locationsHtml(summaryCard.complexityHotspots, {
-            listClass: 'summary-complexity-hotspots micro-limit-3',
+            listClass: 'summary-complexity-hotspots',
           })}
+        </div>`
+      : '';
+  const instabilityTableHtml =
+    summaryCard.instabilityRows && summaryCard.instabilityRows.length > 0
+      ? `<div class="section instability-section mode-micro-hide">
+          <h3>Instability (top ${summaryCard.instabilityRows.length})</h3>
+          ${locationsHtml(summaryCard.instabilityRows, {
+            listClass: 'summary-instability',
+          })}
+        </div>`
+      : '';
+  const longestChainHtml =
+    summaryCard.longestChainPath && summaryCard.longestChainPath.length > 0
+      ? `<div class="section longest-chain-section mode-micro-hide">
+          <h3>Longest Chain (${summaryCard.longestChainPath.length - 1} hops)</h3>
+          ${locationsHtml(summaryCard.longestChainPath, {
+            listClass: 'summary-longest-chain',
+          })}
+        </div>`
+      : '';
+  const sccDistributionHtml =
+    summaryCard.sccDistributionRows && summaryCard.sccDistributionRows.length > 0
+      ? `<div class="section scc-distribution-section mode-micro-hide">
+          <h3>Cycle Size Distribution</h3>
+          <ul class="summary-scc-distribution">
+            ${summaryCard.sccDistributionRows
+              .map(
+                (row) =>
+                  `<li
+                    class="summary-scc-distribution-row"
+                    data-scc-size="${row.size}"
+                    data-scc-count="${row.count}"
+                  >${htmlEscape(row.label)}</li>`,
+              )
+              .join('')}
+          </ul>
         </div>`
       : '';
 
@@ -331,6 +367,9 @@ function workspaceSummaryCardHtml(
       ${hotspotsHtml}
     </div>
     ${complexityHotspotsSectionHtml}
+    ${instabilityTableHtml}
+    ${longestChainHtml}
+    ${sccDistributionHtml}
   </section>`;
 }
 

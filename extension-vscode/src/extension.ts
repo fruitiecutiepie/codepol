@@ -44,6 +44,7 @@ import {
   CODEPOL_EXTENSION_VIEW_RENAME_TARGETS_ID,
 } from './constants';
 import { CodepolArchitectureCodeLensProvider } from './codeLensProvider';
+import { CodepolArchitectureHoverProvider } from './architectureHoverProvider';
 import { CodepolSymbolCodeLensProvider } from './symbolCodeLensProvider';
 import { CodepolTypeHierarchyCodeLensProvider } from './typeHierarchyCodeLensProvider';
 import {
@@ -664,6 +665,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     protocol,
     peekCommandId: CODEPOL_EXTENSION_COMMAND_PEEK_ARCHITECTURE,
   });
+  const architectureHoverProvider = new CodepolArchitectureHoverProvider({
+    protocol,
+    peekCommandId: CODEPOL_EXTENSION_COMMAND_PEEK_ARCHITECTURE,
+  });
   const symbolCodeLensProvider = new CodepolSymbolCodeLensProvider({
     protocol,
     showCallGraphCommandId: CODEPOL_EXTENSION_COMMAND_SHOW_CALL_GRAPH,
@@ -684,6 +689,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.languages.registerCodeLensProvider(
       { scheme: 'file' },
       codeLensProvider,
+    ),
+    // Phase 8 hover provider — gated to line 0 of file: documents to
+    // stay inside the hover-model marker rule (the architecture
+    // CodeLens establishes the per-file Codepol identity at the same
+    // line).
+    vscode.languages.registerHoverProvider(
+      { scheme: 'file' },
+      architectureHoverProvider,
     ),
     vscode.languages.registerCodeLensProvider(
       { scheme: 'file' },
