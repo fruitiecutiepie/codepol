@@ -11,6 +11,8 @@ import type {
   SemanticDefinitionPanelViewModel,
   WorkspaceSummaryCardViewModel,
 } from '../viewModels';
+import type { CallGraphPanelViewModel } from '../callGraphViewModels';
+import { callGraphPanelBodyHtml } from './callGraphRender';
 
 export type CodepolPanelViewModel =
   | {
@@ -44,6 +46,11 @@ export type CodepolPanelViewModel =
       kind: 'renamePreview';
       title: string;
       data: RenamePreviewPanelViewModel;
+    }
+  | {
+      kind: 'callGraph';
+      title: string;
+      data: CallGraphPanelViewModel;
     };
 
 function htmlEscape(value: string): string {
@@ -783,6 +790,24 @@ const BASE_SCRIPT = `
       });
       return;
     }
+    const callGraphChipButton = target.closest('[data-cg-chip-group]');
+    if (callGraphChipButton instanceof HTMLElement) {
+      event.preventDefault();
+      const group = callGraphChipButton.dataset.cgChipGroup;
+      const value = callGraphChipButton.dataset.cgChipValue;
+      if (group === 'direction') {
+        vscode.postMessage({
+          type: 'callGraphDirectionSet',
+          direction: value,
+        });
+      } else if (group === 'depth') {
+        vscode.postMessage({
+          type: 'callGraphDepthSet',
+          depth: value,
+        });
+      }
+      return;
+    }
     if (event.altKey) {
       const blastRadiusNode = target.closest('[data-blast-radius-uri]');
       if (blastRadiusNode instanceof SVGElement || blastRadiusNode instanceof HTMLElement) {
@@ -847,7 +872,9 @@ export function codepolPanelHtmlRender(input: {
             ? architectureLinksBodyHtml(input.model.data)
             : input.model.kind === 'lintRuleDetails'
               ? lintRuleDetailsBodyHtml(input.model.data)
-            : renamePreviewBodyHtml(input.model.data);
+            : input.model.kind === 'renamePreview'
+              ? renamePreviewBodyHtml(input.model.data)
+            : callGraphPanelBodyHtml({ model: input.model.data });
 
   return `<!DOCTYPE html>
   <html lang="en">

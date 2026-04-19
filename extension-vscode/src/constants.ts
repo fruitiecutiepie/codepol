@@ -19,6 +19,10 @@ export const CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_LINKS =
   'codepol.extension.showArchitectureLinks';
 export const CODEPOL_EXTENSION_COMMAND_PEEK_ARCHITECTURE =
   'codepol.architecture.peek';
+export const CODEPOL_EXTENSION_COMMAND_SHOW_CALL_GRAPH =
+  'codepol.extension.showCallGraph';
+export const CODEPOL_EXTENSION_COMMAND_FIND_CALLBACKS =
+  'codepol.extension.findCallbacks';
 export const CODEPOL_EXTENSION_COMMAND_RENAME_CODEPOL_ENTITY =
   'codepol.extension.renameCodepolEntity';
 export const CODEPOL_EXTENSION_COMMAND_REFRESH_RENAME_TARGETS =
@@ -54,3 +58,5 @@ export const CODEPOL_EXTENSION_PANEL_RENAME_PREVIEW =
   'codepol.renamePreviewPanel';
 export const CODEPOL_EXTENSION_PANEL_LINT_RULE_DETAILS =
   'codepol.lintRuleDetailsPanel';
+export const CODEPOL_EXTENSION_PANEL_CALL_GRAPH =
+  'codepol.callGraphPanel';

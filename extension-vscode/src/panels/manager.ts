@@ -4,6 +4,7 @@ import {
   CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_LINKS,
   CODEPOL_EXTENSION_PANEL_ARCHITECTURE_SUMMARY,
   CODEPOL_EXTENSION_PANEL_ARCHITECTURE_LINKS,
+  CODEPOL_EXTENSION_PANEL_CALL_GRAPH,
   CODEPOL_EXTENSION_PANEL_DEPENDENCY_GRAPH,
   CODEPOL_EXTENSION_PANEL_LINT_RULE_DETAILS,
   CODEPOL_EXTENSION_PANEL_RENAME_PREVIEW,
@@ -18,6 +19,12 @@ import type {
   SemanticDefinitionPanelViewModel,
 } from '../viewModels';
 import {
+  callGraphNodeOpenLocationResolve,
+  type CallGraphPanelDepth,
+  type CallGraphPanelDirection,
+  type CallGraphPanelViewModel,
+} from '../callGraphViewModels';
+import {
   dependencyGraphControlMessageIs,
   dependencyGraphControlStateUpdate,
   dependencyGraphPanelControlStateInitialArchitectureLinks,
@@ -29,6 +36,16 @@ import {
 } from './controls';
 import { codepolHoverActionCommandResolve } from './messages';
 import { codepolPanelHtmlRender, type CodepolPanelViewModel } from './render';
+
+export type CallGraphPanelControlMessage =
+  | {
+      type: 'callGraphDirectionSet';
+      direction?: string;
+    }
+  | {
+      type: 'callGraphDepthSet';
+      depth?: string;
+    };
 
 type CodepolPanelMessage =
   | {
@@ -46,7 +63,8 @@ type CodepolPanelMessage =
       type: 'applyPlan';
       planId?: string;
     }
-  | DependencyGraphPanelControlMessage;
+  | DependencyGraphPanelControlMessage
+  | CallGraphPanelControlMessage;
 
 type PanelKind =
   | 'semanticDefinition'
@@ -54,7 +72,48 @@ type PanelKind =
   | 'dependencyGraph'
   | 'architectureLinks'
   | 'lintRuleDetails'
-  | 'renamePreview';
+  | 'renamePreview'
+  | 'callGraph';
+
+/**
+ * Rebuilder shape supplied alongside `showCallGraph(model, rebuilder)`.
+ * The manager calls it whenever a chip-toggle message arrives so the
+ * panel can re-fire `queryCallGraph` with the new direction / depth.
+ */
+export type CallGraphPanelRebuilder = (input: {
+  direction: CallGraphPanelDirection;
+  depth: CallGraphPanelDepth;
+}) => Promise<CallGraphPanelViewModel | null>;
+
+type CallGraphPanelControls = {
+  state: { direction: CallGraphPanelDirection; depth: CallGraphPanelDepth };
+  rebuilder: CallGraphPanelRebuilder;
+};
+
+function callGraphPanelControlMessageIs(
+  message: CodepolPanelMessage,
+): message is CallGraphPanelControlMessage {
+  return (
+    message.type === 'callGraphDirectionSet' ||
+    message.type === 'callGraphDepthSet'
+  );
+}
+
+function callGraphDirectionParse(
+  raw: string | undefined,
+): CallGraphPanelDirection | undefined {
+  if (raw === 'callers' || raw === 'callees' || raw === 'both') return raw;
+  return undefined;
+}
+
+function callGraphDepthParse(
+  raw: string | undefined,
+): CallGraphPanelDepth | undefined {
+  if (raw === '1') return 1;
+  if (raw === '2') return 2;
+  if (raw === 'unbounded') return 'unbounded';
+  return undefined;
+}
 
 export type CodepolPanelActions = {
   openLocation(input: {
@@ -81,6 +140,7 @@ type ManagedPanel = {
   model: CodepolPanelViewModel;
   dependencyGraphControls?: DependencyGraphPanelControls;
   architectureLinksControls?: ArchitectureLinksPanelControls;
+  callGraphControls?: CallGraphPanelControls;
 };
 
 export class CodepolPanelManager implements vscode.Disposable {
@@ -177,6 +237,36 @@ export class CodepolPanelManager implements vscode.Disposable {
     });
   }
 
+  showCallGraph(
+    model: CallGraphPanelViewModel,
+    rebuilder?: CallGraphPanelRebuilder,
+  ): void {
+    const headingName = model.focusSymbolName.length > 0
+      ? model.focusSymbolName
+      : '<anonymous>';
+    this.panelShow('callGraph', {
+      kind: 'callGraph',
+      title: `Codepol: Call Graph (${headingName})`,
+      data: model,
+    });
+    if (rebuilder) {
+      const managed = this.panels.get('callGraph');
+      if (managed) {
+        managed.callGraphControls = {
+          state: { direction: model.direction, depth: model.depth },
+          rebuilder,
+        };
+      }
+    }
+  }
+
+  closeCallGraph(): void {
+    const managed = this.panels.get('callGraph');
+    if (!managed) return;
+    managed.panel.dispose();
+    this.panels.delete('callGraph');
+  }
+
   private panelShow(kind: PanelKind, model: CodepolPanelViewModel): void {
     const existing = this.panels.get(kind);
     if (existing) {
@@ -201,7 +291,9 @@ export class CodepolPanelManager implements vscode.Disposable {
           ? CODEPOL_EXTENSION_PANEL_ARCHITECTURE_LINKS
         : kind === 'lintRuleDetails'
           ? CODEPOL_EXTENSION_PANEL_LINT_RULE_DETAILS
-          : CODEPOL_EXTENSION_PANEL_RENAME_PREVIEW;
+        : kind === 'renamePreview'
+          ? CODEPOL_EXTENSION_PANEL_RENAME_PREVIEW
+        : CODEPOL_EXTENSION_PANEL_CALL_GRAPH;
     const panel = vscode.window.createWebviewPanel(
       panelId,
       model.title,
@@ -303,7 +395,21 @@ export class CodepolPanelManager implements vscode.Disposable {
       return;
     }
 
+    if (callGraphPanelControlMessageIs(message)) {
+      await this.callGraphControlMessageHandle(message);
+      return;
+    }
+
     if (message.type === 'openLocation' && message.uri) {
+      // Symbol-graph panels render synthetic `codepol-symbol://`
+      // URIs the editor cannot open directly; translate them through
+      // the panel's view-model to the symbol's declaration before
+      // dispatching to the editor.
+      const opened = this.callGraphOpenLocationTranslate(kind, message.uri);
+      if (opened) {
+        await this.actions.openLocation(opened);
+        return;
+      }
       await this.actions.openLocation({
         uri: message.uri,
         line: message.line ?? 0,
@@ -355,5 +461,52 @@ export class CodepolPanelManager implements vscode.Disposable {
         model: managed.model,
       });
     }
+  }
+
+  private callGraphOpenLocationTranslate(
+    kind: PanelKind,
+    uri: string,
+  ): { uri: string; line: number; character: number } | null {
+    if (kind !== 'callGraph') return null;
+    const managed = this.panels.get('callGraph');
+    if (!managed || managed.model.kind !== 'callGraph') return null;
+    return callGraphNodeOpenLocationResolve({ model: managed.model.data, uri });
+  }
+
+  private async callGraphControlMessageHandle(
+    message: CallGraphPanelControlMessage,
+  ): Promise<void> {
+    const managed = this.panels.get('callGraph');
+    if (!managed || !managed.callGraphControls) return;
+    if (managed.model.kind !== 'callGraph') return;
+    const controls = managed.callGraphControls;
+    let nextDirection = controls.state.direction;
+    let nextDepth = controls.state.depth;
+    if (message.type === 'callGraphDirectionSet') {
+      const parsed = callGraphDirectionParse(message.direction);
+      if (!parsed || parsed === controls.state.direction) return;
+      nextDirection = parsed;
+    } else if (message.type === 'callGraphDepthSet') {
+      const parsed = callGraphDepthParse(message.depth);
+      if (parsed === undefined || parsed === controls.state.depth) return;
+      nextDepth = parsed;
+    }
+    const nextModel = await controls.rebuilder({
+      direction: nextDirection,
+      depth: nextDepth,
+    });
+    if (!nextModel) return;
+    managed.callGraphControls = {
+      state: { direction: nextModel.direction, depth: nextModel.depth },
+      rebuilder: controls.rebuilder,
+    };
+    managed.model = {
+      ...managed.model,
+      data: nextModel,
+    };
+    managed.panel.webview.html = codepolPanelHtmlRender({
+      nonce: randomBytes(16).toString('hex'),
+      model: managed.model,
+    });
   }
 }

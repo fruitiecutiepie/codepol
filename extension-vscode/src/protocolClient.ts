@@ -41,6 +41,7 @@ import type {
   WorkspaceSymbolFlowDirection,
   WorkspaceSymbolFlowResult,
   WorkspaceSymbolLookupResult,
+  WorkspaceSymbolsInFileWithCallCountsResult,
   WorkspaceTypeHierarchyDirection,
   WorkspaceTypeHierarchyEdgeConfidence,
 } from '@codepol/core';
@@ -71,6 +72,7 @@ import {
   CODEPOL_LSP_REQUEST_SEMANTIC_SEARCH,
   CODEPOL_LSP_REQUEST_SYMBOL_AT_POSITION,
   CODEPOL_LSP_REQUEST_SYMBOL_LOOKUP,
+  CODEPOL_LSP_REQUEST_SYMBOLS_IN_FILE_WITH_CALL_COUNTS,
 } from '@codepol/lsp/protocol';
 import {
   codepolConnectionDisposedErrorIs,
@@ -209,6 +211,9 @@ export type CodepolProtocolClient = {
     uri: string;
     position: WorkspacePosition;
   }): Promise<WorkspaceSymbolAtPositionResult | null>;
+  querySymbolsInFileWithCallCounts(input: {
+    uri: string;
+  }): Promise<WorkspaceSymbolsInFileWithCallCountsResult | null>;
   prepareRename(
     target: WorkspaceRenameTarget,
   ): Promise<WorkspacePrepareRenameResult | null>;
@@ -575,6 +580,15 @@ export class VscodeLanguageClientProtocol implements CodepolProtocolClient {
   }): Promise<WorkspaceSymbolAtPositionResult | null> {
     return this.requestRun<WorkspaceSymbolAtPositionResult | null>(
       CODEPOL_LSP_REQUEST_SYMBOL_AT_POSITION,
+      input,
+    );
+  }
+
+  async querySymbolsInFileWithCallCounts(input: {
+    uri: string;
+  }): Promise<WorkspaceSymbolsInFileWithCallCountsResult | null> {
+    return this.requestRun<WorkspaceSymbolsInFileWithCallCountsResult | null>(
+      CODEPOL_LSP_REQUEST_SYMBOLS_IN_FILE_WITH_CALL_COUNTS,
       input,
     );
   }

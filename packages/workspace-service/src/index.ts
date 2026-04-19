@@ -119,6 +119,8 @@ import {
   type WorkspaceSymbolFlowResult,
   type WorkspaceSymbolLookupResult,
   type WorkspaceSymbolResult,
+  type WorkspaceSymbolWithCallCounts,
+  type WorkspaceSymbolsInFileWithCallCountsResult,
   type SymbolFlowRelation,
   type SymbolId,
   type SymbolKind,
@@ -841,6 +843,14 @@ export type WorkspaceService = {
     analysisGeneration?: number;
     signal?: AbortSignal;
   }) => Promise<WorkspaceSymbolAtPositionResult>;
+  querySymbolsInFileWithCallCounts: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceSymbolsInFileWithCallCountsResult>;
 };
 
 export type WorkspaceServiceCreateOptions = {
@@ -5544,6 +5554,65 @@ function workspaceSymbolAtPositionResultCreate(
     return { symbol: undefined };
   }
   return { symbol: workspaceSymbolDescriptorCreate(state, best) };
+}
+
+/**
+ * Build the per-symbol caller/callee count payload for one file.
+ *
+ * Walks every indexed function/method in the file and asks the call
+ * graph for its caller and callee sets. Both lookups are O(N) over
+ * the in-memory index — a file with 30 functions is ~60 cheap calls
+ * and well under a millisecond on typical projects. The editor's
+ * CodeLens fires this once per file open instead of N+1 times, so
+ * the batched shape matters even though the per-call cost is tiny.
+ *
+ * Sort order is `(declaration line, character, symbol id)` so two
+ * runs over byte-identical input produce byte-identical output. The
+ * editor uses the order directly when laying out lenses.
+ *
+ * Symbols whose `kind` is not in the workspace descriptor union
+ * (e.g. `module`-level or anonymous symbols that the descriptor type
+ * cannot represent) are skipped — the lens has no row to attach to
+ * for those, and emitting a descriptor with a foreign kind would
+ * weaken the type guarantee. Returns `{ items: [] }` (never
+ * `undefined`) for files without indexed function/method
+ * declarations or for paths the URI parser rejects.
+ */
+function workspaceSymbolsInFileWithCallCountsResultCreate(
+  state: WorkspaceDocumentsState,
+  index: ProjectIndex,
+  input: { uri: string },
+): WorkspaceSymbolsInFileWithCallCountsResult {
+  let filePath: string;
+  try {
+    filePath = workspaceUriToPath(input.uri);
+  } catch {
+    return { items: [] };
+  }
+  const fileSymbols = index.symbolsInFileGet(filePath);
+  const items: WorkspaceSymbolWithCallCounts[] = [];
+  for (const symbol of fileSymbols) {
+    if (symbol.kind !== 'function' && symbol.kind !== 'method') continue;
+    if (!workspaceSymbolDescriptorKindIs(symbol.kind)) continue;
+    const descriptor = workspaceSymbolDescriptorCreate(state, symbol);
+    items.push({
+      symbol: descriptor,
+      callerCount: index.callersGet(symbol.id).length,
+      calleeCount: index.calleesGet(symbol.id).length,
+    });
+  }
+  items.sort((left, right) => {
+    const lineDifference =
+      left.symbol.declarationRange.start.line -
+      right.symbol.declarationRange.start.line;
+    if (lineDifference !== 0) return lineDifference;
+    const charDifference =
+      left.symbol.declarationRange.start.character -
+      right.symbol.declarationRange.start.character;
+    if (charDifference !== 0) return charDifference;
+    return left.symbol.symbolId.localeCompare(right.symbol.symbolId);
+  });
+  return { items };
 }
 
 /**
@@ -10821,6 +10890,29 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       position: input.position,
     });
   }
+
+  async querySymbolsInFileWithCallCounts(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceSymbolsInFileWithCallCountsResult> {
+    const { workspace, workspaceSession } = workspaceSessionGet(
+      this.workspaces,
+      this.clientSessions,
+      input.clientSessionId,
+      input.workspaceId,
+    );
+    const index = await this.workspaceSessionIndexEnsure(workspace, workspaceSession, {
+      signal: input.signal,
+    });
+    workspaceAnalysisGenerationValidate(workspaceSession, input);
+    return workspaceSymbolsInFileWithCallCountsResultCreate(workspaceSession, index, {
+      uri: input.uri,
+    });
+  }
 }
 
 class InProcessWorkspaceService implements WorkspaceService {
@@ -11193,6 +11285,17 @@ class InProcessWorkspaceService implements WorkspaceService {
     signal?: AbortSignal;
   }): Promise<WorkspaceSymbolAtPositionResult> {
     return this.engine.querySymbolAtPosition(input);
+  }
+
+  querySymbolsInFileWithCallCounts(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceSymbolsInFileWithCallCountsResult> {
+    return this.engine.querySymbolsInFileWithCallCounts(input);
   }
 }
 

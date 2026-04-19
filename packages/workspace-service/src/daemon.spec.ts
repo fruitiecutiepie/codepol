@@ -370,6 +370,7 @@ function workspaceReadQueriesStubCreate(): Pick<
   | 'queryArchitectureSummary'
   | 'querySymbolLookup'
   | 'querySymbolAtPosition'
+  | 'querySymbolsInFileWithCallCounts'
   | 'planSourceFixAll'
   | 'planFileFixAll'
 > {
@@ -491,6 +492,9 @@ function workspaceReadQueriesStubCreate(): Pick<
     },
     async querySymbolAtPosition() {
       return { symbol: undefined };
+    },
+    async querySymbolsInFileWithCallCounts() {
+      return { items: [] };
     },
     async planSourceFixAll() {
       return null;
@@ -2174,6 +2178,17 @@ describe('workspace daemon control plane', () => {
       position: { line: 0, character: 0 },
     });
     expect(atPosition).toEqual({ symbol: undefined });
+
+    // CodeLens batched RPC round-trips through the daemon transport.
+    // The unindexed-but-attached file path returns an empty item list
+    // (never `undefined`) so the editor's per-file CodeLens fan-in
+    // never has to null-guard.
+    const codelensCounts = await service.querySymbolsInFileWithCallCounts({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      uri: appUri,
+    });
+    expect(codelensCounts).toEqual({ items: [] });
   });
 
   it('rejects stale analysisGeneration for workspace symbol reads through the daemon service client', async () => {

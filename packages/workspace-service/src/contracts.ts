@@ -32,6 +32,7 @@ import type {
   WorkspaceSymbolFlowResult,
   WorkspaceSymbolLookupResult,
   WorkspaceSymbolResult,
+  WorkspaceSymbolsInFileWithCallCountsResult,
   WorkspaceTypeHierarchyDirection,
   WorkspaceTypeHierarchyEdgeConfidence,
 } from '@codepol/core';
@@ -465,4 +466,29 @@ export type WorkspaceService = {
     analysisGeneration?: number;
     signal?: AbortSignal;
   }) => Promise<WorkspaceSymbolAtPositionResult>;
+  /**
+   * Per-symbol structural caller/callee counts for every function or
+   * method declared in `uri`. One round-trip backs the editor's
+   * per-symbol CodeLens — without this batched query, the lens would
+   * fan out N RPCs per file open (one `queryCallGraph` per symbol).
+   *
+   * Sort order is `(declarationRange.start.line, character, symbolId)`
+   * so two runs on byte-identical input produce byte-identical output
+   * and the editor can lay out lenses deterministically. Empty array
+   * for files with no indexed function/method declarations (never
+   * `undefined`).
+   *
+   * Counts come from the structural call graph and silently upgrade
+   * when a `TypeAwareCallGraphSource` binding is wired — there is no
+   * `requireTypeAware` option here on purpose: editor CodeLenses must
+   * never fail on missing type-aware data.
+   */
+  querySymbolsInFileWithCallCounts: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceSymbolsInFileWithCallCountsResult>;
 };

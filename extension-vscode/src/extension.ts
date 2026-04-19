@@ -20,6 +20,7 @@ import {
 import {
   CODEPOL_EXTENSION_COMMAND_ADD_DIAGNOSTICS_ESCALATION,
   CODEPOL_EXTENSION_COMMAND_CLEAR_DIAGNOSTICS_ESCALATIONS,
+  CODEPOL_EXTENSION_COMMAND_FIND_CALLBACKS,
   CODEPOL_EXTENSION_COMMAND_PEEK_ARCHITECTURE,
   CODEPOL_EXTENSION_COMMAND_REFRESH_RENAME_TARGETS,
   CODEPOL_EXTENSION_COMMAND_REFRESH_LINT_RULES,
@@ -31,6 +32,7 @@ import {
   CODEPOL_EXTENSION_COMMAND_SHOW_LINT_RULE_DIAGNOSTIC_FIXES,
   CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_SUMMARY,
   CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_LINKS,
+  CODEPOL_EXTENSION_COMMAND_SHOW_CALL_GRAPH,
   CODEPOL_EXTENSION_COMMAND_SHOW_DEPENDENCY_GRAPH,
   CODEPOL_EXTENSION_COMMAND_SHOW_LINT_RULE_DETAILS,
   CODEPOL_EXTENSION_COMMAND_SHOW_SEMANTIC_DEFINITION,
@@ -41,6 +43,7 @@ import {
   CODEPOL_EXTENSION_VIEW_RENAME_TARGETS_ID,
 } from './constants';
 import { CodepolArchitectureCodeLensProvider } from './codeLensProvider';
+import { CodepolSymbolCodeLensProvider } from './symbolCodeLensProvider';
 import {
   renameTargetCandidatesDiscover,
   type RenameTargetCandidate,
@@ -90,6 +93,66 @@ function activeEditorUriGet(): string | undefined {
     return undefined;
   }
   return editor.document.uri.toString();
+}
+
+function activeEditorPositionGet():
+  | { line: number; character: number }
+  | undefined {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || editor.document.uri.scheme !== 'file') {
+    return undefined;
+  }
+  const position = editor.selection.active;
+  return { line: position.line, character: position.character };
+}
+
+/**
+ * Resolve a workspace-relative path produced by the workspace
+ * service (`WorkspaceSymbolFlowEdge.file`) to an absolute `vscode.Uri`
+ * by joining against the active workspace folder. Returns `undefined`
+ * when no folder is open — the caller should fall back to a parse
+ * attempt against the raw URI string.
+ */
+function workspaceRelativePathToUri(file: string): vscode.Uri | undefined {
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  if (!folder) return undefined;
+  return vscode.Uri.joinPath(folder.uri, file);
+}
+
+async function flowSitePeekShow(input: {
+  sourceUri: string;
+  sourcePosition: { line: number; character: number };
+  locations: Array<{ uri: string; line: number; character: number }>;
+}): Promise<void> {
+  const sourceVscodeUri = vscode.Uri.parse(input.sourceUri);
+  const sourcePosition = new vscode.Position(
+    input.sourcePosition.line,
+    input.sourcePosition.character,
+  );
+  const targets: vscode.Location[] = input.locations.map((loc) => {
+    let uri: vscode.Uri;
+    try {
+      uri = vscode.Uri.parse(loc.uri);
+    } catch {
+      const fromWorkspace = workspaceRelativePathToUri(loc.uri);
+      uri = fromWorkspace ?? vscode.Uri.file(loc.uri);
+    }
+    if (uri.scheme === '' || uri.scheme === 'untitled') {
+      const fromWorkspace = workspaceRelativePathToUri(loc.uri);
+      if (fromWorkspace) uri = fromWorkspace;
+    }
+    return new vscode.Location(
+      uri,
+      new vscode.Position(loc.line, loc.character),
+    );
+  });
+  await vscode.commands.executeCommand(
+    'editor.action.peekLocations',
+    sourceVscodeUri,
+    sourcePosition,
+    targets,
+    'peek',
+  );
 }
 
 const DIAGNOSTICS_LOG_LEVELS: readonly LogLevel[] = [
@@ -577,6 +640,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   controller = new CodepolCommandController(protocol, panels, {
     activeUriGet: activeEditorUriGet,
+    activePositionGet: activeEditorPositionGet,
     readinessSnapshotGet: () => readiness.snapshotGet(),
     semanticSearchInitialQueryResolve: semanticSearchQueryResolve,
     semanticSearchPick,
@@ -591,11 +655,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void vscode.window.showErrorMessage(message);
     },
     openLocation: locationOpen,
+    peekLocations: flowSitePeekShow,
   });
 
   const codeLensProvider = new CodepolArchitectureCodeLensProvider({
     protocol,
     peekCommandId: CODEPOL_EXTENSION_COMMAND_PEEK_ARCHITECTURE,
+  });
+  const symbolCodeLensProvider = new CodepolSymbolCodeLensProvider({
+    protocol,
+    showCallGraphCommandId: CODEPOL_EXTENSION_COMMAND_SHOW_CALL_GRAPH,
   });
 
   context.subscriptions.push(
@@ -604,9 +673,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     sidebarProvider,
     statusBarItem,
     codeLensProvider,
+    symbolCodeLensProvider,
     vscode.languages.registerCodeLensProvider(
       { scheme: 'file' },
       codeLensProvider,
+    ),
+    vscode.languages.registerCodeLensProvider(
+      { scheme: 'file' },
+      symbolCodeLensProvider,
     ),
     vscode.window.registerWebviewViewProvider(
       CODEPOL_EXTENSION_VIEW_CURRENT_CONTEXT_ID,
@@ -649,6 +723,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand(
       CODEPOL_EXTENSION_COMMAND_PEEK_ARCHITECTURE,
       async (uri?: string) => controller?.peekArchitecture(uri),
+    ),
+    vscode.commands.registerCommand(
+      CODEPOL_EXTENSION_COMMAND_SHOW_CALL_GRAPH,
+      async (args?: { symbolId?: string; focusSymbolName?: string }) =>
+        controller?.showCallGraph(args),
+    ),
+    vscode.commands.registerCommand(
+      CODEPOL_EXTENSION_COMMAND_FIND_CALLBACKS,
+      async (args?: { symbolId?: string; focusSymbolName?: string }) =>
+        controller?.findCallbacks(args),
     ),
     vscode.commands.registerCommand(
       CODEPOL_EXTENSION_COMMAND_SHOW_LINT_RULE_DETAILS,
@@ -865,6 +949,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       lintRulesProvider.refresh();
       renameTargetsProvider.refresh();
       codeLensProvider.refresh();
+      symbolCodeLensProvider.refresh();
     }),
   );
 

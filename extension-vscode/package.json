@@ -65,6 +65,16 @@
         "enablement": "codepol.indexBackedCommandsEnabled"
       },
       {
+        "command": "codepol.extension.showCallGraph",
+        "title": "Codepol: Show Call Graph",
+        "enablement": "codepol.indexBackedCommandsEnabled"
+      },
+      {
+        "command": "codepol.extension.findCallbacks",
+        "title": "Codepol: Find Callbacks",
+        "enablement": "codepol.indexBackedCommandsEnabled"
+      },
+      {
         "command": "codepol.extension.renameCodepolEntity",
         "title": "Codepol: Rename Codepol Entity"
       },
@@ -159,6 +169,18 @@
           "command": "codepol.extension.showLintRuleDiagnosticFixes",
           "when": "view == codepol.lintRules && viewItem == codepol.lintRuleDiagnostic.fixable",
           "group": "inline"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "codepol.extension.showCallGraph",
+          "when": "editorTextFocus && resourceScheme == file && codepol.indexBackedCommandsEnabled",
+          "group": "navigation@10"
+        },
+        {
+          "command": "codepol.extension.findCallbacks",
+          "when": "editorTextFocus && resourceScheme == file && codepol.indexBackedCommandsEnabled",
+          "group": "navigation@11"
         }
       ]
     },

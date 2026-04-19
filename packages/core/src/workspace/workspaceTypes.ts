@@ -280,6 +280,42 @@ export type WorkspaceSymbolAtPositionResult = {
   symbol?: WorkspaceSymbolDescriptor;
 };
 
+/**
+ * Per-symbol structural caller/callee counts for one function or
+ * method. Used by `querySymbolsInFileWithCallCounts` to power the
+ * editor's per-symbol CodeLens with one batched round-trip per file
+ * instead of one round-trip per symbol.
+ *
+ * Counts come from the structural call graph
+ * (`ProjectIndex.callersGet` / `calleesGet`) — they upgrade silently
+ * when a `TypeAwareCallGraphSource` binding is wired, but this
+ * surface does NOT take a `requireTypeAware` flag. Editor CodeLenses
+ * never want to fail on missing type-aware data; they want the best
+ * available count.
+ */
+export type WorkspaceSymbolWithCallCounts = {
+  /** Stable descriptor for the function / method declaration. */
+  symbol: WorkspaceSymbolDescriptor;
+  /** Number of distinct caller symbols (structural). */
+  callerCount: number;
+  /** Number of distinct callee symbols (structural). */
+  calleeCount: number;
+};
+
+/**
+ * Result type for `querySymbolsInFileWithCallCounts`. Always returns
+ * an array (never `undefined`); empty when the file has no indexed
+ * function/method declarations.
+ *
+ * Sort order is `(symbol.declarationRange.start.line,
+ * symbol.declarationRange.start.character, symbol.symbolId)` so two
+ * runs over byte-identical input produce byte-identical output. The
+ * editor consumes the order directly when laying out CodeLenses.
+ */
+export type WorkspaceSymbolsInFileWithCallCountsResult = {
+  items: WorkspaceSymbolWithCallCounts[];
+};
+
 export type WorkspaceSearchResult = {
   name: string;
   kind: 'module' | 'exported_symbol';

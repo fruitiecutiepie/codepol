@@ -2,6 +2,7 @@ import type {
   WorkspaceArchitectureSummaryResult,
   WorkspaceDependencyGraphResult,
   WorkspaceLintRuleDetailsResult,
+  WorkspacePosition,
   WorkspacePrepareRenameResult,
   WorkspaceRange,
   WorkspaceRenamePreviewResult,
@@ -10,6 +11,12 @@ import type {
   WorkspaceSemanticReferencesResult,
   WorkspaceSupportedRenameTarget,
 } from '@codepol/core';
+import {
+  callGraphPanelViewModelCreate,
+  type CallGraphPanelDepth,
+  type CallGraphPanelDirection,
+  type CallGraphPanelViewModel,
+} from './callGraphViewModels';
 import type { RenameTargetCandidate } from './discovery';
 import type {
   CodepolProtocolQuickFixAction,
@@ -82,6 +89,11 @@ export type ArchitectureLinksPanelRebuilder = (
   state: DependencyGraphPanelControlState,
 ) => ArchitectureLinksPanelViewModel;
 
+export type CallGraphPanelRebuilder = (input: {
+  direction: CallGraphPanelDirection;
+  depth: CallGraphPanelDepth;
+}) => Promise<CallGraphPanelViewModel | null>;
+
 export type CodepolPanels = {
   showArchitectureSummary(input: ArchitectureSummaryPanelViewModel): void;
   showDependencyGraph(
@@ -95,10 +107,37 @@ export type CodepolPanels = {
   ): void;
   showLintRuleDetails(input: LintRuleDetailsPanelViewModel): void;
   showRenamePreview(input: RenamePreviewPanelViewModel): void;
+  showCallGraph(
+    input: CallGraphPanelViewModel,
+    rebuilder?: CallGraphPanelRebuilder,
+  ): void;
+};
+
+export type FlowSitePeekLocation = {
+  uri: string;
+  line: number;
+  character: number;
 };
 
 export type CodepolCommandHost = {
   activeUriGet(): string | undefined;
+  /**
+   * Cursor position in the active editor, when one exists. Used by
+   * `showCallGraph` and `findCallbacks` to anchor the cursor-resolved
+   * symbol-id discovery (`querySymbolAtPosition`).
+   */
+  activePositionGet(): WorkspacePosition | undefined;
+  /**
+   * Open VS Code's peek view at `(uri, position)` populated with
+   * `locations`. Used by `findCallbacks` to surface the flow sites
+   * inline rather than as a panel. Implementations typically call
+   * `vscode.commands.executeCommand('editor.action.peekLocations', ...)`.
+   */
+  peekLocations(input: {
+    sourceUri: string;
+    sourcePosition: WorkspacePosition;
+    locations: FlowSitePeekLocation[];
+  }): Promise<void>;
   readinessSnapshotGet(): CodepolReadinessSnapshot;
   semanticSearchInitialQueryResolve(): string | undefined;
   semanticSearchPick(input: {
@@ -478,6 +517,185 @@ export class CodepolCommandController {
     const model = buildModel({ filters: {}, layoutMode: 'radial' });
     this.panels.showArchitectureLinks(model, buildModel);
     return model;
+  }
+
+  /**
+   * Open the dedicated call-graph panel scoped to the symbol the
+   * caller passes via `args` (CodeLens click) or to the symbol under
+   * the editor cursor (right-click flow). The handler chains
+   * `querySymbolAtPosition` for cursor resolution and `queryCallGraph`
+   * for the graph itself.
+   */
+  async showCallGraph(
+    args?: { symbolId?: string; focusSymbolName?: string },
+  ): Promise<CallGraphPanelViewModel | null> {
+    const initialDirection: CallGraphPanelDirection = 'both';
+    const initialDepth: CallGraphPanelDepth = 2;
+
+    let symbolId = args?.symbolId;
+    let focusSymbolName = args?.focusSymbolName;
+
+    if (!symbolId) {
+      const cursor = await this.cursorSymbolResolve(
+        'Position your cursor on a function or method to show its call graph.',
+      );
+      if (!cursor) return null;
+      symbolId = cursor.symbolId;
+      focusSymbolName = cursor.name.length > 0 ? cursor.name : '<anonymous>';
+    }
+
+    const buildModel = async (input: {
+      direction: CallGraphPanelDirection;
+      depth: CallGraphPanelDepth;
+    }): Promise<CallGraphPanelViewModel | null> => {
+      const depthValue = input.depth === 'unbounded' ? undefined : input.depth;
+      const requestArgs: {
+        symbolId: string;
+        direction: CallGraphPanelDirection;
+        depth?: number;
+      } = {
+        symbolId: symbolId!,
+        direction: input.direction,
+      };
+      if (depthValue !== undefined) {
+        requestArgs.depth = depthValue;
+      }
+      const graph = await this.protocolRequestRun(
+        this.protocol.queryCallGraph(requestArgs),
+      );
+      if (graph === CodepolCommandController.REQUEST_SUPERSEDED) {
+        return null;
+      }
+      if (!graph) {
+        return null;
+      }
+      const modelInput: {
+        graph: typeof graph;
+        focusSymbolId: string;
+        focusSymbolName?: string;
+        direction: CallGraphPanelDirection;
+        depth: CallGraphPanelDepth;
+      } = {
+        graph,
+        focusSymbolId: symbolId!,
+        direction: input.direction,
+        depth: input.depth,
+      };
+      if (focusSymbolName !== undefined) {
+        modelInput.focusSymbolName = focusSymbolName;
+      }
+      return callGraphPanelViewModelCreate(modelInput);
+    };
+
+    const initial = await buildModel({
+      direction: initialDirection,
+      depth: initialDepth,
+    });
+    if (!initial) {
+      await this.host.errorShow(
+        this.featureUnavailableMessageResolve(
+          'dependencyGraph',
+          `Codepol cannot build a call graph for ${focusSymbolName ?? symbolId} right now.`,
+        ),
+      );
+      return null;
+    }
+    this.panels.showCallGraph(initial, buildModel);
+    return initial;
+  }
+
+  /**
+   * Open VS Code's peek view populated with the "function passed as
+   * argument" flow sites for the symbol under the cursor (or for the
+   * symbol the caller passes explicitly). Uses `querySymbolFlow`
+   * outgoing direction — answers "where is this function used as a
+   * callback?".
+   */
+  async findCallbacks(
+    args?: { symbolId?: string; focusSymbolName?: string },
+  ): Promise<number | null> {
+    const sourceUri = this.host.activeUriGet();
+    const sourcePosition = this.host.activePositionGet();
+    if (!sourceUri || !sourcePosition) {
+      await this.host.errorShow(
+        'Open a workspace file and place your cursor on a function before searching for callbacks.',
+      );
+      return null;
+    }
+
+    let symbolId = args?.symbolId;
+    let focusSymbolName = args?.focusSymbolName;
+
+    if (!symbolId) {
+      const cursor = await this.cursorSymbolResolve(
+        'Position your cursor on a function or method to find callbacks of it.',
+      );
+      if (!cursor) return null;
+      symbolId = cursor.symbolId;
+      focusSymbolName = cursor.name.length > 0 ? cursor.name : '<anonymous>';
+    }
+
+    const result = await this.protocolRequestRun(
+      this.protocol.querySymbolFlow({
+        symbolId,
+        direction: 'outgoing',
+      }),
+    );
+    if (result === CodepolCommandController.REQUEST_SUPERSEDED) {
+      return null;
+    }
+    if (!result) {
+      await this.host.infoShow(`No callback flow sites found for ${focusSymbolName ?? symbolId}.`);
+      return 0;
+    }
+
+    if (result.edges.length === 0) {
+      await this.host.infoShow(`No callback flow sites found for ${focusSymbolName ?? symbolId}.`);
+      return 0;
+    }
+
+    const locations: FlowSitePeekLocation[] = result.edges.map((edge) => ({
+      // `edge.file` is workspace-relative per the contract; the host
+      // peek implementation is responsible for resolving it relative
+      // to the active workspace folder via `vscode.Uri.joinPath`.
+      uri: edge.file,
+      line: edge.range.start.line,
+      character: edge.range.start.character,
+    }));
+    await this.host.peekLocations({
+      sourceUri,
+      sourcePosition,
+      locations,
+    });
+    return locations.length;
+  }
+
+  /**
+   * Resolve the symbol under the active editor cursor via
+   * `querySymbolAtPosition`. Centralised so both `showCallGraph`
+   * and `findCallbacks` produce identical "no symbol" UX.
+   */
+  private async cursorSymbolResolve(
+    bailMessage: string,
+  ): Promise<{ symbolId: string; name: string } | null> {
+    const uri = this.host.activeUriGet();
+    const position = this.host.activePositionGet();
+    if (!uri || !position) {
+      await this.host.errorShow(bailMessage);
+      return null;
+    }
+    const result = await this.protocolRequestRun(
+      this.protocol.querySymbolAtPosition({ uri, position }),
+    );
+    if (result === CodepolCommandController.REQUEST_SUPERSEDED) {
+      return null;
+    }
+    const symbol = result?.symbol;
+    if (!symbol) {
+      await this.host.errorShow(bailMessage);
+      return null;
+    }
+    return { symbolId: symbol.symbolId, name: symbol.name };
   }
 
   async showLintRuleDetails(

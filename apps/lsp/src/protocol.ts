@@ -28,6 +28,8 @@ export const CODEPOL_LSP_REQUEST_ARCHITECTURE_SUMMARY =
 export const CODEPOL_LSP_REQUEST_SYMBOL_LOOKUP = 'codepol/symbolLookup';
 export const CODEPOL_LSP_REQUEST_SYMBOL_AT_POSITION =
   'codepol/symbolAtPosition';
+export const CODEPOL_LSP_REQUEST_SYMBOLS_IN_FILE_WITH_CALL_COUNTS =
+  'codepol/symbolsInFileWithCallCounts';
 export const CODEPOL_LSP_REQUEST_DIAGNOSTICS_CONFIG =
   'codepol/diagnosticsConfig';
 export const CODEPOL_LSP_REQUEST_DIAGNOSTICS_ESCALATIONS =

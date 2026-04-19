@@ -150,6 +150,8 @@ export type {
   WorkspaceSymbolFlowDirection,
   WorkspaceSymbolFlowEdge,
   WorkspaceSymbolFlowResult,
+  WorkspaceSymbolWithCallCounts,
+  WorkspaceSymbolsInFileWithCallCountsResult,
   WorkspaceDependencyPathResult,
   WorkspaceDeadModulesResult,
   WorkspaceDependencyDiffNode,

@@ -55,6 +55,7 @@ function hostCreate(overrides: Partial<{
 }> = {}) {
   return {
     activeUriGet: overrides.activeUriGet ?? (() => 'file:///workspace/packages/lib/src/index.ts'),
+    activePositionGet: () => ({ line: 0, character: 0 }),
     readinessSnapshotGet:
       overrides.readinessSnapshotGet ??
       (() => ({
@@ -82,6 +83,7 @@ function hostCreate(overrides: Partial<{
     infoShow: vi.fn(async () => {}),
     errorShow: vi.fn(async () => {}),
     openLocation: vi.fn(async () => {}),
+    peekLocations: vi.fn(async () => {}),
   };
 }
 
@@ -95,6 +97,12 @@ function protocolCreate() {
     queryImpactRadius: vi.fn(),
     queryDependencyPath: vi.fn(),
     queryDeadModules: vi.fn(),
+    queryCallGraph: vi.fn(),
+    queryTypeHierarchy: vi.fn(),
+    querySymbolFlow: vi.fn(),
+    querySymbolLookup: vi.fn(),
+    querySymbolAtPosition: vi.fn(),
+    querySymbolsInFileWithCallCounts: vi.fn(),
     querySemanticSearch: vi.fn(),
     querySemanticDefinition: vi.fn(),
     querySemanticReferences: vi.fn(),
@@ -144,6 +152,7 @@ function panelsCreate() {
     showArchitectureLinks: vi.fn(),
     showLintRuleDetails: vi.fn(),
     showRenamePreview: vi.fn(),
+    showCallGraph: vi.fn(),
   };
 }
 
@@ -1082,6 +1091,175 @@ describe('CodepolCommandController', () => {
     await expect(emptyController.renameCodepolEntity()).resolves.toBeNull();
     expect(emptyHost.errorShow).toHaveBeenCalledWith(
       'No renameable Codepol targets were discovered in the current workspace.',
+    );
+  });
+});
+
+describe('CodepolCommandController.showCallGraph', () => {
+  it('uses args.symbolId without consulting querySymbolAtPosition when supplied', async () => {
+    const protocol = protocolCreate();
+    protocol.queryCallGraph.mockResolvedValue({
+      nodes: [
+        {
+          uri: 'codepol-symbol://seed',
+          workspaceRelativePath: 'src/a.ts::seed',
+          symbolId: 'seed',
+          symbolName: 'seed',
+          symbolKind: 'function',
+        },
+      ],
+      edges: [],
+      entryPoints: [],
+      cycles: [],
+    });
+    const panels = panelsCreate();
+    const host = hostCreate();
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    const model = await controller.showCallGraph({
+      symbolId: 'seed',
+      focusSymbolName: 'seed',
+    });
+    expect(model).not.toBeNull();
+    expect(protocol.querySymbolAtPosition).not.toHaveBeenCalled();
+    expect(protocol.queryCallGraph).toHaveBeenCalledWith({
+      symbolId: 'seed',
+      direction: 'both',
+      depth: 2,
+    });
+    expect(panels.showCallGraph).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to querySymbolAtPosition when no symbolId is supplied', async () => {
+    const protocol = protocolCreate();
+    protocol.querySymbolAtPosition.mockResolvedValue({
+      symbol: {
+        symbolId: 'cursor-sym',
+        name: 'cursorFn',
+        kind: 'function',
+        declarationUri: 'file:///workspace/src/a.ts',
+        declarationRange: {
+          start: { line: 0, character: 0 },
+          end: { line: 0, character: 8 },
+        },
+      },
+    });
+    protocol.queryCallGraph.mockResolvedValue({
+      nodes: [
+        {
+          uri: 'codepol-symbol://cursor-sym',
+          workspaceRelativePath: 'src/a.ts::cursorFn',
+          symbolId: 'cursor-sym',
+          symbolName: 'cursorFn',
+          symbolKind: 'function',
+        },
+      ],
+      edges: [],
+      entryPoints: [],
+      cycles: [],
+    });
+    const panels = panelsCreate();
+    const host = hostCreate();
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    const model = await controller.showCallGraph();
+    expect(model).not.toBeNull();
+    expect(protocol.querySymbolAtPosition).toHaveBeenCalledTimes(1);
+    expect(protocol.queryCallGraph).toHaveBeenCalledWith({
+      symbolId: 'cursor-sym',
+      direction: 'both',
+      depth: 2,
+    });
+    expect(panels.showCallGraph).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows an error and skips queryCallGraph when the cursor is on no symbol', async () => {
+    const protocol = protocolCreate();
+    protocol.querySymbolAtPosition.mockResolvedValue({ symbol: undefined });
+    const panels = panelsCreate();
+    const host = hostCreate();
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    await expect(controller.showCallGraph()).resolves.toBeNull();
+    expect(protocol.queryCallGraph).not.toHaveBeenCalled();
+    expect(panels.showCallGraph).not.toHaveBeenCalled();
+    expect(host.errorShow).toHaveBeenCalledWith(
+      'Position your cursor on a function or method to show its call graph.',
+    );
+  });
+});
+
+describe('CodepolCommandController.findCallbacks', () => {
+  it('opens a peek populated with the symbol-flow edges for the cursor symbol', async () => {
+    const protocol = protocolCreate();
+    protocol.querySymbolAtPosition.mockResolvedValue({
+      symbol: {
+        symbolId: 'handler-id',
+        name: 'handler',
+        kind: 'function',
+        declarationUri: 'file:///workspace/src/a.ts',
+        declarationRange: {
+          start: { line: 4, character: 9 },
+          end: { line: 4, character: 16 },
+        },
+      },
+    });
+    protocol.querySymbolFlow.mockResolvedValue({
+      edges: [
+        {
+          flowingSymbolId: 'handler-id',
+          flowingSymbolUri: 'file:///workspace/src/a.ts',
+          file: 'src/a.ts',
+          range: {
+            start: { line: 9, character: 4 },
+            end: { line: 9, character: 11 },
+          },
+          flowKind: 'argument',
+          argumentIndex: 0,
+        },
+      ],
+    });
+    const panels = panelsCreate();
+    const host = hostCreate();
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    await expect(controller.findCallbacks()).resolves.toBe(1);
+    expect(protocol.querySymbolFlow).toHaveBeenCalledWith({
+      symbolId: 'handler-id',
+      direction: 'outgoing',
+    });
+    expect(host.peekLocations).toHaveBeenCalledWith({
+      sourceUri: 'file:///workspace/packages/lib/src/index.ts',
+      sourcePosition: { line: 0, character: 0 },
+      locations: [
+        { uri: 'src/a.ts', line: 9, character: 4 },
+      ],
+    });
+  });
+
+  it('shows an info message and skips peek when no flow sites are found', async () => {
+    const protocol = protocolCreate();
+    protocol.querySymbolAtPosition.mockResolvedValue({
+      symbol: {
+        symbolId: 'handler-id',
+        name: 'handler',
+        kind: 'function',
+        declarationUri: 'file:///workspace/src/a.ts',
+        declarationRange: {
+          start: { line: 0, character: 0 },
+          end: { line: 0, character: 0 },
+        },
+      },
+    });
+    protocol.querySymbolFlow.mockResolvedValue({ edges: [] });
+    const panels = panelsCreate();
+    const host = hostCreate();
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    await expect(controller.findCallbacks()).resolves.toBe(0);
+    expect(host.peekLocations).not.toHaveBeenCalled();
+    expect(host.infoShow).toHaveBeenCalledWith(
+      'No callback flow sites found for handler.',
     );
   });
 });

@@ -33,6 +33,7 @@ import {
   type WorkspaceSemanticHoverResult,
   type WorkspaceSemanticReferencesResult,
   type WorkspaceSymbolAtPositionResult,
+  type WorkspaceSymbolsInFileWithCallCountsResult,
   type WorkspaceSymbolDescriptorKind,
   type WorkspaceSymbolLookupResult,
   type WorkspaceSymbolResult,
@@ -67,6 +68,7 @@ import {
   CODEPOL_LSP_REQUEST_SEMANTIC_SEARCH,
   CODEPOL_LSP_REQUEST_SYMBOL_AT_POSITION,
   CODEPOL_LSP_REQUEST_SYMBOL_LOOKUP,
+  CODEPOL_LSP_REQUEST_SYMBOLS_IN_FILE_WITH_CALL_COUNTS,
 } from './protocol';
 
 const APPLY_EDIT_PLAN_COMMAND = CODEPOL_LSP_COMMAND_APPLY_EDIT_PLAN;
@@ -1156,6 +1158,10 @@ export class CodepolLspServer {
         return this.symbolAtPositionHandle(params as {
           uri?: string;
           position?: WorkspacePosition;
+        }, context);
+      case CODEPOL_LSP_REQUEST_SYMBOLS_IN_FILE_WITH_CALL_COUNTS:
+        return this.symbolsInFileWithCallCountsHandle(params as {
+          uri?: string;
         }, context);
       default:
         return null;
@@ -2296,6 +2302,34 @@ export class CodepolLspServer {
           context.requestId === undefined || context.requestId === null
             ? undefined
             : `lsp-codepol-symbol-at-position:${String(context.requestId)}`,
+        signal: context.signal,
+      }), {
+      signal: context.signal,
+    });
+  }
+
+  private async symbolsInFileWithCallCountsHandle(
+    params: { uri?: string },
+    context: { requestId?: JsonRpcId; signal?: AbortSignal } = {},
+  ): Promise<WorkspaceSymbolsInFileWithCallCountsResult | null> {
+    if (
+      !this.registeredClientSessionId ||
+      !this.workspaceId ||
+      !params.uri
+    ) {
+      return null;
+    }
+    const uri = params.uri;
+
+    return this.serviceCall((service) =>
+      service.querySymbolsInFileWithCallCounts({
+        clientSessionId: this.registeredClientSessionId!,
+        workspaceId: this.workspaceId!,
+        uri,
+        requestId:
+          context.requestId === undefined || context.requestId === null
+            ? undefined
+            : `lsp-codepol-symbols-in-file-with-call-counts:${String(context.requestId)}`,
         signal: context.signal,
       }), {
       signal: context.signal,
