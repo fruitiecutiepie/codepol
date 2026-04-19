@@ -13,6 +13,8 @@ import {
   WorkspaceServiceEngine,
   workspaceServiceCreate,
   workspaceWarmCacheFsStoreCreate,
+  type WorkspaceWarmCacheSnapshot,
+  type WorkspaceWarmCacheStore,
   type WorkspaceWatcherCreate,
 } from '@codepol/workspace-service';
 
@@ -4196,8 +4198,8 @@ targets = ["src"]
 
   it('restores a persisted warm cache on attach and lets overlay replay win over it', async () => {
     const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
-    const runtimeDir = tempWorkspaceCreate('codepol-workspace-cache-');
-    createdDirs.push(workspaceRoot, runtimeDir);
+    const cacheDir = tempWorkspaceCreate('codepol-workspace-cache-');
+    createdDirs.push(workspaceRoot, cacheDir);
     fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
     const configPath = path.join(workspaceRoot, 'codepol.toml');
     fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
@@ -4210,7 +4212,7 @@ targets = ["src"]
       'utf8',
     );
 
-    const warmCache = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const warmCache = workspaceWarmCacheFsStoreCreate({ cacheDir });
     const writerService = workspaceServiceCreate({
       engine: new WorkspaceServiceEngine({
         warmCache,
@@ -4304,8 +4306,8 @@ targets = ["src"]
 
   it('persists analyzer ownership scorecards across warm restore for native-owned JS/TS rules', async () => {
     const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
-    const runtimeDir = tempWorkspaceCreate('codepol-workspace-cache-');
-    createdDirs.push(workspaceRoot, runtimeDir);
+    const cacheDir = tempWorkspaceCreate('codepol-workspace-cache-');
+    createdDirs.push(workspaceRoot, cacheDir);
     fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
 
     const filePath = path.join(workspaceRoot, 'src', 'app.ts');
@@ -4361,7 +4363,7 @@ targets = ["src"]
       'utf8',
     );
 
-    const warmCache = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const warmCache = workspaceWarmCacheFsStoreCreate({ cacheDir });
     const writerEngine = new WorkspaceServiceEngine({
       warmCache,
     });
@@ -4463,8 +4465,8 @@ targets = ["src"]
 
   it('does not persist open overlays or session-scoped edit plans across warm restore', async () => {
     const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
-    const runtimeDir = tempWorkspaceCreate('codepol-workspace-cache-');
-    createdDirs.push(workspaceRoot, runtimeDir);
+    const cacheDir = tempWorkspaceCreate('codepol-workspace-cache-');
+    createdDirs.push(workspaceRoot, cacheDir);
     fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
     const configPath = path.join(workspaceRoot, 'codepol.toml');
     fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
@@ -4475,7 +4477,7 @@ targets = ["src"]
     const overlayText = 'export type User = {\n  name: string;\n};\n';
     fs.writeFileSync(filePath, diskText, 'utf8');
 
-    const warmCache = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const warmCache = workspaceWarmCacheFsStoreCreate({ cacheDir });
     const writerService = workspaceServiceCreate({
       engine: new WorkspaceServiceEngine({
         warmCache,
@@ -4540,6 +4542,12 @@ targets = ["src"]
       clientInstanceId: 'warm-cache-overlay-plan-reader',
     });
 
+    // analysisGeneration reflects the writer's last analysis (which ran
+    // against overlay text). The overlay's per-(analyzer, file) entries are
+    // dropped from the snapshot by the overlay-prefix filter, so the
+    // restored cache cannot serve the file from cache; the assertions
+    // below verify that disk-truth diagnostics and missing edit plans
+    // still hold despite the higher generation.
     expect(
       await readerService.queryIndexStatus({
         clientSessionId: restored.clientSessionId,
@@ -4551,7 +4559,6 @@ targets = ["src"]
       status: 'ready',
       replayState: 'pending',
       workspaceReady: false,
-      analysisGeneration: 1,
     });
     expect(
       await readerService.queryDiagnostics({
@@ -4577,8 +4584,8 @@ targets = ["src"]
 
   it('restores an index-required warm cache and reapplies overlay updates through the restored index', async () => {
     const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
-    const runtimeDir = tempWorkspaceCreate('codepol-workspace-cache-');
-    createdDirs.push(workspaceRoot, runtimeDir);
+    const cacheDir = tempWorkspaceCreate('codepol-workspace-cache-');
+    createdDirs.push(workspaceRoot, cacheDir);
     fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
     const configPath = path.join(workspaceRoot, 'codepol.toml');
     fs.writeFileSync(configPath, unusedExportsConfigContentCreate(), 'utf8');
@@ -4595,7 +4602,7 @@ targets = ["src"]
       'utf8',
     );
 
-    const warmCache = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const warmCache = workspaceWarmCacheFsStoreCreate({ cacheDir });
     const writerService = workspaceServiceCreate({
       engine: new WorkspaceServiceEngine({
         warmCache,
@@ -4726,8 +4733,8 @@ targets = ["src"]
 
   it('discards an index-required warm cache when workspace package metadata changes', async () => {
     const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
-    const runtimeDir = tempWorkspaceCreate('codepol-workspace-cache-');
-    createdDirs.push(workspaceRoot, runtimeDir);
+    const cacheDir = tempWorkspaceCreate('codepol-workspace-cache-');
+    createdDirs.push(workspaceRoot, cacheDir);
     fs.mkdirSync(path.join(workspaceRoot, 'packages/lib/src'), { recursive: true });
     fs.mkdirSync(path.join(workspaceRoot, 'apps/web/src'), { recursive: true });
 
@@ -4766,7 +4773,7 @@ targets = ["src"]
       'utf8',
     );
 
-    const warmCache = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const warmCache = workspaceWarmCacheFsStoreCreate({ cacheDir });
     const writerService = workspaceServiceCreate({
       engine: new WorkspaceServiceEngine({
         warmCache,
@@ -4830,8 +4837,8 @@ targets = ["src"]
 
   it('keeps the warm cache and re-runs only the changed file when one disk-backed file changes', async () => {
     const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
-    const runtimeDir = tempWorkspaceCreate('codepol-workspace-cache-');
-    createdDirs.push(workspaceRoot, runtimeDir);
+    const cacheDir = tempWorkspaceCreate('codepol-workspace-cache-');
+    createdDirs.push(workspaceRoot, cacheDir);
     fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
     const configPath = path.join(workspaceRoot, 'codepol.toml');
     fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
@@ -4851,7 +4858,7 @@ targets = ["src"]
       'utf8',
     );
 
-    const warmCache = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const warmCache = workspaceWarmCacheFsStoreCreate({ cacheDir });
     const writerService = workspaceServiceCreate({
       engine: new WorkspaceServiceEngine({
         warmCache,
@@ -4928,8 +4935,8 @@ targets = ["src"]
 
   it('discards a warm cache when a configured external tool binary changes', async () => {
     const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
-    const runtimeDir = tempWorkspaceCreate('codepol-workspace-cache-');
-    createdDirs.push(workspaceRoot, runtimeDir);
+    const cacheDir = tempWorkspaceCreate('codepol-workspace-cache-');
+    createdDirs.push(workspaceRoot, cacheDir);
     fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
 
     const pluginId = `test-biome-cache-${randomUUID()}`;
@@ -4960,7 +4967,7 @@ targets = ["src"]
     const uri = workspacePathToUri(filePath);
     fs.writeFileSync(filePath, 'export const value = 1;\n', 'utf8');
 
-    const warmCache = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const warmCache = workspaceWarmCacheFsStoreCreate({ cacheDir });
     const writerService = workspaceServiceCreate({
       engine: new WorkspaceServiceEngine({
         warmCache,
@@ -5017,8 +5024,8 @@ process.exit(0);
 
   it('discards a warm cache when a configured external tool config file changes', async () => {
     const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
-    const runtimeDir = tempWorkspaceCreate('codepol-workspace-cache-');
-    createdDirs.push(workspaceRoot, runtimeDir);
+    const cacheDir = tempWorkspaceCreate('codepol-workspace-cache-');
+    createdDirs.push(workspaceRoot, cacheDir);
     fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
 
     const pluginId = `test-biome-config-cache-${randomUUID()}`;
@@ -5052,7 +5059,7 @@ process.exit(0);
     const uri = workspacePathToUri(filePath);
     fs.writeFileSync(filePath, 'export const value = 1;\n', 'utf8');
 
-    const warmCache = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const warmCache = workspaceWarmCacheFsStoreCreate({ cacheDir });
     const writerService = workspaceServiceCreate({
       engine: new WorkspaceServiceEngine({
         warmCache,
@@ -5105,8 +5112,8 @@ process.exit(0);
 
   it('discards a warm cache when a process plugin script changes', async () => {
     const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
-    const runtimeDir = tempWorkspaceCreate('codepol-workspace-cache-');
-    createdDirs.push(workspaceRoot, runtimeDir);
+    const cacheDir = tempWorkspaceCreate('codepol-workspace-cache-');
+    createdDirs.push(workspaceRoot, cacheDir);
     fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
 
     const pluginPath = mockProcessPluginScriptCreate(workspaceRoot);
@@ -5117,7 +5124,7 @@ process.exit(0);
     const uri = workspacePathToUri(filePath);
     fs.writeFileSync(filePath, '// TODO fix\nexport const value = 1;\n', 'utf8');
 
-    const warmCache = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const warmCache = workspaceWarmCacheFsStoreCreate({ cacheDir });
     const writerService = workspaceServiceCreate({
       engine: new WorkspaceServiceEngine({
         warmCache,
@@ -5169,8 +5176,8 @@ process.exit(0);
 
   it('discards a warm cache when a registered builtin plugin definition changes', async () => {
     const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
-    const runtimeDir = tempWorkspaceCreate('codepol-workspace-cache-');
-    createdDirs.push(workspaceRoot, runtimeDir);
+    const cacheDir = tempWorkspaceCreate('codepol-workspace-cache-');
+    createdDirs.push(workspaceRoot, cacheDir);
     fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
 
     const pluginId = `test-plugin-signature-${randomUUID()}`;
@@ -5205,7 +5212,7 @@ targets = ["src"]
     const uri = workspacePathToUri(filePath);
     fs.writeFileSync(filePath, 'export const value = 1;\n', 'utf8');
 
-    const warmCache = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const warmCache = workspaceWarmCacheFsStoreCreate({ cacheDir });
     const writerService = workspaceServiceCreate({
       engine: new WorkspaceServiceEngine({
         warmCache,
@@ -5271,8 +5278,8 @@ targets = ["src"]
 
   it('keeps cache for unchanged files and analyzes only the newly added file across warm restore', async () => {
     const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
-    const runtimeDir = tempWorkspaceCreate('codepol-workspace-cache-');
-    createdDirs.push(workspaceRoot, runtimeDir);
+    const cacheDir = tempWorkspaceCreate('codepol-workspace-cache-');
+    createdDirs.push(workspaceRoot, cacheDir);
     fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
     const configPath = path.join(workspaceRoot, 'codepol.toml');
     fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
@@ -5285,7 +5292,7 @@ targets = ["src"]
       'utf8',
     );
 
-    const warmCache = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const warmCache = workspaceWarmCacheFsStoreCreate({ cacheDir });
     const writerService = workspaceServiceCreate({
       engine: new WorkspaceServiceEngine({ warmCache }),
     });
@@ -5352,8 +5359,8 @@ targets = ["src"]
 
   it('drops cache entries for removed files but reuses cache for remaining files across warm restore', async () => {
     const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
-    const runtimeDir = tempWorkspaceCreate('codepol-workspace-cache-');
-    createdDirs.push(workspaceRoot, runtimeDir);
+    const cacheDir = tempWorkspaceCreate('codepol-workspace-cache-');
+    createdDirs.push(workspaceRoot, cacheDir);
     fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
     const configPath = path.join(workspaceRoot, 'codepol.toml');
     fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
@@ -5372,7 +5379,7 @@ targets = ["src"]
       'utf8',
     );
 
-    const warmCache = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const warmCache = workspaceWarmCacheFsStoreCreate({ cacheDir });
     const writerService = workspaceServiceCreate({
       engine: new WorkspaceServiceEngine({ warmCache }),
     });
@@ -5423,8 +5430,8 @@ targets = ["src"]
     // disappears. This proves the warm-cache restore does not paper over a
     // real cross-file invalidation when files are added.
     const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
-    const runtimeDir = tempWorkspaceCreate('codepol-workspace-cache-');
-    createdDirs.push(workspaceRoot, runtimeDir);
+    const cacheDir = tempWorkspaceCreate('codepol-workspace-cache-');
+    createdDirs.push(workspaceRoot, cacheDir);
     fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
     const configPath = path.join(workspaceRoot, 'codepol.toml');
     fs.writeFileSync(configPath, unusedExportsConfigContentCreate(), 'utf8');
@@ -5435,7 +5442,7 @@ targets = ["src"]
 
     fs.writeFileSync(exporterPath, 'export const sharedValue = 1;\n', 'utf8');
 
-    const warmCache = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const warmCache = workspaceWarmCacheFsStoreCreate({ cacheDir });
     const writerService = workspaceServiceCreate({
       engine: new WorkspaceServiceEngine({ warmCache }),
     });
@@ -5480,8 +5487,8 @@ targets = ["src"]
 
   it('produces a round-trip-stable warm cache when nothing changes between sessions', async () => {
     const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
-    const runtimeDir = tempWorkspaceCreate('codepol-workspace-cache-');
-    createdDirs.push(workspaceRoot, runtimeDir);
+    const cacheDir = tempWorkspaceCreate('codepol-workspace-cache-');
+    createdDirs.push(workspaceRoot, cacheDir);
     fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
     const configPath = path.join(workspaceRoot, 'codepol.toml');
     fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
@@ -5493,7 +5500,7 @@ targets = ["src"]
       'utf8',
     );
 
-    const warmCache = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const warmCache = workspaceWarmCacheFsStoreCreate({ cacheDir });
     const firstService = workspaceServiceCreate({
       engine: new WorkspaceServiceEngine({ warmCache }),
     });
@@ -5756,6 +5763,362 @@ targets = ["src"]
         uri,
       }),
     ).toEqual([]);
+  });
+
+  describe('warm cache write-through', () => {
+    type ManualTimerHandle = number & { readonly __manualTimerHandle: unique symbol };
+
+    function manualPersistTimerQueueCreate(): {
+      timers: {
+        setTimeout: (callback: () => void, delayMs: number) => ManualTimerHandle;
+        clearTimeout: (handle: unknown) => void;
+      };
+      pendingCountGet: () => number;
+      flushAll: () => Promise<void>;
+    } {
+      let nextHandle = 1;
+      const callbacks = new Map<number, () => void>();
+      const queue: number[] = [];
+
+      return {
+        timers: {
+          setTimeout(callback) {
+            const handle = nextHandle;
+            nextHandle += 1;
+            callbacks.set(handle, callback);
+            queue.push(handle);
+            return handle as ManualTimerHandle;
+          },
+          clearTimeout(handle) {
+            if (handle === undefined || handle === null) {
+              return;
+            }
+            const internalHandle = handle as number;
+            callbacks.delete(internalHandle);
+            const index = queue.indexOf(internalHandle);
+            if (index !== -1) {
+              queue.splice(index, 1);
+            }
+          },
+        },
+        pendingCountGet() {
+          return queue.filter((handle) => callbacks.has(handle)).length;
+        },
+        async flushAll() {
+          while (queue.length > 0) {
+            const handle = queue.shift();
+            if (handle === undefined) {
+              return;
+            }
+            const callback = callbacks.get(handle);
+            callbacks.delete(handle);
+            const callbackResult = callback?.() as unknown;
+            if (
+              callbackResult &&
+              typeof (callbackResult as { then?: unknown }).then === 'function'
+            ) {
+              await callbackResult;
+            }
+            for (let attempt = 0; attempt < 8; attempt += 1) {
+              await Promise.resolve();
+            }
+          }
+        },
+      };
+    }
+
+    type RecordingStore = WorkspaceWarmCacheStore & {
+      writeCountGet: () => number;
+      lastSnapshotGet: () => WorkspaceWarmCacheSnapshot | undefined;
+    };
+
+    function recordingWarmCacheStoreCreate(inner: WorkspaceWarmCacheStore): RecordingStore {
+      let writeCount = 0;
+      let lastSnapshot: WorkspaceWarmCacheSnapshot | undefined;
+      return {
+        read(key) {
+          return inner.read(key);
+        },
+        async write(key, snapshot) {
+          writeCount += 1;
+          await inner.write(key, snapshot);
+          const restored = await Promise.resolve(inner.read(key));
+          if (restored) {
+            lastSnapshot = restored;
+          }
+        },
+        delete(key) {
+          return inner.delete(key);
+        },
+        writeCountGet() {
+          return writeCount;
+        },
+        lastSnapshotGet() {
+          return lastSnapshot;
+        },
+      };
+    }
+
+    it('persists while a document is open and excludes overlay-fingerprinted analyzer entries', async () => {
+      const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+      const cacheDir = tempWorkspaceCreate('codepol-workspace-cache-');
+      createdDirs.push(workspaceRoot, cacheDir);
+      fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+      const configPath = path.join(workspaceRoot, 'codepol.toml');
+      fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
+
+      const openFilePath = path.join(workspaceRoot, 'src', 'open.ts');
+      const closedFilePath = path.join(workspaceRoot, 'src', 'closed.ts');
+      const openUri = workspacePathToUri(openFilePath);
+      fs.writeFileSync(openFilePath, 'export interface Open {\n  name: string;\n}\n', 'utf8');
+      fs.writeFileSync(closedFilePath, 'export interface Closed {\n  name: string;\n}\n', 'utf8');
+
+      const store = recordingWarmCacheStoreCreate(
+        workspaceWarmCacheFsStoreCreate({ cacheDir }),
+      );
+      const persistTimers = manualPersistTimerQueueCreate();
+      const service = workspaceServiceCreate({
+        engine: new WorkspaceServiceEngine({
+          warmCache: store,
+          timers: persistTimers.timers,
+        }),
+      });
+      const attached = await clientWorkspaceAttach(service, {
+        rootPath: workspaceRoot,
+        configPath,
+        clientInstanceId: 'warm-cache-write-through',
+      });
+
+      await service.openOverlay({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        uri: openUri,
+        version: 1,
+        text: 'export interface Open {\n  name: string;\n  edited: true;\n}\n',
+      });
+
+      await service.queryDiagnostics({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        uri: openUri,
+      });
+
+      // Persist is debounced, so no write should have happened yet.
+      expect(store.writeCountGet()).toBe(0);
+      expect(persistTimers.pendingCountGet()).toBeGreaterThan(0);
+
+      await persistTimers.flushAll();
+
+      expect(store.writeCountGet()).toBe(1);
+      const snapshot = store.lastSnapshotGet();
+      expect(snapshot).toBeDefined();
+
+      const overlayEntries: string[] = [];
+      const closedEntries: string[] = [];
+      for (const analyzerEntry of snapshot?.analyzerCache ?? []) {
+        for (const fileEntry of analyzerEntry.fileResults) {
+          if (fileEntry.key.contentFingerprint.startsWith('overlay:')) {
+            overlayEntries.push(fileEntry.filePath);
+            continue;
+          }
+          if (path.resolve(fileEntry.filePath) === path.resolve(closedFilePath)) {
+            closedEntries.push(fileEntry.filePath);
+          }
+        }
+      }
+      expect(overlayEntries).toEqual([]);
+      expect(closedEntries.length).toBeGreaterThan(0);
+      expect(snapshot?.files.map((file) => path.resolve(file))).toContain(
+        path.resolve(openFilePath),
+      );
+
+      await service.closeClientSession({ clientSessionId: attached.clientSessionId });
+    });
+
+    it('repersists overlay file entries with disk fingerprints once the overlay closes', async () => {
+      const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+      const cacheDir = tempWorkspaceCreate('codepol-workspace-cache-');
+      createdDirs.push(workspaceRoot, cacheDir);
+      fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+      const configPath = path.join(workspaceRoot, 'codepol.toml');
+      fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
+
+      const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+      const uri = workspacePathToUri(filePath);
+      fs.writeFileSync(filePath, 'export interface User {\n  name: string;\n}\n', 'utf8');
+
+      const store = recordingWarmCacheStoreCreate(
+        workspaceWarmCacheFsStoreCreate({ cacheDir }),
+      );
+      const persistTimers = manualPersistTimerQueueCreate();
+      const service = workspaceServiceCreate({
+        engine: new WorkspaceServiceEngine({
+          warmCache: store,
+          timers: persistTimers.timers,
+        }),
+      });
+      const attached = await clientWorkspaceAttach(service, {
+        rootPath: workspaceRoot,
+        configPath,
+        clientInstanceId: 'warm-cache-overlay-cycle',
+      });
+
+      await service.openOverlay({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        uri,
+        version: 1,
+        text: 'export interface User {\n  name: string;\n  edited: true;\n}\n',
+      });
+      await service.queryDiagnostics({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        uri,
+      });
+      await persistTimers.flushAll();
+
+      const snapshotWithOverlay = store.lastSnapshotGet();
+      const overlayPersisted = snapshotWithOverlay?.analyzerCache
+        ?.flatMap((entry) => entry.fileResults)
+        .some(
+          (fileEntry) =>
+            path.resolve(fileEntry.filePath) === path.resolve(filePath),
+        );
+      expect(overlayPersisted ?? false).toBe(false);
+
+      await service.closeOverlay({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        uri,
+      });
+      await service.queryDiagnostics({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        uri,
+      });
+      await persistTimers.flushAll();
+
+      const snapshotAfterClose = store.lastSnapshotGet();
+      const diskFingerprintedEntry = snapshotAfterClose?.analyzerCache
+        ?.flatMap((entry) => entry.fileResults)
+        .find(
+          (fileEntry) =>
+            path.resolve(fileEntry.filePath) === path.resolve(filePath),
+        );
+      expect(diskFingerprintedEntry).toBeDefined();
+      expect(
+        diskFingerprintedEntry?.key.contentFingerprint.startsWith('overlay:'),
+      ).toBe(false);
+
+      await service.closeClientSession({ clientSessionId: attached.clientSessionId });
+    });
+
+    it('coalesces back-to-back analyses into a single debounced write', async () => {
+      const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+      const cacheDir = tempWorkspaceCreate('codepol-workspace-cache-');
+      createdDirs.push(workspaceRoot, cacheDir);
+      fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+      const configPath = path.join(workspaceRoot, 'codepol.toml');
+      fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
+
+      const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+      const uri = workspacePathToUri(filePath);
+      fs.writeFileSync(filePath, 'export const value = 1;\n', 'utf8');
+
+      const store = recordingWarmCacheStoreCreate(
+        workspaceWarmCacheFsStoreCreate({ cacheDir }),
+      );
+      const persistTimers = manualPersistTimerQueueCreate();
+      const service = workspaceServiceCreate({
+        engine: new WorkspaceServiceEngine({
+          warmCache: store,
+          timers: persistTimers.timers,
+        }),
+      });
+      const attached = await clientWorkspaceAttach(service, {
+        rootPath: workspaceRoot,
+        configPath,
+        clientInstanceId: 'warm-cache-debounce',
+      });
+
+      for (let version = 1; version <= 4; version += 1) {
+        await service.openOverlay({
+          clientSessionId: attached.clientSessionId,
+          workspaceId: attached.workspaceId,
+          uri,
+          version,
+          text: `export const value = ${version};\n`,
+        });
+        await service.queryDiagnostics({
+          clientSessionId: attached.clientSessionId,
+          workspaceId: attached.workspaceId,
+          uri,
+        });
+      }
+
+      // Each analysis cancels and re-arms the same per-workspace timer, so
+      // exactly one persist should be pending after the burst.
+      expect(store.writeCountGet()).toBe(0);
+      expect(persistTimers.pendingCountGet()).toBe(1);
+
+      await persistTimers.flushAll();
+
+      expect(store.writeCountGet()).toBe(1);
+
+      await service.closeClientSession({ clientSessionId: attached.clientSessionId });
+    });
+
+    it('flushes a pending debounced persist when the client session closes', async () => {
+      const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+      const cacheDir = tempWorkspaceCreate('codepol-workspace-cache-');
+      createdDirs.push(workspaceRoot, cacheDir);
+      fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+      const configPath = path.join(workspaceRoot, 'codepol.toml');
+      fs.writeFileSync(configPath, noInterfaceConfigContentCreate(), 'utf8');
+
+      const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+      const uri = workspacePathToUri(filePath);
+      fs.writeFileSync(filePath, 'export const value = 1;\n', 'utf8');
+
+      const store = recordingWarmCacheStoreCreate(
+        workspaceWarmCacheFsStoreCreate({ cacheDir }),
+      );
+      const persistTimers = manualPersistTimerQueueCreate();
+      const service = workspaceServiceCreate({
+        engine: new WorkspaceServiceEngine({
+          warmCache: store,
+          timers: persistTimers.timers,
+        }),
+      });
+      const attached = await clientWorkspaceAttach(service, {
+        rootPath: workspaceRoot,
+        configPath,
+        clientInstanceId: 'warm-cache-flush-on-close',
+      });
+
+      await service.openOverlay({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        uri,
+        version: 1,
+        text: 'export const value = 2;\n',
+      });
+      await service.queryDiagnostics({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        uri,
+      });
+
+      expect(store.writeCountGet()).toBe(0);
+      expect(persistTimers.pendingCountGet()).toBe(1);
+
+      await service.closeClientSession({ clientSessionId: attached.clientSessionId });
+
+      // closeClientSession flushes the pending timer synchronously instead of
+      // letting setTimeout fire.
+      expect(store.writeCountGet()).toBe(1);
+      expect(persistTimers.pendingCountGet()).toBe(0);
+    });
   });
 
   describe('external tool config watcher invalidation', () => {

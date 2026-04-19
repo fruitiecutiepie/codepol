@@ -211,8 +211,8 @@ function workspaceWarmCacheIdCreate(
   return hash.digest('hex');
 }
 
-function workspaceWarmCacheDirResolve(runtimeDir: string): string {
-  return path.join(path.resolve(runtimeDir), 'warm-cache');
+function workspaceWarmCacheDirResolve(cacheDir: string): string {
+  return path.join(path.resolve(cacheDir), 'warm-cache');
 }
 
 export function workspaceWarmCacheEnvironmentIdCreate(
@@ -230,7 +230,7 @@ export function workspaceWarmCacheEnvironmentIdCreate(
 }
 
 function workspaceWarmCacheFilePathResolve(
-  runtimeDir: string,
+  cacheDir: string,
   key: WorkspaceWarmCacheKey,
   input: {
     engineVersion: string;
@@ -239,7 +239,7 @@ function workspaceWarmCacheFilePathResolve(
   },
 ): string {
   const cacheId = workspaceWarmCacheIdCreate(key, input);
-  return path.join(workspaceWarmCacheDirResolve(runtimeDir), `${cacheId}.json`);
+  return path.join(workspaceWarmCacheDirResolve(cacheDir), `${cacheId}.json`);
 }
 
 function workspaceWarmCacheSnapshotMatchesKey(
@@ -254,13 +254,13 @@ function workspaceWarmCacheSnapshotMatchesKey(
 }
 
 export function workspaceWarmCacheFsStoreCreate(options: {
-  runtimeDir: string;
+  cacheDir: string;
   engineVersion?: string;
   buildId?: string;
   environmentId?: string;
   now?: () => number;
 }): WorkspaceWarmCacheStore {
-  const runtimeDir = path.resolve(options.runtimeDir);
+  const cacheDir = path.resolve(options.cacheDir);
   const engineVersion = options.engineVersion ?? 'workspace-service';
   const buildId = options.buildId ?? 'dev';
   const environmentId =
@@ -268,7 +268,7 @@ export function workspaceWarmCacheFsStoreCreate(options: {
   const now = options.now ?? (() => Date.now());
 
   const filePathResolve = (key: WorkspaceWarmCacheKey): string =>
-    workspaceWarmCacheFilePathResolve(runtimeDir, key, {
+    workspaceWarmCacheFilePathResolve(cacheDir, key, {
       engineVersion,
       buildId,
       environmentId,
@@ -278,10 +278,10 @@ export function workspaceWarmCacheFsStoreCreate(options: {
     key: WorkspaceWarmCacheKey,
     keepFilePath?: string,
   ): void => {
-    const cacheDir = workspaceWarmCacheDirResolve(runtimeDir);
+    const warmCacheDir = workspaceWarmCacheDirResolve(cacheDir);
     let entries: string[];
     try {
-      entries = fs.readdirSync(cacheDir);
+      entries = fs.readdirSync(warmCacheDir);
     } catch {
       return;
     }
@@ -290,7 +290,7 @@ export function workspaceWarmCacheFsStoreCreate(options: {
       if (!entry.endsWith('.json')) {
         continue;
       }
-      const entryPath = path.join(cacheDir, entry);
+      const entryPath = path.join(warmCacheDir, entry);
       if (keepFilePath && path.resolve(entryPath) === path.resolve(keepFilePath)) {
         continue;
       }

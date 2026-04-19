@@ -7,8 +7,8 @@ import {
   policyCheck as workspacePolicyCheck,
   WORKSPACE_DAEMON_BUILD_ID,
   WORKSPACE_DAEMON_ENGINE_VERSION,
+  workspaceDaemonDefaultCacheDirResolve,
   workspaceDaemonServerStart,
-  workspaceDaemonRuntimePathsResolve,
   workspaceWatcherCreate,
   workspaceWarmCacheEnvironmentIdCreate,
   workspaceWarmCacheFsStoreCreate,
@@ -25,15 +25,19 @@ async function main(): Promise<void> {
   // the new bundle instead of talking to this old process.
   daemonSelfWatchEntryFileStart({ entryPath: __filename });
 
-  const runtimeDir = workspaceDaemonRuntimePathsResolve(
-    process.env.CODEPOL_DAEMON_RUNTIME_DIR,
-  ).runtimeDir;
+  // Sockets / descriptor / lock live under the runtime dir
+  // (CODEPOL_DAEMON_RUNTIME_DIR -> XDG_RUNTIME_DIR -> tmpdir), resolved
+  // internally by workspaceDaemonServerStart. Warm-cache snapshots live
+  // under a separate cache dir so they survive reboot on Linux desktops
+  // where XDG_RUNTIME_DIR is tmpfs.
+  const cacheDir = workspaceDaemonDefaultCacheDirResolve();
+
   const server = await workspaceDaemonServerStart({
     service: new WorkspaceServiceEngine({
       backgroundWarmup: true,
       watcherCreate: workspaceWatcherCreate,
       warmCache: workspaceWarmCacheFsStoreCreate({
-        runtimeDir,
+        cacheDir,
         engineVersion: WORKSPACE_DAEMON_ENGINE_VERSION,
         buildId: WORKSPACE_DAEMON_BUILD_ID,
         environmentId: workspaceWarmCacheEnvironmentIdCreate(process.env),

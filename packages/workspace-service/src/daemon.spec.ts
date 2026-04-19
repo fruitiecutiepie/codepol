@@ -1323,7 +1323,7 @@ describe('workspace daemon control plane', () => {
       'utf8',
     );
 
-    const warmCache = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const warmCache = workspaceWarmCacheFsStoreCreate({ cacheDir: runtimeDir });
     const firstDescriptor = workspaceDaemonDescriptorCreate({ runtimeDir }).descriptor;
     liveDaemons.set(firstDescriptor.transport.path, {
       descriptor: firstDescriptor,
@@ -1363,6 +1363,13 @@ describe('workspace daemon control plane', () => {
         uri,
       }),
     ).toHaveLength(1);
+    // Explicit close so the engine flushes the debounced warm-cache persist
+    // before we drop the connection. Pre-debounce, persist was synchronous;
+    // now the engine schedules a 2s timer that the disposing connection
+    // race could otherwise bypass.
+    await firstService.closeClientSession({
+      clientSessionId: firstRegistered.clientSessionId,
+    });
     await firstService.close();
 
     const secondDescriptor = workspaceDaemonDescriptorCreate({ runtimeDir }).descriptor;
@@ -1515,7 +1522,7 @@ describe('workspace daemon control plane', () => {
       'utf8',
     );
 
-    const warmCache = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const warmCache = workspaceWarmCacheFsStoreCreate({ cacheDir: runtimeDir });
     const firstDescriptor = workspaceDaemonDescriptorCreate({ runtimeDir }).descriptor;
     const firstEngine = new WorkspaceServiceEngine({ warmCache });
     liveDaemons.set(firstDescriptor.transport.path, {
@@ -1575,6 +1582,11 @@ describe('workspace daemon control plane', () => {
         skippedReason: 'native_preferred',
       }),
     );
+    // Explicit close so the engine flushes the debounced warm-cache persist
+    // before we drop the connection.
+    await firstService.closeClientSession({
+      clientSessionId: firstRegistered.clientSessionId,
+    });
     await firstService.close();
 
     const secondDescriptor = workspaceDaemonDescriptorCreate({ runtimeDir }).descriptor;
@@ -2471,7 +2483,7 @@ describe('workspace daemon control plane', () => {
       'utf8',
     );
 
-    const warmCache = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const warmCache = workspaceWarmCacheFsStoreCreate({ cacheDir: runtimeDir });
     const firstDescriptor = workspaceDaemonDescriptorCreate({ runtimeDir }).descriptor;
     liveDaemons.set(firstDescriptor.transport.path, {
       descriptor: firstDescriptor,
@@ -2512,6 +2524,11 @@ describe('workspace daemon control plane', () => {
         uri: exporterUri,
       }),
     ).toEqual([]);
+    // Explicit close so the engine flushes the debounced warm-cache persist
+    // before we drop the connection.
+    await firstService.closeClientSession({
+      clientSessionId: firstRegistered.clientSessionId,
+    });
     await firstService.close();
 
     const secondDescriptor = workspaceDaemonDescriptorCreate({ runtimeDir }).descriptor;

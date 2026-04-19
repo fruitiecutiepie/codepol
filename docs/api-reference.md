@@ -3017,6 +3017,52 @@ plugins: [
 
 ---
 
+## Daemon Filesystem Layout
+
+The codepol daemon uses two filesystem locations with distinct lifecycles.
+The defaults follow OS conventions; both are individually overridable with
+environment variables.
+
+### `CODEPOL_DAEMON_RUNTIME_DIR` — sockets and per-session descriptors
+
+Holds the daemon's IPC socket (`daemon.sock`), its descriptor
+(`daemon.info.json`), and its lock file. These are per-session and
+disposable; the daemon recreates them on every start.
+
+Resolution order:
+
+1. `CODEPOL_DAEMON_RUNTIME_DIR` (explicit override)
+2. `XDG_RUNTIME_DIR/codepol` (Linux desktops with the freedesktop runtime)
+3. `os.tmpdir()/codepol-<user>` fallback
+
+On Linux desktops, `XDG_RUNTIME_DIR` is typically a tmpfs mount that gets
+wiped at logout/reboot. That's fine for sockets and descriptors — they're
+recreated automatically on the next daemon start.
+
+### `CODEPOL_DAEMON_CACHE_DIR` — warm-cache snapshots
+
+Holds the daemon's warm-cache snapshots in `<cacheDir>/warm-cache/`. These
+must survive reboot so that the next session can skip cold analysis for
+files whose disk fingerprint hasn't changed.
+
+Resolution order:
+
+1. `CODEPOL_DAEMON_CACHE_DIR` (explicit override)
+2. `XDG_CACHE_HOME/codepol` when set
+3. OS-conventional cache root:
+   - macOS: `~/Library/Caches/codepol`
+   - Windows: `%LOCALAPPDATA%/codepol/Cache` (or `os.tmpdir()/codepol-cache-<user>` when `LOCALAPPDATA` is missing)
+   - Linux/other: `~/.cache/codepol`
+
+The cache directory is split from the runtime directory specifically so
+that the freedesktop runtime convention (tmpfs `XDG_RUNTIME_DIR`) doesn't
+wipe warm-cache snapshots at logout. Snapshots persist with a 2-second
+trailing-edge debounce while a workspace is being actively analyzed, so
+restarting the daemon after a long session reuses analysis results from
+seconds ago instead of starting cold.
+
+---
+
 ## Complete Example
 
 Custom policy checker script:

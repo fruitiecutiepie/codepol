@@ -893,6 +893,48 @@ function workspaceDaemonDefaultRuntimeDirResolve(): string {
   return path.join(os.tmpdir(), `codepol-${user}`);
 }
 
+/**
+ * Resolve the default daemon cache directory, used to persist warm-cache
+ * snapshots across reboots. Distinct from `workspaceDaemonDefaultRuntimeDirResolve`
+ * (which holds the daemon socket / descriptor / lock) because runtime
+ * directories on Linux desktops (e.g. `XDG_RUNTIME_DIR` -> tmpfs) are wiped
+ * at logout, while warm-cache snapshots need to survive reboot.
+ *
+ * Resolution order:
+ * 1. `CODEPOL_DAEMON_CACHE_DIR` env var (explicit override)
+ * 2. `XDG_CACHE_HOME/codepol` when set
+ * 3. OS-conventional cache root:
+ *    - macOS: `~/Library/Caches/codepol`
+ *    - Windows: `%LOCALAPPDATA%/codepol/Cache`, falling back to
+ *      `os.tmpdir()/codepol-cache-<user>` when `LOCALAPPDATA` is missing
+ *    - Linux/other: `~/.cache/codepol`
+ */
+export function workspaceDaemonDefaultCacheDirResolve(): string {
+  const explicit = process.env.CODEPOL_DAEMON_CACHE_DIR;
+  if (explicit) {
+    return path.resolve(explicit);
+  }
+
+  const xdgCacheHome = process.env.XDG_CACHE_HOME;
+  if (xdgCacheHome) {
+    return path.join(xdgCacheHome, 'codepol');
+  }
+
+  if (process.platform === 'darwin') {
+    return path.join(os.homedir(), 'Library', 'Caches', 'codepol');
+  }
+
+  if (process.platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA;
+    if (localAppData) {
+      return path.join(localAppData, 'codepol', 'Cache');
+    }
+    return path.join(os.tmpdir(), `codepol-cache-${os.userInfo().username}`);
+  }
+
+  return path.join(os.homedir(), '.cache', 'codepol');
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -1430,6 +1472,30 @@ export class WorkspaceDaemonSession {
 
   private daemonSessionDelete(clientSessionId: ClientSessionId): void {
     this.registeredDaemonSessions.delete(clientSessionId);
+  }
+
+  /**
+   * Close every client session this daemon connection registered with the
+   * underlying workspace service. Invoked when the transport socket drops
+   * without an explicit `close_client_session` request, so the engine can
+   * release watchers and flush any pending warm-cache persist timers.
+   */
+  async dispose(): Promise<void> {
+    if (!this.options.service) {
+      return;
+    }
+    const clientSessionIds = [...this.registeredDaemonSessions.keys()];
+    for (const clientSessionId of clientSessionIds) {
+      try {
+        await this.options.service.closeClientSession({ clientSessionId });
+      } catch {
+        // Ignore: best-effort cleanup; the engine may have already torn the
+        // session down via an explicit close_client_session request.
+      }
+      this.daemonSessionDelete(clientSessionId);
+      this.workspaceReplayStateDeleteAll(clientSessionId);
+      this.requestSupersessionDeleteAll(clientSessionId);
+    }
   }
 
   private daemonSessionValidate(
@@ -4390,6 +4456,12 @@ export async function workspaceDaemonServerStart(
             );
           });
       });
+    });
+    // When the transport drops without an explicit close_client_session,
+    // the engine still needs to release watchers and flush debounced
+    // warm-cache persists for every session this connection owned.
+    socket.on('close', () => {
+      void session.dispose();
     });
   });
 

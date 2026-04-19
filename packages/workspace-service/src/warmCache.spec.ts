@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { workspaceDaemonDefaultCacheDirResolve } from './daemon';
 import {
   WORKSPACE_WARM_CACHE_COMPAT_VERSION,
   workspaceWarmCacheEnvironmentIdCreate,
@@ -64,9 +65,9 @@ describe('workspace warm cache store', () => {
   });
 
   it('discards a corrupt cache file on read', async () => {
-    const runtimeDir = tempDirCreate('codepol-warm-cache-');
-    createdDirs.push(runtimeDir);
-    const store = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const cacheDir = tempDirCreate('codepol-warm-cache-');
+    createdDirs.push(cacheDir);
+    const store = workspaceWarmCacheFsStoreCreate({ cacheDir });
     const key = {
       workspaceId: 'workspace:test',
       rootPath: '/tmp/workspace',
@@ -79,19 +80,19 @@ describe('workspace warm cache store', () => {
       key.configPath,
     ));
 
-    const cacheDir = path.join(runtimeDir, 'warm-cache');
-    const [cacheFile] = fs.readdirSync(cacheDir);
+    const warmCacheDir = path.join(cacheDir, 'warm-cache');
+    const [cacheFile] = fs.readdirSync(warmCacheDir);
     expect(cacheFile).toBeDefined();
-    fs.writeFileSync(path.join(cacheDir, cacheFile!), '{not valid json', 'utf8');
+    fs.writeFileSync(path.join(warmCacheDir, cacheFile!), '{not valid json', 'utf8');
 
     await expect(Promise.resolve(store.read(key))).resolves.toBeUndefined();
-    expect(fs.readdirSync(cacheDir)).toEqual([]);
+    expect(fs.readdirSync(warmCacheDir)).toEqual([]);
   });
 
   it('round-trips a snapshot containing multiple external tool configs', async () => {
-    const runtimeDir = tempDirCreate('codepol-warm-cache-');
-    createdDirs.push(runtimeDir);
-    const store = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const cacheDir = tempDirCreate('codepol-warm-cache-');
+    createdDirs.push(cacheDir);
+    const store = workspaceWarmCacheFsStoreCreate({ cacheDir });
     const key = {
       workspaceId: 'workspace:test',
       rootPath: '/tmp/workspace',
@@ -123,9 +124,9 @@ describe('workspace warm cache store', () => {
   });
 
   it('rejects a v2-shaped snapshot via the compat-version check', async () => {
-    const runtimeDir = tempDirCreate('codepol-warm-cache-');
-    createdDirs.push(runtimeDir);
-    const store = workspaceWarmCacheFsStoreCreate({ runtimeDir });
+    const cacheDir = tempDirCreate('codepol-warm-cache-');
+    createdDirs.push(cacheDir);
+    const store = workspaceWarmCacheFsStoreCreate({ cacheDir });
     const key = {
       workspaceId: 'workspace:test',
       rootPath: '/tmp/workspace',
@@ -141,10 +142,10 @@ describe('workspace warm cache store', () => {
       key.rootPath,
       key.configPath,
     ));
-    const cacheDir = path.join(runtimeDir, 'warm-cache');
-    const [cacheFile] = fs.readdirSync(cacheDir);
+    const warmCacheDir = path.join(cacheDir, 'warm-cache');
+    const [cacheFile] = fs.readdirSync(warmCacheDir);
     expect(cacheFile).toBeDefined();
-    const cacheFilePath = path.join(cacheDir, cacheFile!);
+    const cacheFilePath = path.join(warmCacheDir, cacheFile!);
     const v3Snapshot = JSON.parse(fs.readFileSync(cacheFilePath, 'utf8')) as Record<
       string,
       unknown
@@ -164,12 +165,12 @@ describe('workspace warm cache store', () => {
 
     await expect(Promise.resolve(store.read(key))).resolves.toBeUndefined();
     // Stale v2 snapshot is discarded so it can be rebuilt at v3 next run.
-    expect(fs.readdirSync(cacheDir)).toEqual([]);
+    expect(fs.readdirSync(warmCacheDir)).toEqual([]);
   });
 
   it('prunes stale workspace variants when build or environment identity changes', async () => {
-    const runtimeDir = tempDirCreate('codepol-warm-cache-');
-    createdDirs.push(runtimeDir);
+    const cacheDir = tempDirCreate('codepol-warm-cache-');
+    createdDirs.push(cacheDir);
     const key = {
       workspaceId: 'workspace:test',
       rootPath: '/tmp/workspace',
@@ -177,7 +178,7 @@ describe('workspace warm cache store', () => {
     };
 
     const oldStore = workspaceWarmCacheFsStoreCreate({
-      runtimeDir,
+      cacheDir,
       buildId: 'old-build',
       environmentId: 'node:old',
     });
@@ -187,17 +188,17 @@ describe('workspace warm cache store', () => {
       key.configPath,
     ));
 
-    const cacheDir = path.join(runtimeDir, 'warm-cache');
-    expect(fs.readdirSync(cacheDir)).toHaveLength(1);
+    const warmCacheDir = path.join(cacheDir, 'warm-cache');
+    expect(fs.readdirSync(warmCacheDir)).toHaveLength(1);
 
     const currentStore = workspaceWarmCacheFsStoreCreate({
-      runtimeDir,
+      cacheDir,
       buildId: 'new-build',
       environmentId: 'node:new',
     });
 
     await expect(Promise.resolve(currentStore.read(key))).resolves.toBeUndefined();
-    expect(fs.readdirSync(cacheDir)).toEqual([]);
+    expect(fs.readdirSync(warmCacheDir)).toEqual([]);
   });
 
   it('derives environment identity from tool-resolution environment variables', () => {
@@ -223,5 +224,71 @@ describe('workspace warm cache store', () => {
     expect(base).toMatch(/^node:.*:env:[0-9a-f]{16}$/);
     expect(changedPath).not.toBe(base);
     expect(changedVirtualEnv).not.toBe(base);
+  });
+});
+
+describe('workspaceDaemonDefaultCacheDirResolve', () => {
+  const originalEnv = { ...process.env };
+  const originalPlatform = process.platform;
+
+  function platformSet(platform: NodeJS.Platform): void {
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  }
+
+  function envClear(): void {
+    delete process.env.CODEPOL_DAEMON_CACHE_DIR;
+    delete process.env.XDG_CACHE_HOME;
+    delete process.env.LOCALAPPDATA;
+  }
+
+  beforeEach(() => {
+    envClear();
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+    Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+  });
+
+  it('honours CODEPOL_DAEMON_CACHE_DIR over every other source', () => {
+    process.env.CODEPOL_DAEMON_CACHE_DIR = '/explicit/cache';
+    process.env.XDG_CACHE_HOME = '/xdg/cache';
+    platformSet('linux');
+    expect(workspaceDaemonDefaultCacheDirResolve()).toBe(path.resolve('/explicit/cache'));
+  });
+
+  it('uses XDG_CACHE_HOME/codepol when CODEPOL_DAEMON_CACHE_DIR is unset', () => {
+    process.env.XDG_CACHE_HOME = '/xdg/cache';
+    platformSet('linux');
+    expect(workspaceDaemonDefaultCacheDirResolve()).toBe(path.join('/xdg/cache', 'codepol'));
+  });
+
+  it('falls back to ~/Library/Caches/codepol on macOS', () => {
+    platformSet('darwin');
+    expect(workspaceDaemonDefaultCacheDirResolve()).toBe(
+      path.join(os.homedir(), 'Library', 'Caches', 'codepol'),
+    );
+  });
+
+  it('falls back to %LOCALAPPDATA%/codepol/Cache on Windows when LOCALAPPDATA is set', () => {
+    process.env.LOCALAPPDATA = 'C:\\Users\\me\\AppData\\Local';
+    platformSet('win32');
+    expect(workspaceDaemonDefaultCacheDirResolve()).toBe(
+      path.join('C:\\Users\\me\\AppData\\Local', 'codepol', 'Cache'),
+    );
+  });
+
+  it('falls back to a tmpdir-rooted path on Windows when LOCALAPPDATA is missing', () => {
+    platformSet('win32');
+    const resolved = workspaceDaemonDefaultCacheDirResolve();
+    expect(resolved.startsWith(os.tmpdir())).toBe(true);
+    expect(resolved).toContain('codepol-cache-');
+  });
+
+  it('falls back to ~/.cache/codepol on Linux', () => {
+    platformSet('linux');
+    expect(workspaceDaemonDefaultCacheDirResolve()).toBe(
+      path.join(os.homedir(), '.cache', 'codepol'),
+    );
   });
 });

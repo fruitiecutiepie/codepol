@@ -472,11 +472,23 @@ export type WorkspaceWatcherCreate = (input: {
   externalToolConfigPaths: string[];
 }) => WorkspaceWatcher;
 
+/**
+ * Pluggable timer pair used by the engine's per-workspace persist debouncer.
+ * Defaults to `setTimeout` / `clearTimeout`. Tests inject a manual queue so
+ * the 2s debounce window can be advanced synchronously (matching the
+ * `backgroundTaskSchedule` injection pattern).
+ */
+export type WorkspaceServiceEngineTimers = {
+  setTimeout: (handler: () => void, ms: number) => unknown;
+  clearTimeout: (handle: unknown) => void;
+};
+
 export type WorkspaceServiceEngineOptions = {
   watcherCreate?: WorkspaceWatcherCreate;
   backgroundWarmup?: boolean;
   backgroundTaskSchedule?: (task: () => Promise<void>) => void;
   warmCache?: WorkspaceWarmCacheStore;
+  timers?: WorkspaceServiceEngineTimers;
 };
 
 type WorkspaceSessionState = WorkspaceDocumentsState &
@@ -5860,6 +5872,48 @@ export function workspaceAnalysisRebuildFromCache(input: {
 }
 
 /**
+ * Pure projection of an in-memory `WorkspaceAnalyzerCache`: returns a new
+ * cache whose per-(analyzer, file) entries pass the given predicate. Bucket
+ * presence is preserved -- a bucket whose entries were all filtered out
+ * remains as an empty `fileResults` map. This matters for the
+ * `allHitsCovered` fast path in `workspaceAnalysisRunIncremental`, which
+ * treats a missing bucket as "analyzer never ran" rather than "analyzer
+ * ran with zero in-scope files," forcing a redundant analysis on restore.
+ *
+ * Used by the persist path to drop entries fingerprinted against overlay
+ * text (`key.contentFingerprint` starting with `overlay:`) before writing
+ * the snapshot to disk. Persisting overlay-keyed entries would let next
+ * session's restore return diagnostics keyed on a fingerprint no disk file
+ * can produce, so they'd remain stuck as cache hits forever.
+ */
+export function workspaceAnalyzerCacheFilterEntries(
+  cache: WorkspaceAnalyzerCache | undefined,
+  predicate: (entry: WorkspaceAnalyzerFileCacheEntry, filePath: string) => boolean,
+): WorkspaceAnalyzerCache {
+  const result: WorkspaceAnalyzerCache = {};
+  if (!cache) {
+    return result;
+  }
+  for (const analyzer of ['tree', 'eslint', 'biome', 'ruff'] as const) {
+    const entry = cache[analyzer];
+    if (!entry) {
+      continue;
+    }
+    const fileResults = new Map<string, WorkspaceAnalyzerFileCacheEntry>();
+    for (const [filePath, fileEntry] of entry.fileResults) {
+      if (predicate(fileEntry, filePath)) {
+        fileResults.set(filePath, fileEntry);
+      }
+    }
+    result[analyzer] = {
+      scorecardTemplate: entry.scorecardTemplate,
+      fileResults,
+    };
+  }
+  return result;
+}
+
+/**
  * Snapshot-side serialiser for the in-memory `WorkspaceAnalyzerCache`. The
  * `Map<diagnosticId, PolicyViolation>` shape is reduced to a parallel id list
  * because Maps don't survive `JSON.stringify`, and the violation itself is
@@ -6141,6 +6195,22 @@ async function workspaceWarmCacheSnapshotRestore(input: {
         fileKey: snapshot.baseIndexState.fileKey,
         workspacePackages: currentWorkspacePackages,
       };
+
+      // Drop index facts for files whose disk fingerprint diverged from the
+      // snapshot. Persist now writes whenever lastAnalysis exists (no
+      // documents-open gate), so a snapshot may carry index entries derived
+      // from overlay text. `workspaceIndexGetOrBuild` only re-indexes
+      // documents and added/removed files; it does not re-index a file just
+      // because it appears in `dirtyFiles`. Dropping the entries here means
+      // subsequent index queries return nothing for those files rather than
+      // overlay-derived facts. The next analysis run will repopulate them
+      // from disk content via the analyzer's normal index-update path.
+      if (dirtyFiles.size > 0) {
+        for (const dirtyFilePath of dirtyFiles) {
+          indexState.store.fileRemove(dirtyFilePath);
+        }
+        indexState.index = projectIndexCreate(indexState.store, indexState.capabilities);
+      }
       const baseIndexStateNext = workspaceBaseIndexStateGetOrBuild(input.workspace, currentFiles);
       if (
         indexState.fileKey !== baseIndexStateNext.fileKey &&
@@ -6262,7 +6332,7 @@ async function workspaceWarmCacheSnapshotPersist(input: {
   if (!input.warmCache || input.workspaceSession.status !== 'ready') {
     return;
   }
-  if (input.workspaceSession.documents.size > 0 || !input.workspaceSession.lastAnalysis) {
+  if (!input.workspaceSession.lastAnalysis) {
     return;
   }
 
@@ -6286,6 +6356,32 @@ async function workspaceWarmCacheSnapshotPersist(input: {
     input.workspace,
     policy,
     pluginRulesResult.Ok,
+  );
+
+  // Project the analyzer cache before writing. Per-(analyzer, file) entries
+  // analysed against overlay text carry a `key.contentFingerprint` of the
+  // form `overlay:<version>` (see `workspaceContentFingerprintForFile`).
+  // Persisting those would let next session's restore return diagnostics
+  // keyed on a fingerprint no disk file can produce, so they'd remain stuck
+  // as cache hits forever. Drop them here; the file is in
+  // `lastAnalysis.files` so `fileFingerprints` still records a valid disk
+  // fingerprint, which the next session uses to mark the file dirty and
+  // re-analyze.
+  //
+  // `lastAnalysis.diagnostics` and `lastAnalysis.treeViolations` are NOT
+  // filtered. They are advisory ("here's what we showed users last") rather
+  // than authoritative; restore overlays them with the next analysis run's
+  // output before publishing. Filtering them adds complexity (recomputing
+  // scorecard counts, featureStatus) for no observable user-visible benefit.
+  //
+  // `projectIndexStoreSnapshot` is also persisted as-is. The restore path
+  // runs `workspaceWarmCacheFileDeltaCompute` and feeds files whose
+  // (size, mtime) diverged into `dirtyFiles`, then drops their entries from
+  // the restored index store, so overlay-tainted index slices get cleaned
+  // up on first use after restore.
+  const persistableAnalyzerCache = workspaceAnalyzerCacheFilterEntries(
+    input.workspaceSession.analyzerCache,
+    (entry) => !entry.key.contentFingerprint.startsWith('overlay:'),
   );
 
   await input.warmCache.write(workspaceWarmCacheKeyCreate(input.workspace), {
@@ -6314,7 +6410,7 @@ async function workspaceWarmCacheSnapshotPersist(input: {
     toolFingerprints: input.workspaceSession.toolFingerprints ?? [],
     pluginSignature: pluginCompatibility.pluginSignature,
     pluginFingerprints: pluginCompatibility.pluginFingerprints,
-    analyzerCache: workspaceAnalyzerCacheSerialize(input.workspaceSession.analyzerCache),
+    analyzerCache: workspaceAnalyzerCacheSerialize(persistableAnalyzerCache),
     createdAtUnixMs: Date.now(),
   });
 }
@@ -8227,6 +8323,39 @@ async function workspaceSessionAnalysisGet(
 /**
  * Reusable workspace/session engine shared by in-process and future daemon adapters.
  */
+/**
+ * Trailing-edge debounce window for warm-cache persist. Hardcoded:
+ *
+ * - Long enough that a burst of typing-triggered analyses coalesces into a
+ *   single ~tens-of-KB JSON write, keeping disk I/O negligible.
+ * - Short enough that a daemon crash loses at most one debounce window's
+ *   worth of analysis (vs. losing all overlay-period analyses pre-rewrite).
+ *
+ * Not a config knob: there's no actionable use case for tuning this per
+ * deployment, and exposing it adds drift between environments.
+ */
+const WORKSPACE_WARM_CACHE_PERSIST_DEBOUNCE_MS = 2000;
+
+const workspaceServiceEngineTimersDefault: WorkspaceServiceEngineTimers = {
+  setTimeout: (handler, ms) => {
+    const timer = setTimeout(handler, ms);
+    // Don't keep the daemon alive solely for a pending persist.
+    if (typeof timer.unref === 'function') {
+      timer.unref();
+    }
+    return timer;
+  },
+  clearTimeout: (handle) => {
+    clearTimeout(handle as ReturnType<typeof setTimeout>);
+  },
+};
+
+type PersistTimerEntry = {
+  handle: unknown;
+  workspace: WorkspaceState;
+  workspaceSession: WorkspaceSessionState;
+};
+
 export class WorkspaceServiceEngine implements WorkspaceService {
   private readonly daemonSessionId: DaemonSessionId = opaqueIdCreate('daemon');
   private readonly workspaces = new Map<string, WorkspaceState>();
@@ -8235,11 +8364,16 @@ export class WorkspaceServiceEngine implements WorkspaceService {
   private readonly backgroundWarmup: boolean;
   private readonly backgroundTaskSchedule: (task: () => Promise<void>) => void;
   private readonly warmCache?: WorkspaceWarmCacheStore;
+  private readonly timers: WorkspaceServiceEngineTimers;
+  // Per-workspace pending debounced persist. Keyed by `workspaceId` because
+  // every attached client session sees the same in-memory workspace state.
+  private readonly persistTimers = new Map<string, PersistTimerEntry>();
 
   constructor(options: WorkspaceServiceEngineOptions = {}) {
     this.watcherCreate = options.watcherCreate;
     this.backgroundWarmup = options.backgroundWarmup ?? false;
     this.warmCache = options.warmCache;
+    this.timers = options.timers ?? workspaceServiceEngineTimersDefault;
     this.backgroundTaskSchedule =
       options.backgroundTaskSchedule ??
       ((task) => {
@@ -8247,6 +8381,53 @@ export class WorkspaceServiceEngine implements WorkspaceService {
           void task();
         });
       });
+  }
+
+  private workspacePersistSchedule(
+    workspace: WorkspaceState,
+    workspaceSession: WorkspaceSessionState,
+  ): void {
+    if (!this.warmCache) {
+      return;
+    }
+    const existing = this.persistTimers.get(workspace.workspaceId);
+    if (existing) {
+      this.timers.clearTimeout(existing.handle);
+    }
+    const handle = this.timers.setTimeout(() => {
+      const pending = this.persistTimers.get(workspace.workspaceId);
+      if (!pending || pending.handle !== handle) {
+        return;
+      }
+      this.persistTimers.delete(workspace.workspaceId);
+      void workspaceWarmCacheSnapshotPersist({
+        warmCache: this.warmCache,
+        workspace: pending.workspace,
+        workspaceSession: pending.workspaceSession,
+      });
+    }, WORKSPACE_WARM_CACHE_PERSIST_DEBOUNCE_MS);
+    this.persistTimers.set(workspace.workspaceId, {
+      handle,
+      workspace,
+      workspaceSession,
+    });
+  }
+
+  private async workspacePersistFlush(workspaceId: string): Promise<void> {
+    const pending = this.persistTimers.get(workspaceId);
+    if (!pending) {
+      return;
+    }
+    this.timers.clearTimeout(pending.handle);
+    this.persistTimers.delete(workspaceId);
+    if (!this.warmCache) {
+      return;
+    }
+    await workspaceWarmCacheSnapshotPersist({
+      warmCache: this.warmCache,
+      workspace: pending.workspace,
+      workspaceSession: pending.workspaceSession,
+    });
   }
 
   private async workspaceSessionAnalysisEnsure(
@@ -8257,11 +8438,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     } = {},
   ): Promise<WorkspaceAnalysis> {
     const analysis = await workspaceSessionAnalysisGet(workspace, workspaceSession, options);
-    await workspaceWarmCacheSnapshotPersist({
-      warmCache: this.warmCache,
-      workspace,
-      workspaceSession,
-    });
+    this.workspacePersistSchedule(workspace, workspaceSession);
     return analysis;
   }
 
@@ -8445,6 +8622,10 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       }
       workspace.attachedClientSessionIds.delete(input.clientSessionId);
       if (workspace.attachedClientSessionIds.size === 0) {
+        // Flush any pending debounced persist before tearing down the
+        // watcher so the latest analysis lands on disk even if the user
+        // disconnects within the debounce window.
+        await this.workspacePersistFlush(workspaceId);
         await workspaceWatcherClose(workspace);
       }
     }
