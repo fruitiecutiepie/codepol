@@ -25,9 +25,13 @@ import {
   type WorkspaceRenamePreviewResult,
   type WorkspaceRenameTarget,
   type WorkspaceSearchResult,
+  type WorkspacePosition,
   type WorkspaceSemanticDefinitionResult,
   type WorkspaceSemanticHoverResult,
   type WorkspaceSemanticReferencesResult,
+  type WorkspaceSymbolAtPositionResult,
+  type WorkspaceSymbolDescriptorKind,
+  type WorkspaceSymbolLookupResult,
   type WorkspaceSymbolResult,
 } from '@codepol/core';
 import type { WorkspaceService } from '@codepol/workspace-service/contracts';
@@ -57,6 +61,8 @@ import {
   CODEPOL_LSP_REQUEST_SEMANTIC_HOVER,
   CODEPOL_LSP_REQUEST_SEMANTIC_REFERENCES,
   CODEPOL_LSP_REQUEST_SEMANTIC_SEARCH,
+  CODEPOL_LSP_REQUEST_SYMBOL_AT_POSITION,
+  CODEPOL_LSP_REQUEST_SYMBOL_LOOKUP,
 } from './protocol';
 
 const APPLY_EDIT_PLAN_COMMAND = CODEPOL_LSP_COMMAND_APPLY_EDIT_PLAN;
@@ -1126,6 +1132,18 @@ export class CodepolLspServer {
         }, context);
       case CODEPOL_LSP_REQUEST_ARCHITECTURE_SUMMARY:
         return this.architectureSummaryHandle(context);
+      case CODEPOL_LSP_REQUEST_SYMBOL_LOOKUP:
+        return this.symbolLookupHandle(params as {
+          name?: string;
+          kind?: WorkspaceSymbolDescriptorKind;
+          scopeUri?: string;
+          limit?: number;
+        }, context);
+      case CODEPOL_LSP_REQUEST_SYMBOL_AT_POSITION:
+        return this.symbolAtPositionHandle(params as {
+          uri?: string;
+          position?: WorkspacePosition;
+        }, context);
       default:
         return null;
     }
@@ -2153,6 +2171,76 @@ export class CodepolLspServer {
           context.requestId === undefined || context.requestId === null
             ? undefined
             : `lsp-codepol-architecture-summary:${String(context.requestId)}`,
+        signal: context.signal,
+      }), {
+      signal: context.signal,
+    });
+  }
+
+  private async symbolLookupHandle(
+    params: {
+      name?: string;
+      kind?: WorkspaceSymbolDescriptorKind;
+      scopeUri?: string;
+      limit?: number;
+    },
+    context: { requestId?: JsonRpcId; signal?: AbortSignal } = {},
+  ): Promise<WorkspaceSymbolLookupResult | null> {
+    if (
+      !this.registeredClientSessionId ||
+      !this.workspaceId ||
+      params.name === undefined
+    ) {
+      return null;
+    }
+    const name = params.name;
+
+    return this.serviceCall((service) =>
+      service.querySymbolLookup({
+        clientSessionId: this.registeredClientSessionId!,
+        workspaceId: this.workspaceId!,
+        name,
+        kind: params.kind,
+        scopeUri: params.scopeUri,
+        limit: params.limit,
+        requestId:
+          context.requestId === undefined || context.requestId === null
+            ? undefined
+            : `lsp-codepol-symbol-lookup:${String(context.requestId)}`,
+        signal: context.signal,
+      }), {
+      signal: context.signal,
+    });
+  }
+
+  private async symbolAtPositionHandle(
+    params: {
+      uri?: string;
+      position?: WorkspacePosition;
+    },
+    context: { requestId?: JsonRpcId; signal?: AbortSignal } = {},
+  ): Promise<WorkspaceSymbolAtPositionResult | null> {
+    if (
+      !this.registeredClientSessionId ||
+      !this.workspaceId ||
+      !params.uri ||
+      !params.position
+    ) {
+      return null;
+    }
+    const uri = params.uri;
+    const position = params.position;
+
+    return this.serviceCall((service) =>
+      service.querySymbolAtPosition({
+        clientSessionId: this.registeredClientSessionId!,
+        workspaceId: this.workspaceId!,
+        uri,
+        position,
+        requestId:
+          context.requestId === undefined || context.requestId === null
+            ? undefined
+            : `lsp-codepol-symbol-at-position:${String(context.requestId)}`,
         signal: context.signal,
       }), {
       signal: context.signal,

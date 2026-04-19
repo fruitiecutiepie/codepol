@@ -102,6 +102,10 @@ export type {
   WorkspaceLintRuleDetailsResult,
   WorkspaceSymbolKind,
   WorkspaceSymbolResult,
+  WorkspaceSymbolDescriptorKind,
+  WorkspaceSymbolDescriptor,
+  WorkspaceSymbolLookupResult,
+  WorkspaceSymbolAtPositionResult,
   WorkspaceSearchResult,
   WorkspaceSemanticTarget,
   WorkspaceSemanticDefinitionResult,
@@ -167,6 +171,7 @@ export {
   workspaceIdCreate,
   workspaceRangeFromLineColumns,
   workspaceRangeFromByteRange,
+  workspacePositionToByteOffset,
   policyViolationToWorkspaceDiagnostic,
   lintDiagnosticToWorkspaceDiagnostic,
 } from './types';

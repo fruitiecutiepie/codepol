@@ -31,6 +31,10 @@ import type {
   WorkspaceSemanticHoverResult,
   WorkspaceSemanticReferencesResult,
   WorkspaceInstanceId,
+  WorkspacePosition,
+  WorkspaceSymbolAtPositionResult,
+  WorkspaceSymbolDescriptorKind,
+  WorkspaceSymbolLookupResult,
   WorkspaceSymbolResult,
   WorkspaceTypeHierarchyDirection,
 } from '@codepol/core';
@@ -544,6 +548,30 @@ type WorkspaceDaemonQueryArchitectureSummaryRequest = WorkspaceDaemonMessage &
   analysisGeneration?: number;
 };
 
+type WorkspaceDaemonQuerySymbolLookupRequest = WorkspaceDaemonMessage &
+  WorkspaceDaemonClientSessionFreshness &
+  WorkspaceDaemonRequestFreshness &
+  WorkspaceDaemonWorkspaceFreshness & {
+  type: 'query_symbol_lookup';
+  workspaceId: string;
+  name: string;
+  kind?: WorkspaceSymbolDescriptorKind;
+  scopeUri?: string;
+  limit?: number;
+  analysisGeneration?: number;
+};
+
+type WorkspaceDaemonQuerySymbolAtPositionRequest = WorkspaceDaemonMessage &
+  WorkspaceDaemonClientSessionFreshness &
+  WorkspaceDaemonRequestFreshness &
+  WorkspaceDaemonWorkspaceFreshness & {
+  type: 'query_symbol_at_position';
+  workspaceId: string;
+  uri: string;
+  position: WorkspacePosition;
+  analysisGeneration?: number;
+};
+
 type WorkspaceDaemonPolicyCheckRequest = WorkspaceDaemonMessage & {
   type: 'policy_check';
   options: WorkspacePolicyCheckOptions;
@@ -715,6 +743,16 @@ type WorkspaceDaemonQueryArchitectureSummaryAck = {
   result: WorkspaceArchitectureSummaryResult;
 };
 
+type WorkspaceDaemonQuerySymbolLookupAck = {
+  type: 'query_symbol_lookup_ack';
+  result: WorkspaceSymbolLookupResult;
+};
+
+type WorkspaceDaemonQuerySymbolAtPositionAck = {
+  type: 'query_symbol_at_position_ack';
+  result: WorkspaceSymbolAtPositionResult;
+};
+
 type WorkspaceDaemonPolicyCheckAck = {
   type: 'policy_check_ack';
   result: WorkspacePolicyCheckResult;
@@ -788,6 +826,8 @@ type WorkspaceDaemonServiceResponse =
   | WorkspaceDaemonPrepareRenameAck
   | WorkspaceDaemonPreviewRenameAck
   | WorkspaceDaemonQueryArchitectureSummaryAck
+  | WorkspaceDaemonQuerySymbolLookupAck
+  | WorkspaceDaemonQuerySymbolAtPositionAck
   | WorkspaceDaemonPolicyCheckAck
   | WorkspaceDaemonSetDiagnosticsConfigAck
   | WorkspaceDaemonGetDiagnosticsConfigAck
@@ -1785,7 +1825,9 @@ export class WorkspaceDaemonSession {
       case 'query_semantic_hover':
       case 'prepare_rename':
       case 'preview_rename':
-      case 'query_architecture_summary': {
+      case 'query_architecture_summary':
+      case 'query_symbol_lookup':
+      case 'query_symbol_at_position': {
         const input = message as
           | WorkspaceDaemonSubscribeDiagnosticsRequest
           | WorkspaceDaemonCompleteReplayRequest
@@ -1814,7 +1856,9 @@ export class WorkspaceDaemonSession {
           | WorkspaceDaemonQuerySemanticHoverRequest
           | WorkspaceDaemonPrepareRenameRequest
           | WorkspaceDaemonPreviewRenameRequest
-          | WorkspaceDaemonQueryArchitectureSummaryRequest;
+          | WorkspaceDaemonQueryArchitectureSummaryRequest
+          | WorkspaceDaemonQuerySymbolLookupRequest
+          | WorkspaceDaemonQuerySymbolAtPositionRequest;
         return `workspace:${input.clientSessionId}:${input.workspaceId}`;
       }
       default:
@@ -1841,6 +1885,8 @@ export class WorkspaceDaemonSession {
       case 'query_semantic_search':
       case 'query_semantic_definition':
       case 'query_semantic_hover':
+      case 'query_symbol_lookup':
+      case 'query_symbol_at_position':
       case 'prepare_rename':
         return 'high';
       case 'query_code_actions':
@@ -3237,6 +3283,86 @@ export class WorkspaceDaemonSession {
             result,
           };
         }
+        case 'query_symbol_lookup': {
+          if (!this.options.service) {
+            return messageErrorCreate(
+              'unsupported_request',
+              `Unsupported daemon request: ${message.type}`,
+            );
+          }
+          const input = message as WorkspaceDaemonQuerySymbolLookupRequest;
+          const daemonSessionError = this.daemonSessionValidate(input);
+          if (daemonSessionError) {
+            return daemonSessionError;
+          }
+          const replayGate = this.replayGateEnsure(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          if (replayGate) {
+            return replayGate;
+          }
+          const state = this.workspaceReplayStateGet(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          const workspaceInstanceError = this.workspaceInstanceValidate(state, input);
+          if (workspaceInstanceError) {
+            return workspaceInstanceError;
+          }
+          const replayEpochError = this.replayEpochValidate(state, input);
+          if (replayEpochError) {
+            return replayEpochError;
+          }
+          const result = await this.options.service.querySymbolLookup({
+            ...input,
+            signal: options.signal,
+          });
+          return {
+            type: 'query_symbol_lookup_ack',
+            result,
+          };
+        }
+        case 'query_symbol_at_position': {
+          if (!this.options.service) {
+            return messageErrorCreate(
+              'unsupported_request',
+              `Unsupported daemon request: ${message.type}`,
+            );
+          }
+          const input = message as WorkspaceDaemonQuerySymbolAtPositionRequest;
+          const daemonSessionError = this.daemonSessionValidate(input);
+          if (daemonSessionError) {
+            return daemonSessionError;
+          }
+          const replayGate = this.replayGateEnsure(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          if (replayGate) {
+            return replayGate;
+          }
+          const state = this.workspaceReplayStateGet(
+            input.clientSessionId,
+            input.workspaceId,
+          );
+          const workspaceInstanceError = this.workspaceInstanceValidate(state, input);
+          if (workspaceInstanceError) {
+            return workspaceInstanceError;
+          }
+          const replayEpochError = this.replayEpochValidate(state, input);
+          if (replayEpochError) {
+            return replayEpochError;
+          }
+          const result = await this.options.service.querySymbolAtPosition({
+            ...input,
+            signal: options.signal,
+          });
+          return {
+            type: 'query_symbol_at_position_ack',
+            result,
+          };
+        }
         default:
           return messageErrorCreate(
             'unsupported_request',
@@ -4064,6 +4190,64 @@ export class WorkspaceDaemonServiceClient implements WorkspaceService {
       workspaceId: input.workspaceId,
       workspaceInstanceId: freshness?.workspaceInstanceId,
       replayEpoch: freshness?.replayEpoch,
+      analysisGeneration: input.analysisGeneration,
+    }, {
+      signal: input.signal,
+    }).then((response) => response.result);
+  }
+
+  querySymbolLookup(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    name: string;
+    kind?: WorkspaceSymbolDescriptorKind;
+    scopeUri?: string;
+    limit?: number;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceSymbolLookupResult> {
+    const freshness = this.workspaceFreshnessGet(input);
+    const daemonSessionId = this.daemonSessionIdGet(input.clientSessionId);
+    return this.connection.request<WorkspaceDaemonQuerySymbolLookupAck>({
+      type: 'query_symbol_lookup',
+      clientSessionId: input.clientSessionId,
+      daemonSessionId,
+      requestId: input.requestId,
+      workspaceId: input.workspaceId,
+      workspaceInstanceId: freshness?.workspaceInstanceId,
+      replayEpoch: freshness?.replayEpoch,
+      name: input.name,
+      kind: input.kind,
+      scopeUri: input.scopeUri,
+      limit: input.limit,
+      analysisGeneration: input.analysisGeneration,
+    }, {
+      signal: input.signal,
+    }).then((response) => response.result);
+  }
+
+  querySymbolAtPosition(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    position: WorkspacePosition;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceSymbolAtPositionResult> {
+    const freshness = this.workspaceFreshnessGet(input);
+    const daemonSessionId = this.daemonSessionIdGet(input.clientSessionId);
+    return this.connection.request<WorkspaceDaemonQuerySymbolAtPositionAck>({
+      type: 'query_symbol_at_position',
+      clientSessionId: input.clientSessionId,
+      daemonSessionId,
+      requestId: input.requestId,
+      workspaceId: input.workspaceId,
+      workspaceInstanceId: freshness?.workspaceInstanceId,
+      replayEpoch: freshness?.replayEpoch,
+      uri: input.uri,
+      position: input.position,
       analysisGeneration: input.analysisGeneration,
     }, {
       signal: input.signal,

@@ -367,6 +367,8 @@ function workspaceReadQueriesStubCreate(): Pick<
   | 'prepareRename'
   | 'previewRename'
   | 'queryArchitectureSummary'
+  | 'querySymbolLookup'
+  | 'querySymbolAtPosition'
   | 'planSourceFixAll'
   | 'planFileFixAll'
 > {
@@ -477,6 +479,12 @@ function workspaceReadQueriesStubCreate(): Pick<
         cycleCount: 0,
         hotspots: [],
       };
+    },
+    async querySymbolLookup() {
+      return { symbols: [] };
+    },
+    async querySymbolAtPosition() {
+      return { symbol: undefined };
     },
     async planSourceFixAll() {
       return null;
@@ -2093,6 +2101,25 @@ describe('workspace daemon control plane', () => {
     expect(typeHierarchy.nodes).toHaveLength(1);
     expect(typeHierarchy.nodes[0]!.symbolId).toBe('unknown-id');
     expect(typeHierarchy.edges).toEqual([]);
+
+    // Phase 7 follow-up: symbol-id discovery RPCs round-trip through
+    // the daemon transport. We use a name that has no chance of
+    // matching anything in the test workspace so the assertion stays
+    // independent of the indexed corpus.
+    const lookup = await service.querySymbolLookup({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      name: '__codepol_daemon_test_symbol_that_does_not_exist__',
+    });
+    expect(lookup.symbols).toEqual([]);
+
+    const atPosition = await service.querySymbolAtPosition({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      uri: appUri,
+      position: { line: 0, character: 0 },
+    });
+    expect(atPosition).toEqual({ symbol: undefined });
   });
 
   it('rejects stale analysisGeneration for workspace symbol reads through the daemon service client', async () => {

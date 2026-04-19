@@ -41,6 +41,7 @@ import {
   workspaceIdCreate,
   workspacePackageMapCreate,
   workspacePathToUri,
+  workspacePositionToByteOffset,
   workspaceRangeFromByteRange,
   workspacePackageMapDiscover,
   workspacePackageRecordFromManifestSource,
@@ -107,8 +108,15 @@ import {
   type WorkspaceLintRuleProviderSummary,
   type WorkspaceLintRulesResult,
   type WorkspaceLintRuleSummary,
+  type WorkspacePosition,
   type WorkspaceSearchResult,
+  type WorkspaceSymbolAtPositionResult,
+  type WorkspaceSymbolDescriptor,
+  type WorkspaceSymbolDescriptorKind,
+  type WorkspaceSymbolLookupResult,
   type WorkspaceSymbolResult,
+  type SymbolKind,
+  type SymbolRecord,
   type BiomeProviderConfig,
 } from '@codepol/core';
 import { biomeCheckAsync, biomeFixAsync } from '@codepol/plugin-biome';
@@ -768,6 +776,26 @@ export type WorkspaceService = {
     analysisGeneration?: number;
     signal?: AbortSignal;
   }) => Promise<WorkspaceArchitectureSummaryResult>;
+  querySymbolLookup: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    name: string;
+    kind?: WorkspaceSymbolDescriptorKind;
+    scopeUri?: string;
+    limit?: number;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceSymbolLookupResult>;
+  querySymbolAtPosition: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    position: WorkspacePosition;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceSymbolAtPositionResult>;
 };
 
 export type WorkspaceServiceCreateOptions = {
@@ -4677,6 +4705,156 @@ function workspaceTypeHierarchyResultCreate(
     symbols: result.symbols,
     edges: result.edges,
   });
+}
+
+// ============================================================================
+// Symbol-id discovery (querySymbolLookup / querySymbolAtPosition)
+// ============================================================================
+
+/**
+ * Default upper bound on `querySymbolLookup` results when the caller
+ * does not pass an explicit `limit`. Picked to be large enough to
+ * include every overload in a typical file but small enough to keep
+ * the editor round-trip cheap.
+ */
+const WORKSPACE_SYMBOL_LOOKUP_LIMIT_DEFAULT = 50;
+
+/**
+ * The set of `SymbolKind` values the workspace surface accepts as a
+ * `WorkspaceSymbolDescriptorKind`. Mirrors the union one-for-one; kept
+ * as a runtime guard so the lookup surface can validate the caller's
+ * `kind` filter without depending on the core enum.
+ */
+const WORKSPACE_SYMBOL_DESCRIPTOR_KINDS: readonly WorkspaceSymbolDescriptorKind[] = [
+  'module',
+  'namespace',
+  'class',
+  'interface',
+  'type',
+  'function',
+  'method',
+  'variable',
+  'const',
+  'field',
+  'parameter',
+  'enum',
+  'enumMember',
+];
+
+function workspaceSymbolDescriptorKindIs(
+  value: SymbolKind,
+): value is WorkspaceSymbolDescriptorKind {
+  return (WORKSPACE_SYMBOL_DESCRIPTOR_KINDS as readonly string[]).includes(value);
+}
+
+/**
+ * Build a {@link WorkspaceSymbolDescriptor} from an indexed symbol.
+ * Centralizes the "byte-range to workspace-range" conversion so both
+ * the lookup and the at-position queries return identical shapes.
+ */
+function workspaceSymbolDescriptorCreate(
+  state: WorkspaceDocumentsState,
+  symbol: SymbolRecord,
+): WorkspaceSymbolDescriptor {
+  const source = workspaceSourceGet(state, symbol.file);
+  return {
+    symbolId: symbol.id,
+    name: symbol.name,
+    kind: symbol.kind as WorkspaceSymbolDescriptorKind,
+    declarationUri: workspacePathToUri(symbol.file),
+    declarationRange: workspaceRangeFromByteRange(source, symbol.byteRange),
+  };
+}
+
+function workspaceSymbolLookupResultCreate(
+  state: WorkspaceDocumentsState,
+  index: ProjectIndex,
+  input: {
+    name: string;
+    kind?: WorkspaceSymbolDescriptorKind;
+    scopeUri?: string;
+    limit?: number;
+  },
+): WorkspaceSymbolLookupResult {
+  let scopeFilePath: string | undefined;
+  if (input.scopeUri !== undefined) {
+    try {
+      scopeFilePath = workspaceUriToPath(input.scopeUri);
+    } catch {
+      return { symbols: [] };
+    }
+  }
+  const filter: { name: string; kind?: SymbolKind; file?: string } = {
+    name: input.name,
+  };
+  if (input.kind !== undefined) {
+    filter.kind = input.kind;
+  }
+  if (scopeFilePath !== undefined) {
+    filter.file = scopeFilePath;
+  }
+  const matches = index.symbolsGet(filter);
+  matches.sort((left, right) => {
+    const fileDifference = left.file.localeCompare(right.file);
+    if (fileDifference !== 0) return fileDifference;
+    const startDifference = left.byteRange.start - right.byteRange.start;
+    if (startDifference !== 0) return startDifference;
+    return left.id.localeCompare(right.id);
+  });
+  const limit =
+    input.limit !== undefined && input.limit > 0
+      ? Math.floor(input.limit)
+      : WORKSPACE_SYMBOL_LOOKUP_LIMIT_DEFAULT;
+  const trimmed = matches.slice(0, limit);
+  return {
+    symbols: trimmed
+      .filter((symbol) => workspaceSymbolDescriptorKindIs(symbol.kind))
+      .map((symbol) => workspaceSymbolDescriptorCreate(state, symbol)),
+  };
+}
+
+/**
+ * Find the smallest (innermost) symbol whose declaration byte range
+ * contains the editor cursor position. Returns `{ symbol: undefined }`
+ * when nothing matches — never throws on an unindexed file or an
+ * out-of-range position so the editor surfaces stay forgiving.
+ */
+function workspaceSymbolAtPositionResultCreate(
+  state: WorkspaceDocumentsState,
+  index: ProjectIndex,
+  input: {
+    uri: string;
+    position: WorkspacePosition;
+  },
+): WorkspaceSymbolAtPositionResult {
+  let filePath: string;
+  try {
+    filePath = workspaceUriToPath(input.uri);
+  } catch {
+    return { symbol: undefined };
+  }
+  const symbols = index.symbolsInFileGet(filePath);
+  if (symbols.length === 0) {
+    return { symbol: undefined };
+  }
+  const source = workspaceSourceGet(state, filePath);
+  const byteOffset = workspacePositionToByteOffset(source, input.position);
+  let best: SymbolRecord | undefined;
+  let bestSize = Number.POSITIVE_INFINITY;
+  for (const symbol of symbols) {
+    if (!workspaceSymbolDescriptorKindIs(symbol.kind)) continue;
+    if (byteOffset < symbol.byteRange.start) continue;
+    if (byteOffset >= symbol.byteRange.end) continue;
+    const size = symbol.byteRange.end - symbol.byteRange.start;
+    if (size < bestSize) {
+      best = symbol;
+      bestSize = size;
+    }
+  }
+  if (!best) {
+    return { symbol: undefined };
+  }
+  return { symbol: workspaceSymbolDescriptorCreate(state, best) };
 }
 
 /**
@@ -9787,6 +9965,60 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     workspaceAnalysisGenerationValidate(workspaceSession, input);
     return workspaceArchitectureSummaryResultCreate(workspace, index);
   }
+
+  async querySymbolLookup(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    name: string;
+    kind?: WorkspaceSymbolDescriptorKind;
+    scopeUri?: string;
+    limit?: number;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceSymbolLookupResult> {
+    const { workspace, workspaceSession } = workspaceSessionGet(
+      this.workspaces,
+      this.clientSessions,
+      input.clientSessionId,
+      input.workspaceId,
+    );
+    const index = await this.workspaceSessionIndexEnsure(workspace, workspaceSession, {
+      signal: input.signal,
+    });
+    workspaceAnalysisGenerationValidate(workspaceSession, input);
+    return workspaceSymbolLookupResultCreate(workspaceSession, index, {
+      name: input.name,
+      kind: input.kind,
+      scopeUri: input.scopeUri,
+      limit: input.limit,
+    });
+  }
+
+  async querySymbolAtPosition(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    position: WorkspacePosition;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceSymbolAtPositionResult> {
+    const { workspace, workspaceSession } = workspaceSessionGet(
+      this.workspaces,
+      this.clientSessions,
+      input.clientSessionId,
+      input.workspaceId,
+    );
+    const index = await this.workspaceSessionIndexEnsure(workspace, workspaceSession, {
+      signal: input.signal,
+    });
+    workspaceAnalysisGenerationValidate(workspaceSession, input);
+    return workspaceSymbolAtPositionResultCreate(workspaceSession, index, {
+      uri: input.uri,
+      position: input.position,
+    });
+  }
 }
 
 class InProcessWorkspaceService implements WorkspaceService {
@@ -10120,6 +10352,32 @@ class InProcessWorkspaceService implements WorkspaceService {
     signal?: AbortSignal;
   }): Promise<WorkspaceArchitectureSummaryResult> {
     return this.engine.queryArchitectureSummary(input);
+  }
+
+  querySymbolLookup(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    name: string;
+    kind?: WorkspaceSymbolDescriptorKind;
+    scopeUri?: string;
+    limit?: number;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceSymbolLookupResult> {
+    return this.engine.querySymbolLookup(input);
+  }
+
+  querySymbolAtPosition(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    position: WorkspacePosition;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceSymbolAtPositionResult> {
+    return this.engine.querySymbolAtPosition(input);
   }
 }
 

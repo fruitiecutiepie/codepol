@@ -21,10 +21,14 @@ import type {
   WorkspacePrepareRenameResult,
   WorkspaceRenamePreviewResult,
   WorkspaceRenameTarget,
+  WorkspacePosition,
   WorkspaceSearchResult,
   WorkspaceSemanticDefinitionResult,
   WorkspaceSemanticHoverResult,
   WorkspaceSemanticReferencesResult,
+  WorkspaceSymbolAtPositionResult,
+  WorkspaceSymbolDescriptorKind,
+  WorkspaceSymbolLookupResult,
   WorkspaceSymbolResult,
   WorkspaceTypeHierarchyDirection,
 } from '@codepol/core';
@@ -345,4 +349,53 @@ export type WorkspaceService = {
     analysisGeneration?: number;
     signal?: AbortSignal;
   }) => Promise<WorkspaceArchitectureSummaryResult>;
+  /**
+   * Symbol-id discovery by name (with optional kind / file scope).
+   *
+   * Closes the Phase 7 "symbol-id discovery is out of scope for MVP"
+   * gap: editor surfaces (CodeLens, hover, peek) can resolve a stable
+   * symbol id from a user-visible name without walking file-level
+   * structures by hand. The returned descriptors share the same shape
+   * as the symbol fields on {@link WorkspaceDependencyGraphNode}, so
+   * callers can feed the result straight into `queryCallGraph` /
+   * `queryTypeHierarchy` without translation.
+   *
+   * Sorted by `(declarationUri, byteRange.start)` for determinism.
+   * Trimmed to {@link limit} (default 50) — pick a smaller value when
+   * you only need a single deterministic best match. The query never
+   * fans out across re-exports; callers that need to follow re-export
+   * chains must use `symbolCanonicalIdGet` on the returned id.
+   */
+  querySymbolLookup: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    name: string;
+    kind?: WorkspaceSymbolDescriptorKind;
+    /** Restrict the lookup to a single file's declarations. */
+    scopeUri?: string;
+    /** Maximum descriptors to return. Defaults to 50. */
+    limit?: number;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceSymbolLookupResult>;
+  /**
+   * Symbol-id discovery by editor cursor position.
+   *
+   * Returns the smallest (innermost) indexed symbol whose declaration
+   * byte range contains {@link position} in {@link uri}. Returns
+   * `{ symbol: undefined }` when the position is on whitespace,
+   * inside a comment, in an unindexed file, or outside any
+   * declaration. Mirrors the inline byte-range containment check the
+   * Phase 5 CodeLens already performs.
+   */
+  querySymbolAtPosition: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    uri: string;
+    position: WorkspacePosition;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceSymbolAtPositionResult>;
 };

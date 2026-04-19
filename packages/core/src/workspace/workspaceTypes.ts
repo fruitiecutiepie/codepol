@@ -216,6 +216,70 @@ export type WorkspaceSymbolResult = {
   score?: number;
 };
 
+/**
+ * Language-agnostic symbol kind exposed by the symbol-id discovery
+ * surface. Mirrors the core `SymbolKind` one-for-one so the workspace
+ * surface does not have to translate between them.
+ *
+ * Kept as a string-literal union (rather than re-exporting `SymbolKind`
+ * directly) so the workspace contract has no compile-time dependency on
+ * the core index types.
+ */
+export type WorkspaceSymbolDescriptorKind =
+  | 'module'
+  | 'namespace'
+  | 'class'
+  | 'interface'
+  | 'type'
+  | 'function'
+  | 'method'
+  | 'variable'
+  | 'const'
+  | 'field'
+  | 'parameter'
+  | 'enum'
+  | 'enumMember';
+
+/**
+ * Stable, language-agnostic descriptor for a single symbol declaration.
+ *
+ * The shape matches the additive symbol fields on
+ * {@link WorkspaceDependencyGraphNode} so a descriptor flows straight
+ * into `queryCallGraph` / `queryTypeHierarchy` (via {@link symbolId})
+ * without translation, and so editor surfaces can render the
+ * declaration location without re-resolving the symbol.
+ */
+export type WorkspaceSymbolDescriptor = {
+  /** Stable opaque symbol id from the underlying index. */
+  symbolId: string;
+  /** Declared name (local, not qualified). Empty for anonymous symbols. */
+  name: string;
+  /** Language-agnostic kind. */
+  kind: WorkspaceSymbolDescriptorKind;
+  /** `file://` URI of the file that declares the symbol. */
+  declarationUri: string;
+  /** Range of the symbol declaration in {@link declarationUri}. */
+  declarationRange: WorkspaceRange;
+};
+
+/**
+ * Result type for `querySymbolLookup`. Always returns an array (never
+ * `undefined`); empty when no symbols matched the filter.
+ */
+export type WorkspaceSymbolLookupResult = {
+  symbols: WorkspaceSymbolDescriptor[];
+};
+
+/**
+ * Result type for `querySymbolAtPosition`. The descriptor is
+ * `undefined` when the position does not fall inside any indexed
+ * symbol declaration in the requested file (e.g. cursor on whitespace,
+ * on a comment, on an unindexed file, or outside any declaration).
+ */
+export type WorkspaceSymbolAtPositionResult = {
+  symbol?: WorkspaceSymbolDescriptor;
+};
+
 export type WorkspaceSearchResult = {
   name: string;
   kind: 'module' | 'exported_symbol';
@@ -853,6 +917,53 @@ export function workspaceRangeFromByteRange(
     start: positionFromByteOffset(source, byteRange.start),
     end: positionFromByteOffset(source, byteRange.end),
   };
+}
+
+/**
+ * Convert a {@link WorkspacePosition} (UTF-16 line/character, LSP
+ * convention) to a UTF-8 byte offset into {@link source}.
+ *
+ * Symbols emitted by the index carry byte offsets ({@link ByteRange}),
+ * but editor positions arrive in LSP coordinates. This helper bridges
+ * the two so range-containment checks (`querySymbolAtPosition`) can
+ * compare like with like.
+ *
+ * Out-of-range inputs clamp to the nearest valid offset (line beyond
+ * EOF returns the source byte length; character beyond EOL returns the
+ * line's terminating offset). Returning a clamped offset rather than
+ * throwing keeps the call site (a containment check) simple — a
+ * clamped offset never lies inside any byte range, so the predicate
+ * naturally returns "no match".
+ */
+export function workspacePositionToByteOffset(
+  source: string,
+  position: WorkspacePosition,
+): number {
+  const buffer = Buffer.from(source, 'utf8');
+  if (position.line <= 0 && position.character <= 0) {
+    return 0;
+  }
+  let lineIndex = 0;
+  let byteOffset = 0;
+  while (lineIndex < position.line && byteOffset < buffer.length) {
+    const newlineIndex = buffer.indexOf(0x0a, byteOffset);
+    if (newlineIndex === -1) {
+      return buffer.length;
+    }
+    byteOffset = newlineIndex + 1;
+    lineIndex += 1;
+  }
+  if (position.character <= 0) {
+    return byteOffset;
+  }
+  const lineEndIndex = buffer.indexOf(0x0a, byteOffset);
+  const lineEnd = lineEndIndex === -1 ? buffer.length : lineEndIndex;
+  const lineSlice = buffer.subarray(byteOffset, lineEnd).toString('utf8');
+  if (position.character >= lineSlice.length) {
+    return lineEnd;
+  }
+  const characterPrefix = lineSlice.slice(0, position.character);
+  return byteOffset + Buffer.byteLength(characterPrefix, 'utf8');
 }
 
 export function policyViolationToWorkspaceDiagnostic(

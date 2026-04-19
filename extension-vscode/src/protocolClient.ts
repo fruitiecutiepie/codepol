@@ -27,6 +27,7 @@ import type {
   WorkspaceImpactRadiusDirection,
   WorkspaceLintRuleDetailsResult,
   WorkspaceLintRulesResult,
+  WorkspacePosition,
   WorkspacePrepareRenameResult,
   WorkspaceRange,
   WorkspaceRenamePreviewResult,
@@ -35,6 +36,9 @@ import type {
   WorkspaceSemanticHoverResult,
   WorkspaceSemanticReferencesResult,
   WorkspaceSearchResult,
+  WorkspaceSymbolAtPositionResult,
+  WorkspaceSymbolDescriptorKind,
+  WorkspaceSymbolLookupResult,
   WorkspaceTypeHierarchyDirection,
 } from '@codepol/core';
 import {
@@ -61,6 +65,8 @@ import {
   CODEPOL_LSP_REQUEST_SEMANTIC_HOVER,
   CODEPOL_LSP_REQUEST_SEMANTIC_REFERENCES,
   CODEPOL_LSP_REQUEST_SEMANTIC_SEARCH,
+  CODEPOL_LSP_REQUEST_SYMBOL_AT_POSITION,
+  CODEPOL_LSP_REQUEST_SYMBOL_LOOKUP,
 } from '@codepol/lsp/protocol';
 import {
   codepolConnectionDisposedErrorIs,
@@ -181,6 +187,16 @@ export type CodepolProtocolClient = {
   querySemanticDefinition(uri: string): Promise<WorkspaceSemanticDefinitionResult | null>;
   querySemanticReferences(uri: string): Promise<WorkspaceSemanticReferencesResult | null>;
   querySemanticHover(uri: string): Promise<WorkspaceSemanticHoverResult | null>;
+  querySymbolLookup(input: {
+    name: string;
+    kind?: WorkspaceSymbolDescriptorKind;
+    scopeUri?: string;
+    limit?: number;
+  }): Promise<WorkspaceSymbolLookupResult | null>;
+  querySymbolAtPosition(input: {
+    uri: string;
+    position: WorkspacePosition;
+  }): Promise<WorkspaceSymbolAtPositionResult | null>;
   prepareRename(
     target: WorkspaceRenameTarget,
   ): Promise<WorkspacePrepareRenameResult | null>;
@@ -512,6 +528,28 @@ export class VscodeLanguageClientProtocol implements CodepolProtocolClient {
     return this.requestRun<WorkspaceSemanticHoverResult | null>(
       CODEPOL_LSP_REQUEST_SEMANTIC_HOVER,
       { uri },
+    );
+  }
+
+  async querySymbolLookup(input: {
+    name: string;
+    kind?: WorkspaceSymbolDescriptorKind;
+    scopeUri?: string;
+    limit?: number;
+  }): Promise<WorkspaceSymbolLookupResult | null> {
+    return this.requestRun<WorkspaceSymbolLookupResult | null>(
+      CODEPOL_LSP_REQUEST_SYMBOL_LOOKUP,
+      input,
+    );
+  }
+
+  async querySymbolAtPosition(input: {
+    uri: string;
+    position: WorkspacePosition;
+  }): Promise<WorkspaceSymbolAtPositionResult | null> {
+    return this.requestRun<WorkspaceSymbolAtPositionResult | null>(
+      CODEPOL_LSP_REQUEST_SYMBOL_AT_POSITION,
+      input,
     );
   }
 
