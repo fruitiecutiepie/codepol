@@ -272,6 +272,96 @@ When an explicit `entries` glob matches no files, the rule emits zero
 violations rather than reporting every file as dead — that pattern
 catches typos in entry-point globs without flooding the report.
 
+#### `max-cycle-size`
+
+Caps the size of any individual circular import cycle. Useful as a
+companion to `no-cycles` while a codebase still has legitimate legacy
+cycles: keeps the bleeding contained even if a full cycle-free
+codebase is still aspirational.
+
+```toml
+[[rules]]
+ruleId = "@codepol/plugin/max-cycle-size"
+targets = ["src"]
+
+[rules.args]
+max = 4                               # cycles of size > 4 are reported
+ignore = ["src/legacy/**/*.ts"]       # files dropped before measuring
+```
+
+The `ignore` glob is applied to cycle members before measurement, so
+a cycle that touches an ignored barrel file still counts only the
+remaining members against `max`.
+
+#### `no-cross-package-internal-import`
+
+In a monorepo with multiple workspace packages (pnpm / npm / yarn
+workspaces are auto-detected), this rule forbids cross-package imports
+that bypass the importee package's declared public entry point —
+typically `src/index.ts` derived from `package.json` `exports` /
+`main`.
+
+```toml
+[[rules]]
+ruleId = "@codepol/plugin/no-cross-package-internal-import"
+targets = ["src"]
+
+[rules.args]
+allow = ["packages/*/src/cli/index.ts"]   # additional public surfaces
+ignorePackages = ["@scope/legacy"]        # never police imports into these
+```
+
+Files outside any workspace package are ignored — the rule has no
+opinion on root-level scripts.
+
+#### `max-fan-in` and `max-fan-out`
+
+Coupling budgets per file. Use `max-fan-in` to catch "god module"
+growth (too many files depend on this one), and `max-fan-out` to catch
+files that pull in too many collaborators.
+
+```toml
+[[rules]]
+ruleId = "@codepol/plugin/max-fan-in"
+targets = ["src"]
+
+[rules.args]
+max = 10
+files = ["src/lib/**/*.ts"]   # only enforce on shared library code
+ignore = ["src/lib/types.ts"]
+
+[[rules]]
+ruleId = "@codepol/plugin/max-fan-out"
+targets = ["src"]
+
+[rules.args]
+max = 15
+files = ["src/**/*.ts"]
+```
+
+Each violation lists the top-N counterparts via `relatedLocations`
+(default 5; configurable through `topRelated`) so reviewers can see
+exactly who is on the other end without opening the file.
+
+#### `entry-point-allowlist`
+
+Forces every entry point — every file with zero importers — to be
+deliberately declared. Catches forgotten experiment files and
+post-refactor orphans before they accumulate.
+
+```toml
+[[rules]]
+ruleId = "@codepol/plugin/entry-point-allowlist"
+targets = ["src"]
+
+[rules.args]
+entries = ["src/index.ts", "src/cli/**/*.ts", "scripts/**/*.ts"]
+ignore = ["**/*.spec.ts", "**/__fixtures__/**"]
+```
+
+Set `entries = []` to enforce "no orphan files at all" — every file
+must be reachable through an import chain.
+
 ## Example 2: Circular Dependency Detector
 
 A from-scratch rule that uses the module graph to detect circular

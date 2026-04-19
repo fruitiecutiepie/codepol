@@ -18,6 +18,11 @@ import { noCyclesRule } from './noCyclesRule';
 import { deadModuleRule } from './deadModuleRule';
 import { noLayerViolationRule } from './noLayerViolationRule';
 import { noUndeclaredImplementerRule } from './noUndeclaredImplementerRule';
+import { maxCycleSizeRule } from './maxCycleSizeRule';
+import { noCrossPackageInternalImportRule } from './noCrossPackageInternalImportRule';
+import { maxFanInRule } from './maxFanInRule';
+import { maxFanOutRule } from './maxFanOutRule';
+import { entryPointAllowlistRule } from './entryPointAllowlistRule';
 import {
   biomeBridgeRule,
   eslintBridgeRule,
@@ -50,6 +55,21 @@ export type {
 export { noUndeclaredImplementerRule } from './noUndeclaredImplementerRule';
 export { noUndeclaredImplementerCheck } from './noUndeclaredImplementerCheck';
 export type { NoUndeclaredImplementerArgs } from './noUndeclaredImplementerCheck';
+export { maxCycleSizeRule } from './maxCycleSizeRule';
+export { maxCycleSizeCheck } from './maxCycleSizeCheck';
+export type { MaxCycleSizeArgs } from './maxCycleSizeCheck';
+export { noCrossPackageInternalImportRule } from './noCrossPackageInternalImportRule';
+export { noCrossPackageInternalImportCheck } from './noCrossPackageInternalImportCheck';
+export type { NoCrossPackageInternalImportArgs } from './noCrossPackageInternalImportCheck';
+export { maxFanInRule } from './maxFanInRule';
+export { maxFanInCheck } from './maxFanInCheck';
+export type { MaxFanInArgs } from './maxFanInCheck';
+export { maxFanOutRule } from './maxFanOutRule';
+export { maxFanOutCheck } from './maxFanOutCheck';
+export type { MaxFanOutArgs } from './maxFanOutCheck';
+export { entryPointAllowlistRule } from './entryPointAllowlistRule';
+export { entryPointAllowlistCheck } from './entryPointAllowlistCheck';
+export type { EntryPointAllowlistArgs } from './entryPointAllowlistCheck';
 export { forbiddenDeclarationsRule } from './forbiddenDeclarationsRule';
 export type {
   ForbiddenDeclarationsArgs,
@@ -81,8 +101,13 @@ export default [
   noMixedExportsRule,
   noUnusedVarsRule,
   noCyclesRule,
+  maxCycleSizeRule,
   deadModuleRule,
   noLayerViolationRule,
+  noCrossPackageInternalImportRule,
+  maxFanInRule,
+  maxFanOutRule,
+  entryPointAllowlistRule,
   noUndeclaredImplementerRule,
   eslintBridgeRule,
   biomeBridgeRule,
