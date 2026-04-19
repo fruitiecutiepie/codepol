@@ -269,6 +269,248 @@ describe('extension-vscode panel rendering', () => {
     expect(html).toContain('import sharedValue from @acme/lib');
   });
 
+  it('omits SVG <title> on bare nodes/edges and skips data-edge-kind when no enrichment is present', () => {
+    const html = codepolPanelHtmlRender({
+      nonce: 'nonce-bare',
+      model: {
+        kind: 'dependencyGraph',
+        title: 'Codepol: Dependency Graph',
+        data: {
+          summaryCard: null,
+          graph: {
+            mode: 'workspace',
+            width: 480,
+            height: 240,
+            emptyMessage: 'No dependency graph data is available for this workspace.',
+            edges: [
+              {
+                id: 'edge-bare',
+                fromUri: 'file:///workspace/src/a.ts',
+                toUri: 'file:///workspace/src/b.ts',
+                x1: 120,
+                y1: 60,
+                x2: 260,
+                y2: 60,
+                isFocus: false,
+              },
+            ],
+            nodes: [
+              {
+                uri: 'file:///workspace/src/a.ts',
+                label: 'a.ts',
+                detail: 'src/a.ts',
+                x: 32,
+                y: 24,
+                width: 180,
+                height: 72,
+                isFocus: false,
+                isEntryPoint: false,
+                isCycleMember: false,
+              },
+              {
+                uri: 'file:///workspace/src/b.ts',
+                label: 'b.ts',
+                detail: 'src/b.ts',
+                x: 260,
+                y: 24,
+                width: 180,
+                height: 72,
+                isFocus: false,
+                isEntryPoint: false,
+                isCycleMember: false,
+              },
+            ],
+          },
+          controls: {
+            filterChips: [],
+            edgeKindChips: [],
+            layoutOptions: [],
+            blastRadiusUri: null,
+            blastRadiusReachableCount: 0,
+          },
+          filters: {},
+          layoutMode: 'layered',
+        },
+      },
+    });
+
+    // Bare nodes/edges must not emit any SVG <title>, kind/binding data
+    // attributes, package data attributes, or count tspans — the only
+    // <title> in the document is the panel `<head><title>` itself.
+    const titleMatches = html.match(/<title>/g) ?? [];
+    expect(titleMatches).toHaveLength(1);
+    expect(html).toContain('<title>Codepol: Dependency Graph</title>');
+    expect(html).not.toContain('data-edge-kind=');
+    expect(html).not.toContain('data-binding-count=');
+    expect(html).not.toContain('data-package=');
+    expect(html).not.toContain('class="graph-counts"');
+    expect(html).not.toMatch(/class="graph-edge[^"]*\bkind-/);
+    expect(html).not.toMatch(/class="graph-edge[^"]*\bcross-/);
+  });
+
+  it('emits the cross-layer class for edges whose crossesLayerBoundary flag is true', () => {
+    const html = codepolPanelHtmlRender({
+      nonce: 'nonce-cross-layer',
+      model: {
+        kind: 'dependencyGraph',
+        title: 'Codepol: Dependency Graph',
+        data: {
+          summaryCard: null,
+          graph: {
+            mode: 'workspace',
+            width: 480,
+            height: 240,
+            emptyMessage: 'No dependency graph data is available for this workspace.',
+            edges: [
+              {
+                id: 'edge-cross-layer',
+                fromUri: 'file:///workspace/src/ui/button.ts',
+                toUri: 'file:///workspace/src/domain/order.ts',
+                x1: 120,
+                y1: 60,
+                x2: 260,
+                y2: 60,
+                isFocus: false,
+                kind: 'static',
+                bindingCount: 1,
+                crossesPackageBoundary: true,
+                crossesLayerBoundary: true,
+                tooltip: 'static · 1 binding · cross-package · cross-layer',
+              },
+            ],
+            nodes: [
+              {
+                uri: 'file:///workspace/src/ui/button.ts',
+                label: 'button.ts',
+                detail: 'src/ui/button.ts',
+                x: 32,
+                y: 24,
+                width: 180,
+                height: 72,
+                isFocus: false,
+                isEntryPoint: false,
+                isCycleMember: false,
+                layer: 'ui',
+              },
+              {
+                uri: 'file:///workspace/src/domain/order.ts',
+                label: 'order.ts',
+                detail: 'src/domain/order.ts',
+                x: 260,
+                y: 24,
+                width: 180,
+                height: 72,
+                isFocus: false,
+                isEntryPoint: false,
+                isCycleMember: false,
+                layer: 'domain',
+              },
+            ],
+          },
+          controls: {
+            filterChips: [],
+            edgeKindChips: [],
+            layoutOptions: [],
+            blastRadiusUri: null,
+            blastRadiusReachableCount: 0,
+          },
+          filters: {},
+          layoutMode: 'layered',
+        },
+      },
+    });
+
+    expect(html).toMatch(
+      /class="graph-edge[^"]*\bkind-static\b[^"]*\bcross-package\b[^"]*\bcross-layer\b/,
+    );
+    expect(html).toContain(
+      '<title>static · 1 binding · cross-package · cross-layer</title>',
+    );
+    expect(html).toContain('data-layer="ui"');
+    expect(html).toContain('data-layer="domain"');
+  });
+
+  it('renders enriched nodes and edges through the architecture-links panel via the shared graph SVG', () => {
+    const html = codepolPanelHtmlRender({
+      nonce: 'nonce-links-enriched',
+      model: {
+        kind: 'architectureLinks',
+        title: 'Codepol: Architecture Links',
+        uri: 'file:///workspace/packages/lib/src/index.ts',
+        data: {
+          uri: 'file:///workspace/packages/lib/src/index.ts',
+          hoverCard: null,
+          workspaceSummaryCard: null,
+          graph: {
+            mode: 'focus',
+            focusUri: 'file:///workspace/packages/lib/src/index.ts',
+            width: 480,
+            height: 240,
+            emptyMessage: 'No dependency graph context is available for this target.',
+            edges: [
+              {
+                id: 'edge-links-enriched',
+                fromUri: 'file:///workspace/apps/web/src/app.ts',
+                toUri: 'file:///workspace/packages/lib/src/index.ts',
+                x1: 120,
+                y1: 60,
+                x2: 260,
+                y2: 60,
+                isFocus: true,
+                kind: 'cjs',
+                bindingCount: 1,
+                crossesPackageBoundary: true,
+                tooltip: 'cjs · 1 binding · cross-package',
+              },
+            ],
+            nodes: [
+              {
+                uri: 'file:///workspace/packages/lib/src/index.ts',
+                label: 'index.ts',
+                detail: 'packages/lib/src/index.ts · 1 importer · 0 importees',
+                x: 260,
+                y: 24,
+                width: 180,
+                height: 72,
+                isFocus: true,
+                isEntryPoint: false,
+                isCycleMember: false,
+                packageName: '@acme/lib',
+                countsLine: '1 importer · 0 importees · 12 symbols · 84 LOC',
+                tooltip: '1 importer · 0 importees · 12 symbols · 84 LOC · @acme/lib',
+              },
+            ],
+          },
+          totalItems: 0,
+          totalAvailableItems: 0,
+          truncated: false,
+          groups: [],
+          controls: {
+            filterChips: [],
+            edgeKindChips: [],
+            layoutOptions: [],
+            blastRadiusUri: null,
+            blastRadiusReachableCount: 0,
+          },
+          filters: {},
+          layoutMode: 'radial',
+        },
+      },
+    });
+
+    // The architecture-links panel reuses the same graphSvgHtml renderer
+    // as the dependency-graph panel, so all enrichment must surface here
+    // too.
+    expect(html).toContain(
+      '<title>1 importer · 0 importees · 12 symbols · 84 LOC · @acme/lib</title>',
+    );
+    expect(html).toContain('<title>cjs · 1 binding · cross-package</title>');
+    expect(html).toContain('data-edge-kind="cjs"');
+    expect(html).toContain('data-package="@acme/lib"');
+    expect(html).toMatch(/class="graph-edge[^"]*\bkind-cjs\b[^"]*\bcross-package\b/);
+    expect(html).toContain('class="graph-counts"');
+  });
+
   it('renders graph controls (filter chips, layout selector, blast-radius row) with active states', () => {
     const html = codepolPanelHtmlRender({
       nonce: 'nonce-controls',

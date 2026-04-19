@@ -22,6 +22,7 @@
     "@codepol/plugin-biome": "workspace:*",
     "@codepol/workspace-service": "workspace:*",
     "chokidar": "^5.0.0",
+    "minimatch": "^10.1.1",
     "yargs": "^18.0.0"
   },
   "devDependencies": {

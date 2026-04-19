@@ -20,6 +20,7 @@ import {
   graphDiffRun,
 } from './graphDiff';
 import { graphExportRun } from './graphExport';
+import { graphExportFormatChoices } from './graphExportRenderers';
 import { graphFanInRun } from './graphFanIn';
 import { graphFanOutRun } from './graphFanOut';
 import { graphFlowRun } from './graphFlow';
@@ -64,8 +65,16 @@ function graphFormatOption(yargs: Argv): Argv {
 
 const graphExportCommand: CommandModule<GraphCommonArgs, GraphCommonArgs & { format: string }> = {
   command: 'export',
-  describe: 'Emit the full workspace dependency graph as JSON',
-  builder: (yargs) => graphFormatOption(yargs) as unknown as Argv<GraphCommonArgs & { format: string }>,
+  describe:
+    'Emit the full workspace dependency graph (json | text | dot | mermaid | graphml)',
+  builder: (yargs) =>
+    yargs.option('format', {
+      type: 'string',
+      choices: graphExportFormatChoices() as readonly string[],
+      default: 'json',
+      describe:
+        'Output format. json/text are summaries; dot/mermaid/graphml are graph descriptions you can paste into Graphviz, Mermaid, or Gephi.',
+    }) as unknown as Argv<GraphCommonArgs & { format: string }>,
   handler: async (args) => {
     const resolved = await graphConfigResolve(args);
     const exitCode = await graphExportRun({
@@ -149,7 +158,7 @@ const graphDeadCommand: CommandModule<
       type: 'array',
       string: true,
       describe:
-        'Treat these files as entry points (repeatable). Defaults to natural entry points.',
+        'Treat these files as entry points (repeatable). Accepts literal paths (src/index.ts) or glob patterns ("bin/**"). Defaults to natural entry points.',
     }) as unknown as Argv<GraphCommonArgs & { entry?: string[]; format: string }>,
   handler: async (args) => {
     const resolved = await graphConfigResolve(args);

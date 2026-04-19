@@ -175,6 +175,52 @@ describe('CLI graph subcommands', () => {
     expect(payload.cycles).toEqual([]);
   });
 
+  it('graph export --format dot emits a Graphviz digraph with workspace-relative labels', async () => {
+    const { projectDir } = linearProjectCreate('codepol-e2e-graph-export-dot-');
+    createdDirs.push(projectDir);
+
+    const result = await runCli(['graph', 'export', '--format', 'dot'], projectDir);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.startsWith('digraph codepol {')).toBe(true);
+    expect(result.stdout.trimEnd().endsWith('}')).toBe(true);
+    // Workspace-relative label appears verbatim for every node.
+    expect(result.stdout).toContain('label="src/entry.ts"');
+    expect(result.stdout).toContain('label="src/mid.ts"');
+    expect(result.stdout).toContain('label="src/leaf.ts"');
+    expect(result.stdout).toContain('label="src/orphan.ts"');
+    // entry → mid → leaf is the only chain in the linear fixture.
+    expect(result.stdout).toMatch(/n\d+ -> n\d+;/);
+  });
+
+  it('graph export --format mermaid emits a flowchart with quoted labels', async () => {
+    const { projectDir } = linearProjectCreate('codepol-e2e-graph-export-mermaid-');
+    createdDirs.push(projectDir);
+
+    const result = await runCli(['graph', 'export', '--format', 'mermaid'], projectDir);
+
+    expect(result.exitCode).toBe(0);
+    const lines = result.stdout.trimEnd().split('\n');
+    expect(lines[0]).toBe('flowchart LR');
+    expect(result.stdout).toContain('"src/entry.ts"');
+    expect(result.stdout).toContain('"src/mid.ts"');
+    expect(result.stdout).toMatch(/n\d+ --> n\d+/);
+  });
+
+  it('graph export --format graphml emits a GraphML XML document with escaped attributes', async () => {
+    const { projectDir } = linearProjectCreate('codepol-e2e-graph-export-graphml-');
+    createdDirs.push(projectDir);
+
+    const result = await runCli(['graph', 'export', '--format', 'graphml'], projectDir);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.startsWith('<?xml version="1.0" encoding="UTF-8"?>\n')).toBe(true);
+    expect(result.stdout).toContain('<graph id="codepol" edgedefault="directed">');
+    expect(result.stdout).toContain('<data key="label">src/entry.ts</data>');
+    expect(result.stdout).toMatch(/<edge id="e\d+" source="n\d+" target="n\d+"\/>/);
+    expect(result.stdout.trimEnd().endsWith('</graphml>')).toBe(true);
+  });
+
   it('graph cycles exits 0 with an empty array when no cycles exist', async () => {
     const { projectDir } = linearProjectCreate('codepol-e2e-graph-cycles-ok-');
     createdDirs.push(projectDir);
@@ -255,6 +301,71 @@ describe('CLI graph subcommands', () => {
     expect(result.exitCode).toBe(1);
     const payload = JSON.parse(result.stdout);
     expect(payload.unreachable).toEqual([fileUris.orphan]);
+  });
+
+  it('graph dead --entry expands a glob pattern against the indexed file set', async () => {
+    const { projectDir, fileUris } = linearProjectCreate('codepol-e2e-graph-dead-glob-');
+    createdDirs.push(projectDir);
+
+    // Treat every file under `src/` whose basename starts with `entry`
+    // as an entry point. Only `src/entry.ts` matches in the linear
+    // fixture, leaving `src/orphan.ts` unreachable. This mirrors the
+    // example in the user-facing docs (`--entry "bin/**"`).
+    const result = await runCli(
+      ['graph', 'dead', '--entry', 'src/entry*.ts'],
+      projectDir,
+    );
+
+    expect(result.exitCode).toBe(1);
+    const payload = JSON.parse(result.stdout);
+    expect(payload.unreachable).toEqual([fileUris.orphan]);
+  });
+
+  it('graph dead --entry mixes literal and glob entries in a single invocation', async () => {
+    // Build a fixture where neither `entry.ts` nor `mid.ts` would
+    // individually keep `orphan.ts` reachable, and confirm that mixing
+    // a literal entry (src/entry.ts) with a glob (src/m*.ts) reaches
+    // every file in the import chain. `orphan.ts` stays unreachable.
+    const { projectDir, fileUris } = linearProjectCreate(
+      'codepol-e2e-graph-dead-mix-',
+    );
+    createdDirs.push(projectDir);
+
+    const result = await runCli(
+      [
+        'graph',
+        'dead',
+        '--entry',
+        'src/entry.ts',
+        '--entry',
+        'src/m*.ts',
+      ],
+      projectDir,
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe('');
+    const payload = JSON.parse(result.stdout);
+    expect(payload.unreachable).toEqual([fileUris.orphan]);
+  });
+
+  it('graph dead --entry warns on a glob that matches no indexed files', async () => {
+    const { projectDir } = linearProjectCreate('codepol-e2e-graph-dead-glob-warn-');
+    createdDirs.push(projectDir);
+
+    const result = await runCli(
+      ['graph', 'dead', '--entry', 'nonexistent/**'],
+      projectDir,
+    );
+
+    // When the explicit entry set is empty after expansion the workspace
+    // service returns no unreachable modules (typo-safety) — so the
+    // exit code is 0 — and the unmatched pattern is surfaced via stderr
+    // so CI scripts can spot the typo without relying on stdout shape.
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain('--entry "nonexistent/**" matched no indexed files');
+    const payload = JSON.parse(result.stdout);
+    expect(payload).toEqual({ unreachable: [] });
   });
 
   it('graph fan-in ranks files by importerCount and emits a deterministic JSON payload', async () => {

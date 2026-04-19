@@ -125,6 +125,9 @@ importers:
       chokidar:
         specifier: ^5.0.0
         version: 5.0.0
+      minimatch:
+        specifier: ^10.1.1
+        version: 10.1.1
       yargs:
         specifier: ^18.0.0
         version: 18.0.0

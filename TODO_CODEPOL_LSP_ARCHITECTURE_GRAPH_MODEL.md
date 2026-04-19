@@ -420,6 +420,20 @@ A phase-by-phase reference of what each expansion enables for end users (enginee
 - `codepol graph diff <baseRef>`: PR-level diff of the architecture, suitable for CI gates and PR-comment bots
 - CI gating without a custom job: non-zero exit codes on `cycles` / `dead` / `diff --fail-on-new-cycle` plug into existing pipelines
 
+User-facing surfaces landed for Phase 4:
+
+- **Multi-format graph export.** `codepol graph export --format <json|text|dot|mermaid|graphml>` covers the four downstream pipelines named above:
+  - `dot` — Graphviz `digraph` with `rankdir=LR`, box nodes, workspace-relative labels, and stable per-graph node ids (`n0`, `n1`, …) so two exports of the same graph produce byte-identical output (`dot -Tsvg`, `dot -Tpng`, … all just work).
+  - `mermaid` — `flowchart LR` with the same stable ids and quoted `["src/foo.ts"]` labels, suitable for pasting into Mermaid Live Editor or Markdown docs.
+  - `graphml` — GraphML 1.1 XML with `label`/`uri` keys, deterministic edge ids (`e0`, `e1`, …), and XML-attribute escaping for paths containing `&`, `<`, `>`, `"`; consumable by Gephi, yEd, igraph, NetworkX.
+  - Renderers live in `apps/cli/src/graph/graphExportRenderers.ts` as pure functions (one per format) so they can be unit-tested without spinning up the workspace service. Edges with endpoints missing from the node set are dropped (corrupt-input safety) rather than throwing.
+  - Format choices flow through `graphExportFormatChoices()` so the yargs `--format` option, the parser, and the renderers stay in lock-step.
+- **`graph dead --entry` glob expansion.** `--entry` accepts either a literal file path (resolved against `cwd`) or a glob pattern (any value containing `*`, `?`, `[`, `{`); patterns are matched against the workspace-relative path of every node returned by `queryDependencyGraph` — never the filesystem — so the entry set always agrees with what the workspace service indexed. Helper lives in `apps/cli/src/graph/graphEntryGlobExpand.ts` and reuses the same `minimatch` semantics already used by the `dead-module` plugin rule. Patterns that match zero indexed files emit a stderr warning (`warn: --entry "<pattern>" matched no indexed files`) and the workspace-service typo-safety contract still returns `unreachable: []`, so a typo never silently labels healthy modules as dead.
+- **Tests landed (14 new unit cases + 5 new e2e cases):**
+  - `tests/cli.graph-export-renderers.spec.ts` (new file, 8 cases) — pure-function tests for the dot / mermaid / graphml renderers and the `graphExportFormatParse` validator (case-insensitive, throws on unknown formats with a helpful message, drops orphan edges).
+  - `tests/cli.graph-entry-glob-expand.spec.ts` (new file, 6 cases) — pure-function tests for `graphEntryGlobIs` (meta-character detection) and `graphEntryUrisExpand` (literal pass-through, glob expansion, deduplication, sorted URI list, `unmatched` typo channel).
+  - `tests/e2e.cli.graph.spec.ts` (+5 cases) — `graph export --format dot|mermaid|graphml` end-to-end via subprocess (start/end markers, label format, edge syntax); `graph dead --entry "src/entry*.ts"` glob match against an indexed file; `graph dead --entry "nonexistent/**"` typo path emits the stderr warning and returns `{ unreachable: [] }` with exit code 0.
+
 ### Phase 5 — Editor / LSP surfaces enable
 
 - CodeLens above exports: "3 importers" right above the declaration; click to peek the impact radius without leaving the file
