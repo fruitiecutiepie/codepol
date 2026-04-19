@@ -15,6 +15,7 @@ import { CALLS_QUERY } from './queries/calls';
 import { IMPORTS_QUERY } from './queries/imports';
 import { EXPORTS_QUERY } from './queries/exports';
 import { SYMBOL_FLOW_QUERY } from './queries/symbolFlow';
+import { TYPE_RELATIONS_QUERY } from './queries/typeRelations';
 
 /**
  * Reference filter for Python.
@@ -90,6 +91,7 @@ export function pythonConfigCreate(language: Language): LangConfig {
       imports: IMPORTS_QUERY,
       exports: EXPORTS_QUERY,
       symbolFlow: SYMBOL_FLOW_QUERY,
+      typeRelations: TYPE_RELATIONS_QUERY,
     },
     captures: CAPTURE_NAMES_DEFAULT,
     symbolKinds: {

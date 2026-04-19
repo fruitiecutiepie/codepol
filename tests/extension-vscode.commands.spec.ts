@@ -153,6 +153,7 @@ function panelsCreate() {
     showLintRuleDetails: vi.fn(),
     showRenamePreview: vi.fn(),
     showCallGraph: vi.fn(),
+    showTypeHierarchy: vi.fn(),
   };
 }
 
@@ -1261,5 +1262,112 @@ describe('CodepolCommandController.findCallbacks', () => {
     expect(host.infoShow).toHaveBeenCalledWith(
       'No callback flow sites found for handler.',
     );
+  });
+});
+
+describe('CodepolCommandController.showTypeHierarchy kind guard', () => {
+  it('shows an error and skips queryTypeHierarchy when the cursor symbol is a function', async () => {
+    const protocol = protocolCreate();
+    protocol.querySymbolAtPosition.mockResolvedValue({
+      symbol: {
+        symbolId: 'fn-id',
+        name: 'doStuff',
+        kind: 'function',
+        declarationUri: 'file:///workspace/src/a.ts',
+        declarationRange: {
+          start: { line: 1, character: 9 },
+          end: { line: 1, character: 16 },
+        },
+      },
+    });
+    const panels = panelsCreate();
+    const host = hostCreate();
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    await expect(controller.showTypeHierarchy()).resolves.toBeNull();
+    expect(host.errorShow).toHaveBeenCalledWith(
+      'Type hierarchy is only available for classes, interfaces, and type aliases.',
+    );
+    expect(protocol.queryTypeHierarchy).not.toHaveBeenCalled();
+    expect(panels.showTypeHierarchy).not.toHaveBeenCalled();
+  });
+
+  it('opens the panel when the cursor symbol is an interface', async () => {
+    const protocol = protocolCreate();
+    protocol.querySymbolAtPosition.mockResolvedValue({
+      symbol: {
+        symbolId: 'iface-id',
+        name: 'IShape',
+        kind: 'interface',
+        declarationUri: 'file:///workspace/src/shape.ts',
+        declarationRange: {
+          start: { line: 0, character: 10 },
+          end: { line: 0, character: 16 },
+        },
+      },
+    });
+    protocol.queryTypeHierarchy.mockResolvedValue({
+      nodes: [
+        {
+          uri: 'codepol-symbol://iface-id',
+          workspaceRelativePath: 'src/shape.ts::IShape',
+          symbolId: 'iface-id',
+          symbolName: 'IShape',
+          symbolKind: 'interface',
+        },
+      ],
+      edges: [],
+      entryPoints: [],
+      cycles: [],
+    });
+    const panels = panelsCreate();
+    const host = hostCreate();
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    const model = await controller.showTypeHierarchy();
+    expect(model).not.toBeNull();
+    expect(host.errorShow).not.toHaveBeenCalled();
+    // Phase 9.4: editor surface always opts in to the structural-shape
+    // overlay so users see the full picture by default.
+    expect(protocol.queryTypeHierarchy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        symbolId: 'iface-id',
+        direction: 'both',
+        depth: 2,
+        includeStructural: true,
+      }),
+    );
+    expect(panels.showTypeHierarchy).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips the cursor guard when args.symbolId is supplied (CodeLens path is trusted)', async () => {
+    const protocol = protocolCreate();
+    protocol.queryTypeHierarchy.mockResolvedValue({
+      nodes: [
+        {
+          uri: 'codepol-symbol://lens-id',
+          workspaceRelativePath: 'src/x.ts::AnyKind',
+          symbolId: 'lens-id',
+          symbolName: 'AnyKind',
+        },
+      ],
+      edges: [],
+      entryPoints: [],
+      cycles: [],
+    });
+    const panels = panelsCreate();
+    const host = hostCreate();
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    const model = await controller.showTypeHierarchy({
+      symbolId: 'lens-id',
+      focusSymbolName: 'AnyKind',
+    });
+    expect(model).not.toBeNull();
+    // Cursor resolution is bypassed entirely on the args path.
+    expect(protocol.querySymbolAtPosition).not.toHaveBeenCalled();
+    expect(host.errorShow).not.toHaveBeenCalled();
+    expect(protocol.queryTypeHierarchy).toHaveBeenCalledTimes(1);
+    expect(panels.showTypeHierarchy).toHaveBeenCalledTimes(1);
   });
 });

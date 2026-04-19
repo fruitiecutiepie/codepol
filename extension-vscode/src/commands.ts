@@ -10,6 +10,7 @@ import type {
   WorkspaceSemanticHoverResult,
   WorkspaceSemanticReferencesResult,
   WorkspaceSupportedRenameTarget,
+  WorkspaceSymbolDescriptorKind,
 } from '@codepol/core';
 import {
   callGraphPanelViewModelCreate,
@@ -232,6 +233,20 @@ function lintRuleQuickFixesSort(
 
 export class CodepolCommandController {
   private static readonly REQUEST_SUPERSEDED = Symbol('request_superseded');
+  /**
+   * Symbol kinds that have a meaningful type hierarchy. Used by the
+   * `showTypeHierarchy` cursor-path guard — non-eligible kinds (e.g.
+   * `function`, `variable`) bail with a friendly error instead of
+   * opening an empty panel. The set is intentionally narrow — adding
+   * kinds here is a deliberate design choice, not a copy-paste
+   * change. Method-override hierarchies, when they ship, will be a
+   * separate command rather than a kind extension here.
+   */
+  private static readonly HIERARCHY_KINDS = new Set<WorkspaceSymbolDescriptorKind>([
+    'class',
+    'interface',
+    'type',
+  ]);
 
   constructor(
     private readonly protocol: CodepolProtocolClient,
@@ -644,6 +659,18 @@ export class CodepolCommandController {
         'Position your cursor on a class, interface, or type alias to show its type hierarchy.',
       );
       if (!cursor) return null;
+      // Guard the cursor path only — the CodeLens path (when
+      // `args.symbolId` is supplied) is trusted because the
+      // type-hierarchy CodeLens only fires on declarations whose
+      // surface text already matches `class | interface | type`.
+      // This mirrors the `showCallGraph` symmetry where the lens
+      // path is also unguarded.
+      if (!CodepolCommandController.HIERARCHY_KINDS.has(cursor.kind)) {
+        await this.host.errorShow(
+          'Type hierarchy is only available for classes, interfaces, and type aliases.',
+        );
+        return null;
+      }
       symbolId = cursor.symbolId;
       focusSymbolName = cursor.name.length > 0 ? cursor.name : '<anonymous>';
     }
@@ -787,7 +814,14 @@ export class CodepolCommandController {
    */
   private async cursorSymbolResolve(
     bailMessage: string,
-  ): Promise<{ symbolId: string; name: string } | null> {
+  ): Promise<
+    | {
+        symbolId: string;
+        name: string;
+        kind: WorkspaceSymbolDescriptorKind;
+      }
+    | null
+  > {
     const uri = this.host.activeUriGet();
     const position = this.host.activePositionGet();
     if (!uri || !position) {
@@ -805,7 +839,11 @@ export class CodepolCommandController {
       await this.host.errorShow(bailMessage);
       return null;
     }
-    return { symbolId: symbol.symbolId, name: symbol.name };
+    return {
+      symbolId: symbol.symbolId,
+      name: symbol.name,
+      kind: symbol.kind,
+    };
   }
 
   async showLintRuleDetails(
