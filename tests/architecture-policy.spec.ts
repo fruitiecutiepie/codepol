@@ -15,10 +15,11 @@ import codepolBuiltin from '@codepol/plugin';
 
 /**
  * End-to-end exercise of the {@link ArchitectureCheckProvider}
- * capability: load a `codepol.toml` that declares the three built-in
- * architecture rules (`no-cycles`, `no-layer-violation`, `dead-module`),
- * run them through the public `policyCheck` entry point, and assert
- * each rule produced the expected violations.
+ * capability: load a `codepol.toml` that declares the four built-in
+ * architecture rules (`no-cycles`, `no-layer-violation`,
+ * `dead-module`, `no-undeclared-implementer`), run them through the
+ * public `policyCheck` entry point, and assert each rule produced
+ * the expected violations.
  */
 describe('architecture-policy end-to-end', () => {
   let testDir: string;
@@ -45,6 +46,7 @@ describe('architecture-policy end-to-end', () => {
     fs.mkdirSync(path.join(testDir, 'src/ui'), { recursive: true });
     fs.mkdirSync(path.join(testDir, 'src/shared'), { recursive: true });
     fs.mkdirSync(path.join(testDir, 'src/util'), { recursive: true });
+    fs.mkdirSync(path.join(testDir, 'src/contracts'), { recursive: true });
 
     fs.writeFileSync(
       path.join(testDir, 'src/ui/page.ts'),
@@ -79,6 +81,46 @@ describe('architecture-policy end-to-end', () => {
     fs.writeFileSync(
       path.join(testDir, 'src/orphan.ts'),
       'export const orphan = 99;\n',
+      'utf8',
+    );
+
+    // Phase 9.5 / Gap 3 fixture: an interface plus two implementer
+    // candidates. `Triangle` declares `implements`; `Duck` matches by
+    // shape only (no `implements` clause, no import). The
+    // `no-undeclared-implementer` rule should flag `Duck` and stay
+    // silent on `Triangle`.
+    //
+    // Both implementers are kept reachable by re-exporting them from
+    // `src/ui/page.ts` so the dead-module rule (entries =
+    // `src/ui/**/*.ts`) doesn't see them as orphans and produce a
+    // confounding violation.
+    fs.writeFileSync(
+      path.join(testDir, 'src/contracts/shape.ts'),
+      'export interface IShape {\n  area(): number;\n  name: string;\n}\n',
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(testDir, 'src/contracts/declared.ts'),
+      'import { IShape } from "./shape";\n' +
+        'export class Triangle implements IShape {\n' +
+        '  name = "triangle";\n' +
+        '  area(): number { return 0.5; }\n' +
+        '}\n',
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(testDir, 'src/contracts/duck.ts'),
+      'export class Duck {\n' +
+        '  name = "duck";\n' +
+        '  area(): number { return 1; }\n' +
+        '}\n',
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(testDir, 'src/ui/contracts.ts'),
+      'export { IShape } from "../contracts/shape";\n' +
+        'export { Triangle } from "../contracts/declared";\n' +
+        'export { Duck } from "../contracts/duck";\n',
       'utf8',
     );
 
@@ -130,6 +172,15 @@ targets = ["src"]
 
 [rules.args]
 entries = ["src/ui/**/*.ts"]
+
+[[rules]]
+id = "no-undeclared-implementer"
+ruleId = "@codepol/plugin/no-undeclared-implementer"
+description = "Forbid accidental structural-shape implementers"
+targets = ["src"]
+
+[rules.args]
+interfaces = ["I*"]
 `;
     fs.writeFileSync(path.join(testDir, 'codepol.toml'), configContent, 'utf8');
   });
@@ -139,7 +190,7 @@ entries = ["src/ui/**/*.ts"]
     fs.rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('runs all three architecture rules through policyCheck', async () => {
+  it('runs all four architecture rules through policyCheck', async () => {
     const configPath = path.join(testDir, 'codepol.toml');
     const result = await policyCheck({ configPath, cwd: testDir });
 
@@ -176,6 +227,22 @@ entries = ["src/ui/**/*.ts"]
     expect(dead.length).toBeGreaterThanOrEqual(1);
     const orphan = dead.find((v) => v.filePath.endsWith('orphan.ts'));
     expect(orphan).toBeDefined();
+
+    // no-undeclared-implementer: `Duck` (src/contracts/duck.ts) shape-
+    // matches `IShape` without declaring `implements`. `Triangle`
+    // declares `implements IShape` and must NOT be flagged.
+    const undeclared = archByRule.get('no-undeclared-implementer') ?? [];
+    const duckViolation = undeclared.find((v) =>
+      v.filePath.endsWith('duck.ts'),
+    );
+    expect(duckViolation).toBeDefined();
+    expect(duckViolation!.message).toContain('Duck');
+    expect(duckViolation!.message).toContain('IShape');
+    expect(duckViolation!.message).toContain('shape only');
+    const triangleViolation = undeclared.find((v) =>
+      v.filePath.endsWith('declared.ts'),
+    );
+    expect(triangleViolation).toBeUndefined();
 
     // Architecture violations are also surfaced through the legacy
     // treeViolations field for back-compat.
