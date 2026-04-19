@@ -311,7 +311,13 @@ describe('workspace-service queryImportSpecifiersInFile', () => {
     );
   });
 
-  it('classifies CommonJS require() with edgeKind: cjs', async () => {
+  it('classifies CommonJS destructured require() with edgeKind: cjs', async () => {
+    // Use the destructured form `const { helper } = require(...)` so
+    // the binding's `importedName` matches a named export and resolves
+    // through the cross-file resolver. Whole-module require
+    // (`const x = require(...)`) records `importedName: 'default'`,
+    // which only resolves when the target file declares a default
+    // export — out of scope for this fixture.
     const workspaceRoot = tempWorkspaceCreate('codepol-ws-imp-cjs-');
     fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
     fs.writeFileSync(
@@ -328,8 +334,8 @@ describe('workspace-service queryImportSpecifiersInFile', () => {
     const importerPath = path.join(workspaceRoot, 'src', 'importer.ts');
     fs.writeFileSync(
       importerPath,
-      `const helper = require('./helper');\n` +
-        `export const value = helper.helper;\n`,
+      `const { helper } = require('./helper');\n` +
+        `export const value = helper;\n`,
       'utf8',
     );
     const service = workspaceServiceCreate();

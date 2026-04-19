@@ -130,6 +130,7 @@ import {
   type WorkspaceSymbolResult,
   type WorkspaceSymbolWithCallCounts,
   type WorkspaceSymbolsInFileWithCallCountsResult,
+  type ImportBindingRelation,
   type SymbolFlowRelation,
   type SymbolId,
   type SymbolKind,
@@ -5727,93 +5728,164 @@ function workspaceImportSpecifiersInFileResultCreate(
     edgeKind: WorkspaceDependencyGraphEdgeKind;
     bindingCount: number;
   };
-  // Keyed by `${byteRange.start}\0${byteRange.end}\0${target}` — the
-  // import-binding extractor stamps every binding on the same
-  // statement with the same `importRange`, so multi-binding statements
-  // (`import { a, b, c } from './util'`) collapse to one accumulator
-  // with `bindingCount = 3`.
-  const accumulators = new Map<string, SpecifierAccumulator>();
-  // For each `(file, target)` pair, the byte ranges of statements
-  // already covered by an `ImportBindingRelation`. Used below to
-  // suppress redundant `ImportsRelation` entries for the same
-  // statement: the imports query emits *several* captures per
-  // statement (e.g. `@import.source` is just the module-string node),
-  // so without this the side-effect walk would emit a second marker
-  // for every binding statement.
-  const bindingStatementRangesByTarget = new Map<string, WorkspaceByteRange[]>();
 
+  // The imports query emits one `@import.source`-class
+  // `ImportsRelation` per statement — that capture is the only one
+  // whose `spec` parses as a module path, so the cross-file resolver
+  // sets `resolvedModulePath` exactly once per statement. We treat
+  // each resolved `ImportsRelation` as the canonical anchor for one
+  // statement.
+  type ResolvedImport = {
+    target: string;
+    byteRange: WorkspaceByteRange;
+  };
+  const resolvedImports: ResolvedImport[] = [];
+  const resolvedImportsByTarget = new Map<string, ResolvedImport[]>();
+  // The TS imports query has overlapping patterns: every
+  // `import_statement` matches both the specific pattern (named /
+  // default / namespace / require / dynamic) AND the catch-all
+  // side-effect pattern, so the same `(string)` source node is
+  // captured twice and produces two `ImportsRelation` entries with
+  // identical byte ranges. Dedupe by `(byteRange.start,
+  // byteRange.end, target)` so each statement contributes exactly one
+  // resolved import.
+  const seenResolvedImports = new Set<string>();
+  for (const imp of index.importsGet(filePath)) {
+    const target = imp.resolvedModulePath;
+    if (!target || !indexedFiles.has(target) || target === filePath) {
+      continue;
+    }
+    const dedupKey = `${imp.byteRange.start}\0${imp.byteRange.end}\0${target}`;
+    if (seenResolvedImports.has(dedupKey)) continue;
+    seenResolvedImports.add(dedupKey);
+    const entry: ResolvedImport = { target, byteRange: imp.byteRange };
+    resolvedImports.push(entry);
+    let bucket = resolvedImportsByTarget.get(target);
+    if (!bucket) {
+      bucket = [];
+      resolvedImportsByTarget.set(target, bucket);
+    }
+    bucket.push(entry);
+  }
+
+  // Each binding belongs to the closest resolved `ImportsRelation`
+  // with the same target (distance measured by `byteRange.start`).
+  // This pairs a binding to its own statement even when the binding's
+  // range is just the local-name token (the case for dynamic
+  // `const x = await import(...)` and CJS
+  // `const { x } = require(...)`). Multi-binding statements
+  // (`import { a, b, c } from './util'`) all map to the same
+  // `ImportsRelation` because every binding is at the same byteRange.
+  // Multi-statement same-target (`import { a } from './x'; import
+  // './x'`) still discriminates correctly because each statement's
+  // binding sits closer to its own source-string capture.
+  const bindingsByImport = new Map<ResolvedImport, ImportBindingRelation[]>();
+  const orphanBindingsByTarget = new Map<string, ImportBindingRelation[]>();
   const bindings = index.importBindingsGet(filePath);
   for (const binding of bindings) {
     const target = binding.resolvedModulePath;
     if (!target || !indexedFiles.has(target) || target === filePath) {
       continue;
     }
-    const style = binding.importStyle ?? 'static';
-    const bindingKind: WorkspaceDependencyGraphEdgeKind =
-      style === 'dynamic'
-        ? 'dynamic'
-        : style === 'cjs'
-          ? 'cjs'
-          : 'static';
-    const key = `${binding.byteRange.start}\0${binding.byteRange.end}\0${target}`;
-    const existing = accumulators.get(key);
-    if (existing) {
-      existing.bindingCount += 1;
-      existing.edgeKind = workspaceImportSpecifierEdgeKindMerge(
-        existing.edgeKind,
-        bindingKind,
+    const candidates = resolvedImportsByTarget.get(target);
+    const nearest = workspaceImportSpecifierNearestImport(
+      binding.byteRange,
+      candidates,
+    );
+    if (nearest) {
+      let list = bindingsByImport.get(nearest);
+      if (!list) {
+        list = [];
+        bindingsByImport.set(nearest, list);
+      }
+      list.push(binding);
+    } else {
+      // No resolved `ImportsRelation` for the binding's target — rare
+      // in practice. Fall through to emit using the binding's own
+      // range so the marker still appears.
+      let list = orphanBindingsByTarget.get(target);
+      if (!list) {
+        list = [];
+        orphanBindingsByTarget.set(target, list);
+      }
+      list.push(binding);
+    }
+  }
+
+  const accumulators: SpecifierAccumulator[] = [];
+
+  for (const imp of resolvedImports) {
+    const list = bindingsByImport.get(imp) ?? [];
+    if (list.length === 0) {
+      // No binding picked this statement — pure side-effect import.
+      accumulators.push({
+        byteRange: imp.byteRange,
+        resolvedModulePath: imp.target,
+        edgeKind: 'side_effect',
+        bindingCount: 0,
+      });
+      continue;
+    }
+    let edgeKind: WorkspaceDependencyGraphEdgeKind = workspaceImportSpecifierEdgeKindFromBinding(
+      list[0]!.importStyle,
+    );
+    let union = workspaceImportSpecifierByteRangeUnion(
+      imp.byteRange,
+      list[0]!.byteRange,
+    );
+    for (let i = 1; i < list.length; i += 1) {
+      const binding = list[i]!;
+      edgeKind = workspaceImportSpecifierEdgeKindMerge(
+        edgeKind,
+        workspaceImportSpecifierEdgeKindFromBinding(binding.importStyle),
       );
-      continue;
+      union = workspaceImportSpecifierByteRangeUnion(union, binding.byteRange);
     }
-    accumulators.set(key, {
-      byteRange: binding.byteRange,
-      resolvedModulePath: target,
-      edgeKind: bindingKind,
-      bindingCount: 1,
-    });
-    let coveredRanges = bindingStatementRangesByTarget.get(target);
-    if (!coveredRanges) {
-      coveredRanges = [];
-      bindingStatementRangesByTarget.set(target, coveredRanges);
-    }
-    coveredRanges.push(binding.byteRange);
-  }
-
-  const imports = index.importsGet(filePath);
-  for (const imp of imports) {
-    const target = imp.resolvedModulePath;
-    if (!target || !indexedFiles.has(target) || target === filePath) {
-      continue;
-    }
-    if (
-      workspaceImportSpecifierIsCoveredByBinding(
-        imp.byteRange,
-        bindingStatementRangesByTarget.get(target),
-      )
-    ) {
-      // A binding for the same target already covers this statement —
-      // the `ImportsRelation` here is one of the auxiliary captures
-      // (e.g. `@import.source` for the module specifier) and would
-      // otherwise emit a duplicate marker on the same line.
-      continue;
-    }
-    const key = `${imp.byteRange.start}\0${imp.byteRange.end}\0${target}`;
-    if (accumulators.has(key)) continue;
-    accumulators.set(key, {
-      byteRange: imp.byteRange,
-      resolvedModulePath: target,
-      edgeKind: 'side_effect',
-      bindingCount: 0,
+    accumulators.push({
+      byteRange: union,
+      resolvedModulePath: imp.target,
+      edgeKind,
+      bindingCount: list.length,
     });
   }
 
-  if (accumulators.size === 0) {
+  // Orphan bindings: emit one descriptor per (target, byteRange) so
+  // multi-binding orphan statements still collapse correctly.
+  for (const [target, list] of orphanBindingsByTarget) {
+    const grouped = new Map<string, SpecifierAccumulator>();
+    for (const binding of list) {
+      const key = `${binding.byteRange.start}\0${binding.byteRange.end}`;
+      const existing = grouped.get(key);
+      const bindingKind = workspaceImportSpecifierEdgeKindFromBinding(
+        binding.importStyle,
+      );
+      if (existing) {
+        existing.bindingCount += 1;
+        existing.edgeKind = workspaceImportSpecifierEdgeKindMerge(
+          existing.edgeKind,
+          bindingKind,
+        );
+      } else {
+        grouped.set(key, {
+          byteRange: binding.byteRange,
+          resolvedModulePath: target,
+          edgeKind: bindingKind,
+          bindingCount: 1,
+        });
+      }
+    }
+    for (const accumulator of grouped.values()) {
+      accumulators.push(accumulator);
+    }
+  }
+
+  if (accumulators.length === 0) {
     return { specifiers: [] };
   }
 
   const source = workspaceSourceGet(state, filePath);
   const specifiers: WorkspaceImportSpecifierDescriptor[] = [];
-  for (const accumulator of accumulators.values()) {
+  for (const accumulator of accumulators) {
     const range = workspaceRangeFromByteRange(source, accumulator.byteRange);
     const resolvedModuleUri = workspacePathToUri(accumulator.resolvedModulePath);
     const resolvedModuleWorkspaceRelativePath = workspaceRelativePathCreate(
@@ -5847,24 +5919,89 @@ function workspaceImportSpecifiersInFileResultCreate(
 }
 
 /**
- * True when {@link candidate} falls inside (or exactly matches) any of
- * the binding statement ranges. Used to suppress redundant
- * {@link ImportsRelation} entries that the imports query emits as
- * auxiliary captures around a binding statement (e.g. the
- * `@import.source` capture covers just the module specifier substring
- * of a binding statement).
+ * Pair a binding to its nearest unclaimed `ImportsRelation` for the
+ * same target. Distance is measured by `byteRange.start` — for bindings
+ * whose own range is just the local-name token (dynamic / CJS), the
+ * source-string capture on the same line is the closest unclaimed
+ * import; for bindings whose range is the full statement (static),
+ * the binding's start sits before the source string but still wins
+ * over any later statement's import. Multi-statement-same-target is
+ * handled because each statement's binding is closer to its own
+ * source string than to the other statement's.
+ *
+ * Mutates the matched entry's `claimed` flag so subsequent bindings
+ * cannot double-claim it. Returns `undefined` when no unclaimed
+ * import for the target exists (the caller emits a binding-only
+ * descriptor in that case).
  */
-function workspaceImportSpecifierIsCoveredByBinding(
-  candidate: WorkspaceByteRange,
-  bindingRanges: readonly WorkspaceByteRange[] | undefined,
-): boolean {
-  if (!bindingRanges) return false;
-  for (const range of bindingRanges) {
-    if (candidate.start >= range.start && candidate.end <= range.end) {
-      return true;
+/**
+ * Find the candidate (resolved {@link ImportsRelation}) whose
+ * `byteRange.start` is nearest to `bindingRange.start`. Used to
+ * associate each binding with its own statement: the nearest
+ * source-string capture for the same target is — by construction —
+ * the one on the same line as the binding.
+ *
+ * Multiple bindings on the same statement (`import { a, b } from
+ * './x'`) all map to the same candidate because each binding is
+ * equidistant from that single source-string capture.
+ *
+ * Multi-statement same-target (`import { a } from './x'; import './x'`)
+ * still discriminates correctly: the first statement's binding sits
+ * closer to the first source string than to the second.
+ */
+function workspaceImportSpecifierNearestImport<
+  T extends { byteRange: WorkspaceByteRange },
+>(
+  bindingRange: WorkspaceByteRange,
+  candidates: readonly T[] | undefined,
+): T | undefined {
+  if (!candidates || candidates.length === 0) return undefined;
+  let best: T | undefined;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const candidate of candidates) {
+    const distance = Math.abs(candidate.byteRange.start - bindingRange.start);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = candidate;
     }
   }
-  return false;
+  return best;
+}
+
+/**
+ * Map `ImportBindingRelation.importStyle` (a syntactic axis from the
+ * extractor) to the workspace-surface `WorkspaceDependencyGraphEdgeKind`
+ * (the kind axis the hover card surfaces). `static` is the default
+ * when the extractor omits the field.
+ */
+function workspaceImportSpecifierEdgeKindFromBinding(
+  importStyle: ImportBindingRelation['importStyle'],
+): WorkspaceDependencyGraphEdgeKind {
+  switch (importStyle) {
+    case 'dynamic':
+      return 'dynamic';
+    case 'cjs':
+      return 'cjs';
+    default:
+      return 'static';
+  }
+}
+
+/**
+ * Smallest byte range covering both inputs. Used to merge a binding's
+ * range with its claimed `ImportsRelation`'s range so the marker
+ * underlines the broadest signal available — the full statement for
+ * static imports, the variable-name span plus the source string for
+ * dynamic / CJS.
+ */
+function workspaceImportSpecifierByteRangeUnion(
+  left: WorkspaceByteRange,
+  right: WorkspaceByteRange,
+): WorkspaceByteRange {
+  return {
+    start: Math.min(left.start, right.start),
+    end: Math.max(left.end, right.end),
+  };
 }
 
 /**
