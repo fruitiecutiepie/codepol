@@ -426,6 +426,117 @@ function byteOffsetToLine(source: string, offset: number): number {
 }
 ```
 
+## Example 4: Catch Accidental Structural Implementers
+
+A rule that flags classes which satisfy an interface by shape but do
+not declare an `implements` clause. Useful for codebases where the
+type-hierarchy graph treats accidental matches as load-bearing
+participants — a future signature change to the interface then
+ripples in ways the class author did not consent to.
+
+This rule lives in the codepol bundle as `no-undeclared-implementer`
+(see [`packages/plugin/src/noUndeclaredImplementerCheck.ts`](../packages/plugin/src/noUndeclaredImplementerCheck.ts)).
+The example below is a slightly trimmed copy meant to illustrate the
+pattern — `subTypesGet` with `{ confidence: 'all' }` opts in to the
+Phase 9.4 structural-shape relations.
+
+> **Note.** Default `subTypesGet(id)` does NOT return structural-shape
+> relations; this rule opts in by passing `{ confidence: 'all' }`.
+> See the "Type-hierarchy fidelity tiers (Phase 9.4 / 9.5)" section
+> below for the full picture.
+
+### Args
+
+```typescript
+export type NoUndeclaredImplementerArgs = {
+  /** Glob patterns matched against interface symbol names. */
+  interfaces?: string[];
+  /** Glob patterns (relative to cwd) for implementer files to exempt. */
+  ignore?: string[];
+  /** Glob patterns matched against implementer class names (e.g. `*Mock`). */
+  ignoreImplementers?: string[];
+};
+```
+
+### Check Function
+
+```typescript
+import type {
+  ArchitectureCheckContext,
+  ArchitectureCheckFn,
+  PolicyRule,
+  PolicyViolation,
+} from '@codepol/core';
+
+export const noUndeclaredImplementerCheck: ArchitectureCheckFn = (
+  rule: PolicyRule,
+  context: ArchitectureCheckContext,
+): PolicyViolation[] => {
+  const ruleId = rule.id || rule.ruleId;
+  const violations: PolicyViolation[] = [];
+
+  for (const iface of context.projectIndex.symbolsGet({ kind: 'interface' })) {
+    // Phase 9.4 / Gap 3 — `confidence: 'all'` returns declared edges
+    // PLUS structural-shape edges (from the cross-file member-shape
+    // comparison). Default `subTypesGet(id)` returns only declared
+    // edges and remains byte-identical to the pre-Phase-9.4 result.
+    const subtypes = context.projectIndex.subTypesGet(iface.id, {
+      confidence: 'all',
+    });
+
+    for (const relation of subtypes) {
+      // Declared `implements` is fine — we only flag accidental
+      // satisfaction.
+      if (relation.confidence !== 'structural-shape') continue;
+
+      const implementer = context.projectIndex.symbolGet(relation.symbolId);
+      if (!implementer) continue;
+
+      violations.push({
+        ruleId,
+        filePath: implementer.file,
+        message:
+          `Class \`${implementer.name}\` satisfies interface ` +
+          `\`${iface.name}\` by shape only. Add \`implements ${iface.name}\` ` +
+          `or rename a member to break the accidental match.`,
+        line: 1,
+        column: 1,
+      });
+    }
+  }
+
+  return violations;
+};
+```
+
+### Rule Definition
+
+```typescript
+import { pluginRuleNew, type CodepolPluginRule } from '@codepol/core';
+import { noUndeclaredImplementerCheck } from './noUndeclaredImplementerCheck';
+
+export const noUndeclaredImplementerRule: CodepolPluginRule = pluginRuleNew({
+  id: 'no-undeclared-implementer',
+  capabilities: {
+    architectureCheckProvider: { check: noUndeclaredImplementerCheck },
+  },
+});
+```
+
+### Config Usage
+
+```toml
+[[rules]]
+ruleId = "@codepol/plugin/no-undeclared-implementer"
+targets = ["src"]
+
+  [rules.args]
+  # Only enforce on the public-contract interface family.
+  interfaces = ["I*", "*Contract", "*Port"]
+  # Test stubs are intentional shape matches.
+  ignoreImplementers = ["*Mock", "*Stub", "Test*"]
+```
+
 ## ProjectIndex Methods for Rule Authors
 
 Quick reference for the most useful methods when writing cross-file rules. See the [full API reference](./project-index-api) for complete details.

@@ -24,7 +24,25 @@ export type SidebarSearchResultViewModel = {
   scoreLabel: string;
 };
 
-export type SidebarActionViewModel = HoverActionViewModel & {
+/**
+ * Sidebar-only synthetic action kinds. Distinct from
+ * {@link HoverActionViewModel.action} (which is sourced from the
+ * workspace service's hover result) — these actions are appended by
+ * the sidebar itself and don't have a server-side representation.
+ *
+ * Phase 9.5 / Gap 3 — `show_type_hierarchy` opens the dedicated
+ * type-hierarchy panel, defaulting `includeStructural: true`. The
+ * sidebar always offers it on TypeScript files so users can ask
+ * "what implements this?" in one click; the controller's cursor
+ * resolution surfaces a clear error when the cursor is not on a
+ * class / interface / type alias.
+ */
+export type SidebarSyntheticActionKind = 'show_type_hierarchy';
+
+export type SidebarActionViewModel = (
+  | HoverActionViewModel
+  | { action: SidebarSyntheticActionKind; label: string }
+) & {
   disabled?: boolean;
   disabledReason?: string;
 };
@@ -158,11 +176,34 @@ export function sidebarSearchResultsCreate(
   });
 }
 
+/**
+ * Build the synthetic "Show Type Hierarchy" action appended to the
+ * active-target card whenever an editor is open. The controller's
+ * `cursorSymbolResolve` path validates the symbol kind on click; the
+ * sidebar does not pre-filter, so the button is always present
+ * (matching the editor context-menu affordance).
+ */
+function sidebarShowTypeHierarchyActionCreate(
+  disabledMessage: string | undefined,
+): SidebarActionViewModel {
+  const action: SidebarActionViewModel = {
+    action: 'show_type_hierarchy',
+    label: 'Show Type Hierarchy',
+  };
+  if (disabledMessage) {
+    action.disabled = true;
+    action.disabledReason = disabledMessage;
+  }
+  return action;
+}
+
 export function sidebarActiveTargetCreate(input: {
   activeUri?: string;
   hover: WorkspaceSemanticHoverResult | null;
   errorMessage?: string;
-  disabledActionMessages?: Partial<Record<HoverActionViewModel['action'], string>>;
+  disabledActionMessages?: Partial<
+    Record<HoverActionViewModel['action'] | SidebarSyntheticActionKind, string>
+  >;
 }): SidebarActiveTargetViewModel {
   if (!input.activeUri) {
     return {
@@ -174,8 +215,22 @@ export function sidebarActiveTargetCreate(input: {
     };
   }
 
+  const typeHierarchyAction = sidebarShowTypeHierarchyActionCreate(
+    input.disabledActionMessages?.show_type_hierarchy,
+  );
+
   const card = semanticHoverCardViewModelCreate(input.hover);
   if (card) {
+    const cardActions: SidebarActionViewModel[] = card.actions.map((action) => {
+      const disabledReason = input.disabledActionMessages?.[action.action];
+      return disabledReason
+        ? {
+            ...action,
+            disabled: true,
+            disabledReason,
+          }
+        : action;
+    });
     return {
       uri: input.activeUri,
       title: card.title,
@@ -183,16 +238,7 @@ export function sidebarActiveTargetCreate(input: {
       summary: card.summary,
       statusText: card.statusText,
       fields: card.fields,
-      actions: card.actions.map((action) => {
-        const disabledReason = input.disabledActionMessages?.[action.action];
-        return disabledReason
-          ? {
-              ...action,
-              disabled: true,
-              disabledReason,
-            }
-          : action;
-      }),
+      actions: [...cardActions, typeHierarchyAction],
       tone: 'neutral',
     };
   }
@@ -204,7 +250,7 @@ export function sidebarActiveTargetCreate(input: {
     message:
       input.errorMessage ?? 'No Codepol semantic summary is available for this file yet.',
     fields: [],
-    actions: [],
+    actions: [typeHierarchyAction],
     tone: input.errorMessage ? 'warning' : 'neutral',
   };
 }

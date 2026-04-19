@@ -9,6 +9,7 @@ import {
   CODEPOL_EXTENSION_PANEL_LINT_RULE_DETAILS,
   CODEPOL_EXTENSION_PANEL_RENAME_PREVIEW,
   CODEPOL_EXTENSION_PANEL_SEMANTIC_DEFINITION,
+  CODEPOL_EXTENSION_PANEL_TYPE_HIERARCHY,
 } from '../constants';
 import type {
   ArchitectureLinksPanelViewModel,
@@ -24,6 +25,12 @@ import {
   type CallGraphPanelDirection,
   type CallGraphPanelViewModel,
 } from '../callGraphViewModels';
+import {
+  typeHierarchyNodeOpenLocationResolve,
+  type TypeHierarchyPanelDepth,
+  type TypeHierarchyPanelDirection,
+  type TypeHierarchyPanelViewModel,
+} from '../typeHierarchyViewModels';
 import {
   dependencyGraphControlMessageIs,
   dependencyGraphControlStateUpdate,
@@ -47,6 +54,16 @@ export type CallGraphPanelControlMessage =
       depth?: string;
     };
 
+export type TypeHierarchyPanelControlMessage =
+  | {
+      type: 'typeHierarchyDirectionSet';
+      direction?: string;
+    }
+  | {
+      type: 'typeHierarchyDepthSet';
+      depth?: string;
+    };
+
 type CodepolPanelMessage =
   | {
       type: 'openLocation';
@@ -64,7 +81,8 @@ type CodepolPanelMessage =
       planId?: string;
     }
   | DependencyGraphPanelControlMessage
-  | CallGraphPanelControlMessage;
+  | CallGraphPanelControlMessage
+  | TypeHierarchyPanelControlMessage;
 
 type PanelKind =
   | 'semanticDefinition'
@@ -73,7 +91,8 @@ type PanelKind =
   | 'architectureLinks'
   | 'lintRuleDetails'
   | 'renamePreview'
-  | 'callGraph';
+  | 'callGraph'
+  | 'typeHierarchy';
 
 /**
  * Rebuilder shape supplied alongside `showCallGraph(model, rebuilder)`.
@@ -90,12 +109,36 @@ type CallGraphPanelControls = {
   rebuilder: CallGraphPanelRebuilder;
 };
 
+/**
+ * Rebuilder shape for the type-hierarchy panel. Same shape as
+ * {@link CallGraphPanelRebuilder} but the direction values are
+ * disjoint (`supertypes` / `subtypes` / `both`).
+ */
+export type TypeHierarchyPanelRebuilder = (input: {
+  direction: TypeHierarchyPanelDirection;
+  depth: TypeHierarchyPanelDepth;
+}) => Promise<TypeHierarchyPanelViewModel | null>;
+
+type TypeHierarchyPanelControls = {
+  state: { direction: TypeHierarchyPanelDirection; depth: TypeHierarchyPanelDepth };
+  rebuilder: TypeHierarchyPanelRebuilder;
+};
+
 function callGraphPanelControlMessageIs(
   message: CodepolPanelMessage,
 ): message is CallGraphPanelControlMessage {
   return (
     message.type === 'callGraphDirectionSet' ||
     message.type === 'callGraphDepthSet'
+  );
+}
+
+function typeHierarchyPanelControlMessageIs(
+  message: CodepolPanelMessage,
+): message is TypeHierarchyPanelControlMessage {
+  return (
+    message.type === 'typeHierarchyDirectionSet' ||
+    message.type === 'typeHierarchyDepthSet'
   );
 }
 
@@ -109,6 +152,22 @@ function callGraphDirectionParse(
 function callGraphDepthParse(
   raw: string | undefined,
 ): CallGraphPanelDepth | undefined {
+  if (raw === '1') return 1;
+  if (raw === '2') return 2;
+  if (raw === 'unbounded') return 'unbounded';
+  return undefined;
+}
+
+function typeHierarchyDirectionParse(
+  raw: string | undefined,
+): TypeHierarchyPanelDirection | undefined {
+  if (raw === 'supertypes' || raw === 'subtypes' || raw === 'both') return raw;
+  return undefined;
+}
+
+function typeHierarchyDepthParse(
+  raw: string | undefined,
+): TypeHierarchyPanelDepth | undefined {
   if (raw === '1') return 1;
   if (raw === '2') return 2;
   if (raw === 'unbounded') return 'unbounded';
@@ -141,6 +200,7 @@ type ManagedPanel = {
   dependencyGraphControls?: DependencyGraphPanelControls;
   architectureLinksControls?: ArchitectureLinksPanelControls;
   callGraphControls?: CallGraphPanelControls;
+  typeHierarchyControls?: TypeHierarchyPanelControls;
 };
 
 export class CodepolPanelManager implements vscode.Disposable {
@@ -267,6 +327,42 @@ export class CodepolPanelManager implements vscode.Disposable {
     this.panels.delete('callGraph');
   }
 
+  /**
+   * Show (or refresh) the dedicated type-hierarchy panel.
+   * Phase 9.4 / 9.5 — `model.edgeCounts` lets the panel header
+   * advertise how many edges came from declared / shape-matched /
+   * type-aware sources without the user inspecting the SVG.
+   */
+  showTypeHierarchy(
+    model: TypeHierarchyPanelViewModel,
+    rebuilder?: TypeHierarchyPanelRebuilder,
+  ): void {
+    const headingName = model.focusSymbolName.length > 0
+      ? model.focusSymbolName
+      : '<anonymous>';
+    this.panelShow('typeHierarchy', {
+      kind: 'typeHierarchy',
+      title: `Codepol: Type Hierarchy (${headingName})`,
+      data: model,
+    });
+    if (rebuilder) {
+      const managed = this.panels.get('typeHierarchy');
+      if (managed) {
+        managed.typeHierarchyControls = {
+          state: { direction: model.direction, depth: model.depth },
+          rebuilder,
+        };
+      }
+    }
+  }
+
+  closeTypeHierarchy(): void {
+    const managed = this.panels.get('typeHierarchy');
+    if (!managed) return;
+    managed.panel.dispose();
+    this.panels.delete('typeHierarchy');
+  }
+
   private panelShow(kind: PanelKind, model: CodepolPanelViewModel): void {
     const existing = this.panels.get(kind);
     if (existing) {
@@ -293,6 +389,8 @@ export class CodepolPanelManager implements vscode.Disposable {
           ? CODEPOL_EXTENSION_PANEL_LINT_RULE_DETAILS
         : kind === 'renamePreview'
           ? CODEPOL_EXTENSION_PANEL_RENAME_PREVIEW
+        : kind === 'typeHierarchy'
+          ? CODEPOL_EXTENSION_PANEL_TYPE_HIERARCHY
         : CODEPOL_EXTENSION_PANEL_CALL_GRAPH;
     const panel = vscode.window.createWebviewPanel(
       panelId,
@@ -400,12 +498,19 @@ export class CodepolPanelManager implements vscode.Disposable {
       return;
     }
 
+    if (typeHierarchyPanelControlMessageIs(message)) {
+      await this.typeHierarchyControlMessageHandle(message);
+      return;
+    }
+
     if (message.type === 'openLocation' && message.uri) {
       // Symbol-graph panels render synthetic `codepol-symbol://`
       // URIs the editor cannot open directly; translate them through
       // the panel's view-model to the symbol's declaration before
       // dispatching to the editor.
-      const opened = this.callGraphOpenLocationTranslate(kind, message.uri);
+      const opened =
+        this.callGraphOpenLocationTranslate(kind, message.uri) ??
+        this.typeHierarchyOpenLocationTranslate(kind, message.uri);
       if (opened) {
         await this.actions.openLocation(opened);
         return;
@@ -497,6 +602,56 @@ export class CodepolPanelManager implements vscode.Disposable {
     });
     if (!nextModel) return;
     managed.callGraphControls = {
+      state: { direction: nextModel.direction, depth: nextModel.depth },
+      rebuilder: controls.rebuilder,
+    };
+    managed.model = {
+      ...managed.model,
+      data: nextModel,
+    };
+    managed.panel.webview.html = codepolPanelHtmlRender({
+      nonce: randomBytes(16).toString('hex'),
+      model: managed.model,
+    });
+  }
+
+  private typeHierarchyOpenLocationTranslate(
+    kind: PanelKind,
+    uri: string,
+  ): { uri: string; line: number; character: number } | null {
+    if (kind !== 'typeHierarchy') return null;
+    const managed = this.panels.get('typeHierarchy');
+    if (!managed || managed.model.kind !== 'typeHierarchy') return null;
+    return typeHierarchyNodeOpenLocationResolve({
+      model: managed.model.data,
+      uri,
+    });
+  }
+
+  private async typeHierarchyControlMessageHandle(
+    message: TypeHierarchyPanelControlMessage,
+  ): Promise<void> {
+    const managed = this.panels.get('typeHierarchy');
+    if (!managed || !managed.typeHierarchyControls) return;
+    if (managed.model.kind !== 'typeHierarchy') return;
+    const controls = managed.typeHierarchyControls;
+    let nextDirection = controls.state.direction;
+    let nextDepth = controls.state.depth;
+    if (message.type === 'typeHierarchyDirectionSet') {
+      const parsed = typeHierarchyDirectionParse(message.direction);
+      if (!parsed || parsed === controls.state.direction) return;
+      nextDirection = parsed;
+    } else if (message.type === 'typeHierarchyDepthSet') {
+      const parsed = typeHierarchyDepthParse(message.depth);
+      if (parsed === undefined || parsed === controls.state.depth) return;
+      nextDepth = parsed;
+    }
+    const nextModel = await controls.rebuilder({
+      direction: nextDirection,
+      depth: nextDepth,
+    });
+    if (!nextModel) return;
+    managed.typeHierarchyControls = {
       state: { direction: nextModel.direction, depth: nextModel.depth },
       rebuilder: controls.rebuilder,
     };

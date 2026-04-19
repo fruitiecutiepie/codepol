@@ -13,6 +13,8 @@ import type {
 } from '../viewModels';
 import type { CallGraphPanelViewModel } from '../callGraphViewModels';
 import { callGraphPanelBodyHtml } from './callGraphRender';
+import type { TypeHierarchyPanelViewModel } from '../typeHierarchyViewModels';
+import { typeHierarchyPanelBodyHtml } from './typeHierarchyRender';
 
 export type CodepolPanelViewModel =
   | {
@@ -51,6 +53,11 @@ export type CodepolPanelViewModel =
       kind: 'callGraph';
       title: string;
       data: CallGraphPanelViewModel;
+    }
+  | {
+      kind: 'typeHierarchy';
+      title: string;
+      data: TypeHierarchyPanelViewModel;
     };
 
 function htmlEscape(value: string): string {
@@ -808,6 +815,24 @@ const BASE_SCRIPT = `
       }
       return;
     }
+    const typeHierarchyChipButton = target.closest('[data-th-chip-group]');
+    if (typeHierarchyChipButton instanceof HTMLElement) {
+      event.preventDefault();
+      const group = typeHierarchyChipButton.dataset.thChipGroup;
+      const value = typeHierarchyChipButton.dataset.thChipValue;
+      if (group === 'direction') {
+        vscode.postMessage({
+          type: 'typeHierarchyDirectionSet',
+          direction: value,
+        });
+      } else if (group === 'depth') {
+        vscode.postMessage({
+          type: 'typeHierarchyDepthSet',
+          depth: value,
+        });
+      }
+      return;
+    }
     if (event.altKey) {
       const blastRadiusNode = target.closest('[data-blast-radius-uri]');
       if (blastRadiusNode instanceof SVGElement || blastRadiusNode instanceof HTMLElement) {
@@ -874,6 +899,8 @@ export function codepolPanelHtmlRender(input: {
               ? lintRuleDetailsBodyHtml(input.model.data)
             : input.model.kind === 'renamePreview'
               ? renamePreviewBodyHtml(input.model.data)
+            : input.model.kind === 'typeHierarchy'
+              ? typeHierarchyPanelBodyHtml({ model: input.model.data })
             : callGraphPanelBodyHtml({ model: input.model.data });
 
   return `<!DOCTYPE html>

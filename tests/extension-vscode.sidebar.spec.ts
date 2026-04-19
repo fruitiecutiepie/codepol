@@ -90,6 +90,14 @@ describe('extension-vscode sidebar models', () => {
           action: 'find_references',
           label: 'Show Architecture Links',
         },
+        // Phase 9.5 / Gap 3 — synthetic sidebar action appended on
+        // every active-target card. The provider always offers it
+        // and the controller's cursor resolution validates the
+        // symbol kind on click.
+        {
+          action: 'show_type_hierarchy',
+          label: 'Show Type Hierarchy',
+        },
       ],
       tone: 'neutral',
     });
@@ -107,6 +115,8 @@ describe('extension-vscode sidebar models', () => {
           find_references:
             'Codepol architecture links are blocked while the workspace index is warming.',
           show_graph:
+            'Codepol dependency graph is blocked while the workspace index is warming.',
+          show_type_hierarchy:
             'Codepol dependency graph is blocked while the workspace index is warming.',
         },
       }),
@@ -137,6 +147,13 @@ describe('extension-vscode sidebar models', () => {
         {
           action: 'show_graph',
           label: 'Show Graph',
+          disabled: true,
+          disabledReason:
+            'Codepol dependency graph is blocked while the workspace index is warming.',
+        },
+        {
+          action: 'show_type_hierarchy',
+          label: 'Show Type Hierarchy',
           disabled: true,
           disabledReason:
             'Codepol dependency graph is blocked while the workspace index is warming.',

@@ -17,6 +17,12 @@ import {
   type CallGraphPanelDirection,
   type CallGraphPanelViewModel,
 } from './callGraphViewModels';
+import {
+  typeHierarchyPanelViewModelCreate,
+  type TypeHierarchyPanelDepth,
+  type TypeHierarchyPanelDirection,
+  type TypeHierarchyPanelViewModel,
+} from './typeHierarchyViewModels';
 import type { RenameTargetCandidate } from './discovery';
 import type {
   CodepolProtocolQuickFixAction,
@@ -94,6 +100,11 @@ export type CallGraphPanelRebuilder = (input: {
   depth: CallGraphPanelDepth;
 }) => Promise<CallGraphPanelViewModel | null>;
 
+export type TypeHierarchyPanelRebuilder = (input: {
+  direction: TypeHierarchyPanelDirection;
+  depth: TypeHierarchyPanelDepth;
+}) => Promise<TypeHierarchyPanelViewModel | null>;
+
 export type CodepolPanels = {
   showArchitectureSummary(input: ArchitectureSummaryPanelViewModel): void;
   showDependencyGraph(
@@ -110,6 +121,10 @@ export type CodepolPanels = {
   showCallGraph(
     input: CallGraphPanelViewModel,
     rebuilder?: CallGraphPanelRebuilder,
+  ): void;
+  showTypeHierarchy(
+    input: TypeHierarchyPanelViewModel,
+    rebuilder?: TypeHierarchyPanelRebuilder,
   ): void;
 };
 
@@ -601,6 +616,101 @@ export class CodepolCommandController {
       return null;
     }
     this.panels.showCallGraph(initial, buildModel);
+    return initial;
+  }
+
+  /**
+   * Open the dedicated type-hierarchy panel scoped to the symbol the
+   * caller passes via `args` (CodeLens click) or to the symbol under
+   * the editor cursor. Mirrors {@link showCallGraph} but calls
+   * `queryTypeHierarchy` and defaults `includeStructural: true` so
+   * the panel always shows the shape-matched edges Phase 9.4 added.
+   *
+   * The legend in the panel and the dashed edge style make the
+   * additional edges visually distinct, so the default-on choice
+   * does not surprise users.
+   */
+  async showTypeHierarchy(
+    args?: { symbolId?: string; focusSymbolName?: string },
+  ): Promise<TypeHierarchyPanelViewModel | null> {
+    const initialDirection: TypeHierarchyPanelDirection = 'both';
+    const initialDepth: TypeHierarchyPanelDepth = 2;
+
+    let symbolId = args?.symbolId;
+    let focusSymbolName = args?.focusSymbolName;
+
+    if (!symbolId) {
+      const cursor = await this.cursorSymbolResolve(
+        'Position your cursor on a class, interface, or type alias to show its type hierarchy.',
+      );
+      if (!cursor) return null;
+      symbolId = cursor.symbolId;
+      focusSymbolName = cursor.name.length > 0 ? cursor.name : '<anonymous>';
+    }
+
+    const buildModel = async (input: {
+      direction: TypeHierarchyPanelDirection;
+      depth: TypeHierarchyPanelDepth;
+    }): Promise<TypeHierarchyPanelViewModel | null> => {
+      const depthValue = input.depth === 'unbounded' ? undefined : input.depth;
+      const requestArgs: {
+        symbolId: string;
+        direction: TypeHierarchyPanelDirection;
+        depth?: number;
+        includeStructural: boolean;
+      } = {
+        symbolId: symbolId!,
+        direction: input.direction,
+        // Phase 9.4 / Gap 3: panel always opts in to the shape-match
+        // overlay. The CLI default stays `false` to keep CI stable;
+        // the editor surface chooses true so users see the full
+        // picture by default.
+        includeStructural: true,
+      };
+      if (depthValue !== undefined) {
+        requestArgs.depth = depthValue;
+      }
+      const graph = await this.protocolRequestRun(
+        this.protocol.queryTypeHierarchy(requestArgs),
+      );
+      if (graph === CodepolCommandController.REQUEST_SUPERSEDED) {
+        return null;
+      }
+      if (!graph) {
+        return null;
+      }
+      const modelInput: {
+        graph: typeof graph;
+        focusSymbolId: string;
+        focusSymbolName?: string;
+        direction: TypeHierarchyPanelDirection;
+        depth: TypeHierarchyPanelDepth;
+      } = {
+        graph,
+        focusSymbolId: symbolId!,
+        direction: input.direction,
+        depth: input.depth,
+      };
+      if (focusSymbolName !== undefined) {
+        modelInput.focusSymbolName = focusSymbolName;
+      }
+      return typeHierarchyPanelViewModelCreate(modelInput);
+    };
+
+    const initial = await buildModel({
+      direction: initialDirection,
+      depth: initialDepth,
+    });
+    if (!initial) {
+      await this.host.errorShow(
+        this.featureUnavailableMessageResolve(
+          'dependencyGraph',
+          `Codepol cannot build a type hierarchy for ${focusSymbolName ?? symbolId} right now.`,
+        ),
+      );
+      return null;
+    }
+    this.panels.showTypeHierarchy(initial, buildModel);
     return initial;
   }
 

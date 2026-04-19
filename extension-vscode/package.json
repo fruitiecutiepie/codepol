@@ -21,6 +21,9 @@
     "onCommand:codepol.extension.showSemanticSearch",
     "onCommand:codepol.extension.showArchitectureLinks",
     "onCommand:codepol.architecture.peek",
+    "onCommand:codepol.extension.showCallGraph",
+    "onCommand:codepol.extension.showTypeHierarchy",
+    "onCommand:codepol.extension.findCallbacks",
     "onCommand:codepol.extension.showLintRuleDetails",
     "onCommand:codepol.extension.showLintRuleDiagnosticFixes",
     "onCommand:codepol.extension.renameCodepolEntity",
@@ -67,6 +70,11 @@
       {
         "command": "codepol.extension.showCallGraph",
         "title": "Codepol: Show Call Graph",
+        "enablement": "codepol.indexBackedCommandsEnabled"
+      },
+      {
+        "command": "codepol.extension.showTypeHierarchy",
+        "title": "Codepol: Show Type Hierarchy",
         "enablement": "codepol.indexBackedCommandsEnabled"
       },
       {
@@ -178,9 +186,14 @@
           "group": "navigation@10"
         },
         {
-          "command": "codepol.extension.findCallbacks",
+          "command": "codepol.extension.showTypeHierarchy",
           "when": "editorTextFocus && resourceScheme == file && codepol.indexBackedCommandsEnabled",
           "group": "navigation@11"
+        },
+        {
+          "command": "codepol.extension.findCallbacks",
+          "when": "editorTextFocus && resourceScheme == file && codepol.indexBackedCommandsEnabled",
+          "group": "navigation@12"
         }
       ]
     },

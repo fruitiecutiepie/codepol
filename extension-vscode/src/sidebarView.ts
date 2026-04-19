@@ -4,6 +4,7 @@ import type { WorkspaceSemanticHoverResult } from '@codepol/core';
 import {
   CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_LINKS,
   CODEPOL_EXTENSION_COMMAND_SHOW_SEMANTIC_DEFINITION,
+  CODEPOL_EXTENSION_COMMAND_SHOW_TYPE_HIERARCHY,
 } from './constants';
 import type { CodepolProtocolClient } from './protocolClient';
 import {
@@ -875,6 +876,17 @@ export class CodepolSidebarViewProvider
           CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_LINKS,
           message.uri,
         );
+        return;
+      }
+      if (message.action === 'show_type_hierarchy') {
+        // Phase 9.5 / Gap 3 — dispatch with no symbol id; the
+        // command falls back to `querySymbolAtPosition` against the
+        // active editor cursor and surfaces a clear error when the
+        // cursor is not on a class / interface / type alias.
+        await this.actions.executeCommand(
+          CODEPOL_EXTENSION_COMMAND_SHOW_TYPE_HIERARCHY,
+          message.uri,
+        );
       }
     }
   }
@@ -1075,7 +1087,13 @@ export class CodepolSidebarViewProvider
   }
 
   private activeTargetDisabledActionMessagesResolve(): Partial<
-    Record<'go_to_definition' | 'find_references' | 'show_graph', string>
+    Record<
+      | 'go_to_definition'
+      | 'find_references'
+      | 'show_graph'
+      | 'show_type_hierarchy',
+      string
+    >
   > {
     const snapshot = this.readiness.snapshotGet();
     const referencesBlocked = codepolFeatureBlockedMessageResolve(
@@ -1089,6 +1107,10 @@ export class CodepolSidebarViewProvider
     return {
       find_references: referencesBlocked,
       show_graph: graphBlocked,
+      // Type hierarchy uses the same dependency-graph readiness gate
+      // as the other graph-derived actions — when the index isn't
+      // ready the action is disabled with the same explanation.
+      show_type_hierarchy: graphBlocked,
     };
   }
 

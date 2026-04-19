@@ -17,6 +17,7 @@ import { noUnusedVarsRule } from './noUnusedVarsRule';
 import { noCyclesRule } from './noCyclesRule';
 import { deadModuleRule } from './deadModuleRule';
 import { noLayerViolationRule } from './noLayerViolationRule';
+import { noUndeclaredImplementerRule } from './noUndeclaredImplementerRule';
 import {
   biomeBridgeRule,
   eslintBridgeRule,
@@ -46,6 +47,9 @@ export type {
   NoLayerViolationArgs,
   NoLayerViolationLayerConfig,
 } from './noLayerViolationCheck';
+export { noUndeclaredImplementerRule } from './noUndeclaredImplementerRule';
+export { noUndeclaredImplementerCheck } from './noUndeclaredImplementerCheck';
+export type { NoUndeclaredImplementerArgs } from './noUndeclaredImplementerCheck';
 export { forbiddenDeclarationsRule } from './forbiddenDeclarationsRule';
 export type {
   ForbiddenDeclarationsArgs,
@@ -79,6 +83,7 @@ export default [
   noCyclesRule,
   deadModuleRule,
   noLayerViolationRule,
+  noUndeclaredImplementerRule,
   eslintBridgeRule,
   biomeBridgeRule,
   ruffBridgeRule,

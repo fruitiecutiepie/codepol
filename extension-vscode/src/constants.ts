@@ -21,6 +21,8 @@ export const CODEPOL_EXTENSION_COMMAND_PEEK_ARCHITECTURE =
   'codepol.architecture.peek';
 export const CODEPOL_EXTENSION_COMMAND_SHOW_CALL_GRAPH =
   'codepol.extension.showCallGraph';
+export const CODEPOL_EXTENSION_COMMAND_SHOW_TYPE_HIERARCHY =
+  'codepol.extension.showTypeHierarchy';
 export const CODEPOL_EXTENSION_COMMAND_FIND_CALLBACKS =
   'codepol.extension.findCallbacks';
 export const CODEPOL_EXTENSION_COMMAND_RENAME_CODEPOL_ENTITY =
@@ -60,3 +62,5 @@ export const CODEPOL_EXTENSION_PANEL_LINT_RULE_DETAILS =
   'codepol.lintRuleDetailsPanel';
 export const CODEPOL_EXTENSION_PANEL_CALL_GRAPH =
   'codepol.callGraphPanel';
+export const CODEPOL_EXTENSION_PANEL_TYPE_HIERARCHY =
+  'codepol.typeHierarchyPanel';

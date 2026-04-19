@@ -33,6 +33,7 @@ import {
   CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_SUMMARY,
   CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_LINKS,
   CODEPOL_EXTENSION_COMMAND_SHOW_CALL_GRAPH,
+  CODEPOL_EXTENSION_COMMAND_SHOW_TYPE_HIERARCHY,
   CODEPOL_EXTENSION_COMMAND_SHOW_DEPENDENCY_GRAPH,
   CODEPOL_EXTENSION_COMMAND_SHOW_LINT_RULE_DETAILS,
   CODEPOL_EXTENSION_COMMAND_SHOW_SEMANTIC_DEFINITION,
@@ -44,6 +45,7 @@ import {
 } from './constants';
 import { CodepolArchitectureCodeLensProvider } from './codeLensProvider';
 import { CodepolSymbolCodeLensProvider } from './symbolCodeLensProvider';
+import { CodepolTypeHierarchyCodeLensProvider } from './typeHierarchyCodeLensProvider';
 import {
   renameTargetCandidatesDiscover,
   type RenameTargetCandidate,
@@ -666,6 +668,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     protocol,
     showCallGraphCommandId: CODEPOL_EXTENSION_COMMAND_SHOW_CALL_GRAPH,
   });
+  const typeHierarchyCodeLensProvider = new CodepolTypeHierarchyCodeLensProvider({
+    protocol,
+    showTypeHierarchyCommandId: CODEPOL_EXTENSION_COMMAND_SHOW_TYPE_HIERARCHY,
+  });
 
   context.subscriptions.push(
     panels,
@@ -674,6 +680,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     statusBarItem,
     codeLensProvider,
     symbolCodeLensProvider,
+    typeHierarchyCodeLensProvider,
     vscode.languages.registerCodeLensProvider(
       { scheme: 'file' },
       codeLensProvider,
@@ -681,6 +688,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.languages.registerCodeLensProvider(
       { scheme: 'file' },
       symbolCodeLensProvider,
+    ),
+    // Phase 9.5 / Gap 3 — interface-only "implementers" lens.
+    // Scoped to TypeScript / TSX languages because the regex scanner
+    // and the index's member-shape extractor are TypeScript-only
+    // today.
+    vscode.languages.registerCodeLensProvider(
+      [
+        { scheme: 'file', language: 'typescript' },
+        { scheme: 'file', language: 'typescriptreact' },
+      ],
+      typeHierarchyCodeLensProvider,
     ),
     vscode.window.registerWebviewViewProvider(
       CODEPOL_EXTENSION_VIEW_CURRENT_CONTEXT_ID,
@@ -728,6 +746,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       CODEPOL_EXTENSION_COMMAND_SHOW_CALL_GRAPH,
       async (args?: { symbolId?: string; focusSymbolName?: string }) =>
         controller?.showCallGraph(args),
+    ),
+    vscode.commands.registerCommand(
+      CODEPOL_EXTENSION_COMMAND_SHOW_TYPE_HIERARCHY,
+      async (args?: { symbolId?: string; focusSymbolName?: string }) =>
+        controller?.showTypeHierarchy(args),
     ),
     vscode.commands.registerCommand(
       CODEPOL_EXTENSION_COMMAND_FIND_CALLBACKS,
@@ -950,6 +973,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       renameTargetsProvider.refresh();
       codeLensProvider.refresh();
       symbolCodeLensProvider.refresh();
+      typeHierarchyCodeLensProvider.refresh();
     }),
   );
 
