@@ -143,11 +143,13 @@ export function symbolFlowExtract(input: SymbolFlowExtractInput): SymbolFlowRela
       if (argumentIndex === undefined) continue;
 
       const name = sliceText(input.source, argumentNode.startIndex, argumentNode.endIndex);
-      const flowingSymbol = input.resolveLocal(name, argumentNode);
+      const flowingSymbol = flowingSymbolResolve({
+        name,
+        refNode: argumentNode,
+        symbolsByName: input.symbolsByName,
+        resolveLocal: input.resolveLocal,
+      });
       if (!flowingSymbol) continue;
-      if (flowingSymbol.kind !== 'function' && flowingSymbol.kind !== 'method') {
-        continue;
-      }
 
       const byteRange: ByteRange = {
         start: argumentNode.startIndex,
@@ -180,6 +182,46 @@ export function symbolFlowExtract(input: SymbolFlowExtractInput): SymbolFlowRela
   });
 
   return relations;
+}
+
+/**
+ * Resolve the bare-identifier argument to a function/method symbol.
+ *
+ * Tries the scope-aware `resolveLocal` first (so file-local shadowing
+ * still wins when a parameter shares a name with a top-level function),
+ * then falls back to a flat name lookup against `symbolsByName`. The
+ * fallback matters because language adapters whose `function`-symbol
+ * scope is the function *body* itself (Python today) cannot be reached
+ * by walking up scopes from the call site — `callsExtract` already
+ * uses the same flat-lookup pattern for the same reason.
+ */
+function flowingSymbolResolve(input: {
+  name: string;
+  refNode: Parser.SyntaxNode;
+  symbolsByName: Map<string, SymbolRecord[]>;
+  resolveLocal: SymbolFlowExtractInput['resolveLocal'];
+}): SymbolRecord | undefined {
+  const scoped = input.resolveLocal(input.name, input.refNode);
+  if (scoped && (scoped.kind === 'function' || scoped.kind === 'method')) {
+    return scoped;
+  }
+  const candidates = input.symbolsByName.get(input.name);
+  if (!candidates || candidates.length === 0) return undefined;
+  // Prefer the closest declaration to the reference site so two
+  // identically-named functions in the same file produce a stable
+  // best-match. Mirrors the `findImportSymbol` / `callsExtract`
+  // resolution conventions already used elsewhere in the adapter.
+  let closest: SymbolRecord | undefined;
+  let closestDistance = Number.POSITIVE_INFINITY;
+  for (const candidate of candidates) {
+    if (candidate.kind !== 'function' && candidate.kind !== 'method') continue;
+    const distance = Math.abs(candidate.byteRange.start - input.refNode.startIndex);
+    if (distance < closestDistance) {
+      closestDistance = distance;
+      closest = candidate;
+    }
+  }
+  return closest;
 }
 
 function receivingCallSymbolResolve(input: {

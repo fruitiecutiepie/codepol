@@ -14,6 +14,7 @@ import { REFS_QUERY } from './queries/refs';
 import { CALLS_QUERY } from './queries/calls';
 import { IMPORTS_QUERY } from './queries/imports';
 import { EXPORTS_QUERY } from './queries/exports';
+import { SYMBOL_FLOW_QUERY } from './queries/symbolFlow';
 
 /**
  * Reference filter for Python.
@@ -88,6 +89,7 @@ export function pythonConfigCreate(language: Language): LangConfig {
       calls: CALLS_QUERY,
       imports: IMPORTS_QUERY,
       exports: EXPORTS_QUERY,
+      symbolFlow: SYMBOL_FLOW_QUERY,
     },
     captures: CAPTURE_NAMES_DEFAULT,
     symbolKinds: {

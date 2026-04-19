@@ -108,20 +108,20 @@ Per-function CFG construction, storage, querying, cyclomatic complexity, and all
 - [x] Ternary expressions within CFG — `ternaryExpressionFind` recursively scans statement subtrees for `ternary_expression` nodes; `ternaryProcess` models branch(condition) → true/false paths → merge, with `ternaryBranchProcess` handling nested ternaries recursively via `incomingEdgeLabel` propagation
 
 ### 7. Symbol-Flow Relations (Phase 9.1 / Gap 1)
-**Status**: Implemented (TypeScript only; other languages no-op until they ship a `symbolFlow` query)
+**Status**: Implemented (TypeScript / TSX / Python; other languages no-op until they ship a `symbolFlow` query)
 
 Tracks "function-as-argument" flow as a *separate* edge stream from the
 call graph so `callersGet` / `calleesGet` stay honest about what the
 source code actually expresses.
 
 - [x] `SymbolFlowRelation` type in `indexTypes.ts` — `flowKind: 'argument' | 'return' | 'assignment' | 'storage'` (MVP emits only `'argument'`); other variants are reserved for the next phase
-- [x] Tree-sitter query (`languages/typescript/queries/symbolFlow.ts`) — captures bare-identifier arguments only; inline arrow / `function () {}` literals are out of scope for the MVP
-- [x] `symbolFlowExtract` in `adapters/treeSitter/symbolFlowExtract.ts` — one job: walk captures, resolve via the same `resolveLocal` pipeline `refsExtract` uses, emit relations
+- [x] Tree-sitter queries (`languages/typescript/queries/symbolFlow.ts`, `languages/python/queries/symbolFlow.ts`) — capture names match across packs so the language-agnostic extractor stays uniform; bare-identifier arguments only; inline arrow / `function () {}` / `lambda` literals and Python keyword arguments (`f(x=handler)`) are out of scope for the MVP
+- [x] `symbolFlowExtract` in `adapters/treeSitter/symbolFlowExtract.ts` — one job: walk captures, resolve flowing identifier (scope-aware via `resolveLocal`, with a flat `symbolsByName` fallback that mirrors `callsExtract` so language packs whose function symbols are scoped to the function body — Python — still resolve), emit relations
 - [x] `IndexStore` indexes — `symbolFlowsByFlowingSymbol`, `symbolFlowsByReceivingCallSymbol`, `symbolFlowsByFile` with put/remove/clear/`relationUpdate` parity to the existing `typeRelationsBy*` pattern
 - [x] `ProjectIndex` API — `symbolFlowsForSymbolGet`, `symbolFlowsForReceiverGet`, `symbolFlowsInFileGet`
 - [x] Workspace contract — `querySymbolFlow({ symbolId, direction: 'outgoing' | 'incoming' })` → `WorkspaceSymbolFlowResult`; LSP method `codepol/symbolFlow`; CLI `codepol graph flow <symbolId>`
-- [x] `IndexCapabilities.symbolFlow` flag — `true` when the index has at least one language adapter that emits `SymbolFlowRelation` (today: TypeScript / TSX)
-- [x] Tests: `packages/core/src/index/indexStore.spec.ts` (round-trip + `relationUpdate`), `tests/index.symbol-flow-extraction.spec.ts` (extraction matrix), `tests/workspace-service.symbol-flow.spec.ts` (engine integration), `tests/e2e.cli.graph.spec.ts` (CLI happy-path)
+- [x] `IndexCapabilities.symbolFlow` flag — `true` when the index has at least one language adapter that emits `SymbolFlowRelation` (today: TypeScript / TSX / Python)
+- [x] Tests: `packages/core/src/index/indexStore.spec.ts` (round-trip + `relationUpdate`), `tests/index.symbol-flow-extraction.spec.ts` (TS extraction matrix), `tests/index.symbol-flow-extraction.python.spec.ts` (Python extraction matrix — same coverage, plus keyword-argument scope-out test), `tests/workspace-service.symbol-flow.spec.ts` (engine integration), `tests/e2e.cli.graph.spec.ts` (CLI happy-path)
 
 ### 8. Type-Aware Call Graph Source (Phase 9.2 / Gap 1)
 **Status**: Implemented — interface + registry + workspace merge; binding lives in `@codepol/typescript-language-bridge`

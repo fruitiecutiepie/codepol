@@ -214,7 +214,11 @@ function projectIndexBuildImpl(options: IndexBuildOptions): IndexBuildResult {
 function indexCapabilitiesSymbolFlowCompute(
   supportedLanguages: Set<string>,
 ): boolean {
-  return supportedLanguages.has('typescript') || supportedLanguages.has('tsx');
+  return (
+    supportedLanguages.has('typescript') ||
+    supportedLanguages.has('tsx') ||
+    supportedLanguages.has('python')
+  );
 }
 
 /**
