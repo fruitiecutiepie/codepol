@@ -21,6 +21,7 @@
     "onCommand:codepol.extension.showSemanticSearch",
     "onCommand:codepol.extension.showArchitectureLinks",
     "onCommand:codepol.architecture.peek",
+    "onCommand:codepol.architecture.showCycle",
     "onCommand:codepol.extension.showCallGraph",
     "onCommand:codepol.extension.showTypeHierarchy",
     "onCommand:codepol.extension.showDependencyPath",
@@ -67,6 +68,11 @@
       {
         "command": "codepol.architecture.peek",
         "title": "Codepol: Peek Architecture",
+        "enablement": "codepol.indexBackedCommandsEnabled"
+      },
+      {
+        "command": "codepol.architecture.showCycle",
+        "title": "Codepol: Show Full Cycle",
         "enablement": "codepol.indexBackedCommandsEnabled"
       },
       {
@@ -232,6 +238,11 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "Show a subtle gutter marker on every file that participates in a Codepol-detected dependency cycle. Hover the marker for the full member list with peek-architecture links to each member."
+        },
+        "codepol.architecture.baselineLabel": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Phase 6 PR-aware architecture overlay. When set to a label that exists in the workspace's `.codepol/graph-snapshots/` directory (capture one with `codepol graph snapshot --label <name>`), Codepol publishes a `codepol/architecture/new-since-baseline` warning for every cycle and dead module that did not exist in the baseline. Leave empty to disable the overlay; the upstream `codepol/architecture` info-level diagnostics are unaffected either way."
         },
         "codepol.diagnostics.overrides": {
           "type": "object",

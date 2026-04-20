@@ -247,6 +247,13 @@ function architectureLinksRebuilderCreate(input: {
   hover: WorkspaceSemanticHoverResult | null;
   graph: WorkspaceDependencyGraphResult | null;
   summary: WorkspaceArchitectureSummaryResult | null;
+  /**
+   * Phase 6 cycle highlight, captured by the rebuilder closure. Stays
+   * constant across re-renders triggered by control messages
+   * (filter/layout/blast-radius changes) because the cycle the user
+   * clicked on does not move.
+   */
+  cycleHighlightUris?: readonly string[];
 }): ArchitectureLinksPanelRebuilder {
   return (state) =>
     architectureLinksPanelViewModelCreate({
@@ -258,6 +265,9 @@ function architectureLinksRebuilderCreate(input: {
       filters: state.filters,
       layoutMode: state.layoutMode,
       blastRadiusUri: state.blastRadiusUri,
+      ...(input.cycleHighlightUris !== undefined
+        ? { cycleHighlightUris: input.cycleHighlightUris }
+        : {}),
     });
 }
 
@@ -649,6 +659,87 @@ export class CodepolCommandController {
       summary: summary ?? null,
     });
     const model = buildModel({ filters: {}, layoutMode: 'radial' });
+    this.panels.showArchitectureLinks(model, buildModel);
+    return model;
+  }
+
+  /**
+   * Open the Architecture Links panel scoped to a single import cycle.
+   *
+   * Invoked by the Phase 6 "Show full cycle" code action on
+   * `codepol/architecture` cycle diagnostics. The action passes every
+   * cycle member URI in `args.memberUris`; the controller picks the
+   * alphabetically-first member as the focus URI (matches the cycle
+   * anchor convention from `noCyclesCheck`), runs the standard impact
+   * radius + summary fan-out, and hands the rebuilder a
+   * `cycleHighlightUris` set so the panel renders the cycle members
+   * in full opacity and dims the rest.
+   *
+   * Returns `null` when:
+   * - `args.memberUris` is missing or empty (defensive: a malformed
+   *   command invocation should be surfaced via the error host, not
+   *   crash the extension)
+   * - The architecture-links feature is gated off
+   * - The supersession sentinel is observed before the panel can open
+   */
+  async showArchitectureCycle(
+    args?: { memberUris?: string[] },
+  ): Promise<ArchitectureLinksPanelViewModel | null> {
+    const memberUris = args?.memberUris ?? [];
+    if (memberUris.length === 0) {
+      await this.host.errorShow(
+        'Codepol: Show Full Cycle was invoked without any cycle members.',
+      );
+      return null;
+    }
+
+    const blockedMessage = this.featureBlockedMessageResolve('architectureLinks');
+    if (blockedMessage) {
+      await this.host.errorShow(blockedMessage);
+      return null;
+    }
+
+    // Anchor on the alphabetically-first member so the focus URI
+    // matches the diagnostic anchor noCyclesCheck picks. Keeping the
+    // rest of the list in its incoming order preserves any intent the
+    // caller had about presentation order in the panel side panel.
+    const focusUri =
+      memberUris
+        .slice()
+        .sort((left, right) =>
+          left < right ? -1 : left > right ? 1 : 0,
+        )[0] ?? memberUris[0]!;
+
+    const [impactRadius, references, hover, summary] = await Promise.all([
+      this.protocolRequestRun(
+        this.protocol.queryImpactRadius({
+          uri: focusUri,
+          direction: 'both',
+          depth: 2,
+        }),
+      ),
+      this.protocolOptionalRequestRun(
+        this.protocol.querySemanticReferences(focusUri),
+      ),
+      this.protocolOptionalRequestRun(this.protocol.querySemanticHover(focusUri)),
+      this.protocolOptionalRequestRun(this.protocol.queryArchitectureSummary()),
+    ]);
+    if (impactRadius === CodepolCommandController.REQUEST_SUPERSEDED) {
+      return null;
+    }
+
+    const buildModel = architectureLinksRebuilderCreate({
+      uri: focusUri,
+      references: references ?? null,
+      hover: hover ?? null,
+      graph: impactRadius ?? null,
+      summary: summary ?? null,
+      cycleHighlightUris: memberUris,
+    });
+    // Default to layered for cycle peeks because the radial focus
+    // canvas hides nodes that are not adjacent to the focus URI, which
+    // would obscure cycle members two hops away.
+    const model = buildModel({ filters: {}, layoutMode: 'layered' });
     this.panels.showArchitectureLinks(model, buildModel);
     return model;
   }

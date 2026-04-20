@@ -817,6 +817,74 @@ describe('circularDepsCheck', () => {
 - **Create temp directories** with `fs.mkdtempSync` so tests don't interfere with each other.
 - **Test edge cases**: empty files, files with no exports, self-imports, external packages, re-export chains.
 
+## PR-Level Architecture Gating
+
+Phase 6 ships two pieces that work together to gate architectural regressions in pull requests:
+
+1. **`codepol graph snapshot`** captures the live workspace dependency graph (nodes, edges, cycles, entry points) into a labeled sidecar file under `.codepol/graph-snapshots/<label>.json`.
+2. **`codepol graph diff`** compares the live graph against a labeled or inline baseline and exits non-zero when `--fail-on-new-cycle` is set and the diff added at least one cycle.
+
+The two-step CI flow looks like:
+
+```bash
+# On the base branch (e.g. main): capture the baseline once per merge.
+git checkout main
+codepol graph snapshot --label base
+
+# On the PR head: compare against the baseline and gate on regressions.
+git checkout pr-branch
+codepol graph diff base --fail-on-new-cycle
+```
+
+`graph diff` writes a `WorkspaceDependencyDiffResult` JSON payload to stdout regardless of the exit code, so CI bots can parse the diff for richer reporting (added/removed nodes, edges, cycles).
+
+### GitHub Actions snippet
+
+```yaml
+name: codepol-architecture-gate
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  graph-diff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Capture base snapshot
+        run: |
+          git checkout ${{ github.event.pull_request.base.sha }}
+          npx codepol graph snapshot --label base
+
+      - name: Diff PR head against base
+        run: |
+          git checkout ${{ github.event.pull_request.head.sha }}
+          npx codepol graph diff base --fail-on-new-cycle
+```
+
+The job fails when the PR introduces a new cycle even if every individual file type-checks cleanly. To avoid losing the diff JSON when the gate fires, redirect stdout to a file before `--fail-on-new-cycle` short-circuits the run:
+
+```bash
+npx codepol graph diff base --fail-on-new-cycle > graph-diff.json
+```
+
+### Local preview in the editor
+
+Codepol's VS Code extension mirrors the same baseline label via the
+`codepol.architecture.baselineLabel` setting. Set it to the snapshot
+label your CI uses (e.g. `base`) and the editor publishes a
+`codepol/architecture/new-since-baseline` warning in the Problems panel
+for every cycle and dead module that the PR introduced. This lets
+contributors preview gating outcomes locally before pushing.
+
+The overlay is independent of the upstream `codepol/architecture` info
+diagnostics and respects the user's diagnostic-source filters, so
+muting one source never silences the other. Leave the setting empty to
+disable the overlay entirely.
+
 ## Related Documentation
 
 - [Semantic Index Architecture](./semantic-index) -- how the index works internally

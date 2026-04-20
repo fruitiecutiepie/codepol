@@ -33,6 +33,7 @@ import {
   CODEPOL_EXTENSION_COMMAND_SHOW_LINT_RULE_DIAGNOSTIC_FIXES,
   CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_SUMMARY,
   CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_LINKS,
+  CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_CYCLE,
   CODEPOL_EXTENSION_COMMAND_SHOW_CALL_GRAPH,
   CODEPOL_EXTENSION_COMMAND_SHOW_TYPE_HIERARCHY,
   CODEPOL_EXTENSION_COMMAND_SHOW_DEAD_MODULES,
@@ -46,6 +47,11 @@ import {
   CODEPOL_EXTENSION_VIEW_LINT_RULES_ID,
   CODEPOL_EXTENSION_VIEW_RENAME_TARGETS_ID,
 } from './constants';
+import {
+  ARCHITECTURE_CYCLE_CODE_ACTION_KIND,
+  CodepolArchitectureCycleCodeActionProvider,
+} from './architectureCycleCodeActionProvider';
+import { CodepolArchitectureDiffOverlay } from './architectureDiffOverlay';
 import { CodepolArchitectureCodeLensProvider } from './codeLensProvider';
 import { CodepolExportCodeLensProvider } from './exportCodeLensProvider';
 import { CodepolCycleGutterDecorationController } from './cycleGutterDecorationController';
@@ -820,6 +826,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       vscode.window.activeTextEditor,
     );
   }
+  // Phase 6 — PR-aware diff overlay. Reads the
+  // `codepol.architecture.baselineLabel` setting; an empty value
+  // disables the overlay so the default install is a no-op. The
+  // overlay subscribes to its own config / save events through its
+  // own dispose chain, so we just need to push the controller into
+  // `context.subscriptions` and call `start()` once.
+  const architectureDiffOverlay = new CodepolArchitectureDiffOverlay({
+    protocol,
+  });
+  architectureDiffOverlay.start();
 
   context.subscriptions.push(
     panels,
@@ -831,6 +847,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     typeHierarchyCodeLensProvider,
     exportCodeLensProvider,
     cycleGutterDecorationController,
+    architectureDiffOverlay,
     importSpecifierMarkerController,
     vscode.languages.registerCodeLensProvider(
       { scheme: 'file' },
@@ -851,6 +868,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.languages.registerHoverProvider(
       { scheme: 'file' },
       importSpecifierHoverProvider,
+    ),
+    // Phase 6 — "Show full cycle" lightbulb action on
+    // codepol/architecture cycle diagnostics. The provider is a thin
+    // shell over the pure helper in
+    // architectureCycleCodeActionViewModel.ts; no async work happens
+    // inside provideCodeActions so it stays in lockstep with the
+    // editor's normal lightbulb timing.
+    vscode.languages.registerCodeActionsProvider(
+      { scheme: 'file' },
+      new CodepolArchitectureCycleCodeActionProvider(),
+      {
+        providedCodeActionKinds: [ARCHITECTURE_CYCLE_CODE_ACTION_KIND],
+      },
     ),
     vscode.languages.registerCodeLensProvider(
       { scheme: 'file' },
@@ -921,6 +951,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       CODEPOL_EXTENSION_COMMAND_PEEK_ARCHITECTURE,
       async (input?: unknown) =>
         controller?.peekArchitecture(peekArchitectureArgsResolve(input)),
+    ),
+    vscode.commands.registerCommand(
+      CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_CYCLE,
+      async (args?: { memberUris?: string[] }) =>
+        controller?.showArchitectureCycle(args),
     ),
     vscode.commands.registerCommand(
       CODEPOL_EXTENSION_COMMAND_SHOW_CALL_GRAPH,

@@ -42,6 +42,26 @@ targets = ["src"]
 `;
 }
 
+function noCyclesConfigContentCreate(): string {
+  return `[[plugins]]
+id = "@codepol/plugin"
+source = { kind = "builtin" }
+
+[targets.src]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[[rules]]
+id = "no-cycles"
+ruleId = "@codepol/plugin/no-cycles"
+description = "Reject circular imports"
+targets = ["src"]
+
+[rules.args]
+maxCycles = 50
+`;
+}
+
 function noUnusedVarsConfigContentCreate(): string {
   return `[[plugins]]
 id = "@codepol/plugin"
@@ -2906,6 +2926,88 @@ describe('CodepolLspServer', () => {
 
     const finalPublish = messages.filter((message) => message.method === 'textDocument/publishDiagnostics')[2];
     expect(finalPublish?.params.diagnostics).toHaveLength(1);
+  });
+
+  it('publishes architecture cycle diagnostics under the codepol/architecture source', async () => {
+    // Phase 6 user-facing surface: cycles flagged by the architecture
+    // analyzer must reach the editor's Problems panel as a distinct
+    // source so the "Show full cycle" code action and any
+    // user-installed diagnostic filters can pick them out from per-file
+    // tree-check warnings.
+    const workspaceRoot = tempWorkspaceCreate('codepol-lsp-arch-source-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'codepol.toml'),
+      noCyclesConfigContentCreate(),
+      'utf8',
+    );
+
+    const aPath = path.join(workspaceRoot, 'src', 'a.ts');
+    const bPath = path.join(workspaceRoot, 'src', 'b.ts');
+    fs.writeFileSync(
+      aPath,
+      `import { b } from './b';\nexport const a = b + 1;\n`,
+      'utf8',
+    );
+    fs.writeFileSync(
+      bPath,
+      `import { a } from './a';\nexport const b = Number(a) + 1;\n`,
+      'utf8',
+    );
+    const aUri = pathToFileURL(aPath).href;
+
+    const messages: any[] = [];
+    const server = new CodepolLspServer({
+      sendMessage: (message) => {
+        messages.push(message);
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        rootUri: pathToFileURL(workspaceRoot).href,
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      method: 'textDocument/didOpen',
+      params: {
+        textDocument: {
+          uri: aUri,
+          version: 1,
+          text: fs.readFileSync(aPath, 'utf8'),
+        },
+      },
+    });
+
+    const archDiagnostic = messages
+      .filter((message) => message.method === 'textDocument/publishDiagnostics')
+      .flatMap((message) => (message.params.diagnostics ?? []) as any[])
+      .find((diagnostic) => diagnostic?.source === 'codepol/architecture');
+    expect(archDiagnostic).toBeDefined();
+    // The diagnostic code is the rule's `id` field (`no-cycles`) when
+    // present, otherwise the rule's full `ruleId`. The
+    // `architectureCycleCodeActionsCreate` helper accepts either form
+    // by suffix-matching `/no-cycles`.
+    expect(['no-cycles', '@codepol/plugin/no-cycles']).toContain(archDiagnostic.code);
+    // The cycle anchor pins the diagnostic on the alphabetically-first
+    // member's line 1 — see noCyclesCheck.
+    expect(archDiagnostic.range.start.line).toBe(0);
+    expect(typeof archDiagnostic.message).toBe('string');
+    expect(archDiagnostic.message.toLowerCase()).toContain('circular');
+    // The other cycle member must be reachable via relatedInformation
+    // so the Phase 6 "Show full cycle" code action can collect it.
+    expect(Array.isArray(archDiagnostic.relatedInformation)).toBe(true);
+    const relatedUris = (archDiagnostic.relatedInformation ?? []).map(
+      (related: any) => related.location?.uri,
+    );
+    const bUri = pathToFileURL(bPath).href;
+    expect(relatedUris).toContain(bUri);
   });
 
   it('forwards the current document version when querying diagnostics for open overlays', async () => {

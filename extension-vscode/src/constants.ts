@@ -19,6 +19,8 @@ export const CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_LINKS =
   'codepol.extension.showArchitectureLinks';
 export const CODEPOL_EXTENSION_COMMAND_PEEK_ARCHITECTURE =
   'codepol.architecture.peek';
+export const CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_CYCLE =
+  'codepol.architecture.showCycle';
 export const CODEPOL_EXTENSION_COMMAND_SHOW_CALL_GRAPH =
   'codepol.extension.showCallGraph';
 export const CODEPOL_EXTENSION_COMMAND_SHOW_TYPE_HIERARCHY =
@@ -72,3 +74,22 @@ export const CODEPOL_EXTENSION_PANEL_DEPENDENCY_PATH =
   'codepol.dependencyPathPanel';
 export const CODEPOL_EXTENSION_PANEL_DEAD_MODULES =
   'codepol.deadModulesPanel';
+
+/**
+ * Diagnostic source the Phase 6 PR-aware overlay publishes under.
+ * Distinct from the upstream `codepol/architecture` source so users
+ * can mute it independently in the editor's source filter, and so the
+ * overlay never collides with the info-level cycle/dead-module
+ * diagnostic the workspace service emits for the same files.
+ */
+export const CODEPOL_ARCHITECTURE_NEW_SINCE_BASELINE_DIAGNOSTIC_SOURCE =
+  'codepol/architecture/new-since-baseline';
+
+/**
+ * Configuration key the Phase 6 PR-aware overlay reads to pick the
+ * baseline snapshot label. Empty string disables the overlay.
+ * Mirrors the `--baseline-label` flag on `codepol graph diff` so a
+ * developer can preview the same diff locally that CI gates on.
+ */
+export const CODEPOL_CONFIG_ARCHITECTURE_BASELINE_LABEL =
+  'codepol.architecture.baselineLabel';

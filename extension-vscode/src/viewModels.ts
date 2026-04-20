@@ -256,6 +256,16 @@ export type ArchitectureLinksPanelViewModel = {
   filters: DependencyGraphFilterState;
   layoutMode: DependencyGraphLayoutMode;
   blastRadiusUri?: string;
+  /**
+   * Phase 6 — when set by the "Show full cycle" code action, the panel
+   * highlights only the listed URIs and dims the rest. The list always
+   * includes the panel's anchor URI as its first element so the focus
+   * lookup remains stable. Reuses the same `isDimmed` styling that
+   * powers `blastRadiusUri`; when both are set the dim sets are
+   * intersected (a node must be in BOTH the cycle and the blast radius
+   * to stay un-dimmed).
+   */
+  cycleHighlightUris?: readonly string[];
 };
 
 export type LintRuleDetailsPanelGroupViewModel = {
@@ -1333,6 +1343,15 @@ export function architectureLinksPanelViewModelCreate(input: {
   filters?: DependencyGraphFilterState;
   layoutMode?: DependencyGraphLayoutMode;
   blastRadiusUri?: string;
+  /**
+   * Phase 6 cycle highlight — when set, only the listed URIs stay
+   * un-dimmed in the canvas. The panel anchor URI is implicitly added
+   * to the highlight set if it is not already present so the focus
+   * node remains visible. Reuses {@link dependencyGraphCanvasBlastRadiusApply}
+   * via a shared "highlight" set so the dim styling stays consistent
+   * with the existing blast-radius interaction.
+   */
+  cycleHighlightUris?: readonly string[];
 }): ArchitectureLinksPanelViewModel {
   const filters = input.filters ?? {};
   const layoutMode = input.layoutMode ?? 'radial';
@@ -1342,6 +1361,10 @@ export function architectureLinksPanelViewModelCreate(input: {
       : null;
   let canvas: DependencyGraphCanvasViewModel;
   let blastRadiusReachableCount = 0;
+  const cycleHighlightUris =
+    input.cycleHighlightUris && input.cycleHighlightUris.length > 0
+      ? input.cycleHighlightUris
+      : undefined;
   if (filteredGraph !== null) {
     canvas = dependencyGraphCanvasForLayoutCreate({
       graph: filteredGraph,
@@ -1349,13 +1372,28 @@ export function architectureLinksPanelViewModelCreate(input: {
       layoutMode,
       preferFocusForRadial: true,
     });
+    let highlightSet: Set<string> | undefined;
     if (input.blastRadiusUri) {
       const reachable = blastRadiusReachableFromUriCompute(
         filteredGraph,
         input.blastRadiusUri,
       );
       blastRadiusReachableCount = reachable.size;
-      canvas = dependencyGraphCanvasBlastRadiusApply(canvas, reachable);
+      highlightSet = reachable;
+    }
+    if (cycleHighlightUris) {
+      const cycleSet = new Set<string>(cycleHighlightUris);
+      // The panel anchor must remain visible even when it is not part
+      // of the cycle (e.g. when the action was invoked from a file
+      // that imports a cycle but is not itself a member).
+      cycleSet.add(input.uri);
+      highlightSet =
+        highlightSet === undefined
+          ? cycleSet
+          : graphHighlightSetsIntersect(highlightSet, cycleSet);
+    }
+    if (highlightSet !== undefined) {
+      canvas = dependencyGraphCanvasBlastRadiusApply(canvas, highlightSet);
     }
   } else {
     canvas = {
@@ -1401,7 +1439,27 @@ export function architectureLinksPanelViewModelCreate(input: {
     filters,
     layoutMode,
     blastRadiusUri: input.blastRadiusUri,
+    ...(cycleHighlightUris !== undefined
+      ? { cycleHighlightUris }
+      : {}),
   };
+}
+
+/**
+ * Intersect two highlight sets used by the dependency-graph canvas.
+ * Returns a new set so callers do not have to worry about which input
+ * they own. Used to combine the blast-radius reachable set with the
+ * Phase 6 cycle-highlight set when both are present.
+ */
+function graphHighlightSetsIntersect(
+  left: Set<string>,
+  right: Set<string>,
+): Set<string> {
+  const intersection = new Set<string>();
+  for (const uri of left) {
+    if (right.has(uri)) intersection.add(uri);
+  }
+  return intersection;
 }
 
 function namingRuleLinesCreate(

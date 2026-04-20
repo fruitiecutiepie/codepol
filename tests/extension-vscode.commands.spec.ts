@@ -1020,6 +1020,66 @@ describe('CodepolCommandController', () => {
     expect(protocol.querySymbolAtPosition).not.toHaveBeenCalled();
   });
 
+  it('opens the architecture links panel scoped to the cycle members for showArchitectureCycle', async () => {
+    const protocol = protocolCreate();
+    protocol.queryImpactRadius.mockResolvedValue(dependencyGraphResult);
+    protocol.queryArchitectureSummary.mockResolvedValue(architectureSummaryResult);
+    protocol.querySemanticReferences.mockResolvedValue(null);
+    protocol.querySemanticHover.mockResolvedValue(null);
+    const panels = panelsCreate();
+    const host = hostCreate();
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    // Pass the cycle members in non-sorted order to verify the
+    // controller anchors on the alphabetically-first member (matches
+    // the noCyclesCheck anchor convention).
+    const result = await controller.showArchitectureCycle({
+      memberUris: [
+        'file:///workspace/packages/lib/src/index.ts',
+        'file:///workspace/apps/web/src/app.ts',
+      ],
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.uri).toBe('file:///workspace/apps/web/src/app.ts');
+    expect(result?.cycleHighlightUris).toEqual([
+      'file:///workspace/packages/lib/src/index.ts',
+      'file:///workspace/apps/web/src/app.ts',
+    ]);
+    // Layered layout is preferred for cycle peeks so two-hop cycle
+    // members stay visible (radial focus would prune them).
+    expect(result?.layoutMode).toBe('layered');
+    expect(protocol.queryImpactRadius).toHaveBeenCalledWith({
+      uri: 'file:///workspace/apps/web/src/app.ts',
+      direction: 'both',
+      depth: 2,
+    });
+    expect(panels.showArchitectureLinks).toHaveBeenCalledWith(
+      result,
+      expect.any(Function),
+    );
+  });
+
+  it('rejects showArchitectureCycle when no member URIs are supplied', async () => {
+    const protocol = protocolCreate();
+    const panels = panelsCreate();
+    const host = hostCreate();
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    await expect(
+      controller.showArchitectureCycle({ memberUris: [] }),
+    ).resolves.toBeNull();
+    await expect(
+      controller.showArchitectureCycle(undefined),
+    ).resolves.toBeNull();
+
+    expect(host.errorShow).toHaveBeenCalledWith(
+      'Codepol: Show Full Cycle was invoked without any cycle members.',
+    );
+    expect(protocol.queryImpactRadius).not.toHaveBeenCalled();
+    expect(panels.showArchitectureLinks).not.toHaveBeenCalled();
+  });
+
   it('keeps architecture links active-file scoped while workspace commands remain available', async () => {
     const protocol = protocolCreate();
     const panels = panelsCreate();

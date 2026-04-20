@@ -272,6 +272,110 @@ describe('architectureLinksPanelViewModelCreate filters and blast-radius', () =>
       'file:///workspace/packages/lib/src/index.ts->file:///workspace/packages/lib/src/math.ts',
     );
   });
+
+  it('dims every node outside cycleHighlightUris when the Phase 6 cycle action populates the option', () => {
+    // Cycle members: app.ts (anchor) <-> index.ts. The third node in
+    // baseGraph (math.ts) is NOT a member, so it must be dimmed even
+    // though it is downstream of the focused subgraph.
+    const cycleAnchor = 'file:///workspace/apps/web/src/app.ts';
+    const cycleMember = 'file:///workspace/packages/lib/src/index.ts';
+    const model = architectureLinksPanelViewModelCreate({
+      uri: cycleAnchor,
+      references: null,
+      hover: null,
+      // Use the layered layout so every node from the source graph
+      // appears on the canvas — radial focus would otherwise prune
+      // nodes that are not adjacent to the anchor and the dim
+      // assertion would silently pass.
+      layoutMode: 'layered',
+      graph: baseGraph,
+      summary: null,
+      cycleHighlightUris: [cycleAnchor, cycleMember],
+    });
+
+    expect(model.cycleHighlightUris).toEqual([cycleAnchor, cycleMember]);
+
+    const visibleNodes = model.graph.nodes
+      .filter((node) => node.isDimmed !== true)
+      .map((node) => node.uri)
+      .sort();
+    expect(visibleNodes).toEqual([cycleAnchor, cycleMember].sort());
+
+    const dimmedNodes = model.graph.nodes
+      .filter((node) => node.isDimmed === true)
+      .map((node) => node.uri);
+    // Every non-member that the layered canvas decided to render must
+    // be dimmed (we don't pin the exact list to keep the test resilient
+    // to future canvas layout changes).
+    expect(dimmedNodes.length).toBeGreaterThan(0);
+    for (const uri of dimmedNodes) {
+      expect(uri).not.toBe(cycleAnchor);
+      expect(uri).not.toBe(cycleMember);
+    }
+  });
+
+  it('intersects cycleHighlightUris with blastRadiusUri so a node must be in both sets to stay un-dimmed', () => {
+    const cycleAnchor = 'file:///workspace/apps/web/src/app.ts';
+    const cycleMember = 'file:///workspace/packages/lib/src/index.ts';
+    // Blast seed is the test file. Blast radius is the undirected
+    // reachable set, so it covers the anchor and the cycle member but
+    // NOT math.ts (which only exists downstream of index.ts via a
+    // type-only edge already filtered into the canvas).
+    const blastSeed = 'file:///workspace/apps/web/src/app.test.ts';
+    const mathUri = 'file:///workspace/packages/lib/src/math.ts';
+
+    const model = architectureLinksPanelViewModelCreate({
+      uri: cycleAnchor,
+      references: null,
+      hover: null,
+      layoutMode: 'layered',
+      graph: baseGraph,
+      summary: null,
+      blastRadiusUri: blastSeed,
+      // math.ts is reachable from blast seed via the undirected
+      // adjacency (test -> app -> index -> math), so the intersection
+      // with the cycle set will keep only the two cycle members.
+      cycleHighlightUris: [cycleAnchor, cycleMember],
+    });
+
+    const dimmed = new Set(
+      model.graph.nodes
+        .filter((node) => node.isDimmed === true)
+        .map((node) => node.uri),
+    );
+    // Cycle anchor + member: in both sets -> visible.
+    expect(dimmed.has(cycleAnchor)).toBe(false);
+    expect(dimmed.has(cycleMember)).toBe(false);
+    // Blast seed and math.ts: reachable from blast but not in the
+    // cycle highlight set -> intersected away -> dimmed.
+    expect(dimmed.has(blastSeed)).toBe(true);
+    expect(dimmed.has(mathUri)).toBe(true);
+  });
+
+  it('omits cycleHighlightUris from the view model when the option is empty or unset', () => {
+    const noOption = architectureLinksPanelViewModelCreate({
+      uri: 'file:///workspace/packages/lib/src/index.ts',
+      references: null,
+      hover: null,
+      graph: baseGraph,
+      summary: null,
+    });
+    expect(noOption.cycleHighlightUris).toBeUndefined();
+
+    const emptyArray = architectureLinksPanelViewModelCreate({
+      uri: 'file:///workspace/packages/lib/src/index.ts',
+      references: null,
+      hover: null,
+      graph: baseGraph,
+      summary: null,
+      cycleHighlightUris: [],
+    });
+    expect(emptyArray.cycleHighlightUris).toBeUndefined();
+    // No highlight set -> nothing should be dimmed.
+    expect(
+      emptyArray.graph.nodes.every((node) => node.isDimmed !== true),
+    ).toBe(true);
+  });
 });
 
 describe('architectureCodeLensViewModelCreate', () => {
