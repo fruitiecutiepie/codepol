@@ -392,6 +392,19 @@ A phase-by-phase reference of what each expansion enables for end users (enginee
 - aggregate cyclomatic complexity per file, so hotspot detection can mean "lots of branching that everyone depends on", not just "lots of importers"
 - meaningful edge tooltips: counts of bindings crossing each edge answer "is this a real dependency or a single import?"
 
+User-facing surfaces landed for Phase 1:
+
+- **Server (LOC).** `WorkspaceDependencyGraphNodeMetrics` (`packages/core/src/workspace/workspaceTypes.ts`) gains optional `loc?: number`. The new `packages/workspace-service/src/dependencyGraphLoc.ts` module owns line counting: a pure `dependencyGraphLineCountFromSource(source)` and an error-swallowing `workspaceFileLineCountGet(sourceGet)` thunk wrapper. `workspaceDependencyGraphResultCreate` (`packages/workspace-service/src/index.ts`) calls it with `() => workspaceSourceGet(state, filePath)` so the count is overlay-aware; a failed read leaves the node intact with `loc` omitted (TOCTOU guard between `ruleMatchesGet` glob and the LOC pass).
+- **Dependency Graph panel — view models.** `DependencyGraphNodeViewModel` (`extension-vscode/src/viewModels.ts`) gains optional `importerCount`, `importeeCount`, `symbolCount`, `loc`, `aggregateCyclomaticComplexity`, `packageName`, `layer`, `countsLine`, and `tooltip`; `DependencyGraphEdgeViewModel` gains `kind`, `bindingCount`, `crossesPackageBoundary`, `crossesLayerBoundary`, and `tooltip`. Two new pure helpers `dependencyGraphNodeTooltipFormat` and `dependencyGraphEdgeTooltipFormat` produce the rendered strings (singular/plural-aware, package/layer trailing tail, edge-kind precedence, `"import"` fallback when only bindingCount is set). `graphNodeMetaCreate` is reshaped to consume the full `WorkspaceDependencyGraphNode` so all three layout helpers (workspace / focus / force) propagate the enrichment uniformly. The `detail` line appends `· N importers · M importees` only when `metrics` is present so legacy fixtures keep their `toEqual` assertions.
+- **SVG renderer.** `graphSvgHtml` (`extension-vscode/src/panels/render.ts`) wraps every edge in `<g class="graph-edge-group">` carrying a `<title>` for `edge.tooltip` and emits `kind-${kind}` / `cross-package` / `cross-layer` modifier classes (cross-layer wins over cross-package via CSS source order) plus `data-edge-kind` / `data-binding-count`. Nodes gain `<title>${tooltip}</title>`, `data-package` / `data-layer` attributes, and a third `<tspan class="graph-counts">` showing the count summary inline. The `<style>` block adds dash patterns (`kind-dynamic`, `kind-side_effect`, `kind-cjs`), `stroke-opacity` dim for `kind-type_only`, accent strokes (`var(--vscode-charts-orange)` for `cross-package`, `var(--vscode-charts-purple)` for `cross-layer`), and `.graph-counts` typography. The Architecture Links panel inherits every enrichment for free because both panels share `graphSvgHtml`.
+- **Tests landed (33 new cases across 5 spec files; daemon / LSP / integration fixtures updated for the new `loc` field):**
+  - `packages/workspace-service/src/dependencyGraphLoc.spec.ts` (new file, 8 cases) — pure-function tests for `dependencyGraphLineCountFromSource` (empty / newline-terminated / unterminated trailing / single line / only-newlines) plus the only branch the public service surface cannot exercise: `workspaceFileLineCountGet` returning `undefined` when the reader thunk throws — the in-process TOCTOU between glob-based file discovery and the LOC pass that's structurally unreachable through the `queryDependencyGraph` boundary.
+  - `tests/extension-vscode.dependency-graph-tooltip-format.spec.ts` (new file, 17 cases) — `dependencyGraphNodeTooltipFormat` covers undefined-when-bare, singular-vs-plural pluralization, optional `loc` / cyclomatic omission, package-only / layer-only / package-and-layer trailing tail, and full enrichment; `dependencyGraphEdgeTooltipFormat` covers undefined-when-bare, kind-only, `"import"` fallback when only `bindingCount` is set, singular-vs-plural binding nouns, explicit `false` cross flags getting omitted, `cross-layer` only, and `cross-package · cross-layer` joined order.
+  - `tests/extension-vscode.view-models.spec.ts` (+2 cases) — full enrichment flows end-to-end through `dependencyGraphPanelViewModelCreate` (countsLine / tooltip / detail suffix); back-compat fixture without metrics leaves every new field undefined and `detail` unchanged.
+  - `tests/extension-vscode.panels-render.spec.ts` (+4 cases) — full enrichment renders `<title>` / `data-edge-kind` / `data-package` / `kind-dynamic cross-package` classes / new CSS rules; bare nodes/edges emit only the panel-level `<title>` and zero new attributes (regression guard against always-on tooltips); `cross-layer` class is actually emitted when the flag is true; the architecture-links panel inherits the same enrichment via the shared SVG renderer.
+  - `tests/workspace-service.integration.spec.ts` (+2 cases) — `metrics.loc` matches a hand-counted disk fixture and reflects overlay text on subsequent `queryDependencyGraph` reads (overlay-awareness); empty / only-newline / unterminated trailing / single-no-newline source shapes all count correctly through the public boundary.
+- **Deferred until later phases.** `layer` is plumbed through node and edge view models inertly until Phase 3 wires layer config into `workspaceDependencyGraphResultCreate`; the `cross-layer` accent is therefore observable today only via test fixtures. The `type_only` edge kind exists in the type union and renders with a dim stroke when emitted, but the tree-sitter adapter does not yet tag type-only imports — they classify as `static` until a follow-up phase tags `ImportBindingRelation.importStyle` accordingly.
+
 ### Phase 2 — Narrow graph queries enable
 
 Each bullet lists the user-facing surfaces that ship the query end-to-end (CLI subcommand → Phase 4; editor command / panel → Phase 5).
@@ -404,13 +417,15 @@ Each bullet lists the user-facing surfaces that ship the query end-to-end (CLI s
 
 ### Phase 3 — `ArchitectureCheckProvider` policy capability enables
 
-- `no-cycles` / `max-cycle-size`: block new cyclic dependencies in CI, cap legacy cycle damage
-- `no-layer-violation`: declare `domain → ui` is forbidden in `codepol.toml`, get a violation when someone imports a UI helper from a domain module
-- `no-cross-package-internal-import`: enforce that monorepo packages only consume each other's public entrypoints
-- `max-fan-in` / `max-fan-out`: coupling budgets per directory or per layer; flag "god module" growth before it lands
-- `dead-module`: warn on files unreachable from declared entry points; dead code shows up in the editor instead of waiting for an audit
-- `entry-point-allowlist`: only declared roots are allowed to be roots; surprises (a forgotten experiment file with no importers) get caught
-- a real capability for plugin authors: custom architecture rules become a one-liner instead of bolting onto `treeCheckProvider`; user-land patterns from `docs/cross-file-analysis.md` collapse to a few lines
+Each bullet lists the rule `ruleId` you put in `codepol.toml`, the typed `args` shape exported from `@codepol/plugin`, and the source file. Violations flow through `policyCheck` and surface in two places: the legacy `treeViolations[]` field (back-compat) and the new `architectureViolations[]` field on `PolicyCheckResult`. They become editor diagnostics under the `codepol/architecture` source via the Phase 6 diagnostic adapter.
+
+- `no-cycles` / `max-cycle-size`: block new cyclic dependencies in CI, cap legacy cycle damage. *Rules: `@codepol/plugin/no-cycles` (`NoCyclesArgs { maxCycles?, minSize? }`, [packages/plugin/src/noCyclesCheck.ts](packages/plugin/src/noCyclesCheck.ts)) — one violation per cycle anchored at the alphabetically-first member with siblings in `relatedLocations`, deterministic `(-size, first member)` ranking, optional summary violation when truncated by `maxCycles` (default 50). `@codepol/plugin/max-cycle-size` (`MaxCycleSizeArgs { max, ignore? }`, [packages/plugin/src/maxCycleSizeCheck.ts](packages/plugin/src/maxCycleSizeCheck.ts)) — measures cycle length after `ignore` is applied so a cycle that touches an ignored barrel still counts only the rest against `max`. Use them together to hold the line on legacy cycles while ratcheting toward zero.*
+- `no-layer-violation`: declare `domain → ui` is forbidden in `codepol.toml`, get a violation when someone imports a UI helper from a domain module. *Rule: `@codepol/plugin/no-layer-violation` (`NoLayerViolationArgs { layers: Record<string, NoLayerViolationLayerConfig { files, allows?, denies? }> }`, [packages/plugin/src/noLayerViolationCheck.ts](packages/plugin/src/noLayerViolationCheck.ts)) — most-specific glob wins for layer assignment, ambiguous assignments emit their own violation, edges from/to unclassified files are silently allowed (the rule only governs files the policy author opted into).*
+- `no-cross-package-internal-import`: enforce that monorepo packages only consume each other's public entrypoints. *Rule: `@codepol/plugin/no-cross-package-internal-import` (`NoCrossPackageInternalImportArgs { allow?, ignorePackages? }`, [packages/plugin/src/noCrossPackageInternalImportCheck.ts](packages/plugin/src/noCrossPackageInternalImportCheck.ts)) — auto-discovers workspace packages via `workspacePackageRecordsDiscover` (pnpm / npm / yarn), classifies files by longest `packageDir` prefix, allows the importee package's `entryPointPath` plus any `allow` glob; `relatedLocations[0]` always points at the public entry the importer should have used.*
+- `max-fan-in` / `max-fan-out`: coupling budgets per directory or per layer; flag "god module" growth before it lands. *Rules: `@codepol/plugin/max-fan-in` ([packages/plugin/src/maxFanInCheck.ts](packages/plugin/src/maxFanInCheck.ts)) and `@codepol/plugin/max-fan-out` ([packages/plugin/src/maxFanOutCheck.ts](packages/plugin/src/maxFanOutCheck.ts)) share the `MaxFanArgs { max, files?, ignore?, topRelated? }` shape via [packages/plugin/src/lib/maxFanShared.ts](packages/plugin/src/lib/maxFanShared.ts) — one violation per over-budget file with up to `topRelated` (default 5) counterparts in `relatedLocations`; `files` glob narrows enforcement to a layer or directory.*
+- `dead-module`: warn on files unreachable from declared entry points; dead code shows up in the editor instead of waiting for an audit. *Rule: `@codepol/plugin/dead-module` (`DeadModuleArgs { entries?, ignore? }`, [packages/plugin/src/deadModuleCheck.ts](packages/plugin/src/deadModuleCheck.ts)) — runs `moduleDeadModulesCompute` against either `entries` globs or the natural entry points; emits zero violations when an explicit `entries` glob matches nothing (typo-safety). Same data feeds `codepol graph dead` (Phase 4) and the `codepol.deadModulesPanel` editor surface (Phase 5).*
+- `entry-point-allowlist`: only declared roots are allowed to be roots; surprises (a forgotten experiment file with no importers) get caught. *Rule: `@codepol/plugin/entry-point-allowlist` (`EntryPointAllowlistArgs { entries, ignore? }`, [packages/plugin/src/entryPointAllowlistCheck.ts](packages/plugin/src/entryPointAllowlistCheck.ts)) — every zero-importer file must match `entries` or `ignore`. Pass `entries = []` to enforce "no orphan files at all" — every file must be reachable through an import chain.*
+- a real capability for plugin authors: custom architecture rules become a one-liner instead of bolting onto `treeCheckProvider`; user-land patterns from `docs/cross-file-analysis.md` collapse to a few lines. *Capability: `architectureCheckProvider?: ArchitectureCheckProvider` on `PolicyPluginCapabilities` ([packages/core/src/policy/policyTypes.ts](packages/core/src/policy/policyTypes.ts)); the runner [packages/core/src/policy/policyArchitectureCheck.ts](packages/core/src/policy/policyArchitectureCheck.ts) builds the project index implicitly (no need to also set `requiresProjectIndex`) and invokes `provider.check(rule, { cwd, policy, projectIndex, moduleGraph, ruleArgs, ruleTargets })` once per matched rule. `moduleGraphFromProjectIndex` adapts the public `ProjectIndex` surface to a `ModuleGraph` so checks never reach into `IndexStore`. The user-land `circularDepsCheck` example in [docs/cross-file-analysis.md](docs/cross-file-analysis.md) is now superseded by the built-in `no-cycles` rule, with a one-line `pluginRuleNew` wrapper as the new minimum.*
 
 ### Phase 4 — CLI `graph` subcommands enable
 
@@ -421,6 +436,25 @@ Each bullet lists the user-facing surfaces that ship the query end-to-end (CLI s
 - `codepol graph dead --entry "bin/**"`: automated unused-module reports
 - `codepol graph diff <baseRef>`: PR-level diff of the architecture, suitable for CI gates and PR-comment bots
 - CI gating without a custom job: non-zero exit codes on `cycles` / `dead` / `diff --fail-on-new-cycle` plug into existing pipelines
+
+User-facing surfaces landed for Phase 4:
+
+- **CLI router and per-subcommand isolation.** `apps/cli/src/graph/graphCommand.ts` registers `codepol graph <subcommand>` under the top-level yargs CLI; one file per subcommand under `apps/cli/src/graph/` (`graphExport.ts`, `graphCycles.ts`, `graphPath.ts`, `graphDead.ts`, `graphFanIn.ts`, `graphFanOut.ts`, `graphImpact.ts`, `graphSnapshot.ts`, `graphDiff.ts`, `graphFlow.ts`, `graphHierarchy.ts`, `graphMetrics.ts`) plus shared helpers (`graphOutputFormat.ts`, `graphPathResolve.ts`, `graphWorkspaceResolve.ts`, `graphExportRenderers.ts`, `graphEntryGlobExpand.ts`). Graph commands run against an in-process `WorkspaceService` per invocation; daemon-backed graph queries (shared warm graph) are tracked separately. Unknown / missing subcommands print yargs usage + exit non-zero so CI catches typos.
+- **`codepol graph export`** — `--format <json|text|dot|mermaid|graphml>`. JSON is byte-equal to `WorkspaceDependencyGraphResult`; the three graph-description formats produce deterministic output with stable per-graph node ids (`n0`, `n1`, …) so:
+  - `dot` is a Graphviz `digraph` with `rankdir=LR`, box nodes, workspace-relative labels, and DOT-style escaping for `\` and `"` — pipe through `dot -Tsvg` / `dot -Tpng` directly.
+  - `mermaid` is a `flowchart LR` with quoted `["src/foo.ts"]` labels — paste into Markdown / Mermaid Live Editor.
+  - `graphml` is GraphML 1.1 XML with `label`/`uri` keys, deterministic `e<index>` edge ids, and XML-attribute escaping for `&` / `<` / `>` / `"` — opens in Gephi, yEd, igraph, NetworkX. Edges whose endpoints are missing from the node set are dropped (corrupt-input safety) rather than throwing.
+- **`codepol graph cycles`** — runs `queryDependencyGraph`, ranks cycles deterministically by `(-size, alphabetical first member)`, supports `--max <n>` truncation with `truncated: boolean` in the JSON payload, and exits 1 whenever any cycle exists so CI can gate without extra flags. `--format text` renders one block per cycle for human review.
+- **`codepol graph path <from> <to>`** — runs `queryDependencyPath`, accepts paths absolute or relative to `cwd`, supports `--max-paths <n>`, and exits 1 when no path exists.
+- **`codepol graph fan-in [file]` / `graph fan-out [file]`** — derive importer/importee rankings from the graph node metrics, support `--top <n>` (default 20), and emit a deterministic `{ entries: [...] }` JSON payload sorted by metric desc / URI asc. Supplying a file restricts output to that file.
+- **`codepol graph dead`** — runs `queryDeadModules`. `--entry <value>` is repeatable and accepts either a literal file path or a glob pattern (any value containing `*` / `?` / `[` / `{`); patterns are matched against the workspace-relative path of every indexed node — never the filesystem — so the entry set always agrees with what the workspace service indexed. Glob expansion lives in `apps/cli/src/graph/graphEntryGlobExpand.ts` and reuses the same `minimatch` semantics already used by the `dead-module` plugin rule. Patterns that match zero indexed files emit `warn: --entry "<pattern>" matched no indexed files` to stderr; the workspace-service typo-safety contract still returns `unreachable: []` so a typo never silently labels healthy modules as dead. Exits 1 whenever any unreachable module is found.
+- **`codepol graph impact <file>`** — exposes `queryImpactRadius` with `--direction upstream|downstream|both` and `--depth <n>` so panels and CLI share one payload shape (`WorkspaceDependencyGraphResult`).
+- **`codepol graph snapshot` + `codepol graph diff`** — Phase-6 baseline workflow available today via the snapshot/diff pair (`graphSnapshot.ts`, `graphDiff.ts`): `codepol graph snapshot --label base` writes `<cwd>/.codepol/graph-snapshots/<label>.json`; `codepol graph diff base [--fail-on-new-cycle]` compares the live graph to that label and emits a `WorkspaceDependencyDiffResult`. `--baseline-file <path>` lets CI feed a raw `graph export` payload from another git ref without needing a workspace-resident snapshot. `--fail-on-new-cycle` exits 1 only when the diff introduces at least one cycle that wasn't in the baseline.
+- **CI gating.** Exit-code contract is consistent across the family: `graph cycles` / `graph dead` exit 1 when results are non-empty; `graph path` exits 1 when no path exists; `graph diff --fail-on-new-cycle` exits 1 only on net-new cycles; `graph metrics --fail-on-cycle` exits 1 when the workspace has any cycle (Phase 8). The default policy-check flow (`codepol`) is unchanged — graph dispatch short-circuits `main()` only when `argv._[0] === 'graph'`.
+- **Tests landed (45 cases across 3 spec files):**
+  - `tests/cli.graph-export-renderers.spec.ts` (new file, 11 cases) — pure-function tests for the dot / mermaid / graphml renderers and `graphExportFormatParse`. Locks in: format choices list, default to `json`, case-insensitive parsing, helpful error on unknown format; deterministic dot/mermaid/graphml structure on a 3-node fixture (incl. a node label containing `"`); DOT drops orphan edges; GraphML escapes `&` / `<` / `>` in both `label` and `uri` data fields; empty graph (0 nodes / 0 edges) renders a valid-but-empty document for every format; cycle back-edge survives the deterministic edge sort in dot / mermaid / graphml.
+  - `tests/cli.graph-entry-glob-expand.spec.ts` (new file, 9 cases) — pure-function tests for `graphEntryGlobIs` (positive + negative meta-character detection) and `graphEntryUrisExpand`: literal pass-through without consulting the graph, directory glob expansion (`bin/**`), brace alternation (`src/{lib,util}.ts`), character classes (`bin/[cs]*.ts`), absolute-path literals, deduplication when literal + glob overlap, sorted URI list, and `unmatched` typo channel that doesn't drop the rest.
+  - `tests/e2e.cli.graph.spec.ts` (25 cases total — Phase-4 footprint covers every subcommand end-to-end via a spawned built CLI) — happy + sad paths for `graph export` (json + dot + mermaid + graphml), `graph cycles` (empty + non-empty exit codes), `graph path` (shortest-path + no-path), `graph dead` (natural entries, literal `--entry`, glob `--entry`, mixed literal-and-glob `--entry`, glob-with-no-match stderr warning), `graph fan-in` / `graph fan-out` (deterministic JSON), `graph impact`, `graph snapshot` (sidecar file written under `.codepol/graph-snapshots/`), `graph diff` (empty diff, `--fail-on-new-cycle` introducing a cycle, `--baseline-file` feeding a raw export payload), `graph flow` / `graph hierarchy` (Phase-9 wiring smoke), and `graph metrics` (Phase-8 JSON shape, `--fail-on-cycle`, `--format text` deterministic placeholders).
 
 ### Phase 5 — Editor / LSP surfaces enable
 
@@ -522,7 +556,7 @@ These are known limitations that fit Phase 9's scope but were left for follow-up
 
 Each phase is independently shippable, additive, and testable.
 
-### Phase 1: Enrich node / edge data (unblocks everything else)
+### Phase 1: Enrich node / edge data (unblocks everything else) — _done_
 
 - add optional `metrics`, `layer`, `packageName` on `WorkspaceDependencyGraphNode`
 - add optional `kind`, `bindingCount`, `crossesPackageBoundary`, `crossesLayerBoundary` on `WorkspaceDependencyGraphEdge`
@@ -530,6 +564,12 @@ Each phase is independently shippable, additive, and testable.
 - workspace-service populates layer / package fields from config; core only fills structural fields
 - update `workspaceDependencyGraphResultCreate` in `packages/workspace-service/src/index.ts`
 - tests: unit coverage for each new field, including dynamic and side-effect import edges
+- landed:
+  - core types: `WorkspaceDependencyGraphNodeMetrics` (`importerCount`, `importeeCount`, `symbolCount`, optional `loc`, optional `aggregateCyclomaticComplexity`, `isEntryPoint`, `isInCycle`) and the `WorkspaceDependencyGraphEdgeKind` union (`static` / `dynamic` / `side_effect` / `cjs` / `type_only`) on `WorkspaceDependencyGraphNode` / `WorkspaceDependencyGraphEdge` (`packages/core/src/workspace/workspaceTypes.ts`); core adds `ImportStyle` and an optional `importStyle` discriminator on `ImportBindingRelation`, and the tree-sitter adapter tags every binding from its capture context (`packages/core/src/index/indexTypes.ts`, `packages/core/src/adapters/treeSitter/adapterCore.ts`)
+  - core helper: `ModuleEdgeKind`, `ModuleEdgeInfo`, `ModuleGraphEdgeInfo`, and `moduleGraphEdgeInfoBuild(store)` in `packages/core/src/index/moduleGraph.ts`; `ProjectIndex.moduleEdgeInfoGet(from, to)` (lazily built and cached) in `packages/core/src/index/indexQuery.ts`. Edge-kind precedence is `dynamic > cjs > static`, with `side_effect` reserved for `ImportsRelation`-only edges; `type_only` is currently unreachable until adapter tagging lands
+  - workspace service: `workspaceDependencyGraphResultCreate` (`packages/workspace-service/src/index.ts`) populates per-node `metrics` (importer / importee / symbol / loc / aggregate cyclomatic complexity / entry-point / in-cycle), per-node `packageName` via longest-prefix match against `WorkspacePackageRecord[]`, and per-edge `kind` / `bindingCount` / `crossesPackageBoundary` from the new helpers; `loc` reads through the new `packages/workspace-service/src/dependencyGraphLoc.ts` thunk so overlays win and a missing-file read still emits the node with `loc` omitted
+  - user-facing: dependency-graph and architecture-links panels now show per-node count lines, edge-kind dash patterns, cross-package / cross-layer accents, and SVG `<title>` tooltips end-to-end via `dependencyGraphNodeTooltipFormat` / `dependencyGraphEdgeTooltipFormat` (`extension-vscode/src/viewModels.ts`) and the extended `graphSvgHtml` (`extension-vscode/src/panels/render.ts`) — see the "User-facing surfaces landed for Phase 1" entry above for the file-by-file breakdown
+  - tests: `tests/index.module-graph.spec.ts` (+9 unit cases for `moduleEdgeInfoGet` covering static / multi-binding / side-effect / dynamic / cjs / mixed-style precedence / missing-edge undefined), `tests/workspace-service.integration.spec.ts` (+5 integration cases: metrics + packageName + edge kinds across packages, cycle membership outside monorepos, side-effect / dynamic edge kinds, `metrics.loc` overlay-awareness, source-shape edge cases), `packages/workspace-service/src/dependencyGraphLoc.spec.ts` (8 unit cases including the TOCTOU-only `throws → undefined` branch), `tests/extension-vscode.dependency-graph-tooltip-format.spec.ts` (17 unit cases for the format helpers), plus 2 extension view-model cases and 4 panel-render cases — and the existing dependency-graph fixtures in `tests/lsp.server.spec.ts`, `tests/workspace-service.integration.spec.ts`, and `packages/workspace-service/src/daemon.spec.ts` were updated for the enriched result shape
 
 ### Phase 2: Narrow graph queries — _done_
 
@@ -690,11 +730,56 @@ Each phase is independently shippable, additive, and testable.
     - `tests/index.module-graph-metrics.spec.ts` — 13 unit cases over an in-memory `ModuleGraph` fake covering instability semantics (omitting isolated files, canonical Ce/(Ca+Ce) values, sort order, run-to-run determinism), longest-chain semantics (empty graph, single-node fallback, linear DAG, SCC collapse, lex-asc tie-break, JSON-stable output), and SCC size distribution (empty, mixed sizes, ascending key insertion).
     - `tests/workspace-service.architecture-summary-metrics.spec.ts` — 4 integration cases through `WorkspaceServiceEngine`: every field populated end-to-end on a fixture workspace with a 2-cycle and an entry/leaf pair; back-to-back determinism (`JSON.stringify` byte-equality across two queries); incremental stability through an overlay that breaks the cycle (assert `sccSizeDistribution` becomes `undefined`, `longestChain` recomputes, `entry.ts` instability is invariant); empty-edges fallback (every Phase 8 field omitted except the trivial single-node `longestChain`).
 
+## Remaining Work
+
+All nine phases ship in `_done_` form above. This section is a single-screen index of everything that is _not_ done — explicitly-deferred items, residual gaps inherited from earlier slices, and Open Questions that haven't been resolved. Each item is small enough to land independently and additive, in keeping with the doc's per-phase shipping contract.
+
+### Explicitly deferred
+
+- **Cycle-member gutter decorations** + the `codepol.diagnostics.showCycleDecorations` user setting (Phase 5 `deferred:` block above; belongs with the `codepol/architecture` diagnostic source landed in Phase 6 / refined by Phase 8). Editor-level toggle plus gutter-marker plumbing.
+- **`queryDependencyDiff` editor surface** (Phase 6 deliverable; Phase 2 user-visible bullet 4 cross-references this). Protocol client method + CLI (`codepol graph snapshot` / `graph diff`) ship; no dedicated diff panel yet. The clean follow-up is a panel that mirrors the dependency-path / dead-modules pattern (chip-based `--baseline-label` selector, `added` / `removed` rows, click-to-open).
+- **Daemon-backed graph queries (shared warm graph) for the CLI** (Phase 4 landed-notes). Each `codepol graph <subcommand>` builds an in-process `WorkspaceService` per invocation. Promoting the CLI to attach to the daemon socket — same shape as the LSP client — makes warm-graph reuse transparent across CLI calls and shaves the cold-start cost on large monorepos.
+- **`GraphSnapshotStore` Q1-Option-D in-memory ring buffer** (Phase 6 landed-notes). Slot reserved behind the `GraphSnapshotStore` interface; only the Q1-B sidecar implementation exists today. Useful for editor "what changed since this morning" workflows without touching disk.
+
+### Phase 9 residual gaps
+
+Carried verbatim from the existing "Residual gaps (Phase 9)" block; listed here too so they show up in a single index.
+
+- **Symmetric cursor-path kind guard for `showCallGraph` and `findCallbacks`.** `showTypeHierarchy` validates the cursor symbol kind; the other two open empty panels on mismatched cursors. ~5 LOC each + 2 test cases each.
+- **Python `memberShape` query (Phase 9.4 follow-up).** Structural-shape implementer matching is TS-only. Needs a separate design call about Python's `typing.Protocol` semantics — see [packages/core/src/index/TODO_ADAPTER_PY.md](packages/core/src/index/TODO_ADAPTER_PY.md).
+- **Python `TypeAwareTypeHierarchySource` binding (Phase 9.5 follow-up).** `@codepol/python-language-bridge` ships only the call-graph factory. Adding `pythonTypeHierarchySourceCreate` against pyright's `textDocument/implementation` + `textDocument/typeDefinition` is mechanically the same shape as the existing TS bridge (~150 LOC + ~100 LOC of contract tests against a fake transport).
+- **`IndexCapabilities.typeHierarchy` flag.** One-line addition to [packages/core/src/index/indexBuilder.ts](packages/core/src/index/indexBuilder.ts) when a real consumer materializes; not strictly needed today.
+- **Editor menu hiding via context keys.** `showTypeHierarchy` always appears in the `editor/context` menu; the in-handler guard catches non-eligible kinds with an error. Hiding the menu item would require a debounced cursor-tracker that probes `querySymbolAtPosition` and publishes `codepol.cursorOnHierarchyEligibleSymbol` (~150 LOC + per-cursor RPC). Same infrastructure would unblock cursor-driven hovers.
+
+### Phase 2 user-facing extension follow-up — known coverage gap
+
+- **`BASE_SCRIPT` execution test.** The inline webview JS in [extension-vscode/src/panels/render.ts](extension-vscode/src/panels/render.ts) that maps DOM clicks → `postMessage` lives in a template string and is never executed by the test runner. Affects every panel chip dispatcher (call-graph, type-hierarchy, dependency-path, dead-modules). A typo'd message type would silently fail at runtime. Fix: extract the script into a unit-testable module and add a contract test that asserts the dispatch table.
+
+### Open-question status
+
+Cross-reference the per-question prose below; every Q is one of `Resolved` / `Open`.
+
+- **Q1 — Baseline persistence for diff.** _Partially resolved._ Q1-Option-B sidecar shipped under Phase 6 (`fileSystemGraphSnapshotStoreCreate`); Q1-Option-A (full index persistence) and Q1-Option-D (in-process ring buffer) remain open behind the same `GraphSnapshotStore` interface so the swap stays internal.
+- **Q2 — Layer config schema.** _Open._ Phase 3 `no-layer-violation` rule shipped, but the proposed `[layers.<name>]` dedicated section + `targets.<name>.layer = "domain"` sugar (Option B) is not yet adopted in the config loader. Today's rules accept layer configuration through ad-hoc args.
+- **Q3 — Test-file semantics.** _Open._ Option A in effect by default (exclude tests via the existing policy `exclude` globs); Option C (first-class `role = "test"` axis with `ArchitectureCheckContext.filesGetByRole(...)`) remains a future promotion, deferred until a real "test-only layer violation" case appears.
+- **Q4 — External package representation.** _Open._ `includeExternal` flag is drafted in `QueryDependencyGraphInput` but not implemented. Phase 1 / Phase 2 still drop unresolved imports. Adopting Option B (`external:<packageName>` synthetic nodes, gated by the flag) is the next step.
+- **Q5 — Call graph fidelity.** _Resolved (Phase 9.1 / 9.2)._ See the inline annotation on the question header.
+- **Q6 — Cycle diagnostic volume.** _Open._ Phase 6 `codepol/architecture` diagnostic source ships, but the proposed C+A combination (one diagnostic per cycle anchored on the alphabetically-first member, capped at `args.maxCycles` default 50, plus a single truncation-summary diagnostic at the workspace root) is not yet wired in the cycle-diagnostic path.
+
+### Priority summary
+
+Buckets are about scope, not value — anything in any bucket can be picked up next.
+
+- **Trivial (ship when convenient):** `IndexCapabilities.typeHierarchy` flag (~1 LOC); symmetric cursor-path kind guard for `showCallGraph` / `findCallbacks` (~10 LOC + 4 tests).
+- **Small, well-scoped:** `BASE_SCRIPT` contract test (small refactor of `render.ts`); Q1-Option-D in-memory ring buffer for the editor.
+- **Medium, well-scoped:** `pythonTypeHierarchySourceCreate` binding; `queryDependencyDiff` editor panel; daemon-backed graph queries for the CLI; Q6 cycle-diagnostic volume implementation (one-per-cycle + cap + truncation summary).
+- **Larger, design-first:** cycle-member gutter decorations + the user setting; editor menu hiding via context keys; Python `memberShape` query (needs Protocol-semantics design); Q2 dedicated `[layers.<name>]` schema; Q4 `includeExternal` flag implementation; Q3 promotion to first-class `role = "test"` (when a real case appears).
+
 ## Open Questions
 
 Each question lists the candidate options, trade-offs, and a proposed default. Defaults are opinionated to unblock Phase 6 / Phase 7 without prematurely locking more general decisions.
 
-### Q1. Baseline persistence for diff
+### Q1. Baseline persistence for diff — _partially resolved (Phase 6 shipped Option B; Options A and D still open behind the same `GraphSnapshotStore` interface)_
 
 **Context.** `queryDependencyDiff` needs to compare the current module graph against a prior version. The index is in-memory today (`packages/core/src/index/TODO.md` item 2), so there is nothing to compare against across restarts or across a PR boundary.
 
@@ -737,7 +822,7 @@ export type GraphSnapshotStore = {
 };
 ```
 
-### Q2. Layer config schema
+### Q2. Layer config schema — _open (Phase 3 `no-layer-violation` ships with ad-hoc args; the proposed dedicated `[layers.<name>]` schema is not yet adopted in the config loader)_
 
 **Context.** `no-layer-violation` and `no-cross-package-internal-import` need a way to classify files into layers (`ui`, `domain`, `infra`, …) and declare allowed / denied edges. Existing config already has `targets.<name>` with `files` globs, and `[[rules]]` blocks with `targets` arrays.
 
@@ -788,7 +873,7 @@ files = ["src/shared/**/*.ts"]
 
 A file that matches multiple `layers[*].files` patterns resolves to the most specific glob; ties produce a loader error with both layer names to force a decision.
 
-### Q3. Test-file semantics
+### Q3. Test-file semantics — _open (Option A in effect by default via existing policy `exclude` globs; Option C promotion deferred until a real "test-only layer violation" case appears)_
 
 **Context.** Fan-in / fan-out budgets and dead-module detection behave very differently depending on whether tests are counted. A shared helper imported by 200 tests has importerCount 200, which is either meaningful (it's a widely-depended helper) or noise (it's just "everything has tests").
 
@@ -812,7 +897,7 @@ Introduce a first-class `role = "test"` tag on files (derived from policy target
 
 **Proposed default.** **A now, C later.** Exclusion by the existing policy `exclude` machinery keeps Phase 3 small. When we hit real cases where test-only layer violations matter, promote to C and pipe it through `ArchitectureCheckContext.filesGetByRole('production' | 'test')`.
 
-### Q4. External package representation
+### Q4. External package representation — _open (`includeExternal` flag drafted in `QueryDependencyGraphInput` but not implemented; Phase 1 / Phase 2 still drop unresolved imports)_
 
 **Context.** Today any `ImportBindingRelation.resolvedModulePath` that doesn't point into the indexed set is dropped. That hides legitimate third-party coupling: "how many files import `lodash`?", "does `domain` depend on `axios`?".
 
@@ -872,7 +957,7 @@ Restrict Phase 7 to `queryCallersOfExport(symbolId)`. That is the high-confidenc
 
 **Proposed default.** **A for the panel + D for LSP**: the panel renders the structural graph with an explicit label. The LSP hover/CodeLens surfaces only "callers of exports" because that's the one direction we can vouch for. Option B gets revisited only if we collect specific missed cases.
 
-### Q6. Cycle diagnostic volume
+### Q6. Cycle diagnostic volume — _open (Phase 6 `codepol/architecture` source ships, but the proposed C+A combination — one-per-cycle anchored on first member, capped at `args.maxCycles` default 50, plus a single truncation-summary diagnostic — is not yet wired)_
 
 **Context.** `moduleCyclesGet()` can return thousands of SCCs on legacy codebases. Surfacing all of them as diagnostics would flood the Problems panel and destroy signal.
 
