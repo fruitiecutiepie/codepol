@@ -159,6 +159,7 @@ import {
   ruleFixModeResolverCreate,
   type RuleFixModeResolver,
 } from './fixMode';
+import { workspaceFileLineCountGet } from './dependencyGraphLoc';
 import {
   builtinPluginArtifactPathsResolve,
   builtinPluginsRefresh,
@@ -4404,39 +4405,6 @@ function workspaceFileAggregateCyclomaticComplexityGet(
   return counted > 0 ? aggregate : undefined;
 }
 
-/**
- * Count the number of lines in a file as it appears in the active
- * overlay (when present) or on disk. Returns `undefined` when source
- * cannot be read so a missing file still yields a graph node.
- *
- * Counts newline-terminated lines plus a trailing partial line when
- * the source does not end in `\n`. An empty source produces 0.
- */
-function workspaceFileLineCountGet(
-  state: WorkspaceDocumentsState,
-  filePath: string,
-): number | undefined {
-  let source: string;
-  try {
-    source = workspaceSourceGet(state, filePath);
-  } catch {
-    return undefined;
-  }
-  if (source.length === 0) {
-    return 0;
-  }
-  let count = 0;
-  for (let index = 0; index < source.length; index += 1) {
-    if (source.charCodeAt(index) === 10) {
-      count += 1;
-    }
-  }
-  if (source.charCodeAt(source.length - 1) !== 10) {
-    count += 1;
-  }
-  return count;
-}
-
 function workspaceDependencyGraphResultCreate(
   workspace: WorkspaceContextState,
   index: ProjectIndex,
@@ -4461,7 +4429,7 @@ function workspaceDependencyGraphResultCreate(
     const importerCount = index.moduleImportersGet(filePath).length;
     const importeeCount = index.moduleImporteesGet(filePath).length;
     const symbolCount = index.symbolsInFileGet(filePath).length;
-    const loc = workspaceFileLineCountGet(state, filePath);
+    const loc = workspaceFileLineCountGet(() => workspaceSourceGet(state, filePath));
     const aggregateCyclomaticComplexity =
       workspaceFileAggregateCyclomaticComplexityGet(index, filePath);
     const metrics: WorkspaceDependencyGraphNodeMetrics = {
