@@ -32,6 +32,7 @@ import type {
   WorkspaceDependencyGraphResult,
   WorkspaceRange,
 } from '@codepol/core';
+import type { PanelLensSwitcherViewModel } from './panels/panelShared';
 
 const SYMBOL_URI_SCHEME_PREFIX = 'codepol-symbol://';
 
@@ -104,11 +105,39 @@ export type CallGraphChipViewModel = {
 export type CallGraphControlsViewModel = {
   directionChips: CallGraphChipViewModel[];
   depthChips: CallGraphChipViewModel[];
-  /** Phase 9.2 placeholder; today every chip is `active: false` and inert. */
+  /**
+   * Confidence chips: each chip's `active` reflects whether that
+   * tier is currently included in the visible edge set. When no
+   * filter is active (default), every chip renders as `active`.
+   */
   confidenceChips: CallGraphChipViewModel[];
-  /** Phase 9.2 placeholder; today every chip is `active: false` and inert. */
+  /**
+   * Kind chips: each chip's `active` reflects whether that kind is
+   * currently included in the visible edge set. When no filter is
+   * active (default), every chip renders as `active`.
+   */
   kindChips: CallGraphChipViewModel[];
 };
+
+/**
+ * Per-tier counts the panel header tally renders. Both fields count
+ * edges in the visible subgraph (after direction/depth filtering).
+ */
+export type CallGraphConfidenceCounts = {
+  structural: number;
+  typeAware: number;
+};
+
+/**
+ * Modes the call-graph panel can be locked into. Phase 7
+ * `signature-impact` pins the panel to `direction: 'callers'`,
+ * `depth: undefined` (unbounded), greys out the direction / depth
+ * chips, and renders a structural-confidence banner above the
+ * canvas. The string-union shape lets follow-up Phase 8 metric
+ * lenses (e.g. `'instability'`) ship without changing the panel
+ * kind set.
+ */
+export type CallGraphPanelMode = 'signature-impact';
 
 export type CallGraphPanelViewModel = {
   /** Stable id of the seed symbol the panel is centered on. */
@@ -123,6 +152,25 @@ export type CallGraphPanelViewModel = {
   controls: CallGraphControlsViewModel;
   direction: CallGraphPanelDirection;
   depth: CallGraphPanelDepth;
+  /**
+   * Per-tier edge counts shown beneath the panel header summary.
+   * Always present (zero counts collapse in the rendered tally).
+   */
+  edgeCounts: CallGraphConfidenceCounts;
+  /**
+   * Optional pinned mode. When set, the renderer disables the
+   * direction / depth chips, renders a {@link panelModePillHtml}
+   * pill, and emits a structural-confidence banner above the SVG.
+   * Absent for the default interactive call-graph view.
+   */
+  mode?: CallGraphPanelMode;
+  /**
+   * Optional lens-switcher payload. When present, the panel header
+   * renders a {@link panelLensSwitcherHtml} affordance the user can
+   * click to reopen the same focus through a sibling lens. Absent
+   * when the focus has only one valid lens.
+   */
+  lensSwitcher?: PanelLensSwitcherViewModel;
 };
 
 const NODE_RADIUS = 14;
@@ -152,6 +200,33 @@ export function callGraphPanelViewModelCreate(input: {
   focusSymbolName?: string;
   direction: CallGraphPanelDirection;
   depth: CallGraphPanelDepth;
+  /**
+   * Per-tier filter. When undefined every confidence tier is
+   * included (default). When provided as a non-empty set, edges
+   * whose `callGraphConfidence` (treated as `'structural'` when
+   * absent) is not in the set are dropped from the rendered graph.
+   * Empty set is treated identically to undefined so a user can't
+   * filter themselves into an empty subgraph by accident.
+   */
+  confidenceFilter?: ReadonlySet<CallGraphConfidence>;
+  /**
+   * Per-kind filter. Same semantics as `confidenceFilter`. Edge
+   * kinds default to `'direct'` when absent on the underlying edge.
+   */
+  kindFilter?: ReadonlySet<CallGraphKind>;
+  /**
+   * Optional pinned mode (Phase 7 signature-impact lens). When
+   * `'signature-impact'`, the resulting view-model carries
+   * `mode: 'signature-impact'` and the panel renders the locked
+   * mode pill + structural-confidence banner.
+   */
+  mode?: CallGraphPanelMode;
+  /**
+   * Optional lens-switcher payload. The controller computes this
+   * once per show-call and passes it through; the view-model just
+   * surfaces it to the renderer.
+   */
+  lensSwitcher?: PanelLensSwitcherViewModel;
 }): CallGraphPanelViewModel {
   const focusUri = callGraphSymbolUriCreate(input.focusSymbolId);
   const nodesByUri = new Map<string, WorkspaceDependencyGraphNode>();
@@ -260,12 +335,24 @@ export function callGraphPanelViewModelCreate(input: {
   // endpoints landed in the layout. Endpoints outside the requested
   // direction (e.g. the seed's callees when direction is 'callers')
   // will be missing — drop those edges silently.
+  //
+  // The optional confidence / kind filters apply on top of the
+  // direction filter: edges whose tier is excluded from the active
+  // filter are dropped before counting (so the tally matches what
+  // the user sees on the canvas, not the raw payload).
   const nodeIndexByUri = new Map(layoutNodes.map((n) => [n.uri, n]));
   const layoutEdges: CallGraphEdgeViewModel[] = [];
+  const counts: CallGraphConfidenceCounts = { structural: 0, typeAware: 0 };
+  const activeConfidence = filterSetToActiveOrUndefined(input.confidenceFilter);
+  const activeKind = filterSetToActiveOrUndefined(input.kindFilter);
   for (const edge of input.graph.edges) {
     const fromNode = nodeIndexByUri.get(edge.fromUri);
     const toNode = nodeIndexByUri.get(edge.toUri);
     if (!fromNode || !toNode) continue;
+    const edgeConfidence = (edge.callGraphConfidence ?? 'structural') as CallGraphConfidence;
+    const edgeKind = (edge.callGraphKind ?? 'direct') as CallGraphKind;
+    if (activeConfidence && !activeConfidence.has(edgeConfidence)) continue;
+    if (activeKind && !activeKind.has(edgeKind)) continue;
     const layoutEdge: CallGraphEdgeViewModel = {
       fromUri: edge.fromUri,
       toUri: edge.toUri,
@@ -281,6 +368,8 @@ export function callGraphPanelViewModelCreate(input: {
       layoutEdge.callGraphKind = edge.callGraphKind as CallGraphKind;
     }
     layoutEdges.push(layoutEdge);
+    if (edgeConfidence === 'type-aware') counts.typeAware += 1;
+    else counts.structural += 1;
   }
 
   const emptyMessage =
@@ -305,9 +394,12 @@ export function callGraphPanelViewModelCreate(input: {
     controls: callGraphControlsViewModelCreate({
       direction: input.direction,
       depth: input.depth,
+      confidenceFilter: input.confidenceFilter,
+      kindFilter: input.kindFilter,
     }),
     direction: input.direction,
     depth: input.depth,
+    edgeCounts: counts,
   };
   if (focusNode?.declarationUri !== undefined) {
     result.focusDeclarationUri = focusNode.declarationUri;
@@ -315,7 +407,30 @@ export function callGraphPanelViewModelCreate(input: {
   if (focusNode?.declarationRange !== undefined) {
     result.focusDeclarationRange = focusNode.declarationRange;
   }
+  if (input.mode !== undefined) {
+    result.mode = input.mode;
+  }
+  if (input.lensSwitcher !== undefined) {
+    result.lensSwitcher = input.lensSwitcher;
+  }
   return result;
+}
+
+/**
+ * Coerce a filter set to the form the renderer / counts pipeline
+ * expects: `undefined` means "no filter" (every tier passes); a set
+ * with at least one entry means "only include these tiers".
+ *
+ * An empty set is normalized to `undefined` so a user click that
+ * removes the last allowed tier doesn't render an unhelpful empty
+ * subgraph — the chip toggle just falls back to "show everything"
+ * when the user deselects the last chip.
+ */
+function filterSetToActiveOrUndefined<T>(
+  filter: ReadonlySet<T> | undefined,
+): ReadonlySet<T> | undefined {
+  if (!filter || filter.size === 0) return undefined;
+  return filter;
 }
 
 /**
@@ -434,9 +549,22 @@ function callGraphLayoutLayers(input: {
 function callGraphControlsViewModelCreate(input: {
   direction: CallGraphPanelDirection;
   depth: CallGraphPanelDepth;
+  confidenceFilter?: ReadonlySet<CallGraphConfidence>;
+  kindFilter?: ReadonlySet<CallGraphKind>;
 }): CallGraphControlsViewModel {
   const directions: CallGraphPanelDirection[] = ['callers', 'callees', 'both'];
   const depths: CallGraphPanelDepth[] = [1, 2, 'unbounded'];
+  // Default to "all active" for both filters so a user opening the
+  // panel without a prior filter selection sees every chip lit up
+  // and every edge rendered. Toggling a chip narrows the visible set.
+  const confidenceActive = (value: CallGraphConfidence): boolean =>
+    input.confidenceFilter === undefined ||
+    input.confidenceFilter.size === 0 ||
+    input.confidenceFilter.has(value);
+  const kindActive = (value: CallGraphKind): boolean =>
+    input.kindFilter === undefined ||
+    input.kindFilter.size === 0 ||
+    input.kindFilter.has(value);
   return {
     directionChips: directions.map((d) => ({
       id: `direction:${d}`,
@@ -452,20 +580,32 @@ function callGraphControlsViewModelCreate(input: {
       {
         id: 'confidence:structural',
         label: 'Structural',
-        active: false,
-        description: 'Available when no type-aware source is registered.',
+        active: confidenceActive('structural'),
+        description: 'Direct, name-resolved invocations from the index.',
       },
       {
         id: 'confidence:type-aware',
         label: 'Type-aware',
-        active: false,
+        active: confidenceActive('type-aware'),
         description: 'Populated by a TypeAwareCallGraphSource binding.',
       },
     ],
     kindChips: [
-      { id: 'kind:direct', label: 'Direct', active: false },
-      { id: 'kind:dynamic-dispatch', label: 'Dynamic dispatch', active: false },
-      { id: 'kind:higher-order', label: 'Higher-order', active: false },
+      {
+        id: 'kind:direct',
+        label: 'Direct',
+        active: kindActive('direct'),
+      },
+      {
+        id: 'kind:dynamic-dispatch',
+        label: 'Dynamic dispatch',
+        active: kindActive('dynamic-dispatch'),
+      },
+      {
+        id: 'kind:higher-order',
+        label: 'Higher-order',
+        active: kindActive('higher-order'),
+      },
     ],
   };
 }

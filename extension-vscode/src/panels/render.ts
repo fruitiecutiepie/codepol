@@ -19,6 +19,7 @@ import type { DependencyPathPanelViewModel } from '../dependencyPathViewModels';
 import { dependencyPathPanelBodyHtml } from './dependencyPathRender';
 import type { DeadModulesPanelViewModel } from '../deadModulesViewModels';
 import { deadModulesPanelBodyHtml } from './deadModulesRender';
+import { PANEL_SHARED_CSS, panelLensSwitcherHtml } from './panelShared';
 
 export type CodepolPanelViewModel =
   | {
@@ -404,6 +405,19 @@ function graphOverviewHtml(summaryCard: WorkspaceSummaryCardViewModel | null): s
   </div>`;
 }
 
+/**
+ * File-graph control chip strip (dependency graph + architecture
+ * links). Phase 7 panel-parity note: this helper deliberately stays
+ * on its existing `data-control-*` attribute scheme because the
+ * `controls.ts` reducer + `BASE_SCRIPT` `data-control-filter` /
+ * `data-control-edge-kind` / `data-control-layout` /
+ * `data-control-blast-radius` branches are panel-specific and
+ * already widely tested. The shared `panel-chip-row` / `panel-chip`
+ * CSS in {@link PANEL_SHARED_CSS} is the parity layer for visual
+ * grammar; the markup itself stays panel-local for behavioral
+ * stability. Symbol-level panels (call graph, type hierarchy) route
+ * through {@link panelChipRowHtml} for the same look.
+ */
 function graphControlsHtml(controls: DependencyGraphControlsViewModel): string {
   const filterChipsHtml = controls.filterChips
     .map((chip) => {
@@ -594,9 +608,14 @@ function dependencyGraphBodyHtml(model: DependencyGraphPanelViewModel): string {
         : []),
   ];
 
+  const lensSwitcher = model.lensSwitcher
+    ? panelLensSwitcherHtml(model.lensSwitcher)
+    : '';
+
   return `${workspaceSummaryCardHtml(model.summaryCard)}
     <section class="card graph-card dependency-graph-card">
       <header>
+        ${lensSwitcher}
         <h2>Dependency Graph</h2>
         <p class="summary">Showing ${model.graph.nodes.length} nodes and ${model.graph.edges.length} edges.${model.focusUri ? ` Highlighting ${htmlEscape(model.focusUri)}.` : ''}</p>
       </header>
@@ -656,11 +675,16 @@ function architectureLinksBodyHtml(model: ArchitectureLinksPanelViewModel): stri
       : []),
   ];
 
+  const lensSwitcher = model.lensSwitcher
+    ? panelLensSwitcherHtml(model.lensSwitcher)
+    : '';
+
   return `${hoverCardHtml(model.hoverCard, model.uri, {
       microHideDetails: true,
     })}
     <section class="card graph-card architecture-links-graph-card">
       <header>
+        ${lensSwitcher}
         <h2>Focused Graph</h2>
         <p class="summary">Showing ${model.totalItems} of ${model.totalAvailableItems} semantic links.</p>
         ${model.truncated ? '<p class="status">Semantic link results are truncated.</p>' : ''}
@@ -886,8 +910,44 @@ const BASE_SCRIPT = `
       });
       return;
     }
+    const lensButton = target.closest('[data-panel-lens]');
+    if (lensButton instanceof HTMLElement) {
+      event.preventDefault();
+      const lens = lensButton.dataset.panelLens;
+      const focusJson = lensButton.dataset.panelLensFocus;
+      let focus = undefined;
+      if (focusJson) {
+        try {
+          focus = JSON.parse(focusJson);
+        } catch (parseError) {
+          focus = undefined;
+        }
+      }
+      vscode.postMessage({
+        type: 'panelLensSet',
+        lens: lens,
+        focus: focus,
+      });
+      return;
+    }
+    const modeClearButton = target.closest('[data-panel-mode-clear]');
+    if (modeClearButton instanceof HTMLElement) {
+      event.preventDefault();
+      vscode.postMessage({
+        type: 'panelModeClear',
+        modeId: modeClearButton.dataset.panelModeClear,
+      });
+      return;
+    }
     const callGraphChipButton = target.closest('[data-cg-chip-group]');
     if (callGraphChipButton instanceof HTMLElement) {
+      // Locked chips (signature-impact mode) skip their dispatch so
+      // the user can see them but can't accidentally re-fire a query
+      // that the locked configuration would override.
+      if (callGraphChipButton.classList.contains('panel-chip-locked')) {
+        event.preventDefault();
+        return;
+      }
       event.preventDefault();
       const group = callGraphChipButton.dataset.cgChipGroup;
       const value = callGraphChipButton.dataset.cgChipValue;
@@ -900,6 +960,16 @@ const BASE_SCRIPT = `
         vscode.postMessage({
           type: 'callGraphDepthSet',
           depth: value,
+        });
+      } else if (group === 'confidence') {
+        vscode.postMessage({
+          type: 'callGraphConfidenceToggle',
+          confidence: value,
+        });
+      } else if (group === 'kind') {
+        vscode.postMessage({
+          type: 'callGraphKindToggle',
+          kind: value,
         });
       }
       return;
@@ -1030,6 +1100,7 @@ export function codepolPanelHtmlRender(input: {
       <meta name="viewport" content="width=device-width, initial-scale=1.0" />
       <title>${htmlEscape(input.model.title)}</title>
       <style>
+        ${PANEL_SHARED_CSS}
         :root {
           color-scheme: light dark;
         }

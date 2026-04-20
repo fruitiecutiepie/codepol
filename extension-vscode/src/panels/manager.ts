@@ -50,6 +50,10 @@ import {
   type DependencyGraphPanelRebuilder,
 } from './controls';
 import { codepolHoverActionCommandResolve } from './messages';
+import {
+  type PanelLensFocus,
+  type PanelLensValue,
+} from './panelShared';
 import { codepolPanelHtmlRender, type CodepolPanelViewModel } from './render';
 
 export type CallGraphPanelControlMessage =
@@ -99,6 +103,48 @@ export type DeadModulesPanelEntryPointsConfigureRequest = {
   type: 'deadModulesEntryPointsConfigureRequest';
 };
 
+/**
+ * Phase 7 panel lens switcher message. Fired by the
+ * `panel-lens-switcher` button row in any panel header. The host
+ * routes to the right `show*` controller method based on the
+ * `lens` value and uses `focus` as the input argument.
+ *
+ * `focus` is opaque to the panel — the renderer JSON-stringified the
+ * payload onto a data-attribute and the BASE_SCRIPT echoed it back
+ * untouched. The host validates / coerces before dispatch.
+ */
+export type PanelLensSetMessage = {
+  type: 'panelLensSet';
+  lens?: string;
+  focus?: unknown;
+};
+
+/**
+ * Phase 7 mode-clear message. Fired by the `×` button on a
+ * {@link panelModePillHtml} pill. The manager unsets the panel's
+ * `mode` and re-renders.
+ */
+export type PanelModeClearMessage = {
+  type: 'panelModeClear';
+  modeId?: string;
+};
+
+/**
+ * Phase 7 call-graph confidence/kind chip messages. Fired by the
+ * Confidence and Kind chip rows in the call-graph panel. Currently
+ * call-graph-only (the type-hierarchy panel uses a single
+ * confidence axis surfaced through its legend).
+ */
+export type CallGraphConfidenceToggleMessage = {
+  type: 'callGraphConfidenceToggle';
+  confidence?: string;
+};
+
+export type CallGraphKindToggleMessage = {
+  type: 'callGraphKindToggle';
+  kind?: string;
+};
+
 type CodepolPanelMessage =
   | {
       type: 'openLocation';
@@ -117,10 +163,14 @@ type CodepolPanelMessage =
     }
   | DependencyGraphPanelControlMessage
   | CallGraphPanelControlMessage
+  | CallGraphConfidenceToggleMessage
+  | CallGraphKindToggleMessage
   | TypeHierarchyPanelControlMessage
   | DependencyPathPanelControlMessage
   | DeadModulesPanelControlMessage
-  | DeadModulesPanelEntryPointsConfigureRequest;
+  | DeadModulesPanelEntryPointsConfigureRequest
+  | PanelLensSetMessage
+  | PanelModeClearMessage;
 
 type PanelKind =
   | 'semanticDefinition'
@@ -267,6 +317,34 @@ function dependencyPathMaxPathsParse(
   return DEPENDENCY_PATH_PANEL_MAX_PATHS_VALUES.find((value) => value === parsed);
 }
 
+const PANEL_LENS_VALUES = ['module', 'links', 'callers', 'type-hierarchy'] as const;
+
+function panelLensValueParse(raw: unknown): PanelLensValue | undefined {
+  if (typeof raw !== 'string') return undefined;
+  return (PANEL_LENS_VALUES as readonly string[]).includes(raw)
+    ? (raw as PanelLensValue)
+    : undefined;
+}
+
+function panelLensFocusParse(raw: unknown): PanelLensFocus | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const candidate = raw as { kind?: unknown; uri?: unknown; symbolId?: unknown; symbolName?: unknown };
+  if (candidate.kind === 'file' && typeof candidate.uri === 'string') {
+    return { kind: 'file', uri: candidate.uri };
+  }
+  if (
+    candidate.kind === 'symbol' &&
+    typeof candidate.symbolId === 'string'
+  ) {
+    const focus: PanelLensFocus = { kind: 'symbol', symbolId: candidate.symbolId };
+    if (typeof candidate.symbolName === 'string') {
+      focus.symbolName = candidate.symbolName;
+    }
+    return focus;
+  }
+  return undefined;
+}
+
 export type CodepolPanelActions = {
   openLocation(input: {
     uri: string;
@@ -275,6 +353,32 @@ export type CodepolPanelActions = {
   }): Promise<void>;
   applyEditPlan(planId: string): Promise<void>;
   executeCommand(command: string, uri?: string): Promise<void>;
+  /**
+   * Phase 7 lens switcher. Routes the panel's `View as` button
+   * click to the right `show*` controller method without the
+   * manager itself owning a `CodepolCommandController` reference
+   * (which would create a circular type dependency).
+   *
+   * The host wires this when constructing the manager (see
+   * `extension.ts → activate`) and is responsible for translating
+   * the {@link PanelLensValue} + {@link PanelLensFocus} pair into
+   * the underlying command call.
+   */
+  panelLensOpen?(input: {
+    lens: PanelLensValue;
+    focus: PanelLensFocus;
+  }): Promise<void>;
+  /**
+   * Phase 7 signature-impact mode clear. The host calls
+   * `peekSignatureImpact` again with no `mode` to re-open the panel
+   * in interactive mode using the already-resolved focus symbol.
+   * Implemented as an action rather than wired straight into the
+   * manager so the host owns the command surface.
+   */
+  panelModeClear?(input: {
+    modeId: string;
+    focus: PanelLensFocus;
+  }): Promise<void>;
   /**
    * Run a multi-select picker for the dead-modules panel's "Configure
    * entry points..." button. Returns the chosen URIs (in pick order),
@@ -680,6 +784,20 @@ export class CodepolPanelManager implements vscode.Disposable {
       return;
     }
 
+    if (
+      message.type === 'callGraphConfidenceToggle' ||
+      message.type === 'callGraphKindToggle'
+    ) {
+      // Phase 7 confidence/kind chip toggles are no-ops in the
+      // manager today: the panel still routes through the existing
+      // `callGraphDirectionSet` / `callGraphDepthSet` rebuilder
+      // closure, which doesn't carry filter state. Wiring per-tier
+      // filtering through the rebuilder is a follow-up — the chip
+      // remains visually interactive (and the message arrives
+      // here) so the protocol contract is in place.
+      return;
+    }
+
     if (typeHierarchyPanelControlMessageIs(message)) {
       await this.typeHierarchyControlMessageHandle(message);
       return;
@@ -697,6 +815,16 @@ export class CodepolPanelManager implements vscode.Disposable {
 
     if (deadModulesPanelEntryPointsConfigureRequestIs(message)) {
       await this.deadModulesEntryPointsConfigureHandle();
+      return;
+    }
+
+    if (message.type === 'panelLensSet') {
+      await this.panelLensSetHandle(message);
+      return;
+    }
+
+    if (message.type === 'panelModeClear') {
+      await this.panelModeClearHandle(kind, message);
       return;
     }
 
@@ -894,6 +1022,50 @@ export class CodepolPanelManager implements vscode.Disposable {
       nonce: randomBytes(16).toString('hex'),
       model: managed.model,
     });
+  }
+
+  /**
+   * Phase 7 lens-set handler. Validates the message payload and
+   * delegates to the host's `panelLensOpen` action. Silently drops
+   * malformed messages — the renderer should never produce them but
+   * a defensive shape check beats trusting the webview channel.
+   */
+  private async panelLensSetHandle(
+    message: PanelLensSetMessage,
+  ): Promise<void> {
+    const lens = panelLensValueParse(message.lens);
+    const focus = panelLensFocusParse(message.focus);
+    if (!lens || !focus) return;
+    if (!this.actions.panelLensOpen) return;
+    await this.actions.panelLensOpen({ lens, focus });
+  }
+
+  /**
+   * Phase 7 mode-clear handler. The webview's `×` button on a
+   * `panel-mode-pill` posts this; the manager looks up the panel's
+   * current focus from the active model and asks the host to
+   * re-open the panel without the locked mode. The handler is
+   * panel-kind-aware because focus discovery is panel-specific
+   * (call-graph reads `model.focusSymbolId`, others would read
+   * different fields).
+   */
+  private async panelModeClearHandle(
+    kind: PanelKind,
+    message: PanelModeClearMessage,
+  ): Promise<void> {
+    if (!message.modeId) return;
+    if (!this.actions.panelModeClear) return;
+    if (kind !== 'callGraph') return;
+    const managed = this.panels.get('callGraph');
+    if (!managed || managed.model.kind !== 'callGraph') return;
+    const focus: PanelLensFocus = {
+      kind: 'symbol',
+      symbolId: managed.model.data.focusSymbolId,
+      ...(managed.model.data.focusSymbolName.length > 0
+        ? { symbolName: managed.model.data.focusSymbolName }
+        : {}),
+    };
+    await this.actions.panelModeClear({ modeId: message.modeId, focus });
   }
 
   private async typeHierarchyControlMessageHandle(

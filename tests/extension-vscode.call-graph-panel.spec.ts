@@ -126,9 +126,12 @@ describe('callGraphPanelViewModelCreate', () => {
       .map((c) => c.id);
     expect(activeDirection).toEqual(['direction:callees']);
     expect(activeDepth).toEqual(['depth:2']);
-    // Confidence + kind chips are scaffolded but always inert today.
-    expect(model.controls.confidenceChips.every((c) => !c.active)).toBe(true);
-    expect(model.controls.kindChips.every((c) => !c.active)).toBe(true);
+    // Phase 7: confidence + kind chips are now interactive and
+    // default to all-active (no filter applied). Toggling a chip
+    // narrows the visible set; users can opt into a filter without
+    // leaving an empty subgraph by accident.
+    expect(model.controls.confidenceChips.every((c) => c.active)).toBe(true);
+    expect(model.controls.kindChips.every((c) => c.active)).toBe(true);
   });
 
   it('produces a rebuild with the new direction when the panel toggles direction', () => {
@@ -215,5 +218,115 @@ describe('codepolPanelHtmlRender (callGraph kind)', () => {
     expect(html).toContain('data-cg-chip-value="both"');
     expect(html).toContain('class="cg-canvas"');
     expect(html).toContain(`data-open-uri="${SEED_URI}"`);
+  });
+
+  it('renders the structural-confidence banner and locked mode pill when mode is signature-impact', () => {
+    const model = callGraphPanelViewModelCreate({
+      graph: callGraphFixtureCreate(),
+      focusSymbolId: SEED_ID,
+      direction: 'callers',
+      depth: 'unbounded',
+      mode: 'signature-impact',
+    });
+    const html = codepolPanelHtmlRender({
+      nonce: 'test-nonce',
+      model: {
+        kind: 'callGraph',
+        title: 'Codepol: Call Graph (seed)',
+        data: model,
+      },
+    });
+    // Mode pill rendered + dispatch attribute on the clear button.
+    expect(html).toContain('panel-mode-pill');
+    expect(html).toContain('data-panel-mode="signature-impact"');
+    expect(html).toContain('Signature impact');
+    expect(html).toContain('callers, unbounded');
+    expect(html).toContain('data-panel-mode-clear="signature-impact"');
+    // Direction / depth chips locked.
+    expect(html).toContain('panel-chip-locked');
+    expect(html).toContain('aria-disabled="true"');
+    // Structural-confidence banner above the canvas.
+    expect(html).toContain('panel-confidence-banner');
+    expect(html).toContain('Structural confidence');
+  });
+
+  it('omits the mode pill and confidence banner in the default interactive mode', () => {
+    const model = callGraphPanelViewModelCreate({
+      graph: callGraphFixtureCreate(),
+      focusSymbolId: SEED_ID,
+      direction: 'both',
+      depth: 1,
+    });
+    const html = codepolPanelHtmlRender({
+      nonce: 'test-nonce',
+      model: {
+        kind: 'callGraph',
+        title: 'Codepol: Call Graph (seed)',
+        data: model,
+      },
+    });
+    // The CSS embeds class-name selectors so we assert the *DOM
+    // element* attribute, not the raw substring (which would also
+    // match the stylesheet).
+    expect(html).not.toContain('class="panel-mode-pill"');
+    expect(html).not.toContain('class="panel-confidence-banner"');
+    expect(html).not.toContain('panel-chip panel-chip-active panel-chip-locked');
+    expect(html).not.toContain('aria-disabled="true"');
+  });
+
+  it('renders the per-tier tally and confidence + kind chip rows so the panel surface stays uniform with type hierarchy', () => {
+    const model = callGraphPanelViewModelCreate({
+      graph: callGraphFixtureCreate(),
+      focusSymbolId: SEED_ID,
+      direction: 'both',
+      depth: 1,
+    });
+    const html = codepolPanelHtmlRender({
+      nonce: 'test-nonce',
+      model: {
+        kind: 'callGraph',
+        title: 'Codepol: Call Graph (seed)',
+        data: model,
+      },
+    });
+    // Tier tally line + "structural" entry (the fixture has two
+    // structural edges).
+    expect(html).toContain('class="panel-tally cg-summary"');
+    expect(html).toContain('2 structural');
+    // Confidence + kind chip rows present and dispatch through the
+    // call-graph attribute pair (same dispatcher branch as the
+    // direction / depth chips).
+    expect(html).toContain('data-cg-chip-group="confidence"');
+    expect(html).toContain('data-cg-chip-group="kind"');
+    // Legend block present so users can read what they're looking at.
+    expect(html).toContain('class="panel-legend"');
+    expect(html).toContain('cg-edge-structural');
+    expect(html).toContain('cg-edge-type-aware');
+  });
+
+  it('renders the lens-switcher header when the controller supplied one', () => {
+    const model = callGraphPanelViewModelCreate({
+      graph: callGraphFixtureCreate(),
+      focusSymbolId: SEED_ID,
+      direction: 'both',
+      depth: 1,
+      lensSwitcher: {
+        currentLens: 'callers',
+        availableLenses: ['callers', 'type-hierarchy'],
+        focus: { kind: 'symbol', symbolId: SEED_ID, symbolName: 'seed' },
+      },
+    });
+    const html = codepolPanelHtmlRender({
+      nonce: 'test-nonce',
+      model: {
+        kind: 'callGraph',
+        title: 'Codepol: Call Graph (seed)',
+        data: model,
+      },
+    });
+    expect(html).toContain('panel-lens-switcher');
+    expect(html).toContain('data-panel-lens="callers"');
+    expect(html).toContain('data-panel-lens="type-hierarchy"');
+    expect(html).toContain('panel-lens-button-current');
   });
 });

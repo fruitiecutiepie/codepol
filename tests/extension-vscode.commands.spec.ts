@@ -1415,6 +1415,116 @@ describe('CodepolCommandController.showCallGraph', () => {
       'Position your cursor on a function or method to show its call graph.',
     );
   });
+
+  it('attaches a lens-switcher payload that targets call-graph as the current lens', async () => {
+    const protocol = protocolCreate();
+    protocol.queryCallGraph.mockResolvedValue({
+      nodes: [
+        {
+          uri: 'codepol-symbol://seed',
+          workspaceRelativePath: 'src/a.ts::seed',
+          symbolId: 'seed',
+          symbolName: 'seed',
+          symbolKind: 'function',
+        },
+      ],
+      edges: [],
+      entryPoints: [],
+      cycles: [],
+    });
+    const panels = panelsCreate();
+    const host = hostCreate();
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    const model = await controller.showCallGraph({
+      symbolId: 'seed',
+      focusSymbolName: 'seed',
+    });
+    expect(model?.lensSwitcher).toEqual({
+      currentLens: 'callers',
+      availableLenses: ['callers', 'type-hierarchy'],
+      focus: { kind: 'symbol', symbolId: 'seed', symbolName: 'seed' },
+    });
+  });
+});
+
+describe('CodepolCommandController.peekSignatureImpact', () => {
+  it('locks direction to callers and depth to unbounded when invoked with a symbolId', async () => {
+    const protocol = protocolCreate();
+    protocol.queryCallGraph.mockResolvedValue({
+      nodes: [
+        {
+          uri: 'codepol-symbol://seed',
+          workspaceRelativePath: 'src/a.ts::seed',
+          symbolId: 'seed',
+          symbolName: 'seed',
+          symbolKind: 'function',
+        },
+      ],
+      edges: [],
+      entryPoints: [],
+      cycles: [],
+    });
+    const panels = panelsCreate();
+    const host = hostCreate();
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    const model = await controller.peekSignatureImpact({
+      symbolId: 'seed',
+      focusSymbolName: 'seed',
+    });
+    expect(model).not.toBeNull();
+    expect(model?.mode).toBe('signature-impact');
+    expect(model?.direction).toBe('callers');
+    expect(model?.depth).toBe('unbounded');
+    // Phase 7: queryCallGraph fired without a `depth` field (the
+    // pinned `unbounded` becomes `undefined` on the wire).
+    expect(protocol.queryCallGraph).toHaveBeenCalledWith({
+      symbolId: 'seed',
+      direction: 'callers',
+    });
+    expect(panels.showCallGraph).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects the cursor path when the cursor is on a non-function symbol', async () => {
+    const protocol = protocolCreate();
+    protocol.querySymbolAtPosition.mockResolvedValue({
+      symbol: {
+        symbolId: 'iface-id',
+        name: 'IFace',
+        kind: 'interface',
+        declarationUri: 'file:///workspace/src/i.ts',
+        declarationRange: {
+          start: { line: 0, character: 17 },
+          end: { line: 0, character: 22 },
+        },
+      },
+    });
+    const panels = panelsCreate();
+    const host = hostCreate();
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    const model = await controller.peekSignatureImpact();
+    expect(model).toBeNull();
+    expect(protocol.queryCallGraph).not.toHaveBeenCalled();
+    expect(panels.showCallGraph).not.toHaveBeenCalled();
+    expect(host.errorShow).toHaveBeenCalledWith(
+      'Signature impact is only available for functions and methods.',
+    );
+  });
+
+  it('shows a custom cursor-prompt error when the cursor is on no symbol', async () => {
+    const protocol = protocolCreate();
+    protocol.querySymbolAtPosition.mockResolvedValue({ symbol: undefined });
+    const panels = panelsCreate();
+    const host = hostCreate();
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    await expect(controller.peekSignatureImpact()).resolves.toBeNull();
+    expect(host.errorShow).toHaveBeenCalledWith(
+      'Position your cursor on a function or method to peek its signature impact.',
+    );
+  });
 });
 
 describe('CodepolCommandController.findCallbacks', () => {

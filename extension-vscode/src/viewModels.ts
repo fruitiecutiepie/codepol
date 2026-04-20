@@ -14,6 +14,7 @@ import type {
   WorkspaceSemanticReferencesResult,
 } from '@codepol/core';
 import type { RenameTargetCandidate } from './discovery';
+import type { PanelLensSwitcherViewModel } from './panels/panelShared';
 
 export type PanelLocationViewModel = {
   uri: string;
@@ -241,6 +242,14 @@ export type DependencyGraphPanelViewModel = {
   filters: DependencyGraphFilterState;
   layoutMode: DependencyGraphLayoutMode;
   blastRadiusUri?: string;
+  /**
+   * Phase 7 lens switcher. When present, the panel header renders a
+   * `View as` button row the user can click to reopen the same focus
+   * URI through a sibling lens (e.g. Architecture Links). Absent
+   * when the controller did not supply a lens-switcher payload (the
+   * field is additive — older models / tests stay byte-stable).
+   */
+  lensSwitcher?: PanelLensSwitcherViewModel;
 };
 
 export type ArchitectureLinksPanelViewModel = {
@@ -266,6 +275,12 @@ export type ArchitectureLinksPanelViewModel = {
    * to stay un-dimmed).
    */
   cycleHighlightUris?: readonly string[];
+  /**
+   * Phase 7 lens switcher. Same role as
+   * {@link DependencyGraphPanelViewModel.lensSwitcher} — file-focus
+   * lenses available for this panel are `module` and `links`.
+   */
+  lensSwitcher?: PanelLensSwitcherViewModel;
 };
 
 export type LintRuleDetailsPanelGroupViewModel = {
@@ -1298,6 +1313,13 @@ export function dependencyGraphPanelViewModelCreate(input: {
   filters?: DependencyGraphFilterState;
   layoutMode?: DependencyGraphLayoutMode;
   blastRadiusUri?: string;
+  /**
+   * Optional Phase 7 lens-switcher payload. The controller computes
+   * this once per show-call (the focus URI does not change for the
+   * panel's lifetime) and passes it through; the view-model just
+   * surfaces it to the renderer.
+   */
+  lensSwitcher?: PanelLensSwitcherViewModel;
 }): DependencyGraphPanelViewModel {
   const filters = input.filters ?? {};
   const layoutMode = input.layoutMode ?? 'layered';
@@ -1318,7 +1340,7 @@ export function dependencyGraphPanelViewModelCreate(input: {
     canvas = dependencyGraphCanvasBlastRadiusApply(canvas, reachable);
   }
 
-  return {
+  const result: DependencyGraphPanelViewModel = {
     focusUri: input.focusUri,
     summaryCard: workspaceSummaryCardViewModelCreate(input.summary),
     graph: canvas,
@@ -1332,6 +1354,10 @@ export function dependencyGraphPanelViewModelCreate(input: {
     layoutMode,
     blastRadiusUri: input.blastRadiusUri,
   };
+  if (input.lensSwitcher !== undefined) {
+    result.lensSwitcher = input.lensSwitcher;
+  }
+  return result;
 }
 
 export function architectureLinksPanelViewModelCreate(input: {
@@ -1352,6 +1378,12 @@ export function architectureLinksPanelViewModelCreate(input: {
    * with the existing blast-radius interaction.
    */
   cycleHighlightUris?: readonly string[];
+  /**
+   * Phase 7 lens-switcher payload — see
+   * {@link dependencyGraphPanelViewModelCreate} for the field
+   * semantics.
+   */
+  lensSwitcher?: PanelLensSwitcherViewModel;
 }): ArchitectureLinksPanelViewModel {
   const filters = input.filters ?? {};
   const layoutMode = input.layoutMode ?? 'radial';
@@ -1441,6 +1473,9 @@ export function architectureLinksPanelViewModelCreate(input: {
     blastRadiusUri: input.blastRadiusUri,
     ...(cycleHighlightUris !== undefined
       ? { cycleHighlightUris }
+      : {}),
+    ...(input.lensSwitcher !== undefined
+      ? { lensSwitcher: input.lensSwitcher }
       : {}),
   };
 }

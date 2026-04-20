@@ -23,6 +23,7 @@ import {
   CODEPOL_EXTENSION_COMMAND_CLEAR_DIAGNOSTICS_ESCALATIONS,
   CODEPOL_EXTENSION_COMMAND_FIND_CALLBACKS,
   CODEPOL_EXTENSION_COMMAND_PEEK_ARCHITECTURE,
+  CODEPOL_EXTENSION_COMMAND_PEEK_SIGNATURE_IMPACT,
   CODEPOL_EXTENSION_COMMAND_REFRESH_RENAME_TARGETS,
   CODEPOL_EXTENSION_COMMAND_REFRESH_LINT_RULES,
   CODEPOL_EXTENSION_COMMAND_OPEN_LINT_RULE_LOCATION,
@@ -704,6 +705,57 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
       await vscode.commands.executeCommand(command);
     },
+    panelLensOpen: async ({ lens, focus }) => {
+      // Phase 7 lens switcher. Each lens routes to the right
+      // controller method without the manager itself owning a
+      // controller reference (which would create a circular type
+      // dependency between `manager.ts` and `commands.ts`).
+      if (!controller) return;
+      if (lens === 'module' && focus.kind === 'file') {
+        await controller.showDependencyGraph(focus.uri);
+        return;
+      }
+      if (lens === 'links' && focus.kind === 'file') {
+        await controller.showArchitectureLinks(focus.uri);
+        return;
+      }
+      if (lens === 'callers' && focus.kind === 'symbol') {
+        const args: { symbolId: string; focusSymbolName?: string } = {
+          symbolId: focus.symbolId,
+        };
+        if (focus.symbolName !== undefined) {
+          args.focusSymbolName = focus.symbolName;
+        }
+        await controller.showCallGraph(args);
+        return;
+      }
+      if (lens === 'type-hierarchy' && focus.kind === 'symbol') {
+        const args: { symbolId: string; focusSymbolName?: string } = {
+          symbolId: focus.symbolId,
+        };
+        if (focus.symbolName !== undefined) {
+          args.focusSymbolName = focus.symbolName;
+        }
+        await controller.showTypeHierarchy(args);
+        return;
+      }
+      // Cross-type switching (file ↔ symbol) is intentionally
+      // out of scope for the MVP — silently drop.
+    },
+    panelModeClear: async ({ modeId, focus }) => {
+      // Phase 7 signature-impact mode clear. Re-open the panel in
+      // interactive mode using the already-resolved focus symbol.
+      if (!controller) return;
+      if (modeId === 'signature-impact' && focus.kind === 'symbol') {
+        const args: { symbolId: string; focusSymbolName?: string } = {
+          symbolId: focus.symbolId,
+        };
+        if (focus.symbolName !== undefined) {
+          args.focusSymbolName = focus.symbolName;
+        }
+        await controller.showCallGraph(args);
+      }
+    },
     deadModulesEntryPointsPick: async ({ currentEntryPointUris }) => {
       // The picker source is the workspace-indexed file set so the
       // multi-select only offers files Codepol actually knows about.
@@ -995,6 +1047,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       CODEPOL_EXTENSION_COMMAND_FIND_CALLBACKS,
       async (args?: { symbolId?: string; focusSymbolName?: string }) =>
         controller?.findCallbacks(args),
+    ),
+    vscode.commands.registerCommand(
+      CODEPOL_EXTENSION_COMMAND_PEEK_SIGNATURE_IMPACT,
+      async (args?: { symbolId?: string; focusSymbolName?: string }) =>
+        controller?.peekSignatureImpact(args),
     ),
     vscode.commands.registerCommand(
       CODEPOL_EXTENSION_COMMAND_SHOW_LINT_RULE_DETAILS,

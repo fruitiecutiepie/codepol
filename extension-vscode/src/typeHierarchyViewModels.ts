@@ -27,6 +27,7 @@ import type {
   WorkspaceRange,
   WorkspaceTypeHierarchyEdgeConfidence,
 } from '@codepol/core';
+import type { PanelLensSwitcherViewModel } from './panels/panelShared';
 
 const SYMBOL_URI_SCHEME_PREFIX = 'codepol-symbol://';
 
@@ -115,6 +116,13 @@ export type TypeHierarchyPanelViewModel = {
   depth: TypeHierarchyPanelDepth;
   /** Per-tier edge counts shown in the panel header. */
   edgeCounts: TypeHierarchyConfidenceCounts;
+  /**
+   * Optional lens-switcher payload (Phase 7). When present, the
+   * panel header renders a {@link panelLensSwitcherHtml} affordance
+   * the user can click to reopen the same focus through a sibling
+   * lens. Absent when the focus has only one valid lens.
+   */
+  lensSwitcher?: PanelLensSwitcherViewModel;
 };
 
 const NODE_RADIUS = 14;
@@ -143,6 +151,12 @@ export function typeHierarchyPanelViewModelCreate(input: {
   focusSymbolName?: string;
   direction: TypeHierarchyPanelDirection;
   depth: TypeHierarchyPanelDepth;
+  /**
+   * Optional lens-switcher payload (Phase 7). The controller builds
+   * this once per show-call and passes it through; the view-model
+   * just surfaces it to the renderer.
+   */
+  lensSwitcher?: PanelLensSwitcherViewModel;
 }): TypeHierarchyPanelViewModel {
   const focusUri = typeHierarchySymbolUriCreate(input.focusSymbolId);
   const nodesByUri = new Map<string, WorkspaceDependencyGraphNode>();
@@ -310,6 +324,9 @@ export function typeHierarchyPanelViewModelCreate(input: {
   }
   if (focusNode?.declarationRange !== undefined) {
     result.focusDeclarationRange = focusNode.declarationRange;
+  }
+  if (input.lensSwitcher !== undefined) {
+    result.lensSwitcher = input.lensSwitcher;
   }
   return result;
 }

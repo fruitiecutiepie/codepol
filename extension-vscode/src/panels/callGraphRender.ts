@@ -9,6 +9,13 @@
  * primitives the call-graph layout needs and stays free of any
  * imports from the file-graph render path.
  *
+ * Phase 7 polish: chip rows, the second-summary tally, the legend,
+ * the lens-switcher header affordance, the locked mode pill, and the
+ * structural-confidence banner all funnel through the shared helpers
+ * in {@link panelShared} so the visual grammar is uniform across the
+ * call-graph, type-hierarchy, dependency-graph, and architecture-links
+ * panels.
+ *
  * The output HTML is rendered inside `codepolPanelHtmlRender`'s
  * `<body>`; the surrounding `<head>` (CSP, base styles) is supplied
  * by render.ts so the call-graph panel inherits the standard panel
@@ -24,6 +31,14 @@ import type {
   CallGraphControlsViewModel,
   CallGraphPanelViewModel,
 } from '../callGraphViewModels';
+import {
+  panelChipRowHtml,
+  panelConfidenceBannerHtml,
+  panelLegendHtml,
+  panelLensSwitcherHtml,
+  panelModePillHtml,
+  panelTallyHeaderHtml,
+} from './panelShared';
 
 function htmlEscape(value: string): string {
   return value
@@ -34,45 +49,100 @@ function htmlEscape(value: string): string {
     .split("'").join('&#39;');
 }
 
-function callGraphChipHtml(
+/**
+ * Convert one viewmodel chip into the shared-helper descriptor shape.
+ * The data-attribute pair stays panel-specific (`data-cg-chip-*`) so
+ * the existing BASE_SCRIPT dispatcher and the existing test
+ * assertions on those attributes continue to work after the helper
+ * migration.
+ */
+function callGraphChipDescriptorCreate(
   chip: CallGraphChipViewModel,
   group: 'direction' | 'depth' | 'confidence' | 'kind',
-): string {
-  const description = chip.description
-    ? ` title="${htmlEscape(chip.description)}"`
-    : '';
+  options: { locked?: boolean } = {},
+): import('./panelShared').PanelChipDescriptor {
   // The chip id is `<group>:<value>`; strip the prefix so the click
   // handler in render.ts only has to read `data-cg-chip-value`.
-  const value = chip.id.startsWith(`${group}:`) ? chip.id.slice(group.length + 1) : chip.id;
-  return `<button
-      type="button"
-      class="cg-chip${chip.active ? ' cg-chip-active' : ''}"
-      data-cg-chip-group="${htmlEscape(group)}"
-      data-cg-chip-value="${htmlEscape(value)}"
-      ${description}
-    >${htmlEscape(chip.label)}</button>`;
+  const value = chip.id.startsWith(`${group}:`)
+    ? chip.id.slice(group.length + 1)
+    : chip.id;
+  return {
+    label: chip.label,
+    active: chip.active,
+    locked: options.locked === true,
+    ...(chip.description !== undefined ? { description: chip.description } : {}),
+    dataAttributes: {
+      'data-cg-chip-group': group,
+      'data-cg-chip-value': value,
+    },
+  };
 }
 
-function callGraphControlsHtml(controls: CallGraphControlsViewModel): string {
+function callGraphControlsHtml(
+  controls: CallGraphControlsViewModel,
+  options: { locked?: boolean } = {},
+): string {
+  const directionRow = panelChipRowHtml({
+    label: 'Direction',
+    chips: controls.directionChips.map((c) =>
+      callGraphChipDescriptorCreate(c, 'direction', { locked: options.locked }),
+    ),
+    rowExtraClass: 'cg-chip-row',
+    chipExtraClass: 'cg-chip',
+  });
+  const depthRow = panelChipRowHtml({
+    label: 'Depth',
+    chips: controls.depthChips.map((c) =>
+      callGraphChipDescriptorCreate(c, 'depth', { locked: options.locked }),
+    ),
+    rowExtraClass: 'cg-chip-row',
+    chipExtraClass: 'cg-chip',
+  });
+  const confidenceRow = panelChipRowHtml({
+    label: 'Confidence',
+    chips: controls.confidenceChips.map((c) =>
+      callGraphChipDescriptorCreate(c, 'confidence'),
+    ),
+    rowExtraClass: 'cg-chip-row',
+    chipExtraClass: 'cg-chip',
+    note: 'Populated when a TypeAwareCallGraphSource is wired.',
+  });
+  const kindRow = panelChipRowHtml({
+    label: 'Kind',
+    chips: controls.kindChips.map((c) =>
+      callGraphChipDescriptorCreate(c, 'kind'),
+    ),
+    rowExtraClass: 'cg-chip-row',
+    chipExtraClass: 'cg-chip',
+  });
   return `<div class="cg-controls">
-    <div class="cg-chip-row" role="group" aria-label="Direction">
-      <span class="cg-chip-row-label">Direction</span>
-      ${controls.directionChips.map((c) => callGraphChipHtml(c, 'direction')).join('')}
-    </div>
-    <div class="cg-chip-row" role="group" aria-label="Depth">
-      <span class="cg-chip-row-label">Depth</span>
-      ${controls.depthChips.map((c) => callGraphChipHtml(c, 'depth')).join('')}
-    </div>
-    <div class="cg-chip-row cg-chip-row-inert" role="group" aria-label="Confidence">
-      <span class="cg-chip-row-label">Confidence</span>
-      ${controls.confidenceChips.map((c) => callGraphChipHtml(c, 'confidence')).join('')}
-      <span class="cg-chip-row-note">populated when a TypeAwareCallGraphSource is wired</span>
-    </div>
-    <div class="cg-chip-row cg-chip-row-inert" role="group" aria-label="Kind">
-      <span class="cg-chip-row-label">Kind</span>
-      ${controls.kindChips.map((c) => callGraphChipHtml(c, 'kind')).join('')}
-    </div>
+    ${directionRow}
+    ${depthRow}
+    ${confidenceRow}
+    ${kindRow}
   </div>`;
+}
+
+/**
+ * Two-row legend explaining the confidence tiers. Mirrors the
+ * type-hierarchy legend so the visual grammar is consistent across
+ * symbol-graph panels.
+ */
+function callGraphLegendHtml(): string {
+  return panelLegendHtml({
+    entries: [
+      {
+        label: 'Structural',
+        detail: 'direct call edges resolved from the source index',
+        swatchClass: 'cg-edge-structural',
+      },
+      {
+        label: 'Type-aware',
+        detail: 'confirmed by a registered TypeAwareCallGraphSource',
+        swatchClass: 'cg-edge-type-aware',
+      },
+    ],
+  });
 }
 
 function callGraphSvgHtml(canvas: CallGraphCanvasViewModel): string {
@@ -130,21 +200,71 @@ function callGraphSvgHtml(canvas: CallGraphCanvasViewModel): string {
     </svg>`;
 }
 
+/**
+ * Format a per-tier counts line for the panel header. Zero-count
+ * tiers collapse so the line stays terse on small graphs.
+ */
+function callGraphTallyHtml(model: CallGraphPanelViewModel): string {
+  return panelTallyHeaderHtml({
+    tallies: [
+      { label: 'structural', count: model.edgeCounts.structural },
+      { label: 'type-aware', count: model.edgeCounts.typeAware },
+    ],
+    extraClass: 'cg-summary',
+  });
+}
+
+/**
+ * Render the panel's header copy: lens switcher → optional mode pill
+ * → title → primary summary line → tier-tally.
+ *
+ * The lens switcher and mode pill are optional and collapse to the
+ * empty string when absent so the header looks unchanged for callers
+ * that don't supply them.
+ */
+function callGraphHeaderHtml(model: CallGraphPanelViewModel): string {
+  const headingName = model.focusSymbolName.length > 0
+    ? model.focusSymbolName
+    : '<anonymous>';
+  const summaryParts = [
+    `${model.graph.nodes.length} nodes`,
+    `${model.graph.edges.length} edges`,
+    `direction: ${model.direction}`,
+    `depth: ${typeof model.depth === 'string' ? model.depth : `up to ${model.depth}`}`,
+  ];
+  const lensSwitcher = model.lensSwitcher
+    ? panelLensSwitcherHtml(model.lensSwitcher)
+    : '';
+  const modePill = model.mode === 'signature-impact'
+    ? panelModePillHtml({
+        label: 'Signature impact',
+        configurationSummary: 'callers, unbounded',
+        modeId: 'signature-impact',
+        description: 'Locked: showing every caller (transitive). Click \u00d7 to return to interactive mode.',
+      })
+    : '';
+  return `<header class="cg-header">
+    ${lensSwitcher}
+    ${modePill}
+    <h2>Call Graph: ${htmlEscape(headingName)}</h2>
+    <p class="cg-summary">${htmlEscape(summaryParts.join(' \u00b7 '))}</p>
+    ${callGraphTallyHtml(model)}
+  </header>`;
+}
+
 const CALL_GRAPH_PANEL_CSS = `
   .cg-card { padding: 12px; border: 1px solid var(--vscode-panel-border); border-radius: 10px; background: var(--vscode-editor-background); }
   .cg-header { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
   .cg-header h2 { margin: 0; font-size: 14px; }
   .cg-header .cg-summary { color: var(--vscode-descriptionForeground); font-size: 12px; }
   .cg-controls { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
-  .cg-chip-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-  .cg-chip-row-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--vscode-descriptionForeground); margin-right: 4px; }
-  .cg-chip-row-inert .cg-chip { opacity: 0.55; pointer-events: none; }
-  .cg-chip-row-note { font-size: 11px; color: var(--vscode-descriptionForeground); margin-left: auto; }
-  .cg-chip { padding: 2px 8px; border-radius: 999px; border: 1px solid var(--vscode-panel-border); background: transparent; color: var(--vscode-foreground); font-size: 11px; cursor: pointer; }
+  .cg-chip-row { /* parity row hook; layout supplied by .panel-chip-row */ }
+  .cg-chip { /* parity chip hook; styling supplied by .panel-chip */ }
   .cg-chip-active { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border-color: transparent; }
   .cg-canvas { width: 100%; height: auto; max-height: 70vh; }
   .cg-edge { stroke: var(--vscode-editorIndentGuide-background); stroke-width: 1.5; }
-  .cg-edge-type-aware { stroke-width: 2.25; }
+  .cg-edge-structural { stroke: var(--vscode-editorIndentGuide-background); stroke-width: 1.5; }
+  .cg-edge-type-aware { stroke: var(--vscode-textLink-activeForeground); stroke-width: 2.25; }
   .cg-edge-kind-dynamic-dispatch { stroke-dasharray: 6 4; }
   .cg-edge-kind-higher-order { stroke-dasharray: 2 3; }
   .cg-node circle { fill: var(--vscode-editor-background); stroke: var(--vscode-foreground); stroke-width: 1.25; }
@@ -163,30 +283,29 @@ const CALL_GRAPH_PANEL_CSS = `
  * Click handling is intentionally delegated to the panel shell's
  * single `BASE_SCRIPT` (in `render.ts`) so the panel only ever calls
  * `acquireVsCodeApi()` once. Nodes carry `data-open-uri` (the
- * standard panel attribute) and chips carry `data-cg-chip-group` /
- * `data-cg-chip-value` (the new attribute pair the shell knows about
- * for the call-graph panel).
+ * standard panel attribute), chips carry `data-cg-chip-group` /
+ * `data-cg-chip-value` (the existing attribute pair the shell knows
+ * about for the call-graph panel), and the lens switcher /
+ * mode-clear button rely on the shared `data-panel-lens` /
+ * `data-panel-mode-clear` attributes the shell now also dispatches.
  */
 export function callGraphPanelBodyHtml(input: {
   model: CallGraphPanelViewModel;
 }): string {
   const { model } = input;
-  const summaryParts = [
-    `${model.graph.nodes.length} nodes`,
-    `${model.graph.edges.length} edges`,
-    `direction: ${model.direction}`,
-    `depth: ${typeof model.depth === 'string' ? model.depth : `up to ${model.depth}`}`,
-  ];
-  const headingName = model.focusSymbolName.length > 0
-    ? model.focusSymbolName
-    : '<anonymous>';
+  const isLocked = model.mode === 'signature-impact';
+  const confidenceBanner = isLocked
+    ? panelConfidenceBannerHtml({
+        message:
+          'Structural confidence — dynamic dispatch and higher-order calls are not tracked.',
+      })
+    : '';
   return `<style>${CALL_GRAPH_PANEL_CSS}</style>
     <section class="cg-card">
-      <header class="cg-header">
-        <h2>Call Graph: ${htmlEscape(headingName)}</h2>
-        <p class="cg-summary">${htmlEscape(summaryParts.join(' \u00b7 '))}</p>
-      </header>
-      ${callGraphControlsHtml(model.controls)}
+      ${callGraphHeaderHtml(model)}
+      ${callGraphControlsHtml(model.controls, { locked: isLocked })}
+      ${callGraphLegendHtml()}
+      ${confidenceBanner}
       ${callGraphSvgHtml(model.graph)}
     </section>`;
 }

@@ -31,6 +31,8 @@ export const CODEPOL_EXTENSION_COMMAND_SHOW_DEAD_MODULES =
   'codepol.extension.showDeadModules';
 export const CODEPOL_EXTENSION_COMMAND_FIND_CALLBACKS =
   'codepol.extension.findCallbacks';
+export const CODEPOL_EXTENSION_COMMAND_PEEK_SIGNATURE_IMPACT =
+  'codepol.extension.peekSignatureImpact';
 export const CODEPOL_EXTENSION_COMMAND_RENAME_CODEPOL_ENTITY =
   'codepol.extension.renameCodepolEntity';
 export const CODEPOL_EXTENSION_COMMAND_REFRESH_RENAME_TARGETS =

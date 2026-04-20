@@ -10,11 +10,16 @@
  * - dashed stroke:  structural-shape (Phase 9.4 cross-file shape match)
  * - emphasized:     type-aware (Phase 9.5 language-server binding)
  *
+ * Phase 7 polish: chip rows, the per-tier counts header, the legend,
+ * and the lens-switcher header affordance funnel through the shared
+ * helpers in {@link panelShared} so the visual grammar matches the
+ * call-graph panel exactly.
+ *
  * Layout, click handling, and chip wiring follow `callGraphRender`
- * one-for-one — `data-cg-chip-*` attributes are reused so the panel
- * shell's inline `<script>` does not need a new branch. Per-node SVG
- * carries `data-open-uri` so the panel manager's existing
- * `openLocation` message can fire on click.
+ * one-for-one — `data-th-chip-*` attributes route messages
+ * specifically to the type-hierarchy handler in `manager.ts`.
+ * Per-node SVG carries `data-open-uri` so the panel manager's
+ * existing `openLocation` message can fire on click.
  */
 
 import type {
@@ -24,6 +29,11 @@ import type {
   TypeHierarchyConfidenceCounts,
   TypeHierarchyPanelViewModel,
 } from '../typeHierarchyViewModels';
+import {
+  panelChipRowHtml,
+  panelLegendHtml,
+  panelLensSwitcherHtml,
+} from './panelShared';
 
 function htmlEscape(value: string): string {
   return value
@@ -34,68 +44,71 @@ function htmlEscape(value: string): string {
     .split("'").join('&#39;');
 }
 
-function typeHierarchyChipHtml(
+function typeHierarchyChipDescriptorCreate(
   chip: TypeHierarchyChipViewModel,
   group: 'direction' | 'depth',
-): string {
-  const description = chip.description
-    ? ` title="${htmlEscape(chip.description)}"`
-    : '';
-  const value = chip.id.startsWith(`${group}:`) ? chip.id.slice(group.length + 1) : chip.id;
-  // Reuse the call-graph chip class names for visual styling but
-  // tag with `data-th-chip-*` so the panel shell dispatches the
-  // type-hierarchy-specific message type. The two panels share
-  // chip CSS but never collide on chip values (call graph uses
-  // 'callers'/'callees', type hierarchy uses 'supertypes'/'subtypes').
-  return `<button
-      type="button"
-      class="cg-chip${chip.active ? ' cg-chip-active' : ''}"
-      data-th-chip-group="${htmlEscape(group)}"
-      data-th-chip-value="${htmlEscape(value)}"
-      ${description}
-    >${htmlEscape(chip.label)}</button>`;
+): import('./panelShared').PanelChipDescriptor {
+  const value = chip.id.startsWith(`${group}:`)
+    ? chip.id.slice(group.length + 1)
+    : chip.id;
+  return {
+    label: chip.label,
+    active: chip.active,
+    ...(chip.description !== undefined ? { description: chip.description } : {}),
+    dataAttributes: {
+      'data-th-chip-group': group,
+      'data-th-chip-value': value,
+    },
+  };
 }
 
 function typeHierarchyControlsHtml(controls: TypeHierarchyControlsViewModel): string {
   return `<div class="cg-controls">
-    <div class="cg-chip-row" role="group" aria-label="Direction">
-      <span class="cg-chip-row-label">Direction</span>
-      ${controls.directionChips.map((c) => typeHierarchyChipHtml(c, 'direction')).join('')}
-    </div>
-    <div class="cg-chip-row" role="group" aria-label="Depth">
-      <span class="cg-chip-row-label">Depth</span>
-      ${controls.depthChips.map((c) => typeHierarchyChipHtml(c, 'depth')).join('')}
-    </div>
+    ${panelChipRowHtml({
+      label: 'Direction',
+      chips: controls.directionChips.map((c) =>
+        typeHierarchyChipDescriptorCreate(c, 'direction'),
+      ),
+      rowExtraClass: 'cg-chip-row',
+      chipExtraClass: 'cg-chip',
+    })}
+    ${panelChipRowHtml({
+      label: 'Depth',
+      chips: controls.depthChips.map((c) =>
+        typeHierarchyChipDescriptorCreate(c, 'depth'),
+      ),
+      rowExtraClass: 'cg-chip-row',
+      chipExtraClass: 'cg-chip',
+    })}
   </div>`;
 }
 
 /**
  * Three-row legend explaining the confidence tiers. Renders a tiny
  * SVG swatch for each tier so the visual matches the actual edge
- * style users see on the canvas.
+ * style users see on the canvas. Exported so the test suite can
+ * assert the human-readable copy in isolation from the panel body.
  */
 export function typeHierarchyLegendHtml(): string {
-  const swatch = (className: string): string =>
-    `<svg class="th-legend-swatch" viewBox="0 0 24 8" aria-hidden="true">
-      <line class="cg-edge ${className}" x1="0" y1="4" x2="24" y2="4" />
-    </svg>`;
-  return `<ul class="th-legend" role="list">
-    <li>
-      ${swatch('th-edge-declared')}
-      <span class="th-legend-label">Declared</span>
-      <span class="th-legend-detail">extends / implements clause in source code</span>
-    </li>
-    <li>
-      ${swatch('th-edge-structural-shape')}
-      <span class="th-legend-label">Shape-matched</span>
-      <span class="th-legend-detail">name + arity match — may include false positives</span>
-    </li>
-    <li>
-      ${swatch('th-edge-type-aware')}
-      <span class="th-legend-label">Type-aware</span>
-      <span class="th-legend-detail">confirmed by the language server</span>
-    </li>
-  </ul>`;
+  return panelLegendHtml({
+    entries: [
+      {
+        label: 'Declared',
+        detail: 'extends / implements clause in source code',
+        swatchClass: 'th-edge-declared',
+      },
+      {
+        label: 'Shape-matched',
+        detail: 'name + arity match — may include false positives',
+        swatchClass: 'th-edge-structural-shape',
+      },
+      {
+        label: 'Type-aware',
+        detail: 'confirmed by the language server',
+        swatchClass: 'th-edge-type-aware',
+      },
+    ],
+  });
 }
 
 function typeHierarchyConfidenceClassResolve(
@@ -158,16 +171,22 @@ function typeHierarchySvgHtml(canvas: TypeHierarchyCanvasViewModel): string {
     </svg>`;
 }
 
-function typeHierarchyCountsHtml(counts: TypeHierarchyConfidenceCounts): string {
-  const parts: string[] = [];
-  parts.push(`${counts.declared} declared`);
+/**
+ * Tier counts line. The `declared` count always renders (even at
+ * zero) — the panel shipped this row from day one and dropping it on
+ * zero would surprise readers used to the existing layout. The other
+ * tiers collapse when zero so the line stays terse on declared-only
+ * graphs.
+ */
+function typeHierarchyTallyHtml(counts: TypeHierarchyConfidenceCounts): string {
+  const parts: string[] = [`${counts.declared} declared`];
   if (counts.structuralShape > 0) {
     parts.push(`${counts.structuralShape} shape-matched`);
   }
   if (counts.typeAware > 0) {
     parts.push(`${counts.typeAware} from language server`);
   }
-  return parts.join(' \u00b7 ');
+  return `<p class="panel-tally th-summary">${htmlEscape(parts.join(' \u00b7 '))}</p>`;
 }
 
 const TYPE_HIERARCHY_PANEL_CSS = `
@@ -176,15 +195,9 @@ const TYPE_HIERARCHY_PANEL_CSS = `
   .th-header h2 { margin: 0; font-size: 14px; }
   .th-summary { color: var(--vscode-descriptionForeground); font-size: 12px; }
   .cg-controls { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
-  .cg-chip-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-  .cg-chip-row-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--vscode-descriptionForeground); margin-right: 4px; }
-  .cg-chip { padding: 2px 8px; border-radius: 999px; border: 1px solid var(--vscode-panel-border); background: transparent; color: var(--vscode-foreground); font-size: 11px; cursor: pointer; }
+  .cg-chip-row { /* parity hook; layout supplied by .panel-chip-row */ }
+  .cg-chip { /* parity hook; styling supplied by .panel-chip */ }
   .cg-chip-active { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border-color: transparent; }
-  .th-legend { list-style: none; margin: 0 0 12px 0; padding: 8px 12px; border: 1px solid var(--vscode-panel-border); border-radius: 6px; display: flex; flex-direction: column; gap: 4px; }
-  .th-legend li { display: flex; align-items: center; gap: 8px; font-size: 12px; }
-  .th-legend-swatch { width: 24px; height: 8px; flex-shrink: 0; }
-  .th-legend-label { font-weight: 600; color: var(--vscode-foreground); min-width: 110px; }
-  .th-legend-detail { color: var(--vscode-descriptionForeground); font-size: 11px; }
   .cg-canvas { width: 100%; height: auto; max-height: 70vh; }
   .cg-edge { stroke: var(--vscode-editorIndentGuide-background); stroke-width: 1.5; fill: none; }
   .cg-edge.th-edge-declared { stroke: var(--vscode-foreground); stroke-width: 1.5; }
@@ -201,32 +214,43 @@ const TYPE_HIERARCHY_PANEL_CSS = `
 `;
 
 /**
- * Build the panel `<body>` HTML. Click handling is delegated to the
- * shell's single `BASE_SCRIPT` (in `render.ts`); chips reuse the
- * `data-cg-chip-*` attribute pair so the existing dispatcher routes
- * messages to the manager's chip handler.
+ * Render the panel's header copy: optional lens switcher → title →
+ * primary summary line → tier-tally.
  */
-export function typeHierarchyPanelBodyHtml(input: {
-  model: TypeHierarchyPanelViewModel;
-}): string {
-  const { model } = input;
+function typeHierarchyHeaderHtml(model: TypeHierarchyPanelViewModel): string {
+  const headingName = model.focusSymbolName.length > 0
+    ? model.focusSymbolName
+    : '<anonymous>';
   const summaryParts = [
     `${model.graph.nodes.length} nodes`,
     `${model.graph.edges.length} edges`,
     `direction: ${model.direction}`,
     `depth: ${typeof model.depth === 'string' ? model.depth : `up to ${model.depth}`}`,
   ];
-  const headingName = model.focusSymbolName.length > 0
-    ? model.focusSymbolName
-    : '<anonymous>';
-  const countsLine = typeHierarchyCountsHtml(model.edgeCounts);
+  const lensSwitcher = model.lensSwitcher
+    ? panelLensSwitcherHtml(model.lensSwitcher)
+    : '';
+  return `<header class="th-header">
+    ${lensSwitcher}
+    <h2>Type Hierarchy: ${htmlEscape(headingName)}</h2>
+    <p class="th-summary">${htmlEscape(summaryParts.join(' \u00b7 '))}</p>
+    ${typeHierarchyTallyHtml(model.edgeCounts)}
+  </header>`;
+}
+
+/**
+ * Build the panel `<body>` HTML. Click handling is delegated to the
+ * shell's single `BASE_SCRIPT` (in `render.ts`); chips reuse the
+ * `data-th-chip-*` attribute pair so the existing dispatcher routes
+ * messages to the manager's chip handler.
+ */
+export function typeHierarchyPanelBodyHtml(input: {
+  model: TypeHierarchyPanelViewModel;
+}): string {
+  const { model } = input;
   return `<style>${TYPE_HIERARCHY_PANEL_CSS}</style>
     <section class="th-card">
-      <header class="th-header">
-        <h2>Type Hierarchy: ${htmlEscape(headingName)}</h2>
-        <p class="th-summary">${htmlEscape(summaryParts.join(' \u00b7 '))}</p>
-        <p class="th-summary">${htmlEscape(countsLine)}</p>
-      </header>
+      ${typeHierarchyHeaderHtml(model)}
       ${typeHierarchyControlsHtml(model.controls)}
       ${typeHierarchyLegendHtml()}
       ${typeHierarchySvgHtml(model.graph)}

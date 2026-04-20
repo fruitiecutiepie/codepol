@@ -66,6 +66,10 @@ import {
   renamePreviewPanelViewModelCreate,
   semanticDefinitionPanelViewModelCreate,
 } from './viewModels';
+import type {
+  PanelLensSwitcherViewModel,
+  PanelLensValue,
+} from './panels/panelShared';
 
 export type RenameCommandOptions = {
   target?: WorkspaceSupportedRenameTarget;
@@ -254,6 +258,12 @@ function architectureLinksRebuilderCreate(input: {
    * clicked on does not move.
    */
   cycleHighlightUris?: readonly string[];
+  /**
+   * Phase 7 lens-switcher payload. Captured by the rebuilder closure
+   * so chip toggles preserve the lens-switcher header instead of
+   * dropping it across re-renders.
+   */
+  lensSwitcher?: PanelLensSwitcherViewModel;
 }): ArchitectureLinksPanelRebuilder {
   return (state) =>
     architectureLinksPanelViewModelCreate({
@@ -268,7 +278,49 @@ function architectureLinksRebuilderCreate(input: {
       ...(input.cycleHighlightUris !== undefined
         ? { cycleHighlightUris: input.cycleHighlightUris }
         : {}),
+      ...(input.lensSwitcher !== undefined
+        ? { lensSwitcher: input.lensSwitcher }
+        : {}),
     });
+}
+
+/**
+ * Phase 7 lens-switcher payloads. Each helper returns the
+ * compatible-lens set for the current focus type so the panel header
+ * only renders buttons that route somewhere meaningful. Cross-type
+ * switching (file ↔ symbol) is intentionally out of scope for the
+ * MVP — the user has to peek the right place to change focus type.
+ */
+function fileLensSwitcherCreate(input: {
+  uri: string;
+  currentLens: 'module' | 'links';
+}): PanelLensSwitcherViewModel {
+  const availableLenses: PanelLensValue[] = ['module', 'links'];
+  return {
+    currentLens: input.currentLens,
+    availableLenses,
+    focus: { kind: 'file', uri: input.uri },
+  };
+}
+
+function symbolLensSwitcherCreate(input: {
+  symbolId: string;
+  symbolName?: string;
+  currentLens: 'callers' | 'type-hierarchy';
+}): PanelLensSwitcherViewModel {
+  const availableLenses: PanelLensValue[] = ['callers', 'type-hierarchy'];
+  const focus: { kind: 'symbol'; symbolId: string; symbolName?: string } = {
+    kind: 'symbol',
+    symbolId: input.symbolId,
+  };
+  if (input.symbolName !== undefined) {
+    focus.symbolName = input.symbolName;
+  }
+  return {
+    currentLens: input.currentLens,
+    availableLenses,
+    focus,
+  };
 }
 
 function lintRuleQuickFixesSort(
@@ -298,6 +350,17 @@ export class CodepolCommandController {
     'class',
     'interface',
     'type',
+  ]);
+
+  /**
+   * Symbol kinds the `peekSignatureImpact` command accepts. Limited
+   * to function/method because "downstream of a signature change"
+   * is only meaningful for callable symbols. Mirrors the
+   * `HIERARCHY_KINDS` guard pattern.
+   */
+  private static readonly FUNCTION_KINDS = new Set<WorkspaceSymbolDescriptorKind>([
+    'function',
+    'method',
   ]);
 
   constructor(
@@ -505,6 +568,9 @@ export class CodepolCommandController {
 
     const summaryResolved: WorkspaceArchitectureSummaryResult | null =
       summary ?? null;
+    const lensSwitcher = focusUri
+      ? fileLensSwitcherCreate({ uri: focusUri, currentLens: 'module' })
+      : undefined;
     const buildModel = (
       state: DependencyGraphPanelControlState,
     ): DependencyGraphPanelViewModel =>
@@ -515,6 +581,7 @@ export class CodepolCommandController {
         filters: state.filters,
         layoutMode: state.layoutMode,
         blastRadiusUri: state.blastRadiusUri,
+        ...(lensSwitcher !== undefined ? { lensSwitcher } : {}),
       });
     const model = buildModel({ filters: {}, layoutMode: 'layered' });
     this.panels.showDependencyGraph(model, buildModel);
@@ -549,6 +616,10 @@ export class CodepolCommandController {
       hover: hover ?? null,
       graph: graph ?? null,
       summary: summary ?? null,
+      lensSwitcher: fileLensSwitcherCreate({
+        uri: targetUri,
+        currentLens: 'links',
+      }),
     });
     const model = buildModel({ filters: {}, layoutMode: 'radial' });
     this.panels.showArchitectureLinks(model, buildModel);
@@ -657,6 +728,10 @@ export class CodepolCommandController {
       hover: hover ?? null,
       graph: impactRadius ?? null,
       summary: summary ?? null,
+      lensSwitcher: fileLensSwitcherCreate({
+        uri: targetUri,
+        currentLens: 'links',
+      }),
     });
     const model = buildModel({ filters: {}, layoutMode: 'radial' });
     this.panels.showArchitectureLinks(model, buildModel);
@@ -735,6 +810,10 @@ export class CodepolCommandController {
       graph: impactRadius ?? null,
       summary: summary ?? null,
       cycleHighlightUris: memberUris,
+      lensSwitcher: fileLensSwitcherCreate({
+        uri: focusUri,
+        currentLens: 'links',
+      }),
     });
     // Default to layered for cycle peeks because the radial focus
     // canvas hides nodes that are not adjacent to the focus URI, which
@@ -929,25 +1008,46 @@ export class CodepolCommandController {
    * the editor cursor (right-click flow). The handler chains
    * `querySymbolAtPosition` for cursor resolution and `queryCallGraph`
    * for the graph itself.
+   *
+   * Phase 7: when `args.mode === 'signature-impact'`, the panel
+   * opens pinned to `direction: 'callers'` and `depth: 'unbounded'`
+   * with the locked mode pill and structural-confidence banner
+   * rendered above the canvas.
    */
   async showCallGraph(
-    args?: { symbolId?: string; focusSymbolName?: string },
+    args?: {
+      symbolId?: string;
+      focusSymbolName?: string;
+      mode?: 'signature-impact';
+    },
   ): Promise<CallGraphPanelViewModel | null> {
-    const initialDirection: CallGraphPanelDirection = 'both';
-    const initialDepth: CallGraphPanelDepth = 2;
+    const lockedMode = args?.mode === 'signature-impact' ? 'signature-impact' : undefined;
+    const initialDirection: CallGraphPanelDirection = lockedMode === 'signature-impact'
+      ? 'callers'
+      : 'both';
+    const initialDepth: CallGraphPanelDepth = lockedMode === 'signature-impact'
+      ? 'unbounded'
+      : 2;
 
     let symbolId = args?.symbolId;
     let focusSymbolName = args?.focusSymbolName;
 
     if (!symbolId) {
       const cursor = await this.cursorSymbolResolve(
-        'Position your cursor on a function or method to show its call graph.',
+        lockedMode === 'signature-impact'
+          ? 'Position your cursor on a function or method to peek its signature impact.'
+          : 'Position your cursor on a function or method to show its call graph.',
       );
       if (!cursor) return null;
       symbolId = cursor.symbolId;
       focusSymbolName = cursor.name.length > 0 ? cursor.name : '<anonymous>';
     }
 
+    const lensSwitcher = symbolLensSwitcherCreate({
+      symbolId: symbolId!,
+      ...(focusSymbolName !== undefined ? { symbolName: focusSymbolName } : {}),
+      currentLens: 'callers',
+    });
     const buildModel = async (input: {
       direction: CallGraphPanelDirection;
       depth: CallGraphPanelDepth;
@@ -979,14 +1079,20 @@ export class CodepolCommandController {
         focusSymbolName?: string;
         direction: CallGraphPanelDirection;
         depth: CallGraphPanelDepth;
+        lensSwitcher: PanelLensSwitcherViewModel;
+        mode?: 'signature-impact';
       } = {
         graph,
         focusSymbolId: symbolId!,
         direction: input.direction,
         depth: input.depth,
+        lensSwitcher,
       };
       if (focusSymbolName !== undefined) {
         modelInput.focusSymbolName = focusSymbolName;
+      }
+      if (lockedMode !== undefined) {
+        modelInput.mode = lockedMode;
       }
       return callGraphPanelViewModelCreate(modelInput);
     };
@@ -1006,6 +1112,61 @@ export class CodepolCommandController {
     }
     this.panels.showCallGraph(initial, buildModel);
     return initial;
+  }
+
+  /**
+   * Phase 7 "signature impact" peek. Opens the call-graph panel
+   * pinned to `direction: 'callers'` and `depth: 'unbounded'` with
+   * a locked mode pill plus a structural-confidence banner above
+   * the canvas — the framing the user reads is "if I change the
+   * signature of this function, what's downstream?".
+   *
+   * Cursor-path guard: only `function | method` symbols accept the
+   * peek. Non-callable kinds bail with a friendly error rather than
+   * opening an empty panel. The CodeLens / sidebar / right-click
+   * paths all converge on this command — the guard keeps every
+   * entry surface uniform.
+   *
+   * Implementation is just a thin wrapper over
+   * {@link showCallGraph} with `mode: 'signature-impact'`. Keeping
+   * it as a separate command (rather than a flag on
+   * `showCallGraph`) lets the manifest expose a distinct title and
+   * editor-context entry so users can find it without learning the
+   * call-graph panel's mode chip first.
+   */
+  async peekSignatureImpact(
+    args?: { symbolId?: string; focusSymbolName?: string },
+  ): Promise<CallGraphPanelViewModel | null> {
+    let symbolId = args?.symbolId;
+    let focusSymbolName = args?.focusSymbolName;
+
+    if (!symbolId) {
+      const cursor = await this.cursorSymbolResolve(
+        'Position your cursor on a function or method to peek its signature impact.',
+      );
+      if (!cursor) return null;
+      if (!CodepolCommandController.FUNCTION_KINDS.has(cursor.kind)) {
+        await this.host.errorShow(
+          'Signature impact is only available for functions and methods.',
+        );
+        return null;
+      }
+      symbolId = cursor.symbolId;
+      focusSymbolName = cursor.name.length > 0 ? cursor.name : '<anonymous>';
+    }
+
+    const showCallGraphArgs: {
+      symbolId: string;
+      focusSymbolName?: string;
+      mode: 'signature-impact';
+    } = {
+      symbolId,
+      mode: 'signature-impact',
+    };
+    if (focusSymbolName !== undefined) {
+      showCallGraphArgs.focusSymbolName = focusSymbolName;
+    }
+    return this.showCallGraph(showCallGraphArgs);
   }
 
   /**
@@ -1049,6 +1210,11 @@ export class CodepolCommandController {
       focusSymbolName = cursor.name.length > 0 ? cursor.name : '<anonymous>';
     }
 
+    const lensSwitcher = symbolLensSwitcherCreate({
+      symbolId: symbolId!,
+      ...(focusSymbolName !== undefined ? { symbolName: focusSymbolName } : {}),
+      currentLens: 'type-hierarchy',
+    });
     const buildModel = async (input: {
       direction: TypeHierarchyPanelDirection;
       depth: TypeHierarchyPanelDepth;
@@ -1086,11 +1252,13 @@ export class CodepolCommandController {
         focusSymbolName?: string;
         direction: TypeHierarchyPanelDirection;
         depth: TypeHierarchyPanelDepth;
+        lensSwitcher: PanelLensSwitcherViewModel;
       } = {
         graph,
         focusSymbolId: symbolId!,
         direction: input.direction,
         depth: input.depth,
+        lensSwitcher,
       };
       if (focusSymbolName !== undefined) {
         modelInput.focusSymbolName = focusSymbolName;

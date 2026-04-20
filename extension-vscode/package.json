@@ -27,6 +27,7 @@
     "onCommand:codepol.extension.showDependencyPath",
     "onCommand:codepol.extension.showDeadModules",
     "onCommand:codepol.extension.findCallbacks",
+    "onCommand:codepol.extension.peekSignatureImpact",
     "onCommand:codepol.extension.showLintRuleDetails",
     "onCommand:codepol.extension.showLintRuleDiagnosticFixes",
     "onCommand:codepol.extension.renameCodepolEntity",
@@ -98,6 +99,11 @@
       {
         "command": "codepol.extension.findCallbacks",
         "title": "Codepol: Find Callbacks",
+        "enablement": "codepol.indexBackedCommandsEnabled"
+      },
+      {
+        "command": "codepol.extension.peekSignatureImpact",
+        "title": "Codepol: Peek Signature Impact",
         "enablement": "codepol.indexBackedCommandsEnabled"
       },
       {
@@ -217,6 +223,11 @@
           "command": "codepol.extension.findCallbacks",
           "when": "editorTextFocus && resourceScheme == file && codepol.indexBackedCommandsEnabled",
           "group": "navigation@12"
+        },
+        {
+          "command": "codepol.extension.peekSignatureImpact",
+          "when": "editorTextFocus && resourceScheme == file && codepol.indexBackedCommandsEnabled",
+          "group": "navigation@13"
         }
       ]
     },
