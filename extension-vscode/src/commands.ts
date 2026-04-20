@@ -545,10 +545,36 @@ export class CodepolCommandController {
     return model;
   }
 
+  /**
+   * "Peek architecture" command. Three caller paths converge here:
+   *
+   * 1. CodeLens click on the architecture lens (head-of-file): one
+   *    string argument with the file URI, no position.
+   * 2. Per-export CodeLens click: `{ uri, position }` argument
+   *    pointing at the declaration identifier.
+   * 3. Editor `editor/context` menu (right-click): no arguments;
+   *    cursor URI + position read from `host.activeUriGet` /
+   *    `host.activePositionGet`.
+   *
+   * When a `position` is available (paths 2 and 3), the controller
+   * resolves the symbol via `querySymbolAtPosition` and delegates to:
+   *
+   * - `showCallGraph` for `function | method` symbols
+   * - `showTypeHierarchy` for `class | interface | type` symbols
+   * - the file-level impact-radius peek for any other kind, or when
+   *   the cursor does not resolve to a symbol
+   *
+   * Path 1 always falls through to the file-level peek.
+   *
+   * Backwards-compatible: bare `string` arguments are still accepted
+   * by the registered command handler (`extension.ts` parses `string |
+   * { uri, position }` before forwarding), so existing CodeLens / smoke
+   * test paths keep working.
+   */
   async peekArchitecture(
-    uri?: string,
+    args?: { uri?: string; position?: WorkspacePosition },
   ): Promise<ArchitectureLinksPanelViewModel | null> {
-    const targetUri = uri ?? this.host.activeUriGet();
+    const targetUri = args?.uri ?? this.host.activeUriGet();
     if (!targetUri) {
       await this.host.errorShow(
         'Open a workspace file before peeking architecture.',
@@ -560,6 +586,42 @@ export class CodepolCommandController {
     if (blockedMessage) {
       await this.host.errorShow(blockedMessage);
       return null;
+    }
+
+    // Symbol-aware routing: when the caller supplied a position
+    // (per-export CodeLens, right-click menu) try to resolve the
+    // cursor symbol and delegate to the right panel.
+    const cursorPosition = args?.position ?? this.host.activePositionGet();
+    if (cursorPosition) {
+      const positionResult = await this.protocolRequestRun(
+        this.protocol.querySymbolAtPosition({
+          uri: targetUri,
+          position: cursorPosition,
+        }),
+      );
+      if (positionResult === CodepolCommandController.REQUEST_SUPERSEDED) {
+        return null;
+      }
+      const symbol = positionResult?.symbol;
+      if (symbol) {
+        if (symbol.kind === 'function' || symbol.kind === 'method') {
+          await this.showCallGraph({
+            symbolId: symbol.symbolId,
+            focusSymbolName: symbol.name.length > 0 ? symbol.name : '<anonymous>',
+          });
+          return null;
+        }
+        if (CodepolCommandController.HIERARCHY_KINDS.has(symbol.kind)) {
+          await this.showTypeHierarchy({
+            symbolId: symbol.symbolId,
+            focusSymbolName: symbol.name.length > 0 ? symbol.name : '<anonymous>',
+          });
+          return null;
+        }
+        // Other kinds (variable, const, enumMember, etc.): fall
+        // through to the file-level peek so the user always sees
+        // *something* relevant when they peek an export.
+      }
     }
 
     const [impactRadius, references, hover, summary] = await Promise.all([

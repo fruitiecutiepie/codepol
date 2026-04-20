@@ -316,6 +316,36 @@ export type WorkspaceSymbolsInFileWithCallCountsResult = {
   items: WorkspaceSymbolWithCallCounts[];
 };
 
+/**
+ * Per-symbol importer enumeration. Powers the per-export CodeLens
+ * (Phase 5 follow-up) — anchored above each top-level `export`
+ * declaration to show "N importers" of THAT symbol specifically, as
+ * opposed to file-level importer count.
+ *
+ * The input symbol id is normalized through the index's
+ * `symbolCanonicalIdGet`, so callers may pass either the canonical
+ * declaration id or a local re-export proxy id without affecting the
+ * answer; the response always echoes the canonical id back so callers
+ * can cache by stable key.
+ *
+ * Importer URIs are sorted lexicographically and deduplicated per file.
+ */
+export type WorkspaceSymbolImporterCountResult = {
+  /**
+   * Canonical declaration id corresponding to the input. Echoed so
+   * callers that fed in a proxy id can rebuild their cache against
+   * the canonical id.
+   */
+  symbolId: string;
+  /** Number of distinct files that import this symbol. */
+  importerCount: number;
+  /**
+   * Distinct importer file URIs (`file://` scheme), sorted
+   * lexicographically.
+   */
+  importerUris: string[];
+};
+
 export type WorkspaceSearchResult = {
   name: string;
   kind: 'module' | 'exported_symbol';

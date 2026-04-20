@@ -34,6 +34,7 @@ import {
   type WorkspaceSemanticHoverResult,
   type WorkspaceSemanticReferencesResult,
   type WorkspaceSymbolAtPositionResult,
+  type WorkspaceSymbolImporterCountResult,
   type WorkspaceSymbolsInFileWithCallCountsResult,
   type WorkspaceSymbolDescriptorKind,
   type WorkspaceSymbolLookupResult,
@@ -56,6 +57,7 @@ import {
   CODEPOL_LSP_REQUEST_DEPENDENCY_PATH,
   CODEPOL_LSP_REQUEST_IMPACT_RADIUS,
   CODEPOL_LSP_REQUEST_IMPORT_SPECIFIERS_IN_FILE,
+  CODEPOL_LSP_REQUEST_SYMBOL_IMPORTER_COUNT,
   CODEPOL_LSP_REQUEST_TYPE_HIERARCHY,
   CODEPOL_LSP_REQUEST_DIAGNOSTICS_CONFIG,
   CODEPOL_LSP_REQUEST_DIAGNOSTICS_ESCALATIONS,
@@ -1168,6 +1170,10 @@ export class CodepolLspServer {
       case CODEPOL_LSP_REQUEST_IMPORT_SPECIFIERS_IN_FILE:
         return this.importSpecifiersInFileHandle(params as {
           uri?: string;
+        }, context);
+      case CODEPOL_LSP_REQUEST_SYMBOL_IMPORTER_COUNT:
+        return this.symbolImporterCountHandle(params as {
+          symbolId?: string;
         }, context);
       default:
         return null;
@@ -2364,6 +2370,34 @@ export class CodepolLspServer {
           context.requestId === undefined || context.requestId === null
             ? undefined
             : `lsp-codepol-import-specifiers-in-file:${String(context.requestId)}`,
+        signal: context.signal,
+      }), {
+      signal: context.signal,
+    });
+  }
+
+  private async symbolImporterCountHandle(
+    params: { symbolId?: string },
+    context: { requestId?: JsonRpcId; signal?: AbortSignal } = {},
+  ): Promise<WorkspaceSymbolImporterCountResult | null> {
+    if (
+      !this.registeredClientSessionId ||
+      !this.workspaceId ||
+      !params.symbolId
+    ) {
+      return null;
+    }
+    const symbolId = params.symbolId;
+
+    return this.serviceCall((service) =>
+      service.querySymbolImporterCount({
+        clientSessionId: this.registeredClientSessionId!,
+        workspaceId: this.workspaceId!,
+        symbolId,
+        requestId:
+          context.requestId === undefined || context.requestId === null
+            ? undefined
+            : `lsp-codepol-symbol-importer-count:${String(context.requestId)}`,
         signal: context.signal,
       }), {
       signal: context.signal,

@@ -34,6 +34,7 @@ import type {
   WorkspaceSymbolLookupResult,
   WorkspaceSymbolResult,
   WorkspaceSymbolsInFileWithCallCountsResult,
+  WorkspaceSymbolImporterCountResult,
   WorkspaceTypeHierarchyDirection,
   WorkspaceTypeHierarchyEdgeConfidence,
 } from '@codepol/core';
@@ -515,4 +516,26 @@ export type WorkspaceService = {
     analysisGeneration?: number;
     signal?: AbortSignal;
   }) => Promise<WorkspaceSymbolsInFileWithCallCountsResult>;
+  /**
+   * Per-symbol importer enumeration for a single exported symbol.
+   *
+   * Powers the per-export CodeLens (Phase 5 follow-up): given a
+   * symbol id resolved from `querySymbolAtPosition` against an
+   * `export` declaration, return the distinct count and URIs of files
+   * that import that symbol specifically (not the file the symbol
+   * lives in).
+   *
+   * The input id is normalized through the index's
+   * `symbolCanonicalIdGet` so callers may pass either a canonical
+   * declaration id or a local re-export proxy id and get the same
+   * answer; the response always echoes the canonical id back.
+   */
+  querySymbolImporterCount: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    symbolId: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceSymbolImporterCountResult>;
 };

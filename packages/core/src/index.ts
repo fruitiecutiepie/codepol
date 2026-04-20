@@ -154,6 +154,7 @@ export type {
   WorkspaceSymbolFlowResult,
   WorkspaceSymbolWithCallCounts,
   WorkspaceSymbolsInFileWithCallCountsResult,
+  WorkspaceSymbolImporterCountResult,
   WorkspaceDependencyPathResult,
   WorkspaceDeadModulesResult,
   WorkspaceDependencyDiffNode,
@@ -744,6 +745,13 @@ export {
   symbolCallGraphCompute,
   symbolTypeHierarchyCompute,
 } from './index/symbolGraphQueries';
+
+// Per-symbol importer enumeration (Phase 5 follow-up: per-export CodeLens)
+export type {
+  SymbolImportersInput,
+  SymbolImportersResult,
+} from './index/symbolImporters';
+export { symbolImportersCompute } from './index/symbolImporters';
 
 // Type-aware call-graph source seam (Phase 9.2 / Gap 1)
 export type {

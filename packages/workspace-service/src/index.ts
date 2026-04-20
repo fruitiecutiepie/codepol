@@ -23,6 +23,7 @@ import {
   moduleLongestChainCompute,
   moduleSccSizeDistributionCompute,
   symbolCallGraphCompute,
+  symbolImportersCompute,
   symbolTypeHierarchyCompute,
   policyArchitectureViolationsGetFromDir,
   pluginsMapHasArchitectureProvider,
@@ -130,6 +131,7 @@ import {
   type WorkspaceSymbolResult,
   type WorkspaceSymbolWithCallCounts,
   type WorkspaceSymbolsInFileWithCallCountsResult,
+  type WorkspaceSymbolImporterCountResult,
   type ImportBindingRelation,
   type SymbolFlowRelation,
   type SymbolId,
@@ -870,6 +872,14 @@ export type WorkspaceService = {
     analysisGeneration?: number;
     signal?: AbortSignal;
   }) => Promise<WorkspaceImportSpecifiersInFileResult>;
+  querySymbolImporterCount: (input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    symbolId: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }) => Promise<WorkspaceSymbolImporterCountResult>;
 };
 
 export type WorkspaceServiceCreateOptions = {
@@ -5635,6 +5645,30 @@ function workspaceSymbolsInFileWithCallCountsResultCreate(
     return left.symbol.symbolId.localeCompare(right.symbol.symbolId);
   });
   return { items };
+}
+
+/**
+ * Build the per-symbol importer-count payload that powers the
+ * per-export CodeLens (Phase 5 follow-up).
+ *
+ * Wraps {@link symbolImportersCompute} to translate file paths to
+ * `file://` URIs and to count distinct importer files. Returns an
+ * empty payload (with the input symbol id echoed unchanged) when the
+ * input symbol id is unknown to the index — the canonical-id helper
+ * normalizes unknown ids to themselves.
+ */
+function workspaceSymbolImporterCountResultCreate(
+  index: ProjectIndex,
+  input: { symbolId: string },
+): WorkspaceSymbolImporterCountResult {
+  const computed = symbolImportersCompute(index, { symbolId: input.symbolId });
+  return {
+    symbolId: computed.symbolId,
+    importerCount: computed.importerFilePaths.length,
+    importerUris: computed.importerFilePaths.map((filePath) =>
+      workspacePathToUri(filePath),
+    ),
+  };
 }
 
 // ============================================================================
@@ -11415,6 +11449,29 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     });
   }
 
+  async querySymbolImporterCount(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    symbolId: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceSymbolImporterCountResult> {
+    const { workspace, workspaceSession } = workspaceSessionGet(
+      this.workspaces,
+      this.clientSessions,
+      input.clientSessionId,
+      input.workspaceId,
+    );
+    const index = await this.workspaceSessionIndexEnsure(workspace, workspaceSession, {
+      signal: input.signal,
+    });
+    workspaceAnalysisGenerationValidate(workspaceSession, input);
+    return workspaceSymbolImporterCountResultCreate(index, {
+      symbolId: input.symbolId,
+    });
+  }
+
   async queryImportSpecifiersInFile(input: {
     clientSessionId: ClientSessionId;
     workspaceId: string;
@@ -11823,6 +11880,17 @@ class InProcessWorkspaceService implements WorkspaceService {
     signal?: AbortSignal;
   }): Promise<WorkspaceSymbolsInFileWithCallCountsResult> {
     return this.engine.querySymbolsInFileWithCallCounts(input);
+  }
+
+  querySymbolImporterCount(input: {
+    clientSessionId: ClientSessionId;
+    workspaceId: string;
+    symbolId: string;
+    requestId?: string;
+    analysisGeneration?: number;
+    signal?: AbortSignal;
+  }): Promise<WorkspaceSymbolImporterCountResult> {
+    return this.engine.querySymbolImporterCount(input);
   }
 
   queryImportSpecifiersInFile(input: {

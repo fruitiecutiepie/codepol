@@ -193,6 +193,11 @@
       ],
       "editor/context": [
         {
+          "command": "codepol.architecture.peek",
+          "when": "editorTextFocus && resourceScheme == file && codepol.indexBackedCommandsEnabled",
+          "group": "navigation@9"
+        },
+        {
           "command": "codepol.extension.showCallGraph",
           "when": "editorTextFocus && resourceScheme == file && codepol.indexBackedCommandsEnabled",
           "group": "navigation@10"
@@ -222,6 +227,11 @@
           "enum": ["user", "dev", "test", "verbose"],
           "default": "user",
           "markdownDescription": "Named diagnostics preset. `user` is the safe field posture; `dev` is productive daily; `test` is deterministic verification; `verbose` is temporary investigation. Overlays in `codepol.diagnostics.overrides` layer on top, and escalations in `codepol.diagnostics.escalations` apply with a TTL."
+        },
+        "codepol.diagnostics.showCycleDecorations": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show a subtle gutter marker on every file that participates in a Codepol-detected dependency cycle. Hover the marker for the full member list with peek-architecture links to each member."
         },
         "codepol.diagnostics.overrides": {
           "type": "object",

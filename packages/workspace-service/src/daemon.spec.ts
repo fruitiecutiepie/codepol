@@ -372,6 +372,7 @@ function workspaceReadQueriesStubCreate(): Pick<
   | 'querySymbolAtPosition'
   | 'querySymbolsInFileWithCallCounts'
   | 'queryImportSpecifiersInFile'
+  | 'querySymbolImporterCount'
   | 'planSourceFixAll'
   | 'planFileFixAll'
 > {
@@ -499,6 +500,13 @@ function workspaceReadQueriesStubCreate(): Pick<
     },
     async queryImportSpecifiersInFile() {
       return { specifiers: [] };
+    },
+    async querySymbolImporterCount(input) {
+      return {
+        symbolId: input.symbolId,
+        importerCount: 0,
+        importerUris: [],
+      };
     },
     async planSourceFixAll() {
       return null;
@@ -2210,6 +2218,21 @@ describe('workspace daemon control plane', () => {
       'src/shared.ts',
     );
     expect(importSpecifiers.specifiers[0]!.edgeKind).toBe('static');
+
+    // Phase 5 follow-up: per-symbol importer-count RPC round-trip.
+    // Unknown symbol id echoes back with zero importers; this
+    // exercises the daemon transport plumbing without depending on a
+    // specific symbol id format that varies across runs.
+    const importerCount = await service.querySymbolImporterCount({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      symbolId: '__codepol_daemon_test_symbol_that_does_not_exist__',
+    });
+    expect(importerCount).toEqual({
+      symbolId: '__codepol_daemon_test_symbol_that_does_not_exist__',
+      importerCount: 0,
+      importerUris: [],
+    });
   });
 
   it('rejects stale analysisGeneration for workspace symbol reads through the daemon service client', async () => {

@@ -812,8 +812,11 @@ describe('CodepolCommandController', () => {
     expect(panels.showArchitectureLinks).toHaveBeenCalledWith(result, expect.any(Function));
   });
 
-  it('peeks architecture using queryImpactRadius for the active file', async () => {
+  it('peeks architecture using queryImpactRadius for the active file when no symbol resolves under the cursor', async () => {
     const protocol = protocolCreate();
+    // Cursor doesn't land on a symbol (e.g. blank line) — controller
+    // should fall through to the file-level peek path.
+    protocol.querySymbolAtPosition.mockResolvedValue({ symbol: undefined });
     protocol.queryImpactRadius.mockResolvedValue(dependencyGraphResult);
     protocol.queryArchitectureSummary.mockResolvedValue(architectureSummaryResult);
     protocol.querySemanticReferences.mockResolvedValue(null);
@@ -840,6 +843,167 @@ describe('CodepolCommandController', () => {
       result,
       expect.any(Function),
     );
+    expect(panels.showCallGraph).not.toHaveBeenCalled();
+    expect(panels.showTypeHierarchy).not.toHaveBeenCalled();
+  });
+
+  it('peeks architecture using queryImpactRadius when called with a bare URI string (CodeLens path)', async () => {
+    const protocol = protocolCreate();
+    protocol.queryImpactRadius.mockResolvedValue(dependencyGraphResult);
+    protocol.queryArchitectureSummary.mockResolvedValue(architectureSummaryResult);
+    protocol.querySemanticReferences.mockResolvedValue(null);
+    protocol.querySemanticHover.mockResolvedValue(null);
+    const panels = panelsCreate();
+    // Host has no cursor position so the symbol-aware branch is skipped.
+    const host = {
+      ...hostCreate(),
+      activePositionGet: () => undefined,
+    };
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    const result = await controller.peekArchitecture({
+      uri: 'file:///workspace/packages/lib/src/index.ts',
+    });
+
+    expect(protocol.querySymbolAtPosition).not.toHaveBeenCalled();
+    expect(protocol.queryImpactRadius).toHaveBeenCalledWith({
+      uri: 'file:///workspace/packages/lib/src/index.ts',
+      direction: 'both',
+      depth: 2,
+    });
+    expect(panels.showArchitectureLinks).toHaveBeenCalledWith(
+      result,
+      expect.any(Function),
+    );
+  });
+
+  it('routes peek architecture to the call graph when the cursor is on a function/method', async () => {
+    const protocol = protocolCreate();
+    protocol.querySymbolAtPosition.mockResolvedValue({
+      symbol: {
+        symbolId: 'sym-helper',
+        name: 'helper',
+        kind: 'function',
+        declarationUri: 'file:///workspace/packages/lib/src/index.ts',
+        declarationRange: {
+          start: { line: 0, character: 16 },
+          end: { line: 0, character: 22 },
+        },
+      },
+    });
+    protocol.queryCallGraph.mockResolvedValue({
+      nodes: [],
+      edges: [],
+      entryPoints: [],
+      cycles: [],
+    });
+    const panels = panelsCreate();
+    const host = hostCreate();
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    const result = await controller.peekArchitecture({
+      uri: 'file:///workspace/packages/lib/src/index.ts',
+      position: { line: 0, character: 16 },
+    });
+
+    expect(result).toBeNull();
+    expect(protocol.querySymbolAtPosition).toHaveBeenCalledWith({
+      uri: 'file:///workspace/packages/lib/src/index.ts',
+      position: { line: 0, character: 16 },
+    });
+    expect(protocol.queryCallGraph).toHaveBeenCalledWith(
+      expect.objectContaining({
+        symbolId: 'sym-helper',
+        direction: 'both',
+        depth: 2,
+      }),
+    );
+    expect(panels.showCallGraph).toHaveBeenCalledOnce();
+    expect(panels.showTypeHierarchy).not.toHaveBeenCalled();
+    expect(panels.showArchitectureLinks).not.toHaveBeenCalled();
+    expect(protocol.queryImpactRadius).not.toHaveBeenCalled();
+  });
+
+  it('routes peek architecture to the type hierarchy when the cursor is on a class/interface/type', async () => {
+    const protocol = protocolCreate();
+    protocol.querySymbolAtPosition.mockResolvedValue({
+      symbol: {
+        symbolId: 'sym-shape',
+        name: 'IShape',
+        kind: 'interface',
+        declarationUri: 'file:///workspace/packages/lib/src/types.ts',
+        declarationRange: {
+          start: { line: 4, character: 17 },
+          end: { line: 4, character: 23 },
+        },
+      },
+    });
+    protocol.queryTypeHierarchy.mockResolvedValue({
+      nodes: [],
+      edges: [],
+      entryPoints: [],
+      cycles: [],
+    });
+    const panels = panelsCreate();
+    const host = hostCreate();
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    const result = await controller.peekArchitecture({
+      uri: 'file:///workspace/packages/lib/src/types.ts',
+      position: { line: 4, character: 17 },
+    });
+
+    expect(result).toBeNull();
+    expect(protocol.queryTypeHierarchy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        symbolId: 'sym-shape',
+        direction: 'both',
+      }),
+    );
+    expect(panels.showTypeHierarchy).toHaveBeenCalledOnce();
+    expect(panels.showCallGraph).not.toHaveBeenCalled();
+    expect(panels.showArchitectureLinks).not.toHaveBeenCalled();
+    expect(protocol.queryImpactRadius).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the file-level peek when the cursor lands on a non-callable, non-type symbol (variable/const)', async () => {
+    const protocol = protocolCreate();
+    protocol.querySymbolAtPosition.mockResolvedValue({
+      symbol: {
+        symbolId: 'sym-value',
+        name: 'value',
+        kind: 'const',
+        declarationUri: 'file:///workspace/packages/lib/src/lib.ts',
+        declarationRange: {
+          start: { line: 2, character: 13 },
+          end: { line: 2, character: 18 },
+        },
+      },
+    });
+    protocol.queryImpactRadius.mockResolvedValue(dependencyGraphResult);
+    protocol.queryArchitectureSummary.mockResolvedValue(architectureSummaryResult);
+    protocol.querySemanticReferences.mockResolvedValue(null);
+    protocol.querySemanticHover.mockResolvedValue(null);
+    const panels = panelsCreate();
+    const host = hostCreate();
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    const result = await controller.peekArchitecture({
+      uri: 'file:///workspace/packages/lib/src/lib.ts',
+      position: { line: 2, character: 13 },
+    });
+
+    expect(panels.showCallGraph).not.toHaveBeenCalled();
+    expect(panels.showTypeHierarchy).not.toHaveBeenCalled();
+    expect(protocol.queryImpactRadius).toHaveBeenCalledWith({
+      uri: 'file:///workspace/packages/lib/src/lib.ts',
+      direction: 'both',
+      depth: 2,
+    });
+    expect(panels.showArchitectureLinks).toHaveBeenCalledWith(
+      result,
+      expect.any(Function),
+    );
   });
 
   it('rejects peek architecture without an active file', async () => {
@@ -853,6 +1017,7 @@ describe('CodepolCommandController', () => {
       'Open a workspace file before peeking architecture.',
     );
     expect(protocol.queryImpactRadius).not.toHaveBeenCalled();
+    expect(protocol.querySymbolAtPosition).not.toHaveBeenCalled();
   });
 
   it('keeps architecture links active-file scoped while workspace commands remain available', async () => {

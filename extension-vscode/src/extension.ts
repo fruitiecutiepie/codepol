@@ -8,6 +8,7 @@ import type {
   RuntimeDiagnosticsPolicy,
   WorkspaceLintRuleDetailsResult,
   WorkspaceLintRuleSummary,
+  WorkspacePosition,
   WorkspaceSearchResult,
 } from '@codepol/core';
 import { configFileDiscover, environmentNamesList } from '@codepol/core';
@@ -46,6 +47,8 @@ import {
   CODEPOL_EXTENSION_VIEW_RENAME_TARGETS_ID,
 } from './constants';
 import { CodepolArchitectureCodeLensProvider } from './codeLensProvider';
+import { CodepolExportCodeLensProvider } from './exportCodeLensProvider';
+import { CodepolCycleGutterDecorationController } from './cycleGutterDecorationController';
 import { CodepolArchitectureHoverProvider } from './architectureHoverProvider';
 import { CodepolImportSpecifierHoverProvider } from './importSpecifierHoverProvider';
 import { ImportSpecifierMarkerController } from './importSpecifierMarkerController';
@@ -445,6 +448,62 @@ async function multiSelectPick<T>(input: {
   return picked.map((item) => item.value);
 }
 
+/**
+ * Parse the `codepol.architecture.peek` command argument shape. Three
+ * caller paths converge on this command:
+ *
+ * - the head-of-file architecture CodeLens passes a bare `string` URI
+ *   (legacy shape; preserved verbatim)
+ * - the per-export CodeLens passes `{ uri, position }` so the
+ *   controller can route to the right symbol-aware panel
+ * - the editor `editor/context` menu passes nothing; the controller
+ *   reads `host.activeUriGet` / `host.activePositionGet` itself
+ *
+ * Returns `undefined` for the menu path (controller picks up cursor
+ * from the host).
+ */
+function peekArchitectureArgsResolve(
+  input: unknown,
+):
+  | { uri?: string; position?: WorkspacePosition }
+  | undefined {
+  if (input === undefined || input === null) {
+    return undefined;
+  }
+  if (typeof input === 'string') {
+    return { uri: input };
+  }
+  if (typeof input !== 'object') {
+    return undefined;
+  }
+  const record = input as {
+    uri?: unknown;
+    position?: {
+      line?: unknown;
+      character?: unknown;
+    };
+  };
+  const uri = typeof record.uri === 'string' ? record.uri : undefined;
+  let position: WorkspacePosition | undefined;
+  if (
+    record.position &&
+    typeof record.position.line === 'number' &&
+    typeof record.position.character === 'number'
+  ) {
+    position = {
+      line: record.position.line,
+      character: record.position.character,
+    };
+  }
+  if (uri === undefined && position === undefined) {
+    return undefined;
+  }
+  const result: { uri?: string; position?: WorkspacePosition } = {};
+  if (uri !== undefined) result.uri = uri;
+  if (position !== undefined) result.position = position;
+  return result;
+}
+
 function lintRuleIdResolve(input: unknown): string | undefined {
   if (typeof input === 'string') {
     return input;
@@ -736,6 +795,31 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     protocol,
     showTypeHierarchyCommandId: CODEPOL_EXTENSION_COMMAND_SHOW_TYPE_HIERARCHY,
   });
+  // Phase 5 follow-up — per-export "N importers" lens. Anchored above
+  // every top-level `export` declaration in TS/JS files; click invokes
+  // the symbol-aware peek architecture command which routes to the
+  // call graph / type hierarchy / file impact-radius panel by symbol
+  // kind.
+  const exportCodeLensProvider = new CodepolExportCodeLensProvider({
+    protocol,
+    peekCommandId: CODEPOL_EXTENSION_COMMAND_PEEK_ARCHITECTURE,
+  });
+  // Phase 5 follow-up — gutter marker on every cycle-member file. The
+  // hover lists every cycle member as a trusted command link to the
+  // peek-architecture command so the user can jump from the hover
+  // into the focused panel for any member of the cycle. Gated by
+  // `codepol.diagnostics.showCycleDecorations` (default true).
+  const cycleGutterDecorationController = new CodepolCycleGutterDecorationController(
+    {
+      protocol,
+      peekCommandId: CODEPOL_EXTENSION_COMMAND_PEEK_ARCHITECTURE,
+    },
+  );
+  if (vscode.window.activeTextEditor) {
+    cycleGutterDecorationController.attachToEditor(
+      vscode.window.activeTextEditor,
+    );
+  }
 
   context.subscriptions.push(
     panels,
@@ -745,6 +829,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     codeLensProvider,
     symbolCodeLensProvider,
     typeHierarchyCodeLensProvider,
+    exportCodeLensProvider,
+    cycleGutterDecorationController,
     importSpecifierMarkerController,
     vscode.languages.registerCodeLensProvider(
       { scheme: 'file' },
@@ -780,6 +866,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         { scheme: 'file', language: 'typescriptreact' },
       ],
       typeHierarchyCodeLensProvider,
+    ),
+    // Phase 5 follow-up — per-export "N importers" lens. Scoped to
+    // TS/JS family languages; Python uses `__all__` rather than the
+    // `export` keyword and is documented as a follow-up gap.
+    vscode.languages.registerCodeLensProvider(
+      [
+        { scheme: 'file', language: 'typescript' },
+        { scheme: 'file', language: 'typescriptreact' },
+        { scheme: 'file', language: 'javascript' },
+        { scheme: 'file', language: 'javascriptreact' },
+      ],
+      exportCodeLensProvider,
     ),
     vscode.window.registerWebviewViewProvider(
       CODEPOL_EXTENSION_VIEW_CURRENT_CONTEXT_ID,
@@ -821,7 +919,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ),
     vscode.commands.registerCommand(
       CODEPOL_EXTENSION_COMMAND_PEEK_ARCHITECTURE,
-      async (uri?: string) => controller?.peekArchitecture(uri),
+      async (input?: unknown) =>
+        controller?.peekArchitecture(peekArchitectureArgsResolve(input)),
     ),
     vscode.commands.registerCommand(
       CODEPOL_EXTENSION_COMMAND_SHOW_CALL_GRAPH,
@@ -1079,6 +1178,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       codeLensProvider.refresh();
       symbolCodeLensProvider.refresh();
       typeHierarchyCodeLensProvider.refresh();
+      exportCodeLensProvider.refresh();
+      cycleGutterDecorationController.refresh();
     }),
   );
 
