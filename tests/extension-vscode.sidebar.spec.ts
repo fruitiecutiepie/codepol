@@ -98,6 +98,14 @@ describe('extension-vscode sidebar models', () => {
           action: 'show_type_hierarchy',
           label: 'Show Type Hierarchy',
         },
+        // Phase 2 user-facing — synthetic sidebar action that opens
+        // the dependency-path panel scoped to the active file as
+        // the source. The controller drives a quick-pick to choose
+        // the destination URI on click.
+        {
+          action: 'show_dependency_path_from',
+          label: 'Show Dependency Path From This File…',
+        },
       ],
       tone: 'neutral',
     });
@@ -117,6 +125,8 @@ describe('extension-vscode sidebar models', () => {
           show_graph:
             'Codepol dependency graph is blocked while the workspace index is warming.',
           show_type_hierarchy:
+            'Codepol dependency graph is blocked while the workspace index is warming.',
+          show_dependency_path_from:
             'Codepol dependency graph is blocked while the workspace index is warming.',
         },
       }),
@@ -154,6 +164,13 @@ describe('extension-vscode sidebar models', () => {
         {
           action: 'show_type_hierarchy',
           label: 'Show Type Hierarchy',
+          disabled: true,
+          disabledReason:
+            'Codepol dependency graph is blocked while the workspace index is warming.',
+        },
+        {
+          action: 'show_dependency_path_from',
+          label: 'Show Dependency Path From This File…',
           disabled: true,
           disabledReason:
             'Codepol dependency graph is blocked while the workspace index is warming.',

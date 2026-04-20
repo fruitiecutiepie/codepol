@@ -5,7 +5,9 @@ import {
   CODEPOL_EXTENSION_PANEL_ARCHITECTURE_SUMMARY,
   CODEPOL_EXTENSION_PANEL_ARCHITECTURE_LINKS,
   CODEPOL_EXTENSION_PANEL_CALL_GRAPH,
+  CODEPOL_EXTENSION_PANEL_DEAD_MODULES,
   CODEPOL_EXTENSION_PANEL_DEPENDENCY_GRAPH,
+  CODEPOL_EXTENSION_PANEL_DEPENDENCY_PATH,
   CODEPOL_EXTENSION_PANEL_LINT_RULE_DETAILS,
   CODEPOL_EXTENSION_PANEL_RENAME_PREVIEW,
   CODEPOL_EXTENSION_PANEL_SEMANTIC_DEFINITION,
@@ -31,6 +33,12 @@ import {
   type TypeHierarchyPanelDirection,
   type TypeHierarchyPanelViewModel,
 } from '../typeHierarchyViewModels';
+import {
+  DEPENDENCY_PATH_PANEL_MAX_PATHS_VALUES,
+  type DependencyPathPanelMaxPaths,
+  type DependencyPathPanelViewModel,
+} from '../dependencyPathViewModels';
+import type { DeadModulesPanelViewModel } from '../deadModulesViewModels';
 import {
   dependencyGraphControlMessageIs,
   dependencyGraphControlStateUpdate,
@@ -64,6 +72,33 @@ export type TypeHierarchyPanelControlMessage =
       depth?: string;
     };
 
+/**
+ * Chip click on the dependency-path panel. The chip is serialized as a
+ * string in the webview; the manager parses it via
+ * {@link dependencyPathMaxPathsParse} before calling the rebuilder.
+ */
+export type DependencyPathPanelControlMessage = {
+  type: 'dependencyPathMaxPathsSet';
+  maxPaths?: string;
+};
+
+/**
+ * Dead-modules panel header buttons. The "Use natural entry points"
+ * button emits this with `entryPointUris === undefined`; the
+ * "Configure entry points..." button emits the separate
+ * {@link DeadModulesPanelEntryPointsConfigureRequest} message because
+ * the host has to drive a multi-select picker before the rebuilder can
+ * fire.
+ */
+export type DeadModulesPanelControlMessage = {
+  type: 'deadModulesEntryPointsSet';
+  entryPointUris?: string[];
+};
+
+export type DeadModulesPanelEntryPointsConfigureRequest = {
+  type: 'deadModulesEntryPointsConfigureRequest';
+};
+
 type CodepolPanelMessage =
   | {
       type: 'openLocation';
@@ -82,7 +117,10 @@ type CodepolPanelMessage =
     }
   | DependencyGraphPanelControlMessage
   | CallGraphPanelControlMessage
-  | TypeHierarchyPanelControlMessage;
+  | TypeHierarchyPanelControlMessage
+  | DependencyPathPanelControlMessage
+  | DeadModulesPanelControlMessage
+  | DeadModulesPanelEntryPointsConfigureRequest;
 
 type PanelKind =
   | 'semanticDefinition'
@@ -92,7 +130,9 @@ type PanelKind =
   | 'lintRuleDetails'
   | 'renamePreview'
   | 'callGraph'
-  | 'typeHierarchy';
+  | 'typeHierarchy'
+  | 'dependencyPath'
+  | 'deadModules';
 
 /**
  * Rebuilder shape supplied alongside `showCallGraph(model, rebuilder)`.
@@ -122,6 +162,34 @@ export type TypeHierarchyPanelRebuilder = (input: {
 type TypeHierarchyPanelControls = {
   state: { direction: TypeHierarchyPanelDirection; depth: TypeHierarchyPanelDepth };
   rebuilder: TypeHierarchyPanelRebuilder;
+};
+
+/**
+ * Rebuilder shape supplied alongside `showDependencyPath(model, rebuilder)`.
+ * The manager calls it whenever the `maxPaths` chip is toggled so the
+ * controller can re-fire `queryDependencyPath` with the new cap.
+ */
+export type DependencyPathPanelRebuilder = (
+  input: { maxPaths: DependencyPathPanelMaxPaths },
+) => Promise<DependencyPathPanelViewModel | null>;
+
+type DependencyPathPanelControls = {
+  state: { maxPaths: DependencyPathPanelMaxPaths };
+  rebuilder: DependencyPathPanelRebuilder;
+};
+
+/**
+ * Rebuilder shape for the dead-modules panel. `entryPointUris` is
+ * forwarded directly to `queryDeadModules`; `undefined` (or an empty
+ * array) means "natural entry points".
+ */
+export type DeadModulesPanelRebuilder = (
+  input: { entryPointUris?: string[] },
+) => Promise<DeadModulesPanelViewModel | null>;
+
+type DeadModulesPanelControls = {
+  state: { entryPointUris?: string[] };
+  rebuilder: DeadModulesPanelRebuilder;
 };
 
 function callGraphPanelControlMessageIs(
@@ -174,6 +242,31 @@ function typeHierarchyDepthParse(
   return undefined;
 }
 
+function dependencyPathPanelControlMessageIs(
+  message: CodepolPanelMessage,
+): message is DependencyPathPanelControlMessage {
+  return message.type === 'dependencyPathMaxPathsSet';
+}
+
+function deadModulesPanelControlMessageIs(
+  message: CodepolPanelMessage,
+): message is DeadModulesPanelControlMessage {
+  return message.type === 'deadModulesEntryPointsSet';
+}
+
+function deadModulesPanelEntryPointsConfigureRequestIs(
+  message: CodepolPanelMessage,
+): message is DeadModulesPanelEntryPointsConfigureRequest {
+  return message.type === 'deadModulesEntryPointsConfigureRequest';
+}
+
+function dependencyPathMaxPathsParse(
+  raw: string | undefined,
+): DependencyPathPanelMaxPaths | undefined {
+  const parsed = Number(raw);
+  return DEPENDENCY_PATH_PANEL_MAX_PATHS_VALUES.find((value) => value === parsed);
+}
+
 export type CodepolPanelActions = {
   openLocation(input: {
     uri: string;
@@ -182,6 +275,19 @@ export type CodepolPanelActions = {
   }): Promise<void>;
   applyEditPlan(planId: string): Promise<void>;
   executeCommand(command: string, uri?: string): Promise<void>;
+  /**
+   * Run a multi-select picker for the dead-modules panel's "Configure
+   * entry points..." button. Returns the chosen URIs (in pick order),
+   * or `undefined` when the user cancels.
+   *
+   * The host injects a vscode-backed implementation; tests can supply a
+   * deterministic stub. The panel manager calls this when it receives a
+   * {@link DeadModulesPanelEntryPointsConfigureRequest} from the
+   * webview.
+   */
+  deadModulesEntryPointsPick?(input: {
+    currentEntryPointUris?: string[];
+  }): Promise<string[] | undefined>;
 };
 
 type DependencyGraphPanelControls = {
@@ -201,6 +307,8 @@ type ManagedPanel = {
   architectureLinksControls?: ArchitectureLinksPanelControls;
   callGraphControls?: CallGraphPanelControls;
   typeHierarchyControls?: TypeHierarchyPanelControls;
+  dependencyPathControls?: DependencyPathPanelControls;
+  deadModulesControls?: DeadModulesPanelControls;
 };
 
 export class CodepolPanelManager implements vscode.Disposable {
@@ -363,6 +471,76 @@ export class CodepolPanelManager implements vscode.Disposable {
     this.panels.delete('typeHierarchy');
   }
 
+  /**
+   * Show (or refresh) the dedicated dependency-path panel. The panel
+   * answers "why does {from} depend on {to}?" by listing the simple
+   * paths the workspace service returned. When a `rebuilder` is
+   * supplied, chip clicks replay it with the new `maxPaths` cap.
+   */
+  showDependencyPath(
+    model: DependencyPathPanelViewModel,
+    rebuilder?: DependencyPathPanelRebuilder,
+  ): void {
+    this.panelShow('dependencyPath', {
+      kind: 'dependencyPath',
+      title: `Codepol: Dependency Path (${model.fromWorkspaceRelativePath} → ${model.toWorkspaceRelativePath})`,
+      data: model,
+    });
+    if (rebuilder) {
+      const managed = this.panels.get('dependencyPath');
+      if (managed) {
+        managed.dependencyPathControls = {
+          state: { maxPaths: model.maxPaths },
+          rebuilder,
+        };
+      }
+    }
+  }
+
+  closeDependencyPath(): void {
+    const managed = this.panels.get('dependencyPath');
+    if (!managed) return;
+    managed.panel.dispose();
+    this.panels.delete('dependencyPath');
+  }
+
+  /**
+   * Show (or refresh) the dedicated dead-modules panel. The panel lists
+   * unreachable files grouped by directory. When a `rebuilder` is
+   * supplied, the panel header's `Configure entry points...` /
+   * `Use natural entry points` buttons replay it with the new entry
+   * point set.
+   */
+  showDeadModules(
+    model: DeadModulesPanelViewModel,
+    rebuilder?: DeadModulesPanelRebuilder,
+  ): void {
+    this.panelShow('deadModules', {
+      kind: 'deadModules',
+      title: 'Codepol: Dead Modules',
+      data: model,
+    });
+    if (rebuilder) {
+      const managed = this.panels.get('deadModules');
+      if (managed) {
+        managed.deadModulesControls = {
+          state: {
+            entryPointUris:
+              model.entryPointUris.length > 0 ? model.entryPointUris : undefined,
+          },
+          rebuilder,
+        };
+      }
+    }
+  }
+
+  closeDeadModules(): void {
+    const managed = this.panels.get('deadModules');
+    if (!managed) return;
+    managed.panel.dispose();
+    this.panels.delete('deadModules');
+  }
+
   private panelShow(kind: PanelKind, model: CodepolPanelViewModel): void {
     const existing = this.panels.get(kind);
     if (existing) {
@@ -391,6 +569,10 @@ export class CodepolPanelManager implements vscode.Disposable {
           ? CODEPOL_EXTENSION_PANEL_RENAME_PREVIEW
         : kind === 'typeHierarchy'
           ? CODEPOL_EXTENSION_PANEL_TYPE_HIERARCHY
+        : kind === 'dependencyPath'
+          ? CODEPOL_EXTENSION_PANEL_DEPENDENCY_PATH
+        : kind === 'deadModules'
+          ? CODEPOL_EXTENSION_PANEL_DEAD_MODULES
         : CODEPOL_EXTENSION_PANEL_CALL_GRAPH;
     const panel = vscode.window.createWebviewPanel(
       panelId,
@@ -500,6 +682,21 @@ export class CodepolPanelManager implements vscode.Disposable {
 
     if (typeHierarchyPanelControlMessageIs(message)) {
       await this.typeHierarchyControlMessageHandle(message);
+      return;
+    }
+
+    if (dependencyPathPanelControlMessageIs(message)) {
+      await this.dependencyPathControlMessageHandle(message);
+      return;
+    }
+
+    if (deadModulesPanelControlMessageIs(message)) {
+      await this.deadModulesControlMessageHandle(message);
+      return;
+    }
+
+    if (deadModulesPanelEntryPointsConfigureRequestIs(message)) {
+      await this.deadModulesEntryPointsConfigureHandle();
       return;
     }
 
@@ -625,6 +822,77 @@ export class CodepolPanelManager implements vscode.Disposable {
     return typeHierarchyNodeOpenLocationResolve({
       model: managed.model.data,
       uri,
+    });
+  }
+
+  private async dependencyPathControlMessageHandle(
+    message: DependencyPathPanelControlMessage,
+  ): Promise<void> {
+    const managed = this.panels.get('dependencyPath');
+    if (!managed || !managed.dependencyPathControls) return;
+    if (managed.model.kind !== 'dependencyPath') return;
+    const controls = managed.dependencyPathControls;
+    const parsed = dependencyPathMaxPathsParse(message.maxPaths);
+    if (parsed === undefined || parsed === controls.state.maxPaths) return;
+    const nextModel = await controls.rebuilder({ maxPaths: parsed });
+    if (!nextModel) return;
+    managed.dependencyPathControls = {
+      state: { maxPaths: nextModel.maxPaths },
+      rebuilder: controls.rebuilder,
+    };
+    managed.model = {
+      ...managed.model,
+      data: nextModel,
+    };
+    managed.panel.webview.html = codepolPanelHtmlRender({
+      nonce: randomBytes(16).toString('hex'),
+      model: managed.model,
+    });
+  }
+
+  private async deadModulesControlMessageHandle(
+    message: DeadModulesPanelControlMessage,
+  ): Promise<void> {
+    await this.deadModulesRebuilderRun(message.entryPointUris);
+  }
+
+  private async deadModulesEntryPointsConfigureHandle(): Promise<void> {
+    const managed = this.panels.get('deadModules');
+    if (!managed || !managed.deadModulesControls) return;
+    if (managed.model.kind !== 'deadModules') return;
+    const picker = this.actions.deadModulesEntryPointsPick;
+    if (!picker) return;
+    const picked = await picker({
+      currentEntryPointUris: managed.deadModulesControls.state.entryPointUris,
+    });
+    if (picked === undefined) return;
+    const next = picked.length === 0 ? undefined : picked;
+    await this.deadModulesRebuilderRun(next);
+  }
+
+  private async deadModulesRebuilderRun(
+    entryPointUris: string[] | undefined,
+  ): Promise<void> {
+    const managed = this.panels.get('deadModules');
+    if (!managed || !managed.deadModulesControls) return;
+    if (managed.model.kind !== 'deadModules') return;
+    const controls = managed.deadModulesControls;
+    const nextModel = await controls.rebuilder({ entryPointUris });
+    if (!nextModel) return;
+    managed.deadModulesControls = {
+      state: {
+        entryPointUris:
+          nextModel.entryPointUris.length > 0 ? nextModel.entryPointUris : undefined,
+      },
+      rebuilder: controls.rebuilder,
+    };
+    managed.model = {
+      ...managed.model,
+      data: nextModel,
+    };
+    managed.panel.webview.html = codepolPanelHtmlRender({
+      nonce: randomBytes(16).toString('hex'),
+      model: managed.model,
     });
   }
 

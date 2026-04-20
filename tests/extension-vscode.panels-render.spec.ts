@@ -743,4 +743,115 @@ describe('extension-vscode panel rendering', () => {
       CODEPOL_EXTENSION_COMMAND_SHOW_DEPENDENCY_GRAPH,
     );
   });
+
+  it('renders the dependency-path panel with chips, headline, and clickable nodes', () => {
+    const fromUri = 'file:///workspace/src/app.ts';
+    const middleUri = 'file:///workspace/src/middle.ts';
+    const toUri = 'file:///workspace/src/leaf.ts';
+
+    const html = codepolPanelHtmlRender({
+      nonce: 'nonce-dep-path',
+      model: {
+        kind: 'dependencyPath',
+        title: 'Codepol: Dependency Path (src/app.ts → src/leaf.ts)',
+        data: {
+          fromUri,
+          toUri,
+          fromWorkspaceRelativePath: 'src/app.ts',
+          toWorkspaceRelativePath: 'src/leaf.ts',
+          headline: 'Shortest path: 2 hops',
+          summary: '1 path shown',
+          maxPaths: 5,
+          truncated: false,
+          shortestLength: 2,
+          paths: [
+            {
+              hops: 2,
+              nodes: [
+                { uri: fromUri, workspaceRelativePath: 'src/app.ts' },
+                { uri: middleUri, workspaceRelativePath: 'src/middle.ts' },
+                { uri: toUri, workspaceRelativePath: 'src/leaf.ts' },
+              ],
+            },
+          ],
+          chips: [
+            { id: '5', label: '5', active: true },
+            { id: '10', label: '10', active: false },
+            { id: '20', label: '20', active: false },
+          ],
+        },
+      },
+    });
+
+    expect(html).toContain(
+      '<title>Codepol: Dependency Path (src/app.ts → src/leaf.ts)</title>',
+    );
+    expect(html).toContain('class="dp-summary">Shortest path: 2 hops · 1 path shown');
+    expect(html).toContain('data-dp-chip-value="5"');
+    expect(html).toContain('data-dp-chip-value="10"');
+    expect(html).toContain('data-dp-chip-value="20"');
+    expect(html).toContain('class="dp-chip dp-chip-active"');
+    expect(html).toContain(`data-open-uri="${fromUri}"`);
+    expect(html).toContain(`data-open-uri="${middleUri}"`);
+    expect(html).toContain(`data-open-uri="${toUri}"`);
+  });
+
+  it('renders the dead-modules panel with one details per group and the root group as "/"', () => {
+    const html = codepolPanelHtmlRender({
+      nonce: 'nonce-dead-modules',
+      model: {
+        kind: 'deadModules',
+        title: 'Codepol: Dead Modules',
+        data: {
+          headline: '3 unreachable files in 2 directories',
+          summary: 'Entry points: natural',
+          entryPointUris: [],
+          entryPointLabels: [],
+          totalUnreachable: 3,
+          groups: [
+            {
+              directoryWorkspaceRelativePath: '',
+              files: [
+                {
+                  uri: 'file:///workspace/orphan.ts',
+                  workspaceRelativePath: 'orphan.ts',
+                  basename: 'orphan.ts',
+                },
+              ],
+            },
+            {
+              directoryWorkspaceRelativePath: 'src/foo',
+              files: [
+                {
+                  uri: 'file:///workspace/src/foo/a.ts',
+                  workspaceRelativePath: 'src/foo/a.ts',
+                  basename: 'a.ts',
+                },
+                {
+                  uri: 'file:///workspace/src/foo/b.ts',
+                  workspaceRelativePath: 'src/foo/b.ts',
+                  basename: 'b.ts',
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(html).toContain('<title>Codepol: Dead Modules</title>');
+    expect(html).toContain('3 unreachable files in 2 directories');
+    expect(html).toContain('class="dm-summary">Entry points: natural');
+    expect(html).toContain('data-dm-control="configure"');
+    expect(html).toContain('data-dm-control="natural"');
+    // Root-files group renders the literal "/" label
+    expect(html).toContain('class="dm-group-label">/');
+    // Each file row carries data-open-uri (existing handler) + dm-file-rel
+    expect(html).toContain('data-open-uri="file:///workspace/orphan.ts"');
+    expect(html).toContain('data-open-uri="file:///workspace/src/foo/a.ts"');
+    expect(html).toContain('class="dm-file-rel">src/foo/b.ts');
+    // Two <details> wrappers, one per group
+    const detailsCount = html.split('<details').length - 1;
+    expect(detailsCount).toBe(2);
+  });
 });

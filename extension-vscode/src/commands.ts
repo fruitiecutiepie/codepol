@@ -24,6 +24,15 @@ import {
   type TypeHierarchyPanelDirection,
   type TypeHierarchyPanelViewModel,
 } from './typeHierarchyViewModels';
+import {
+  dependencyPathPanelViewModelCreate,
+  type DependencyPathPanelMaxPaths,
+  type DependencyPathPanelViewModel,
+} from './dependencyPathViewModels';
+import {
+  deadModulesPanelViewModelCreate,
+  type DeadModulesPanelViewModel,
+} from './deadModulesViewModels';
 import type { RenameTargetCandidate } from './discovery';
 import type {
   CodepolProtocolQuickFixAction,
@@ -106,6 +115,14 @@ export type TypeHierarchyPanelRebuilder = (input: {
   depth: TypeHierarchyPanelDepth;
 }) => Promise<TypeHierarchyPanelViewModel | null>;
 
+export type DependencyPathPanelRebuilder = (
+  input: { maxPaths: DependencyPathPanelMaxPaths },
+) => Promise<DependencyPathPanelViewModel | null>;
+
+export type DeadModulesPanelRebuilder = (
+  input: { entryPointUris?: string[] },
+) => Promise<DeadModulesPanelViewModel | null>;
+
 export type CodepolPanels = {
   showArchitectureSummary(input: ArchitectureSummaryPanelViewModel): void;
   showDependencyGraph(
@@ -126,6 +143,14 @@ export type CodepolPanels = {
   showTypeHierarchy(
     input: TypeHierarchyPanelViewModel,
     rebuilder?: TypeHierarchyPanelRebuilder,
+  ): void;
+  showDependencyPath(
+    input: DependencyPathPanelViewModel,
+    rebuilder?: DependencyPathPanelRebuilder,
+  ): void;
+  showDeadModules(
+    input: DeadModulesPanelViewModel,
+    rebuilder?: DeadModulesPanelRebuilder,
   ): void;
 };
 
@@ -179,6 +204,23 @@ export type CodepolCommandHost = {
       value: T;
     }>;
   }): Promise<T | undefined>;
+  /**
+   * Multi-select picker for the dead-modules panel's "Configure entry
+   * points..." button. Items show the workspace-relative path; values
+   * are file URIs. Returns the chosen URIs in pick order, or
+   * `undefined` when the user cancels.
+   */
+  multiSelectPick?<T>(input: {
+    title: string;
+    placeholder?: string;
+    items: Array<{
+      label: string;
+      description?: string;
+      detail?: string;
+      picked?: boolean;
+      value: T;
+    }>;
+  }): Promise<T[] | undefined>;
   infoShow(message: string): void | Promise<void>;
   errorShow(message: string): void | Promise<void>;
   openLocation(input: OpenLocationInput): Promise<void>;
@@ -547,6 +589,185 @@ export class CodepolCommandController {
     const model = buildModel({ filters: {}, layoutMode: 'radial' });
     this.panels.showArchitectureLinks(model, buildModel);
     return model;
+  }
+
+  /**
+   * Open the dedicated dependency-path panel scoped to the source URI
+   * (`fromUri`) the caller passes via `args` (sidebar action / Command
+   * Palette) or to the active editor URI. When `args.toUri` is missing
+   * the controller drives a quick-pick over the workspace-indexed file
+   * set so the user can choose the destination interactively. The
+   * `maxPaths` chip in the panel re-fires the rebuilder to ask for a
+   * different cap.
+   */
+  async showDependencyPath(
+    args?: {
+      fromUri?: string;
+      toUri?: string;
+      maxPaths?: DependencyPathPanelMaxPaths;
+    },
+  ): Promise<DependencyPathPanelViewModel | null> {
+    const blockedMessage = this.featureBlockedMessageResolve('architectureLinks');
+    if (blockedMessage) {
+      await this.host.errorShow(blockedMessage);
+      return null;
+    }
+
+    const fromUri = args?.fromUri ?? this.host.activeUriGet();
+    if (!fromUri) {
+      await this.host.errorShow(
+        'Open a workspace file before requesting a dependency path.',
+      );
+      return null;
+    }
+
+    // Pull the indexed-file set from the existing dependency graph so
+    // the picker only offers files Codepol actually knows about.
+    const graph = await this.protocolOptionalRequestRun(
+      this.protocol.queryDependencyGraph(),
+    );
+    if (!graph) {
+      await this.host.errorShow(
+        this.featureUnavailableMessageResolve(
+          'architectureLinks',
+          'Codepol does not have a workspace dependency graph yet.',
+        ),
+      );
+      return null;
+    }
+    const fromNode = graph.nodes.find((node) => node.uri === fromUri);
+    if (!fromNode) {
+      await this.host.errorShow(
+        'Codepol has not indexed the active file yet.',
+      );
+      return null;
+    }
+    const nodeRelGet = (uri: string): string => {
+      return (
+        graph.nodes.find((node) => node.uri === uri)?.workspaceRelativePath ??
+        uri
+      );
+    };
+
+    let toUri = args?.toUri;
+    if (!toUri) {
+      const items = graph.nodes
+        .filter((node) => node.uri !== fromUri)
+        .map((node) => ({
+          label: node.workspaceRelativePath,
+          description: node.uri,
+          value: node.uri,
+        }))
+        .sort((left, right) => left.label.localeCompare(right.label));
+      const picked = await this.host.quickPick({
+        title: `Dependency path from ${fromNode.workspaceRelativePath}`,
+        placeholder: `Choose the file you want to reach from ${fromNode.workspaceRelativePath}`,
+        items,
+      });
+      if (!picked) {
+        return null;
+      }
+      toUri = picked;
+    }
+    const targetToUri = toUri;
+
+    const initialMaxPaths: DependencyPathPanelMaxPaths = args?.maxPaths ?? 5;
+
+    const buildModel = async (
+      input: { maxPaths: DependencyPathPanelMaxPaths },
+    ): Promise<DependencyPathPanelViewModel | null> => {
+      const result = await this.protocolRequestRun(
+        this.protocol.queryDependencyPath({
+          fromUri,
+          toUri: targetToUri,
+          maxPaths: input.maxPaths,
+        }),
+      );
+      if (result === CodepolCommandController.REQUEST_SUPERSEDED) return null;
+      if (!result) return null;
+      return dependencyPathPanelViewModelCreate({
+        result,
+        fromUri,
+        toUri: targetToUri,
+        fromWorkspaceRelativePath: nodeRelGet(fromUri),
+        toWorkspaceRelativePath: nodeRelGet(targetToUri),
+        nodeWorkspaceRelativePathGet: nodeRelGet,
+        maxPaths: input.maxPaths,
+      });
+    };
+
+    const initial = await buildModel({ maxPaths: initialMaxPaths });
+    if (!initial) {
+      await this.host.errorShow(
+        this.featureUnavailableMessageResolve(
+          'architectureLinks',
+          'Codepol could not compute a dependency path.',
+        ),
+      );
+      return null;
+    }
+    this.panels.showDependencyPath(initial, buildModel);
+    return initial;
+  }
+
+  /**
+   * Open the dedicated dead-modules panel. Defaults to the workspace's
+   * natural entry points; the panel header carries control buttons that
+   * re-fire `queryDeadModules` with caller-supplied entry points.
+   */
+  async showDeadModules(
+    args?: { entryPointUris?: string[] },
+  ): Promise<DeadModulesPanelViewModel | null> {
+    const blockedMessage = this.featureBlockedMessageResolve('architectureLinks');
+    if (blockedMessage) {
+      await this.host.errorShow(blockedMessage);
+      return null;
+    }
+
+    // The graph is optional: when present we resolve workspace-relative
+    // paths through it; otherwise we fall back to the URI itself in the
+    // view model.
+    const graph = await this.protocolOptionalRequestRun(
+      this.protocol.queryDependencyGraph(),
+    );
+    const nodeRelGet = (uri: string): string => {
+      return (
+        graph?.nodes.find((node) => node.uri === uri)?.workspaceRelativePath ??
+        uri
+      );
+    };
+
+    const initialEntryPointUris = args?.entryPointUris;
+
+    const buildModel = async (
+      input: { entryPointUris?: string[] },
+    ): Promise<DeadModulesPanelViewModel | null> => {
+      const result = await this.protocolRequestRun(
+        this.protocol.queryDeadModules({
+          entryPointUris: input.entryPointUris,
+        }),
+      );
+      if (result === CodepolCommandController.REQUEST_SUPERSEDED) return null;
+      if (!result) return null;
+      return deadModulesPanelViewModelCreate({
+        result,
+        entryPointUris: input.entryPointUris,
+        nodeWorkspaceRelativePathGet: nodeRelGet,
+      });
+    };
+
+    const initial = await buildModel({ entryPointUris: initialEntryPointUris });
+    if (!initial) {
+      await this.host.errorShow(
+        this.featureUnavailableMessageResolve(
+          'architectureLinks',
+          'Codepol could not compute the dead-module set.',
+        ),
+      );
+      return null;
+    }
+    this.panels.showDeadModules(initial, buildModel);
+    return initial;
   }
 
   /**

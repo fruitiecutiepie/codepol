@@ -15,6 +15,10 @@ import type { CallGraphPanelViewModel } from '../callGraphViewModels';
 import { callGraphPanelBodyHtml } from './callGraphRender';
 import type { TypeHierarchyPanelViewModel } from '../typeHierarchyViewModels';
 import { typeHierarchyPanelBodyHtml } from './typeHierarchyRender';
+import type { DependencyPathPanelViewModel } from '../dependencyPathViewModels';
+import { dependencyPathPanelBodyHtml } from './dependencyPathRender';
+import type { DeadModulesPanelViewModel } from '../deadModulesViewModels';
+import { deadModulesPanelBodyHtml } from './deadModulesRender';
 
 export type CodepolPanelViewModel =
   | {
@@ -58,6 +62,16 @@ export type CodepolPanelViewModel =
       kind: 'typeHierarchy';
       title: string;
       data: TypeHierarchyPanelViewModel;
+    }
+  | {
+      kind: 'dependencyPath';
+      title: string;
+      data: DependencyPathPanelViewModel;
+    }
+  | {
+      kind: 'deadModules';
+      title: string;
+      data: DeadModulesPanelViewModel;
     };
 
 function htmlEscape(value: string): string {
@@ -908,6 +922,29 @@ const BASE_SCRIPT = `
       }
       return;
     }
+    const dependencyPathChipButton = target.closest('[data-dp-chip-value]');
+    if (dependencyPathChipButton instanceof HTMLElement) {
+      event.preventDefault();
+      vscode.postMessage({
+        type: 'dependencyPathMaxPathsSet',
+        maxPaths: dependencyPathChipButton.dataset.dpChipValue,
+      });
+      return;
+    }
+    const deadModulesControlButton = target.closest('[data-dm-control]');
+    if (deadModulesControlButton instanceof HTMLElement) {
+      event.preventDefault();
+      const control = deadModulesControlButton.dataset.dmControl;
+      if (control === 'configure') {
+        vscode.postMessage({ type: 'deadModulesEntryPointsConfigureRequest' });
+      } else if (control === 'natural') {
+        vscode.postMessage({
+          type: 'deadModulesEntryPointsSet',
+          entryPointUris: undefined,
+        });
+      }
+      return;
+    }
     if (event.altKey) {
       const blastRadiusNode = target.closest('[data-blast-radius-uri]');
       if (blastRadiusNode instanceof SVGElement || blastRadiusNode instanceof HTMLElement) {
@@ -976,6 +1013,10 @@ export function codepolPanelHtmlRender(input: {
               ? renamePreviewBodyHtml(input.model.data)
             : input.model.kind === 'typeHierarchy'
               ? typeHierarchyPanelBodyHtml({ model: input.model.data })
+            : input.model.kind === 'dependencyPath'
+              ? dependencyPathPanelBodyHtml(input.model.data)
+            : input.model.kind === 'deadModules'
+              ? deadModulesPanelBodyHtml(input.model.data)
             : callGraphPanelBodyHtml({ model: input.model.data });
 
   return `<!DOCTYPE html>
@@ -1415,6 +1456,142 @@ export function codepolPanelHtmlRender(input: {
         body[data-mode="micro"] .micro-limit-3 > li:nth-child(n + 4),
         body[data-mode="micro"] .micro-limit-1 > li:nth-child(n + 2) {
           display: none;
+        }
+        .dp-panel, .dm-panel {
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+        .dp-header, .dm-header {
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+        }
+        .dp-summary, .dm-summary {
+          margin: 0;
+          color: var(--vscode-descriptionForeground);
+        }
+        .dp-chip-row, .dm-controls {
+          display: flex;
+          gap: 6px;
+          align-items: center;
+          flex-wrap: wrap;
+        }
+        .dp-chip-row-label {
+          font-size: 11px;
+          text-transform: uppercase;
+          letter-spacing: 0.06em;
+          color: var(--vscode-descriptionForeground);
+          margin-right: 4px;
+        }
+        .dp-chip {
+          display: inline-flex;
+          align-items: center;
+          padding: 3px 10px;
+          border-radius: 999px;
+          border: 1px solid var(--vscode-panel-border);
+          background: var(--vscode-input-background);
+          color: var(--vscode-foreground);
+          font-size: 12px;
+          cursor: pointer;
+        }
+        .dp-chip-active {
+          background: color-mix(in srgb, var(--vscode-input-background) 60%, var(--vscode-textLink-foreground) 40%);
+          border-color: var(--vscode-textLink-foreground);
+          color: var(--vscode-textLink-foreground);
+        }
+        .dm-control {
+          padding: 4px 10px;
+          border-radius: 8px;
+        }
+        .dp-path-list {
+          list-style: none;
+          padding: 0;
+          margin: 0;
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+        }
+        .dp-path {
+          padding: 8px 10px;
+          border-radius: 8px;
+          background: var(--vscode-input-background);
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          gap: 4px;
+          overflow-wrap: anywhere;
+        }
+        .dp-node {
+          padding: 4px 8px;
+          border-radius: 6px;
+          background: color-mix(in srgb, var(--vscode-editor-background) 86%, var(--vscode-textLink-foreground) 14%);
+          color: var(--vscode-foreground);
+          border: 1px solid transparent;
+          cursor: pointer;
+          font-size: 12px;
+        }
+        .dp-node:hover {
+          border-color: var(--vscode-textLink-foreground);
+        }
+        .dp-node-arrow {
+          color: var(--vscode-descriptionForeground);
+        }
+        .dp-empty, .dm-empty {
+          color: var(--vscode-descriptionForeground);
+          margin: 0;
+        }
+        .dm-group-list {
+          list-style: none;
+          padding: 0;
+          margin: 0;
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+        }
+        .dm-group {
+          border: 1px solid var(--vscode-panel-border);
+          border-radius: 8px;
+          padding: 6px 10px;
+          background: var(--vscode-input-background);
+        }
+        .dm-group-label {
+          font-weight: 600;
+        }
+        .dm-group-count {
+          color: var(--vscode-descriptionForeground);
+          margin-left: 8px;
+          font-weight: normal;
+        }
+        .dm-file-list {
+          list-style: none;
+          padding: 6px 0 0;
+          margin: 0;
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+        }
+        .dm-file-row {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          flex-wrap: wrap;
+        }
+        .dm-file {
+          padding: 3px 8px;
+          border-radius: 6px;
+          background: color-mix(in srgb, var(--vscode-editor-background) 86%, var(--vscode-textLink-foreground) 14%);
+          color: var(--vscode-foreground);
+          border: 1px solid transparent;
+          cursor: pointer;
+          font-size: 12px;
+        }
+        .dm-file:hover {
+          border-color: var(--vscode-textLink-foreground);
+        }
+        .dm-file-rel {
+          color: var(--vscode-descriptionForeground);
+          font-size: 11px;
         }
       </style>
     </head>

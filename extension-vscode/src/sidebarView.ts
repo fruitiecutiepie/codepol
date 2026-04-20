@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import type { WorkspaceSemanticHoverResult } from '@codepol/core';
 import {
   CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_LINKS,
+  CODEPOL_EXTENSION_COMMAND_SHOW_DEPENDENCY_PATH,
   CODEPOL_EXTENSION_COMMAND_SHOW_SEMANTIC_DEFINITION,
   CODEPOL_EXTENSION_COMMAND_SHOW_TYPE_HIERARCHY,
 } from './constants';
@@ -887,6 +888,17 @@ export class CodepolSidebarViewProvider
           CODEPOL_EXTENSION_COMMAND_SHOW_TYPE_HIERARCHY,
           message.uri,
         );
+        return;
+      }
+      if (message.action === 'show_dependency_path_from') {
+        // Phase 2 user-facing — dispatch with the active URI as the
+        // source. The command's registered handler normalizes the
+        // bare URI into `{ fromUri }` and drives a quick-pick to
+        // choose the destination.
+        await this.actions.executeCommand(
+          CODEPOL_EXTENSION_COMMAND_SHOW_DEPENDENCY_PATH,
+          message.uri,
+        );
       }
     }
   }
@@ -1091,7 +1103,8 @@ export class CodepolSidebarViewProvider
       | 'go_to_definition'
       | 'find_references'
       | 'show_graph'
-      | 'show_type_hierarchy',
+      | 'show_type_hierarchy'
+      | 'show_dependency_path_from',
       string
     >
   > {
@@ -1111,6 +1124,10 @@ export class CodepolSidebarViewProvider
       // as the other graph-derived actions — when the index isn't
       // ready the action is disabled with the same explanation.
       show_type_hierarchy: graphBlocked,
+      // Dependency-path needs both the dependency graph (file picker
+      // source) and the architecture-links pipeline; reuse the same
+      // gate so the disabled-state message family is consistent.
+      show_dependency_path_from: graphBlocked,
     };
   }
 

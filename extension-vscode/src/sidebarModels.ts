@@ -30,14 +30,21 @@ export type SidebarSearchResultViewModel = {
  * workspace service's hover result) — these actions are appended by
  * the sidebar itself and don't have a server-side representation.
  *
- * Phase 9.5 / Gap 3 — `show_type_hierarchy` opens the dedicated
- * type-hierarchy panel, defaulting `includeStructural: true`. The
- * sidebar always offers it on TypeScript files so users can ask
- * "what implements this?" in one click; the controller's cursor
- * resolution surfaces a clear error when the cursor is not on a
- * class / interface / type alias.
+ * - Phase 9.5 / Gap 3 — `show_type_hierarchy` opens the dedicated
+ *   type-hierarchy panel, defaulting `includeStructural: true`. The
+ *   sidebar always offers it on TypeScript files so users can ask
+ *   "what implements this?" in one click; the controller's cursor
+ *   resolution surfaces a clear error when the cursor is not on a
+ *   class / interface / type alias.
+ * - Phase 2 user-facing — `show_dependency_path_from` opens the
+ *   dependency-path panel scoped to the active file as the source
+ *   (`fromUri`). The controller drives a quick-pick to choose the
+ *   destination, so the sidebar entry is a one-click way to start
+ *   asking "why does this file depend on X?" without typing.
  */
-export type SidebarSyntheticActionKind = 'show_type_hierarchy';
+export type SidebarSyntheticActionKind =
+  | 'show_type_hierarchy'
+  | 'show_dependency_path_from';
 
 export type SidebarActionViewModel = (
   | HoverActionViewModel
@@ -197,6 +204,27 @@ function sidebarShowTypeHierarchyActionCreate(
   return action;
 }
 
+/**
+ * Build the synthetic "Show Dependency Path From This File…" action
+ * appended to the active-target card whenever an editor is open. The
+ * controller drives a quick-pick to choose the destination URI on
+ * click; if the active file is not in the indexed set the controller
+ * surfaces a clear error before opening the panel.
+ */
+function sidebarShowDependencyPathFromActionCreate(
+  disabledMessage: string | undefined,
+): SidebarActionViewModel {
+  const action: SidebarActionViewModel = {
+    action: 'show_dependency_path_from',
+    label: 'Show Dependency Path From This File…',
+  };
+  if (disabledMessage) {
+    action.disabled = true;
+    action.disabledReason = disabledMessage;
+  }
+  return action;
+}
+
 export function sidebarActiveTargetCreate(input: {
   activeUri?: string;
   hover: WorkspaceSemanticHoverResult | null;
@@ -218,6 +246,9 @@ export function sidebarActiveTargetCreate(input: {
   const typeHierarchyAction = sidebarShowTypeHierarchyActionCreate(
     input.disabledActionMessages?.show_type_hierarchy,
   );
+  const dependencyPathFromAction = sidebarShowDependencyPathFromActionCreate(
+    input.disabledActionMessages?.show_dependency_path_from,
+  );
 
   const card = semanticHoverCardViewModelCreate(input.hover);
   if (card) {
@@ -238,7 +269,7 @@ export function sidebarActiveTargetCreate(input: {
       summary: card.summary,
       statusText: card.statusText,
       fields: card.fields,
-      actions: [...cardActions, typeHierarchyAction],
+      actions: [...cardActions, typeHierarchyAction, dependencyPathFromAction],
       tone: 'neutral',
     };
   }
@@ -250,7 +281,7 @@ export function sidebarActiveTargetCreate(input: {
     message:
       input.errorMessage ?? 'No Codepol semantic summary is available for this file yet.',
     fields: [],
-    actions: [typeHierarchyAction],
+    actions: [typeHierarchyAction, dependencyPathFromAction],
     tone: input.errorMessage ? 'warning' : 'neutral',
   };
 }

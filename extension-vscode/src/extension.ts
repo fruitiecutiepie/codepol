@@ -34,7 +34,9 @@ import {
   CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_LINKS,
   CODEPOL_EXTENSION_COMMAND_SHOW_CALL_GRAPH,
   CODEPOL_EXTENSION_COMMAND_SHOW_TYPE_HIERARCHY,
+  CODEPOL_EXTENSION_COMMAND_SHOW_DEAD_MODULES,
   CODEPOL_EXTENSION_COMMAND_SHOW_DEPENDENCY_GRAPH,
+  CODEPOL_EXTENSION_COMMAND_SHOW_DEPENDENCY_PATH,
   CODEPOL_EXTENSION_COMMAND_SHOW_LINT_RULE_DETAILS,
   CODEPOL_EXTENSION_COMMAND_SHOW_SEMANTIC_DEFINITION,
   CODEPOL_EXTENSION_COMMAND_SHOW_SEMANTIC_SEARCH,
@@ -426,6 +428,23 @@ async function quickPick<T>(input: {
   return picked?.value;
 }
 
+async function multiSelectPick<T>(input: {
+  title: string;
+  placeholder?: string;
+  items: Array<vscode.QuickPickItem & { picked?: boolean; value: T }>;
+}): Promise<T[] | undefined> {
+  const picked = await vscode.window.showQuickPick(input.items, {
+    title: input.title,
+    placeHolder: input.placeholder,
+    matchOnDescription: true,
+    matchOnDetail: true,
+    ignoreFocusOut: true,
+    canPickMany: true,
+  });
+  if (!picked) return undefined;
+  return picked.map((item) => item.value);
+}
+
 function lintRuleIdResolve(input: unknown): string | undefined {
   if (typeof input === 'string') {
     return input;
@@ -620,6 +639,31 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
       await vscode.commands.executeCommand(command);
     },
+    deadModulesEntryPointsPick: async ({ currentEntryPointUris }) => {
+      // The picker source is the workspace-indexed file set so the
+      // multi-select only offers files Codepol actually knows about.
+      const graph = await protocol.queryDependencyGraph();
+      if (!graph) {
+        void vscode.window.showErrorMessage(
+          'Codepol does not have a workspace dependency graph yet.',
+        );
+        return undefined;
+      }
+      const current = new Set(currentEntryPointUris ?? []);
+      const items = graph.nodes
+        .map((node) => ({
+          label: node.workspaceRelativePath,
+          description: node.uri,
+          picked: current.has(node.uri),
+          value: node.uri,
+        }))
+        .sort((left, right) => left.label.localeCompare(right.label));
+      return multiSelectPick({
+        title: 'Configure dead-module entry points',
+        placeholder: 'Pick one or more files to treat as entry points.',
+        items,
+      });
+    },
   });
 
   sidebarProvider = new CodepolSidebarViewProvider(
@@ -788,6 +832,30 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       CODEPOL_EXTENSION_COMMAND_SHOW_TYPE_HIERARCHY,
       async (args?: { symbolId?: string; focusSymbolName?: string }) =>
         controller?.showTypeHierarchy(args),
+    ),
+    vscode.commands.registerCommand(
+      CODEPOL_EXTENSION_COMMAND_SHOW_DEPENDENCY_PATH,
+      async (
+        args?:
+          | string
+          | {
+              fromUri?: string;
+              toUri?: string;
+              maxPaths?: 5 | 10 | 20;
+            },
+      ) => {
+        // The sidebar synthetic action calls
+        // `executeCommand(command, uri)` which surfaces the URI as a
+        // bare string here. Normalize to the args-object shape the
+        // controller expects.
+        const normalized = typeof args === 'string' ? { fromUri: args } : args;
+        return controller?.showDependencyPath(normalized);
+      },
+    ),
+    vscode.commands.registerCommand(
+      CODEPOL_EXTENSION_COMMAND_SHOW_DEAD_MODULES,
+      async (args?: { entryPointUris?: string[] }) =>
+        controller?.showDeadModules(args),
     ),
     vscode.commands.registerCommand(
       CODEPOL_EXTENSION_COMMAND_FIND_CALLBACKS,

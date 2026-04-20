@@ -154,6 +154,8 @@ function panelsCreate() {
     showRenamePreview: vi.fn(),
     showCallGraph: vi.fn(),
     showTypeHierarchy: vi.fn(),
+    showDependencyPath: vi.fn(),
+    showDeadModules: vi.fn(),
   };
 }
 
@@ -1369,5 +1371,161 @@ describe('CodepolCommandController.showTypeHierarchy kind guard', () => {
     expect(host.errorShow).not.toHaveBeenCalled();
     expect(protocol.queryTypeHierarchy).toHaveBeenCalledTimes(1);
     expect(panels.showTypeHierarchy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('CodepolCommandController.showDependencyPath', () => {
+  const FROM_URI = 'file:///workspace/apps/web/src/app.ts';
+  const TO_URI = 'file:///workspace/packages/lib/src/index.ts';
+
+  it('threads the active URI + picked toUri into queryDependencyPath and opens the panel', async () => {
+    const protocol = protocolCreate();
+    protocol.queryDependencyGraph.mockResolvedValue(dependencyGraphResult);
+    protocol.queryDependencyPath.mockResolvedValue({
+      paths: [[FROM_URI, TO_URI]],
+      shortestLength: 1,
+      truncated: false,
+    });
+    const panels = panelsCreate();
+    const host = hostCreate({
+      activeUriGet: () => FROM_URI,
+      // The picker returns the lib node URI as the destination.
+      quickPick: (async <T>(input: { items: Array<{ value: T }> }) =>
+        input.items[0]?.value) as never,
+    });
+    const controller = new CodepolCommandController(
+      protocol as never,
+      panels,
+      host,
+    );
+
+    const model = await controller.showDependencyPath();
+
+    expect(model).not.toBeNull();
+    expect(protocol.queryDependencyGraph).toHaveBeenCalledTimes(1);
+    expect(protocol.queryDependencyPath).toHaveBeenCalledWith({
+      fromUri: FROM_URI,
+      toUri: TO_URI,
+      maxPaths: 5,
+    });
+    expect(panels.showDependencyPath).toHaveBeenCalledTimes(1);
+    const openedModel = panels.showDependencyPath.mock.calls[0]![0];
+    expect(openedModel.maxPaths).toBe(5);
+    expect(openedModel.headline).toBe('Shortest path: 1 hop');
+    expect(openedModel.fromWorkspaceRelativePath).toBe('apps/web/src/app.ts');
+    expect(openedModel.toWorkspaceRelativePath).toBe(
+      'packages/lib/src/index.ts',
+    );
+  });
+
+  it('chip replay re-fires queryDependencyPath with the new maxPaths and rebuilds the model', async () => {
+    const protocol = protocolCreate();
+    protocol.queryDependencyGraph.mockResolvedValue(dependencyGraphResult);
+    protocol.queryDependencyPath
+      .mockResolvedValueOnce({
+        paths: [[FROM_URI, TO_URI]],
+        shortestLength: 1,
+        truncated: false,
+      })
+      .mockResolvedValueOnce({
+        paths: [[FROM_URI, TO_URI]],
+        shortestLength: 1,
+        truncated: true,
+      });
+    const panels = panelsCreate();
+    const host = hostCreate({
+      activeUriGet: () => FROM_URI,
+      quickPick: (async <T>(input: { items: Array<{ value: T }> }) =>
+        input.items[0]?.value) as never,
+    });
+    const controller = new CodepolCommandController(
+      protocol as never,
+      panels,
+      host,
+    );
+
+    await controller.showDependencyPath();
+    expect(panels.showDependencyPath).toHaveBeenCalledTimes(1);
+    const rebuilder = panels.showDependencyPath.mock.calls[0]![1] as (input: {
+      maxPaths: 5 | 10 | 20;
+    }) => Promise<unknown>;
+    expect(typeof rebuilder).toBe('function');
+
+    const replayed = (await rebuilder({ maxPaths: 20 })) as {
+      maxPaths: number;
+      truncated: boolean;
+    };
+
+    expect(replayed.maxPaths).toBe(20);
+    expect(replayed.truncated).toBe(true);
+    expect(protocol.queryDependencyPath).toHaveBeenLastCalledWith({
+      fromUri: FROM_URI,
+      toUri: TO_URI,
+      maxPaths: 20,
+    });
+  });
+});
+
+describe('CodepolCommandController.showDeadModules', () => {
+  it('runs queryDeadModules with no entry points and renders the natural-entry summary', async () => {
+    const protocol = protocolCreate();
+    protocol.queryDependencyGraph.mockResolvedValue(dependencyGraphResult);
+    protocol.queryDeadModules.mockResolvedValue({
+      unreachable: ['file:///workspace/orphan.ts'],
+    });
+    const panels = panelsCreate();
+    const host = hostCreate();
+    const controller = new CodepolCommandController(
+      protocol as never,
+      panels,
+      host,
+    );
+
+    const model = await controller.showDeadModules();
+
+    expect(model).not.toBeNull();
+    expect(protocol.queryDeadModules).toHaveBeenCalledWith({
+      entryPointUris: undefined,
+    });
+    expect(panels.showDeadModules).toHaveBeenCalledTimes(1);
+    const opened = panels.showDeadModules.mock.calls[0]![0];
+    expect(opened.summary).toBe('Entry points: natural');
+    expect(opened.totalUnreachable).toBe(1);
+  });
+
+  it('chip replay re-fires queryDeadModules with caller-supplied entry points', async () => {
+    const protocol = protocolCreate();
+    protocol.queryDependencyGraph.mockResolvedValue(dependencyGraphResult);
+    protocol.queryDeadModules
+      .mockResolvedValueOnce({ unreachable: ['file:///workspace/orphan.ts'] })
+      .mockResolvedValueOnce({
+        unreachable: ['file:///workspace/orphan.ts', 'file:///workspace/lonely.ts'],
+      });
+    const panels = panelsCreate();
+    const host = hostCreate();
+    const controller = new CodepolCommandController(
+      protocol as never,
+      panels,
+      host,
+    );
+
+    await controller.showDeadModules();
+    expect(panels.showDeadModules).toHaveBeenCalledTimes(1);
+    const rebuilder = panels.showDeadModules.mock.calls[0]![1] as (input: {
+      entryPointUris?: string[];
+    }) => Promise<unknown>;
+    expect(typeof rebuilder).toBe('function');
+
+    const replayed = (await rebuilder({
+      entryPointUris: ['file:///workspace/apps/web/src/app.ts'],
+    })) as { summary: string; entryPointUris: string[] };
+
+    expect(replayed.entryPointUris).toEqual([
+      'file:///workspace/apps/web/src/app.ts',
+    ]);
+    expect(replayed.summary).toBe('Entry points: apps/web/src/app.ts');
+    expect(protocol.queryDeadModules).toHaveBeenLastCalledWith({
+      entryPointUris: ['file:///workspace/apps/web/src/app.ts'],
+    });
   });
 });

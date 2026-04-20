@@ -23,6 +23,8 @@
     "onCommand:codepol.architecture.peek",
     "onCommand:codepol.extension.showCallGraph",
     "onCommand:codepol.extension.showTypeHierarchy",
+    "onCommand:codepol.extension.showDependencyPath",
+    "onCommand:codepol.extension.showDeadModules",
     "onCommand:codepol.extension.findCallbacks",
     "onCommand:codepol.extension.showLintRuleDetails",
     "onCommand:codepol.extension.showLintRuleDiagnosticFixes",
@@ -75,6 +77,16 @@
       {
         "command": "codepol.extension.showTypeHierarchy",
         "title": "Codepol: Show Type Hierarchy",
+        "enablement": "codepol.indexBackedCommandsEnabled"
+      },
+      {
+        "command": "codepol.extension.showDependencyPath",
+        "title": "Codepol: Show Dependency Path...",
+        "enablement": "codepol.indexBackedCommandsEnabled"
+      },
+      {
+        "command": "codepol.extension.showDeadModules",
+        "title": "Codepol: Show Dead Modules",
         "enablement": "codepol.indexBackedCommandsEnabled"
       },
       {

@@ -23,6 +23,10 @@ export const CODEPOL_EXTENSION_COMMAND_SHOW_CALL_GRAPH =
   'codepol.extension.showCallGraph';
 export const CODEPOL_EXTENSION_COMMAND_SHOW_TYPE_HIERARCHY =
   'codepol.extension.showTypeHierarchy';
+export const CODEPOL_EXTENSION_COMMAND_SHOW_DEPENDENCY_PATH =
+  'codepol.extension.showDependencyPath';
+export const CODEPOL_EXTENSION_COMMAND_SHOW_DEAD_MODULES =
+  'codepol.extension.showDeadModules';
 export const CODEPOL_EXTENSION_COMMAND_FIND_CALLBACKS =
   'codepol.extension.findCallbacks';
 export const CODEPOL_EXTENSION_COMMAND_RENAME_CODEPOL_ENTITY =
@@ -64,3 +68,7 @@ export const CODEPOL_EXTENSION_PANEL_CALL_GRAPH =
   'codepol.callGraphPanel';
 export const CODEPOL_EXTENSION_PANEL_TYPE_HIERARCHY =
   'codepol.typeHierarchyPanel';
+export const CODEPOL_EXTENSION_PANEL_DEPENDENCY_PATH =
+  'codepol.dependencyPathPanel';
+export const CODEPOL_EXTENSION_PANEL_DEAD_MODULES =
+  'codepol.deadModulesPanel';
