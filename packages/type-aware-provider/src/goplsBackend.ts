@@ -12,6 +12,9 @@ export const WORKSPACE_TYPE_AWARE_GOPLS_BIN_ENV = 'CODEPOL_GOPLS_BIN';
 export const WORKSPACE_TYPE_AWARE_GOPLS_ARGS_JSON_ENV =
   'CODEPOL_GOPLS_ARGS_JSON';
 
+// TODO: Add an `@codepol/go-language-bridge` package (Go equivalent of
+// `@codepol/python-language-bridge`) so this transport can be wired into
+// first-party type-aware call-graph and type-hierarchy bridge definitions.
 export type WorkspaceTypeAwareGoplsSessionFactory =
   WorkspaceTypeAwareLspSubprocessSessionFactory;
 
