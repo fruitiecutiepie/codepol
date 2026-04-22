@@ -98,5 +98,30 @@ function workspaceTypeAwareBridgeTransportsLike(
   if (!value || typeof value !== 'object') {
     return false;
   }
-  return 'typescript' in value || 'python' in value;
+  return Object.values(value).some((entry) => workspaceTypeAwareBridgeTransportSourceLike(entry));
+}
+
+function workspaceTypeAwareBridgeTransportLike(
+  value: unknown,
+): boolean {
+  return (
+    !!value &&
+    typeof value === 'object' &&
+    'request' in value &&
+    typeof (value as { request?: unknown }).request === 'function'
+  );
+}
+
+function workspaceTypeAwareBridgeTransportSourceLike(
+  value: unknown,
+): boolean {
+  return (
+    workspaceTypeAwareBridgeTransportLike(value) ||
+    (
+      !!value &&
+      typeof value === 'object' &&
+      'transportResolve' in value &&
+      typeof (value as { transportResolve?: unknown }).transportResolve === 'function'
+    )
+  );
 }

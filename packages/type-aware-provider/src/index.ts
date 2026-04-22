@@ -8,6 +8,11 @@ import type {
 } from '@codepol/workspace-service';
 import { workspaceTypeAwareEditorAdapterBackendCreate } from './editorAdapterBackend';
 import {
+  workspaceTypeAwareGoplsBackendCreate,
+  WORKSPACE_TYPE_AWARE_GOPLS_ARGS_JSON_ENV,
+  WORKSPACE_TYPE_AWARE_GOPLS_BIN_ENV,
+} from './goplsBackend';
+import {
   workspaceTypeAwarePyrightBackendCreate,
   WORKSPACE_TYPE_AWARE_PYRIGHT_ARGS_JSON_ENV,
   WORKSPACE_TYPE_AWARE_PYRIGHT_BIN_ENV,
@@ -26,6 +31,12 @@ export {
   workspaceTypeAwareLspSubprocessLaunchSpecResolve,
   workspaceTypeAwareLspSubprocessRuntimeCreate,
 } from './lspSubprocessBackend';
+export {
+  WORKSPACE_TYPE_AWARE_GOPLS_ARGS_JSON_ENV,
+  WORKSPACE_TYPE_AWARE_GOPLS_BIN_ENV,
+  workspaceTypeAwareGoplsBackendCreate,
+  workspaceTypeAwareGoplsRuntimeCreate,
+} from './goplsBackend';
 export {
   WORKSPACE_TYPE_AWARE_PYRIGHT_ARGS_JSON_ENV,
   WORKSPACE_TYPE_AWARE_PYRIGHT_BIN_ENV,

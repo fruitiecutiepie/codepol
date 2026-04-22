@@ -62,15 +62,15 @@ export type WorkspaceTypeAwareBridgeTransportSource =
   | WorkspaceTypeAwareBridgeTransportResolver;
 
 /**
- * Host-supplied transports keyed by the language-bridge package they
- * power. `typescript` also covers `.tsx` / `.jsx` because the workspace
- * maps those extensions to the `tsx` language id and the same
- * TypeScript language server answers both.
+ * Host-supplied transports keyed by language id. The current
+ * first-party registrar consumes `typescript`, `tsx`, and `python`, but
+ * the map intentionally stays open so provider packages can export
+ * additional language backends (for example `go`) ahead of the matching
+ * bridge package.
  */
-export type WorkspaceTypeAwareBridgeTransports = Partial<{
-  typescript: WorkspaceTypeAwareBridgeTransportSource;
-  python: WorkspaceTypeAwareBridgeTransportSource;
-}>;
+export type WorkspaceTypeAwareBridgeTransports = Partial<
+  Record<string, WorkspaceTypeAwareBridgeTransportSource>
+>;
 
 export type WorkspaceTypeAwareBridgeSymbolLocation = {
   uri: string;
@@ -403,7 +403,7 @@ function workspaceTypeAwareBridgeTransportsLike(
   if (!value || typeof value !== 'object') {
     return false;
   }
-  return 'typescript' in value || 'python' in value;
+  return Object.values(value).some((entry) => workspaceTypeAwareBridgeTransportSourceLike(entry));
 }
 
 function workspaceTypeAwareBridgeTransportResolverLike(
@@ -414,5 +414,25 @@ function workspaceTypeAwareBridgeTransportResolverLike(
     typeof value === 'object' &&
     'transportResolve' in value &&
     typeof (value as { transportResolve?: unknown }).transportResolve === 'function'
+  );
+}
+
+function workspaceTypeAwareBridgeTransportLike(
+  value: unknown,
+): value is WorkspaceTypeAwareBridgeTransport {
+  return (
+    !!value &&
+    typeof value === 'object' &&
+    'request' in value &&
+    typeof (value as { request?: unknown }).request === 'function'
+  );
+}
+
+function workspaceTypeAwareBridgeTransportSourceLike(
+  value: unknown,
+): value is WorkspaceTypeAwareBridgeTransportSource {
+  return (
+    workspaceTypeAwareBridgeTransportLike(value) ||
+    workspaceTypeAwareBridgeTransportResolverLike(value)
   );
 }
