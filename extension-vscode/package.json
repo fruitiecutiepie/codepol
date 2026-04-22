@@ -26,6 +26,7 @@
     "onCommand:codepol.extension.showTypeHierarchy",
     "onCommand:codepol.extension.showDependencyPath",
     "onCommand:codepol.extension.showDeadModules",
+    "onCommand:codepol.extension.showDependencyDiff",
     "onCommand:codepol.extension.findCallbacks",
     "onCommand:codepol.extension.peekSignatureImpact",
     "onCommand:codepol.extension.showLintRuleDetails",
@@ -94,6 +95,11 @@
       {
         "command": "codepol.extension.showDeadModules",
         "title": "Codepol: Show Dead Modules",
+        "enablement": "codepol.indexBackedCommandsEnabled"
+      },
+      {
+        "command": "codepol.extension.showDependencyDiff",
+        "title": "Codepol: Show Dependency Diff",
         "enablement": "codepol.indexBackedCommandsEnabled"
       },
       {

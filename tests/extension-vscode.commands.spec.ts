@@ -42,6 +42,10 @@ function hostCreate(overrides: Partial<{
     value: string;
     namingRules: string[];
   }) => Promise<string | undefined>;
+  architectureBaselineLabelGet: () => string;
+  architectureBaselineLabelPrompt: (input: {
+    currentLabel: string;
+  }) => Promise<string | undefined>;
   quickPick: <T>(input: {
     title: string;
     placeholder?: string;
@@ -73,6 +77,12 @@ function hostCreate(overrides: Partial<{
     renamePrompt:
       overrides.renamePrompt ??
       (async () => undefined),
+    architectureBaselineLabelGet:
+      overrides.architectureBaselineLabelGet ??
+      (() => ''),
+    architectureBaselineLabelPrompt:
+      overrides.architectureBaselineLabelPrompt ??
+      (async () => undefined),
     quickPick:
       overrides.quickPick ??
       (async <T>(input: {
@@ -97,6 +107,7 @@ function protocolCreate() {
     queryImpactRadius: vi.fn(),
     queryDependencyPath: vi.fn(),
     queryDeadModules: vi.fn(),
+    queryDependencyDiff: vi.fn(),
     queryCallGraph: vi.fn(),
     queryTypeHierarchy: vi.fn(),
     querySymbolFlow: vi.fn(),
@@ -156,6 +167,7 @@ function panelsCreate() {
     showTypeHierarchy: vi.fn(),
     showDependencyPath: vi.fn(),
     showDeadModules: vi.fn(),
+    showDependencyDiff: vi.fn(),
   };
 }
 
@@ -240,6 +252,24 @@ const architectureSummaryResult = {
       importeeCount: 1,
     },
   ],
+};
+
+const dependencyDiffResult = {
+  workspaceId: 'workspace-1',
+  baselineLabel: 'base',
+  currentAnalysisGeneration: 7,
+  baselineAnalysisGeneration: 3,
+  addedNodes: [
+    {
+      uri: 'file:///workspace/src/new.ts',
+      workspaceRelativePath: 'src/new.ts',
+    },
+  ],
+  removedNodes: [],
+  addedEdges: [],
+  removedEdges: [],
+  newCycles: [],
+  removedCycles: [],
 };
 
 const lintRuleDetailsResult: WorkspaceLintRuleDetailsResult = {
@@ -1861,6 +1891,136 @@ describe('CodepolCommandController.showDeadModules', () => {
     expect(replayed.summary).toBe('Entry points: apps/web/src/app.ts');
     expect(protocol.queryDeadModules).toHaveBeenLastCalledWith({
       entryPointUris: ['file:///workspace/apps/web/src/app.ts'],
+    });
+  });
+});
+
+describe('CodepolCommandController.showDependencyDiff', () => {
+  it('uses args.baselineLabel when supplied and opens the diff panel', async () => {
+    const protocol = protocolCreate();
+    protocol.queryDependencyGraph.mockResolvedValue(dependencyGraphResult);
+    protocol.queryDependencyDiff.mockResolvedValue(dependencyDiffResult);
+    const panels = panelsCreate();
+    const prompt = vi.fn(async () => 'prompted');
+    const host = hostCreate({
+      architectureBaselineLabelGet: () => 'configured',
+      architectureBaselineLabelPrompt: prompt,
+    });
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    const model = await controller.showDependencyDiff({ baselineLabel: 'base' });
+
+    expect(model).not.toBeNull();
+    expect(protocol.queryDependencyDiff).toHaveBeenCalledWith({
+      baselineLabel: 'base',
+    });
+    expect(prompt).not.toHaveBeenCalled();
+    expect(panels.showDependencyDiff).toHaveBeenCalledTimes(1);
+    const opened = panels.showDependencyDiff.mock.calls[0]![0];
+    expect(opened.baselineLabel).toBe('base');
+    expect(opened.summary).toBe('1 added node');
+  });
+
+  it('falls back to the configured baseline label when args are omitted', async () => {
+    const protocol = protocolCreate();
+    protocol.queryDependencyGraph.mockResolvedValue(dependencyGraphResult);
+    protocol.queryDependencyDiff.mockResolvedValue({
+      ...dependencyDiffResult,
+      baselineLabel: 'configured',
+    });
+    const panels = panelsCreate();
+    const host = hostCreate({
+      architectureBaselineLabelGet: () => 'configured',
+    });
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    await controller.showDependencyDiff();
+
+    expect(protocol.queryDependencyDiff).toHaveBeenCalledWith({
+      baselineLabel: 'configured',
+    });
+    expect(panels.showDependencyDiff).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to the prompt when the configured baseline is empty', async () => {
+    const protocol = protocolCreate();
+    protocol.queryDependencyGraph.mockResolvedValue(dependencyGraphResult);
+    protocol.queryDependencyDiff.mockResolvedValue({
+      ...dependencyDiffResult,
+      baselineLabel: 'prompted',
+    });
+    const panels = panelsCreate();
+    const prompt = vi.fn(async () => 'prompted');
+    const host = hostCreate({
+      architectureBaselineLabelGet: () => '',
+      architectureBaselineLabelPrompt: prompt,
+    });
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    await controller.showDependencyDiff();
+
+    expect(prompt).toHaveBeenCalledWith({
+      currentLabel: '',
+    });
+    expect(protocol.queryDependencyDiff).toHaveBeenCalledWith({
+      baselineLabel: 'prompted',
+    });
+    expect(panels.showDependencyDiff).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns null and does not open the panel when the prompt is cancelled', async () => {
+    const protocol = protocolCreate();
+    protocol.queryDependencyGraph.mockResolvedValue(dependencyGraphResult);
+    const panels = panelsCreate();
+    const host = hostCreate({
+      architectureBaselineLabelGet: () => '',
+      architectureBaselineLabelPrompt: async () => undefined,
+    });
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    const model = await controller.showDependencyDiff();
+
+    expect(model).toBeNull();
+    expect(protocol.queryDependencyDiff).not.toHaveBeenCalled();
+    expect(panels.showDependencyDiff).not.toHaveBeenCalled();
+    expect(host.errorShow).toHaveBeenCalledWith(
+      'Set codepol.architecture.baselineLabel or enter a baseline label to diff against.',
+    );
+  });
+
+  it('rebuilder replay re-fires queryDependencyDiff with the new baseline label', async () => {
+    const protocol = protocolCreate();
+    protocol.queryDependencyGraph.mockResolvedValue(dependencyGraphResult);
+    protocol.queryDependencyDiff
+      .mockResolvedValueOnce({
+        ...dependencyDiffResult,
+        baselineLabel: 'base',
+      })
+      .mockResolvedValueOnce({
+        ...dependencyDiffResult,
+        baselineLabel: 'main',
+        currentAnalysisGeneration: 8,
+      });
+    const panels = panelsCreate();
+    const host = hostCreate();
+    const controller = new CodepolCommandController(protocol as never, panels, host);
+
+    await controller.showDependencyDiff({ baselineLabel: 'base' });
+    expect(panels.showDependencyDiff).toHaveBeenCalledTimes(1);
+    const rebuilder = panels.showDependencyDiff.mock.calls[0]![1] as (input: {
+      baselineLabel: string;
+    }) => Promise<unknown>;
+    expect(typeof rebuilder).toBe('function');
+
+    const replayed = (await rebuilder({ baselineLabel: 'main' })) as {
+      baselineLabel: string;
+      currentAnalysisGeneration: number;
+    };
+
+    expect(replayed.baselineLabel).toBe('main');
+    expect(replayed.currentAnalysisGeneration).toBe(8);
+    expect(protocol.queryDependencyDiff).toHaveBeenLastCalledWith({
+      baselineLabel: 'main',
     });
   });
 });

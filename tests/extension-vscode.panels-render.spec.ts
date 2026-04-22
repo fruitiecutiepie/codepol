@@ -854,4 +854,81 @@ describe('extension-vscode panel rendering', () => {
     const detailsCount = html.split('<details').length - 1;
     expect(detailsCount).toBe(2);
   });
+
+  it('renders the dependency-diff panel with baseline controls and clickable rows', () => {
+    const html = codepolPanelHtmlRender({
+      nonce: 'nonce-dependency-diff',
+      model: {
+        kind: 'dependencyDiff',
+        title: 'Codepol: Dependency Diff',
+        data: {
+          baselineLabel: 'base',
+          headline: 'Diff against baseline "base"',
+          summary: '1 added node · 1 removed edge · 1 new cycle',
+          currentAnalysisGeneration: 7,
+          baselineAnalysisGeneration: 3,
+          isEmpty: false,
+          sections: {
+            addedNodes: {
+              title: 'Added Nodes',
+              count: 1,
+              rows: [
+                {
+                  uri: 'file:///workspace/src/new.ts',
+                  label: 'src/new.ts',
+                },
+              ],
+            },
+            removedNodes: {
+              title: 'Removed Nodes',
+              count: 0,
+              rows: [],
+            },
+            addedEdges: {
+              title: 'Added Edges',
+              count: 0,
+              rows: [],
+            },
+            removedEdges: {
+              title: 'Removed Edges',
+              count: 1,
+              rows: [
+                {
+                  uri: 'file:///workspace/src/a.ts',
+                  label: 'src/a.ts → src/b.ts',
+                  detail:
+                    'file:///workspace/src/a.ts → file:///workspace/src/b.ts',
+                },
+              ],
+            },
+            newCycles: {
+              title: 'New Cycles',
+              count: 1,
+              rows: [
+                {
+                  uri: 'file:///workspace/src/a.ts',
+                  label: 'src/a.ts',
+                  detail: 'src/a.ts → src/b.ts → src/c.ts',
+                },
+              ],
+            },
+            removedCycles: {
+              title: 'Removed Cycles',
+              count: 0,
+              rows: [],
+            },
+          },
+        },
+      },
+    });
+
+    expect(html).toContain('<title>Codepol: Dependency Diff</title>');
+    expect(html).toContain('Diff against baseline &quot;base&quot;');
+    expect(html).toContain('data-dd-control="choose-baseline"');
+    expect(html).toContain('data-dd-control="configured-baseline"');
+    expect(html).toContain('Current generation: 7 · Baseline generation: 3');
+    expect(html).toContain('data-open-uri="file:///workspace/src/new.ts"');
+    expect(html).toContain('data-open-uri="file:///workspace/src/a.ts"');
+    expect(html).toContain('1 added node · 1 removed edge · 1 new cycle');
+  });
 });

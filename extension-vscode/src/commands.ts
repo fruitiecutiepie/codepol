@@ -33,6 +33,10 @@ import {
   deadModulesPanelViewModelCreate,
   type DeadModulesPanelViewModel,
 } from './deadModulesViewModels';
+import {
+  dependencyDiffPanelViewModelCreate,
+  type DependencyDiffPanelViewModel,
+} from './dependencyDiffViewModels';
 import type { RenameTargetCandidate } from './discovery';
 import type {
   CodepolProtocolQuickFixAction,
@@ -127,6 +131,10 @@ export type DeadModulesPanelRebuilder = (
   input: { entryPointUris?: string[] },
 ) => Promise<DeadModulesPanelViewModel | null>;
 
+export type DependencyDiffPanelRebuilder = (
+  input: { baselineLabel: string },
+) => Promise<DependencyDiffPanelViewModel | null>;
+
 export type CodepolPanels = {
   showArchitectureSummary(input: ArchitectureSummaryPanelViewModel): void;
   showDependencyGraph(
@@ -155,6 +163,10 @@ export type CodepolPanels = {
   showDeadModules(
     input: DeadModulesPanelViewModel,
     rebuilder?: DeadModulesPanelRebuilder,
+  ): void;
+  showDependencyDiff(
+    input: DependencyDiffPanelViewModel,
+    rebuilder?: DependencyDiffPanelRebuilder,
   ): void;
 };
 
@@ -225,6 +237,22 @@ export type CodepolCommandHost = {
       value: T;
     }>;
   }): Promise<T[] | undefined>;
+  /**
+   * Read the currently configured architecture baseline label.
+   * Mirrors the semantics used by the Phase 6 overlay:
+   * `codepol.architecture.baselineLabel` with empty string meaning
+   * "disabled / unset".
+   */
+  architectureBaselineLabelGet?(): string;
+  /**
+   * Prompt the user for a dependency-diff baseline label. Used when the
+   * caller did not pass `args.baselineLabel` and the configured label is
+   * empty, plus by the dependency-diff panel's `Choose baseline...`
+   * control through the manager action hook.
+   */
+  architectureBaselineLabelPrompt?(input: {
+    currentLabel: string;
+  }): Promise<string | undefined>;
   infoShow(message: string): void | Promise<void>;
   errorShow(message: string): void | Promise<void>;
   openLocation(input: OpenLocationInput): Promise<void>;
@@ -999,6 +1027,96 @@ export class CodepolCommandController {
       return null;
     }
     this.panels.showDeadModules(initial, buildModel);
+    return initial;
+  }
+
+  /**
+   * Open the dedicated dependency-diff panel. Resolves the baseline
+   * label in this order:
+   *
+   * 1. `args.baselineLabel`
+   * 2. configured `codepol.architecture.baselineLabel` via host hook
+   * 3. typed prompt via host hook
+   *
+   * The panel is read-focused: a header shows the selected baseline and
+   * the panel manager's control buttons replay the rebuilder with a new
+   * label. No sidebar action is wired for this surface because the diff
+   * is workspace-scoped, not file-scoped.
+   */
+  async showDependencyDiff(
+    args?: { baselineLabel?: string },
+  ): Promise<DependencyDiffPanelViewModel | null> {
+    const blockedMessage = this.featureBlockedMessageResolve('architectureLinks');
+    if (blockedMessage) {
+      await this.host.errorShow(blockedMessage);
+      return null;
+    }
+
+    const configuredBaselineLabel =
+      this.host.architectureBaselineLabelGet?.().trim() ?? '';
+    let baselineLabel =
+      args?.baselineLabel?.trim() ??
+      (configuredBaselineLabel.length > 0 ? configuredBaselineLabel : undefined);
+    if (!baselineLabel) {
+      const prompted = await this.host.architectureBaselineLabelPrompt?.({
+        currentLabel: configuredBaselineLabel,
+      });
+      const next = prompted?.trim() ?? '';
+      baselineLabel = next.length > 0 ? next : undefined;
+    }
+    if (!baselineLabel) {
+      await this.host.errorShow(
+        'Set codepol.architecture.baselineLabel or enter a baseline label to diff against.',
+      );
+      return null;
+    }
+
+    // Best-effort current graph lookup for workspace-relative path
+    // labels. Added/removed nodes already carry their own relative
+    // paths, but edges and removed cycles benefit from the current graph
+    // when the URI still exists in the workspace.
+    const graph = await this.protocolOptionalRequestRun(
+      this.protocol.queryDependencyGraph(),
+    );
+
+    const buildModel = async (
+      input: { baselineLabel: string },
+    ): Promise<DependencyDiffPanelViewModel | null> => {
+      const result = await this.protocolRequestRun(
+        this.protocol.queryDependencyDiff({
+          baselineLabel: input.baselineLabel,
+        }),
+      );
+      if (result === CodepolCommandController.REQUEST_SUPERSEDED) return null;
+      if (!result) return null;
+      const pathMap = new Map<string, string>();
+      for (const node of graph?.nodes ?? []) {
+        pathMap.set(node.uri, node.workspaceRelativePath);
+      }
+      for (const node of result.addedNodes) {
+        pathMap.set(node.uri, node.workspaceRelativePath);
+      }
+      for (const node of result.removedNodes) {
+        pathMap.set(node.uri, node.workspaceRelativePath);
+      }
+      const nodeRelGet = (uri: string): string => pathMap.get(uri) ?? uri;
+      return dependencyDiffPanelViewModelCreate({
+        result,
+        nodeWorkspaceRelativePathGet: nodeRelGet,
+      });
+    };
+
+    const initial = await buildModel({ baselineLabel });
+    if (!initial) {
+      await this.host.errorShow(
+        this.featureUnavailableMessageResolve(
+          'architectureLinks',
+          'Codepol could not compute a dependency diff for the selected baseline.',
+        ),
+      );
+      return null;
+    }
+    this.panels.showDependencyDiff(initial, buildModel);
     return initial;
   }
 

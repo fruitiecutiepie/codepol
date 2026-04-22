@@ -19,6 +19,8 @@ import type { DependencyPathPanelViewModel } from '../dependencyPathViewModels';
 import { dependencyPathPanelBodyHtml } from './dependencyPathRender';
 import type { DeadModulesPanelViewModel } from '../deadModulesViewModels';
 import { deadModulesPanelBodyHtml } from './deadModulesRender';
+import type { DependencyDiffPanelViewModel } from '../dependencyDiffViewModels';
+import { dependencyDiffPanelBodyHtml } from './dependencyDiffRender';
 import { PANEL_SHARED_CSS, panelLensSwitcherHtml } from './panelShared';
 
 export type CodepolPanelViewModel =
@@ -73,6 +75,11 @@ export type CodepolPanelViewModel =
       kind: 'deadModules';
       title: string;
       data: DeadModulesPanelViewModel;
+    }
+  | {
+      kind: 'dependencyDiff';
+      title: string;
+      data: DependencyDiffPanelViewModel;
     };
 
 function htmlEscape(value: string): string {
@@ -1015,6 +1022,17 @@ const BASE_SCRIPT = `
       }
       return;
     }
+    const dependencyDiffControlButton = target.closest('[data-dd-control]');
+    if (dependencyDiffControlButton instanceof HTMLElement) {
+      event.preventDefault();
+      const control = dependencyDiffControlButton.dataset.ddControl;
+      if (control === 'choose-baseline') {
+        vscode.postMessage({ type: 'dependencyDiffChooseBaselineRequest' });
+      } else if (control === 'configured-baseline') {
+        vscode.postMessage({ type: 'dependencyDiffUseConfiguredBaselineRequest' });
+      }
+      return;
+    }
     if (event.altKey) {
       const blastRadiusNode = target.closest('[data-blast-radius-uri]');
       if (blastRadiusNode instanceof SVGElement || blastRadiusNode instanceof HTMLElement) {
@@ -1087,6 +1105,8 @@ export function codepolPanelHtmlRender(input: {
               ? dependencyPathPanelBodyHtml(input.model.data)
             : input.model.kind === 'deadModules'
               ? deadModulesPanelBodyHtml(input.model.data)
+            : input.model.kind === 'dependencyDiff'
+              ? dependencyDiffPanelBodyHtml(input.model.data)
             : callGraphPanelBodyHtml({ model: input.model.data });
 
   return `<!DOCTYPE html>
@@ -1528,21 +1548,21 @@ export function codepolPanelHtmlRender(input: {
         body[data-mode="micro"] .micro-limit-1 > li:nth-child(n + 2) {
           display: none;
         }
-        .dp-panel, .dm-panel {
+        .dp-panel, .dm-panel, .dd-panel {
           display: flex;
           flex-direction: column;
           gap: 12px;
         }
-        .dp-header, .dm-header {
+        .dp-header, .dm-header, .dd-header {
           display: flex;
           flex-direction: column;
           gap: 4px;
         }
-        .dp-summary, .dm-summary {
+        .dp-summary, .dm-summary, .dd-summary, .dd-meta {
           margin: 0;
           color: var(--vscode-descriptionForeground);
         }
-        .dp-chip-row, .dm-controls {
+        .dp-chip-row, .dm-controls, .dd-controls {
           display: flex;
           gap: 6px;
           align-items: center;
@@ -1571,7 +1591,7 @@ export function codepolPanelHtmlRender(input: {
           border-color: var(--vscode-textLink-foreground);
           color: var(--vscode-textLink-foreground);
         }
-        .dm-control {
+        .dm-control, .dd-control {
           padding: 4px 10px;
           border-radius: 8px;
         }
@@ -1608,7 +1628,7 @@ export function codepolPanelHtmlRender(input: {
         .dp-node-arrow {
           color: var(--vscode-descriptionForeground);
         }
-        .dp-empty, .dm-empty {
+        .dp-empty, .dm-empty, .dd-empty {
           color: var(--vscode-descriptionForeground);
           margin: 0;
         }
@@ -1663,6 +1683,65 @@ export function codepolPanelHtmlRender(input: {
         .dm-file-rel {
           color: var(--vscode-descriptionForeground);
           font-size: 11px;
+        }
+        .dd-section {
+          border: 1px solid var(--vscode-panel-border);
+          border-radius: 8px;
+          padding: 10px 12px;
+          background: var(--vscode-input-background);
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+        }
+        .dd-section-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+        }
+        .dd-section-count {
+          color: var(--vscode-descriptionForeground);
+          font-size: 12px;
+        }
+        .dd-row-list {
+          list-style: none;
+          padding: 0;
+          margin: 0;
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+        }
+        .dd-row {
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+        }
+        .dd-row-link {
+          width: fit-content;
+          max-width: 100%;
+          justify-content: flex-start;
+          padding: 3px 8px;
+          border-radius: 6px;
+          background: color-mix(in srgb, var(--vscode-editor-background) 86%, var(--vscode-textLink-foreground) 14%);
+          color: var(--vscode-foreground);
+          border: 1px solid transparent;
+          cursor: pointer;
+          font-size: 12px;
+        }
+        .dd-row-link:hover {
+          border-color: var(--vscode-textLink-foreground);
+        }
+        .dd-row-label {
+          font-weight: 600;
+        }
+        .dd-row-detail {
+          color: var(--vscode-descriptionForeground);
+          font-size: 11px;
+          overflow-wrap: anywhere;
+        }
+        .dd-empty-section {
+          margin: 0;
+          color: var(--vscode-descriptionForeground);
         }
       </style>
     </head>

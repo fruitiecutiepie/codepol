@@ -36,6 +36,7 @@ import {
   CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_LINKS,
   CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_CYCLE,
   CODEPOL_EXTENSION_COMMAND_SHOW_CALL_GRAPH,
+  CODEPOL_EXTENSION_COMMAND_SHOW_DEPENDENCY_DIFF,
   CODEPOL_EXTENSION_COMMAND_SHOW_TYPE_HIERARCHY,
   CODEPOL_EXTENSION_COMMAND_SHOW_DEAD_MODULES,
   CODEPOL_EXTENSION_COMMAND_SHOW_DEPENDENCY_GRAPH,
@@ -47,6 +48,7 @@ import {
   CODEPOL_EXTENSION_VIEW_CURRENT_CONTEXT_ID,
   CODEPOL_EXTENSION_VIEW_LINT_RULES_ID,
   CODEPOL_EXTENSION_VIEW_RENAME_TARGETS_ID,
+  CODEPOL_CONFIG_ARCHITECTURE_BASELINE_LABEL,
 } from './constants';
 import {
   ARCHITECTURE_CYCLE_CODE_ACTION_KIND,
@@ -456,6 +458,26 @@ async function multiSelectPick<T>(input: {
   return picked.map((item) => item.value);
 }
 
+function architectureBaselineLabelGet(): string {
+  const value = vscode.workspace
+    .getConfiguration()
+    .get<string>(CODEPOL_CONFIG_ARCHITECTURE_BASELINE_LABEL, '');
+  return typeof value === 'string' ? value : '';
+}
+
+async function architectureBaselineLabelPrompt(input: {
+  currentLabel: string;
+}): Promise<string | undefined> {
+  return vscode.window.showInputBox({
+    title: 'Dependency diff baseline',
+    value: input.currentLabel,
+    placeHolder: 'base',
+    ignoreFocusOut: true,
+    validateInput: (value) =>
+      value.trim().length === 0 ? 'Baseline label must not be empty.' : undefined,
+  });
+}
+
 /**
  * Parse the `codepol.architecture.peek` command argument shape. Three
  * caller paths converge on this command:
@@ -783,6 +805,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         items,
       });
     },
+    architectureBaselineLabelGet,
+    architectureBaselineLabelPrompt: async (currentLabel) =>
+      architectureBaselineLabelPrompt({ currentLabel }),
   });
 
   sidebarProvider = new CodepolSidebarViewProvider(
@@ -816,6 +841,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     renameTargetPick,
     renamePrompt,
     quickPick,
+    architectureBaselineLabelGet,
+    architectureBaselineLabelPrompt,
     infoShow: (message: string) => {
       void vscode.window.showInformationMessage(message);
     },
@@ -1044,6 +1071,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       CODEPOL_EXTENSION_COMMAND_SHOW_DEAD_MODULES,
       async (args?: { entryPointUris?: string[] }) =>
         controller?.showDeadModules(args),
+    ),
+    vscode.commands.registerCommand(
+      CODEPOL_EXTENSION_COMMAND_SHOW_DEPENDENCY_DIFF,
+      async (args?: { baselineLabel?: string }) =>
+        controller?.showDependencyDiff(args),
     ),
     vscode.commands.registerCommand(
       CODEPOL_EXTENSION_COMMAND_FIND_CALLBACKS,

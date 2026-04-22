@@ -38,13 +38,8 @@ language = "typescript"
 files = ["src/**/*.ts"]
 
 [[rules]]
-id = "no-cycles"
-ruleId = "@codepol/plugin/no-cycles"
-description = "Reject circular imports"
+ruleId = "@codepol/plugin/no-interface"
 targets = ["src"]
-
-[rules.args]
-maxCycles = 50
 `;
 }
 
@@ -582,6 +577,159 @@ describe('CodepolLspServer', () => {
       clientKind: 'lsp',
       clientInstanceId: 'lsp-instance-1',
       clientSessionId: 'lsp-client-session-1',
+    });
+  });
+
+  it('routes codepol/dependencyDiff to the workspace service and returns the diff payload', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-lsp-diff-');
+    createdDirs.push(workspaceRoot);
+    fs.writeFileSync(path.join(workspaceRoot, 'codepol.toml'), noInterfaceConfigContentCreate(), 'utf8');
+
+    const baselineGraph = {
+      nodes: [
+        {
+          uri: 'file:///workspace/src/app.ts',
+          workspaceRelativePath: 'src/app.ts',
+        },
+      ],
+      edges: [],
+      entryPoints: ['file:///workspace/src/app.ts'],
+      cycles: [] as string[][],
+    };
+    const diffResult = {
+      workspaceId: 'workspace-1',
+      baselineLabel: 'base',
+      currentAnalysisGeneration: 4,
+      baselineAnalysisGeneration: 1,
+      addedNodes: [
+        {
+          uri: 'file:///workspace/src/new.ts',
+          workspaceRelativePath: 'src/new.ts',
+        },
+      ],
+      removedNodes: [],
+      addedEdges: [],
+      removedEdges: [],
+      newCycles: [],
+      removedCycles: [],
+    };
+    let receivedInput:
+      | {
+          clientSessionId: string;
+          workspaceId: string;
+          baselineGraph?: typeof baselineGraph;
+          baselineLabel?: string;
+        }
+      | undefined;
+
+    const service: WorkspaceService = {
+      ...workspaceReadQueriesStubCreate(),
+      async registerClientSession() {
+        return {
+          clientSessionId: 'client-1',
+          daemonSessionId: 'daemon-1',
+        };
+      },
+      async closeClientSession() {},
+      async attachWorkspace() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+        };
+      },
+      async subscribeDiagnostics() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          scope: 'workspace',
+          subscriptionState: 'active',
+        };
+      },
+      async completeReplay() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          replayEpoch: 1,
+          replayState: 'applied',
+        };
+      },
+      async openOverlay() {},
+      async updateOverlay() {},
+      async closeOverlay() {},
+      async queryDiagnostics() {
+        return [];
+      },
+      async queryCodeActions() {
+        return [];
+      },
+      async applyEditPlan() {
+        return { applied: false, failureReason: 'plan_not_found' };
+      },
+      async queryIndexStatus() {
+        return {
+          workspaceId: 'workspace-1',
+          workspaceInstanceId: 'workspace-instance-1',
+          status: 'ready',
+          indexedFileCount: 1,
+          openDocumentCount: 0,
+          overlayCount: 0,
+          analysisGeneration: 4,
+        };
+      },
+      async queryDependencyDiff(input) {
+        receivedInput = {
+          clientSessionId: input.clientSessionId,
+          workspaceId: input.workspaceId,
+          baselineGraph: input.baselineGraph as typeof baselineGraph | undefined,
+          baselineLabel: input.baselineLabel,
+        };
+        return diffResult;
+      },
+    };
+
+    const messages: Array<Record<string, unknown>> = [];
+    const server = new CodepolLspServer({
+      service,
+      clientInstanceId: 'lsp-instance-diff',
+      sendMessage: (message) => {
+        messages.push(message as Record<string, unknown>);
+      },
+    });
+
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        rootUri: pathToFileURL(workspaceRoot).href,
+      },
+    });
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'codepol/dependencyDiff',
+      params: {
+        baselineGraph,
+      },
+    });
+
+    expect(receivedInput).toEqual({
+      clientSessionId: 'client-1',
+      workspaceId: 'workspace-1',
+      baselineGraph,
+      baselineLabel: undefined,
+    });
+    expect(messages.find((message) => message.id === 2)?.result).toEqual(
+      diffResult,
+    );
+
+    // Keep the test isolated: `initialize` starts status polling / replay
+    // machinery, and later tests in this file assume no prior server
+    // instance is still ticking in the background.
+    await server.handleMessage({
+      jsonrpc: '2.0',
+      id: 3,
+      method: 'shutdown',
     });
   });
 

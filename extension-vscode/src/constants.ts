@@ -29,6 +29,8 @@ export const CODEPOL_EXTENSION_COMMAND_SHOW_DEPENDENCY_PATH =
   'codepol.extension.showDependencyPath';
 export const CODEPOL_EXTENSION_COMMAND_SHOW_DEAD_MODULES =
   'codepol.extension.showDeadModules';
+export const CODEPOL_EXTENSION_COMMAND_SHOW_DEPENDENCY_DIFF =
+  'codepol.extension.showDependencyDiff';
 export const CODEPOL_EXTENSION_COMMAND_FIND_CALLBACKS =
   'codepol.extension.findCallbacks';
 export const CODEPOL_EXTENSION_COMMAND_PEEK_SIGNATURE_IMPACT =
@@ -76,6 +78,8 @@ export const CODEPOL_EXTENSION_PANEL_DEPENDENCY_PATH =
   'codepol.dependencyPathPanel';
 export const CODEPOL_EXTENSION_PANEL_DEAD_MODULES =
   'codepol.deadModulesPanel';
+export const CODEPOL_EXTENSION_PANEL_DEPENDENCY_DIFF =
+  'codepol.dependencyDiffPanel';
 
 /**
  * Diagnostic source the Phase 6 PR-aware overlay publishes under.

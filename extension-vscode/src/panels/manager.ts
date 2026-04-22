@@ -1,11 +1,11 @@
 import { randomBytes } from 'node:crypto';
 import * as vscode from 'vscode';
 import {
-  CODEPOL_EXTENSION_COMMAND_SHOW_ARCHITECTURE_LINKS,
   CODEPOL_EXTENSION_PANEL_ARCHITECTURE_SUMMARY,
   CODEPOL_EXTENSION_PANEL_ARCHITECTURE_LINKS,
   CODEPOL_EXTENSION_PANEL_CALL_GRAPH,
   CODEPOL_EXTENSION_PANEL_DEAD_MODULES,
+  CODEPOL_EXTENSION_PANEL_DEPENDENCY_DIFF,
   CODEPOL_EXTENSION_PANEL_DEPENDENCY_GRAPH,
   CODEPOL_EXTENSION_PANEL_DEPENDENCY_PATH,
   CODEPOL_EXTENSION_PANEL_LINT_RULE_DETAILS,
@@ -39,11 +39,10 @@ import {
   type DependencyPathPanelViewModel,
 } from '../dependencyPathViewModels';
 import type { DeadModulesPanelViewModel } from '../deadModulesViewModels';
+import type { DependencyDiffPanelViewModel } from '../dependencyDiffViewModels';
 import {
   dependencyGraphControlMessageIs,
   dependencyGraphControlStateUpdate,
-  dependencyGraphPanelControlStateInitialArchitectureLinks,
-  dependencyGraphPanelControlStateInitialDependencyGraph,
   type ArchitectureLinksPanelRebuilder,
   type DependencyGraphPanelControlMessage,
   type DependencyGraphPanelControlState,
@@ -101,6 +100,20 @@ export type DeadModulesPanelControlMessage = {
 
 export type DeadModulesPanelEntryPointsConfigureRequest = {
   type: 'deadModulesEntryPointsConfigureRequest';
+};
+
+/**
+ * Dependency-diff panel header buttons. `choose-baseline` runs a host
+ * prompt; `use-configured-baseline` reads the current
+ * `codepol.architecture.baselineLabel` value through the host and
+ * replays the rebuilder with that label.
+ */
+export type DependencyDiffChooseBaselineRequest = {
+  type: 'dependencyDiffChooseBaselineRequest';
+};
+
+export type DependencyDiffUseConfiguredBaselineRequest = {
+  type: 'dependencyDiffUseConfiguredBaselineRequest';
 };
 
 /**
@@ -169,6 +182,8 @@ type CodepolPanelMessage =
   | DependencyPathPanelControlMessage
   | DeadModulesPanelControlMessage
   | DeadModulesPanelEntryPointsConfigureRequest
+  | DependencyDiffChooseBaselineRequest
+  | DependencyDiffUseConfiguredBaselineRequest
   | PanelLensSetMessage
   | PanelModeClearMessage;
 
@@ -182,7 +197,8 @@ type PanelKind =
   | 'callGraph'
   | 'typeHierarchy'
   | 'dependencyPath'
-  | 'deadModules';
+  | 'deadModules'
+  | 'dependencyDiff';
 
 /**
  * Rebuilder shape supplied alongside `showCallGraph(model, rebuilder)`.
@@ -240,6 +256,20 @@ export type DeadModulesPanelRebuilder = (
 type DeadModulesPanelControls = {
   state: { entryPointUris?: string[] };
   rebuilder: DeadModulesPanelRebuilder;
+};
+
+/**
+ * Rebuilder shape for the dependency-diff panel. The manager replays it
+ * whenever the user chooses a new baseline label (typed prompt) or asks
+ * to use the configured baseline label from settings.
+ */
+export type DependencyDiffPanelRebuilder = (
+  input: { baselineLabel: string },
+) => Promise<DependencyDiffPanelViewModel | null>;
+
+type DependencyDiffPanelControls = {
+  state: { baselineLabel: string };
+  rebuilder: DependencyDiffPanelRebuilder;
 };
 
 function callGraphPanelControlMessageIs(
@@ -317,6 +347,18 @@ function dependencyPathMaxPathsParse(
   return DEPENDENCY_PATH_PANEL_MAX_PATHS_VALUES.find((value) => value === parsed);
 }
 
+function dependencyDiffChooseBaselineRequestIs(
+  message: CodepolPanelMessage,
+): message is DependencyDiffChooseBaselineRequest {
+  return message.type === 'dependencyDiffChooseBaselineRequest';
+}
+
+function dependencyDiffUseConfiguredBaselineRequestIs(
+  message: CodepolPanelMessage,
+): message is DependencyDiffUseConfiguredBaselineRequest {
+  return message.type === 'dependencyDiffUseConfiguredBaselineRequest';
+}
+
 const PANEL_LENS_VALUES = ['module', 'links', 'callers', 'type-hierarchy'] as const;
 
 function panelLensValueParse(raw: unknown): PanelLensValue | undefined {
@@ -392,6 +434,20 @@ export type CodepolPanelActions = {
   deadModulesEntryPointsPick?(input: {
     currentEntryPointUris?: string[];
   }): Promise<string[] | undefined>;
+  /**
+   * Read the currently configured architecture baseline label from the
+   * host. Mirrors the semantics used by `CodepolArchitectureDiffOverlay`
+   * (`codepol.architecture.baselineLabel`). Empty string means
+   * "disabled / unset".
+   */
+  architectureBaselineLabelGet?(): string;
+  /**
+   * Prompt the user for a dependency-diff baseline label. The manager
+   * calls this when the panel posts
+   * `dependencyDiffChooseBaselineRequest`. Returning `undefined`
+   * cancels the re-render.
+   */
+  architectureBaselineLabelPrompt?(currentLabel: string): Promise<string | undefined>;
 };
 
 type DependencyGraphPanelControls = {
@@ -413,6 +469,7 @@ type ManagedPanel = {
   typeHierarchyControls?: TypeHierarchyPanelControls;
   dependencyPathControls?: DependencyPathPanelControls;
   deadModulesControls?: DeadModulesPanelControls;
+  dependencyDiffControls?: DependencyDiffPanelControls;
 };
 
 export class CodepolPanelManager implements vscode.Disposable {
@@ -645,6 +702,39 @@ export class CodepolPanelManager implements vscode.Disposable {
     this.panels.delete('deadModules');
   }
 
+  /**
+   * Show (or refresh) the dedicated dependency-diff panel. The panel
+   * answers "what changed since baseline X?" by listing added/removed
+   * nodes, edges, and cycles. When a `rebuilder` is supplied, the panel
+   * header buttons replay it with a new baseline label.
+   */
+  showDependencyDiff(
+    model: DependencyDiffPanelViewModel,
+    rebuilder?: DependencyDiffPanelRebuilder,
+  ): void {
+    this.panelShow('dependencyDiff', {
+      kind: 'dependencyDiff',
+      title: 'Codepol: Dependency Diff',
+      data: model,
+    });
+    if (rebuilder) {
+      const managed = this.panels.get('dependencyDiff');
+      if (managed) {
+        managed.dependencyDiffControls = {
+          state: { baselineLabel: model.baselineLabel },
+          rebuilder,
+        };
+      }
+    }
+  }
+
+  closeDependencyDiff(): void {
+    const managed = this.panels.get('dependencyDiff');
+    if (!managed) return;
+    managed.panel.dispose();
+    this.panels.delete('dependencyDiff');
+  }
+
   private panelShow(kind: PanelKind, model: CodepolPanelViewModel): void {
     const existing = this.panels.get(kind);
     if (existing) {
@@ -677,6 +767,8 @@ export class CodepolPanelManager implements vscode.Disposable {
           ? CODEPOL_EXTENSION_PANEL_DEPENDENCY_PATH
         : kind === 'deadModules'
           ? CODEPOL_EXTENSION_PANEL_DEAD_MODULES
+        : kind === 'dependencyDiff'
+          ? CODEPOL_EXTENSION_PANEL_DEPENDENCY_DIFF
         : CODEPOL_EXTENSION_PANEL_CALL_GRAPH;
     const panel = vscode.window.createWebviewPanel(
       panelId,
@@ -815,6 +907,16 @@ export class CodepolPanelManager implements vscode.Disposable {
 
     if (deadModulesPanelEntryPointsConfigureRequestIs(message)) {
       await this.deadModulesEntryPointsConfigureHandle();
+      return;
+    }
+
+    if (dependencyDiffChooseBaselineRequestIs(message)) {
+      await this.dependencyDiffChooseBaselineHandle();
+      return;
+    }
+
+    if (dependencyDiffUseConfiguredBaselineRequestIs(message)) {
+      await this.dependencyDiffUseConfiguredBaselineHandle();
       return;
     }
 
@@ -1012,6 +1114,51 @@ export class CodepolPanelManager implements vscode.Disposable {
         entryPointUris:
           nextModel.entryPointUris.length > 0 ? nextModel.entryPointUris : undefined,
       },
+      rebuilder: controls.rebuilder,
+    };
+    managed.model = {
+      ...managed.model,
+      data: nextModel,
+    };
+    managed.panel.webview.html = codepolPanelHtmlRender({
+      nonce: randomBytes(16).toString('hex'),
+      model: managed.model,
+    });
+  }
+
+  private async dependencyDiffChooseBaselineHandle(): Promise<void> {
+    const managed = this.panels.get('dependencyDiff');
+    if (!managed || !managed.dependencyDiffControls) return;
+    if (managed.model.kind !== 'dependencyDiff') return;
+    const prompt = this.actions.architectureBaselineLabelPrompt;
+    if (!prompt) return;
+    const picked = await prompt(managed.dependencyDiffControls.state.baselineLabel);
+    if (picked === undefined) return;
+    const next = picked.trim();
+    if (next.length === 0) return;
+    await this.dependencyDiffRebuilderRun(next);
+  }
+
+  private async dependencyDiffUseConfiguredBaselineHandle(): Promise<void> {
+    const getBaseline = this.actions.architectureBaselineLabelGet;
+    if (!getBaseline) return;
+    const next = getBaseline().trim();
+    if (next.length === 0) return;
+    await this.dependencyDiffRebuilderRun(next);
+  }
+
+  private async dependencyDiffRebuilderRun(
+    baselineLabel: string,
+  ): Promise<void> {
+    const managed = this.panels.get('dependencyDiff');
+    if (!managed || !managed.dependencyDiffControls) return;
+    if (managed.model.kind !== 'dependencyDiff') return;
+    const controls = managed.dependencyDiffControls;
+    if (baselineLabel === controls.state.baselineLabel) return;
+    const nextModel = await controls.rebuilder({ baselineLabel });
+    if (!nextModel) return;
+    managed.dependencyDiffControls = {
+      state: { baselineLabel: nextModel.baselineLabel },
       rebuilder: controls.rebuilder,
     };
     managed.model = {
