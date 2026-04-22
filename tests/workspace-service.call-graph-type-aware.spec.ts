@@ -590,4 +590,63 @@ describe('workspace-service queryCallGraph (type-aware merge)', () => {
     expect(events).toContain(`resolve:${workspaceId}`);
     expect(events).toContain(`detach:${workspaceId}`);
   });
+
+  it('accepts custom bridge definitions for non-built-in language ids', async () => {
+    const { engine, service, clientSessionId, workspaceId, callerId, calleeId } =
+      await callerCalleeFixtureCreate('codepol-cg-custom-bridge-def-');
+    const transportCalls: string[] = [];
+    workspaceTypeAwareBridgeSourcesRegister({
+      engine,
+      provider: {
+        transports: {
+          'custom-go': {
+            async request<T>(method: string): Promise<T> {
+              transportCalls.push(method);
+              return [] as T;
+            },
+          },
+        },
+      },
+      definitions: [
+        {
+          transportKey: 'custom-go',
+          registrations: [
+            {
+              languageId: 'custom-go',
+              fileExtensions: ['.ts'],
+            },
+          ],
+          callGraphSourceCreate: ({ transport }) => ({
+            typeAwareCalleesGet: async () => {
+              await transport.request('custom-go/callGraph', {});
+              return [
+                {
+                  callerSymbolId: callerId,
+                  calleeSymbolId: calleeId,
+                  callKind: 'higher-order',
+                },
+              ];
+            },
+          }),
+        },
+      ],
+    });
+
+    const result = await service.queryCallGraph({
+      clientSessionId,
+      workspaceId,
+      symbolId: callerId,
+      direction: 'callees',
+      requireTypeAware: true,
+    });
+    const typeAwareEdge = result.edges.find(
+      (edge) =>
+        edge.fromUri.endsWith(encodeURIComponent(callerId)) &&
+        edge.toUri.endsWith(encodeURIComponent(calleeId)),
+    );
+    expect(typeAwareEdge).toBeDefined();
+    expect(typeAwareEdge!.callGraphConfidence).toBe('type-aware');
+    expect(typeAwareEdge!.callGraphKind).toBe('higher-order');
+    expect(transportCalls).toEqual(['custom-go/callGraph']);
+  });
 });

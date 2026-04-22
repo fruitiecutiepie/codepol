@@ -89,6 +89,67 @@ export type WorkspaceTypeAwareBridgeSymbolTable = {
   symbolKindResolve(symbolId: SymbolId): 'interface' | 'class' | 'other' | undefined;
 };
 
+export type WorkspaceTypeAwareBridgeCallGraphFactoryInput = {
+  transport: WorkspaceTypeAwareBridgeTransport;
+  symbolLocate(symbolId: SymbolId): WorkspaceTypeAwareBridgeSymbolLocation | undefined;
+  symbolIdResolve(location: WorkspaceTypeAwareBridgeSymbolLocation): SymbolId | undefined;
+};
+
+export type WorkspaceTypeAwareBridgeTypeHierarchyFactoryInput =
+  WorkspaceTypeAwareBridgeCallGraphFactoryInput & {
+    symbolKindResolve(symbolId: SymbolId): 'interface' | 'class' | 'other' | undefined;
+  };
+
+export type WorkspaceTypeAwareBridgeRegistration = {
+  languageId: string;
+  fileExtensions: readonly string[];
+};
+
+/**
+ * One first-party bridge definition: how to turn a resolved transport
+ * plus workspace symbol-table callbacks into concrete call-graph and/or
+ * type-hierarchy sources for one or more language ids.
+ */
+export type WorkspaceTypeAwareBridgeDefinition = {
+  transportKey: string;
+  registrations: readonly WorkspaceTypeAwareBridgeRegistration[];
+  callGraphSourceCreate?(
+    input: WorkspaceTypeAwareBridgeCallGraphFactoryInput,
+  ): TypeAwareCallGraphSource;
+  typeHierarchySourceCreate?(
+    input: WorkspaceTypeAwareBridgeTypeHierarchyFactoryInput,
+  ): TypeAwareTypeHierarchySource;
+};
+
+export const WORKSPACE_TYPE_AWARE_BRIDGE_DEFINITIONS_DEFAULT: readonly WorkspaceTypeAwareBridgeDefinition[] = [
+  {
+    transportKey: 'typescript',
+    registrations: [
+      {
+        languageId: 'typescript',
+        fileExtensions: ['.ts', '.mts', '.cts', '.js', '.mjs', '.cjs'],
+      },
+      {
+        languageId: 'tsx',
+        fileExtensions: ['.tsx', '.jsx'],
+      },
+    ],
+    callGraphSourceCreate: typeScriptCallGraphSourceCreate,
+    typeHierarchySourceCreate: typeScriptTypeHierarchySourceCreate,
+  },
+  {
+    transportKey: 'python',
+    registrations: [
+      {
+        languageId: 'python',
+        fileExtensions: ['.py', '.pyw'],
+      },
+    ],
+    callGraphSourceCreate: pythonCallGraphSourceCreate,
+    typeHierarchySourceCreate: pythonTypeHierarchySourceCreate,
+  },
+];
+
 export type WorkspaceTypeAwareBridgeWorkspaceLifecycleInput =
   WorkspaceTypeAwareBridgeExecutionContext;
 
@@ -148,6 +209,9 @@ export type WorkspaceTypeAwareBridgeHostEngine = {
     | undefined;
   typeAwareBridgeLifecycleSet(
     lifecycle: WorkspaceTypeAwareBridgeLifecycle | undefined,
+  ): void;
+  typeAwareBridgeDefinitionsRegister(
+    definitions: readonly WorkspaceTypeAwareBridgeDefinition[],
   ): void;
 };
 
@@ -217,80 +281,65 @@ export function workspaceTypeAwareBridgeSourcesRegister(input: {
   engine: WorkspaceTypeAwareBridgeHostEngine;
   provider?: WorkspaceTypeAwareBridgeProviderRuntime;
   transports?: WorkspaceTypeAwareBridgeTransports;
+  definitions?: readonly WorkspaceTypeAwareBridgeDefinition[];
 }): void {
   const provider = input.provider ?? (input.transports ? { transports: input.transports } : undefined);
   input.engine.typeAwareBridgeLifecycleSet(provider?.lifecycle);
   const transports = provider?.transports ?? input.transports;
+  const definitions = input.definitions ?? WORKSPACE_TYPE_AWARE_BRIDGE_DEFINITIONS_DEFAULT;
+  input.engine.typeAwareBridgeDefinitionsRegister(definitions);
 
-  if (transports?.typescript) {
-    const typeScriptCallGraphSource = typeAwareCallGraphSourceDelegateCreate((symbolId) => {
-      const symbolTable = input.engine.typeAwareBridgeSymbolTableGet(symbolId);
-      const transport = workspaceTypeAwareBridgeTransportSourceResolve(
-        transports.typescript,
-        input.engine.typeAwareBridgeExecutionContextGet(),
-      );
-      if (!symbolTable || !transport) return undefined;
-      return typeScriptCallGraphSourceCreate({
-        transport,
-        symbolLocate: symbolTable.symbolLocate,
-        symbolIdResolve: symbolTable.symbolIdResolve,
-      });
-    });
-    const typeScriptTypeHierarchySource = typeAwareTypeHierarchySourceDelegateCreate(
-      (symbolId) => {
-        const symbolTable = input.engine.typeAwareBridgeSymbolTableGet(symbolId);
-        const transport = workspaceTypeAwareBridgeTransportSourceResolve(
-          transports.typescript,
-          input.engine.typeAwareBridgeExecutionContextGet(),
-        );
-        if (!symbolTable || !transport) return undefined;
-        return typeScriptTypeHierarchySourceCreate({
-          transport,
-          symbolLocate: symbolTable.symbolLocate,
-          symbolIdResolve: symbolTable.symbolIdResolve,
-          symbolKindResolve: symbolTable.symbolKindResolve,
-        });
-      },
-    );
-    for (const languageId of ['typescript', 'tsx']) {
-      input.engine.typeAwareCallGraphSourceRegister(languageId, typeScriptCallGraphSource);
-      input.engine.typeAwareTypeHierarchySourceRegister(
-        languageId,
-        typeScriptTypeHierarchySource,
-      );
+  for (const definition of definitions) {
+    const transportSource = transports?.[definition.transportKey];
+    if (!transportSource) {
+      continue;
     }
-  }
+    const callGraphSource = definition.callGraphSourceCreate
+      ? typeAwareCallGraphSourceDelegateCreate((symbolId) => {
+          const symbolTable = input.engine.typeAwareBridgeSymbolTableGet(symbolId);
+          const transport = workspaceTypeAwareBridgeTransportSourceResolve(
+            transportSource,
+            input.engine.typeAwareBridgeExecutionContextGet(),
+          );
+          if (!symbolTable || !transport) return undefined;
+          return definition.callGraphSourceCreate!({
+            transport,
+            symbolLocate: symbolTable.symbolLocate,
+            symbolIdResolve: symbolTable.symbolIdResolve,
+          });
+        })
+      : undefined;
+    const typeHierarchySource = definition.typeHierarchySourceCreate
+      ? typeAwareTypeHierarchySourceDelegateCreate((symbolId) => {
+          const symbolTable = input.engine.typeAwareBridgeSymbolTableGet(symbolId);
+          const transport = workspaceTypeAwareBridgeTransportSourceResolve(
+            transportSource,
+            input.engine.typeAwareBridgeExecutionContextGet(),
+          );
+          if (!symbolTable || !transport) return undefined;
+          return definition.typeHierarchySourceCreate!({
+            transport,
+            symbolLocate: symbolTable.symbolLocate,
+            symbolIdResolve: symbolTable.symbolIdResolve,
+            symbolKindResolve: symbolTable.symbolKindResolve,
+          });
+        })
+      : undefined;
 
-  if (transports?.python) {
-    const pythonCallGraphSource = typeAwareCallGraphSourceDelegateCreate((symbolId) => {
-      const symbolTable = input.engine.typeAwareBridgeSymbolTableGet(symbolId);
-      const transport = workspaceTypeAwareBridgeTransportSourceResolve(
-        transports.python,
-        input.engine.typeAwareBridgeExecutionContextGet(),
-      );
-      if (!symbolTable || !transport) return undefined;
-      return pythonCallGraphSourceCreate({
-        transport,
-        symbolLocate: symbolTable.symbolLocate,
-        symbolIdResolve: symbolTable.symbolIdResolve,
-      });
-    });
-    const pythonTypeHierarchySource = typeAwareTypeHierarchySourceDelegateCreate((symbolId) => {
-      const symbolTable = input.engine.typeAwareBridgeSymbolTableGet(symbolId);
-      const transport = workspaceTypeAwareBridgeTransportSourceResolve(
-        transports.python,
-        input.engine.typeAwareBridgeExecutionContextGet(),
-      );
-      if (!symbolTable || !transport) return undefined;
-      return pythonTypeHierarchySourceCreate({
-        transport,
-        symbolLocate: symbolTable.symbolLocate,
-        symbolIdResolve: symbolTable.symbolIdResolve,
-        symbolKindResolve: symbolTable.symbolKindResolve,
-      });
-    });
-    input.engine.typeAwareCallGraphSourceRegister('python', pythonCallGraphSource);
-    input.engine.typeAwareTypeHierarchySourceRegister('python', pythonTypeHierarchySource);
+    for (const registration of definition.registrations) {
+      if (callGraphSource) {
+        input.engine.typeAwareCallGraphSourceRegister(
+          registration.languageId,
+          callGraphSource,
+        );
+      }
+      if (typeHierarchySource) {
+        input.engine.typeAwareTypeHierarchySourceRegister(
+          registration.languageId,
+          typeHierarchySource,
+        );
+      }
+    }
   }
 }
 

@@ -2894,6 +2894,12 @@ describe('CodepolLspServer', () => {
       rootPath: workspaceRoot,
       configPath: path.join(workspaceRoot, 'codepol.toml'),
     });
+    await service.subscribeDiagnostics({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+      scope: 'workspace',
+    });
     await service.completeReplay({
       clientSessionId: registered.clientSessionId,
       workspaceId: attached.workspaceId,

@@ -525,4 +525,65 @@ describe('workspace-service queryTypeHierarchy type-aware merge', () => {
     expect(events).toContain(`resolve:${workspaceId}`);
     expect(events).toContain(`detach:${workspaceId}`);
   });
+
+  it('accepts custom bridge definitions for non-built-in type hierarchy language ids', async () => {
+    const engine = new WorkspaceServiceEngine();
+    const transportCalls: string[] = [];
+    let resolvedDogId = '';
+    workspaceTypeAwareBridgeSourcesRegister({
+      engine,
+      provider: {
+        transports: {
+          'custom-go': {
+            async request<T>(method: string): Promise<T> {
+              transportCalls.push(method);
+              return [] as T;
+            },
+          },
+        },
+      },
+      definitions: [
+        {
+          transportKey: 'custom-go',
+          registrations: [
+            {
+              languageId: 'custom-go',
+              fileExtensions: ['.py'],
+            },
+          ],
+          typeHierarchySourceCreate: ({ transport }) => ({
+            typeAwareImplementersGet: async (supertypeSymbolId) => {
+              await transport.request('custom-go/typeHierarchy', {});
+              return [
+                {
+                  subtypeSymbolId: resolvedDogId,
+                  supertypeSymbolId,
+                  relationKind: 'implements',
+                },
+              ];
+            },
+          }),
+        },
+      ],
+    });
+    const { service, clientSessionId, workspaceId, animalId, dogId } =
+      await pythonFixtureSetup({ engine });
+    resolvedDogId = dogId;
+
+    const result = await service.queryTypeHierarchy({
+      clientSessionId,
+      workspaceId,
+      symbolId: animalId,
+      direction: 'subtypes',
+      requireTypeAware: true,
+    });
+    const typeAwareEdge = result.edges.find(
+      (edge) =>
+        edge.fromUri.endsWith(encodeURIComponent(dogId)) &&
+        edge.toUri.endsWith(encodeURIComponent(animalId)),
+    );
+    expect(typeAwareEdge).toBeDefined();
+    expect(typeAwareEdge!.typeRelationConfidence).toBe('type-aware');
+    expect(transportCalls).toEqual(['custom-go/typeHierarchy']);
+  });
 });

@@ -185,9 +185,14 @@ import {
   graphSnapshotWorkspaceRootIdCompute as graphSnapshotWorkspaceRootIdComputeInternal,
 } from './graphSnapshotStore';
 import type {
+  WorkspaceTypeAwareBridgeDefinition,
   WorkspaceTypeAwareBridgeExecutionContext,
   WorkspaceTypeAwareBridgeLifecycle,
+  WorkspaceTypeAwareBridgeRegistration,
   WorkspaceTypeAwareBridgeSymbolTable,
+} from './typeAwareBridgeHost';
+import {
+  WORKSPACE_TYPE_AWARE_BRIDGE_DEFINITIONS_DEFAULT,
 } from './typeAwareBridgeHost';
 
 export * from './daemon';
@@ -4773,30 +4778,33 @@ function typeAwareCallGraphSourceMissingErrorCreate(
  * surface stays in sync without a hard import dependency on that
  * private helper.
  */
+function workspaceTypeAwareBridgeRegistrationsCollect(
+  definitions: readonly WorkspaceTypeAwareBridgeDefinition[],
+): WorkspaceTypeAwareBridgeRegistration[] {
+  return definitions.flatMap((definition) => [...definition.registrations]);
+}
+
+function workspaceTypeAwareBridgeLanguageIdsByExtensionCreate(
+  definitions: readonly WorkspaceTypeAwareBridgeDefinition[],
+): Map<string, string> {
+  const byExtension = new Map<string, string>();
+  for (const registration of workspaceTypeAwareBridgeRegistrationsCollect(definitions)) {
+    for (const fileExtension of registration.fileExtensions) {
+      byExtension.set(fileExtension.toLowerCase(), registration.languageId);
+    }
+  }
+  return byExtension;
+}
+
 function workspaceSymbolLanguageIdGet(
   index: ProjectIndex,
   symbolId: SymbolId,
+  languageIdsByExtension: ReadonlyMap<string, string>,
 ): string | undefined {
   const symbol = index.symbolGet(symbolId);
   if (!symbol) return undefined;
   const ext = symbol.file.slice(symbol.file.lastIndexOf('.')).toLowerCase();
-  switch (ext) {
-    case '.ts':
-    case '.mts':
-    case '.cts':
-    case '.js':
-    case '.mjs':
-    case '.cjs':
-      return 'typescript';
-    case '.tsx':
-    case '.jsx':
-      return 'tsx';
-    case '.py':
-    case '.pyw':
-      return 'python';
-    default:
-      return undefined;
-  }
+  return languageIdsByExtension.get(ext);
 }
 
 /**
@@ -4973,6 +4981,7 @@ async function workspaceCallGraphResultCreate(
     depth?: number;
     requireTypeAware?: boolean;
     signal?: AbortSignal;
+    languageIdResolve(symbolId: SymbolId): string | undefined;
   },
 ): Promise<WorkspaceDependencyGraphResult> {
   const structural = symbolCallGraphCompute(
@@ -4987,7 +4996,7 @@ async function workspaceCallGraphResultCreate(
     },
   );
 
-  const languageId = workspaceSymbolLanguageIdGet(index, input.symbolId);
+  const languageId = input.languageIdResolve(input.symbolId);
   const source = languageId
     ? registry.typeAwareCallGraphSourceGet(languageId)
     : undefined;
@@ -5273,6 +5282,7 @@ async function workspaceTypeHierarchyResultCreate(
     minConfidence?: WorkspaceTypeHierarchyEdgeConfidence;
     requireTypeAware?: boolean;
     signal?: AbortSignal;
+    languageIdResolve(symbolId: SymbolId): string | undefined;
   },
 ): Promise<WorkspaceDependencyGraphResult> {
   const includeStructural = input.includeStructural === true;
@@ -5343,7 +5353,7 @@ async function workspaceTypeHierarchyResultCreate(
   }
 
   // Pull the type-aware overlay (if any).
-  const languageId = workspaceSymbolLanguageIdGet(index, input.symbolId);
+  const languageId = input.languageIdResolve(input.symbolId);
   const source = languageId
     ? registry.typeAwareTypeHierarchySourceGet(languageId)
     : undefined;
@@ -9948,6 +9958,10 @@ export class WorkspaceServiceEngine implements WorkspaceService {
    * one does not require or affect the other.
    */
   private readonly typeAwareTypeHierarchySourceRegistry: TypeAwareTypeHierarchySourceRegistry;
+  private readonly typeAwareBridgeLanguageIdsByExtension =
+    workspaceTypeAwareBridgeLanguageIdsByExtensionCreate(
+      WORKSPACE_TYPE_AWARE_BRIDGE_DEFINITIONS_DEFAULT,
+    );
   private readonly typeAwareBridgeContext =
     new AsyncLocalStorage<WorkspaceTypeAwareBridgeActiveContext>();
   private typeAwareBridgeLifecycle: WorkspaceTypeAwareBridgeLifecycle | undefined;
@@ -10018,6 +10032,19 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     lifecycle: WorkspaceTypeAwareBridgeLifecycle | undefined,
   ): void {
     this.typeAwareBridgeLifecycle = lifecycle;
+  }
+
+  typeAwareBridgeDefinitionsRegister(
+    definitions: readonly WorkspaceTypeAwareBridgeDefinition[],
+  ): void {
+    for (const registration of workspaceTypeAwareBridgeRegistrationsCollect(definitions)) {
+      for (const fileExtension of registration.fileExtensions) {
+        this.typeAwareBridgeLanguageIdsByExtension.set(
+          fileExtension.toLowerCase(),
+          registration.languageId,
+        );
+      }
+    }
   }
 
   /**
@@ -11241,6 +11268,12 @@ export class WorkspaceServiceEngine implements WorkspaceService {
           depth: input.depth,
           requireTypeAware: input.requireTypeAware,
           signal: input.signal,
+          languageIdResolve: (symbolId) =>
+            workspaceSymbolLanguageIdGet(
+              index,
+              symbolId,
+              this.typeAwareBridgeLanguageIdsByExtension,
+            ),
         },
       ));
   }
@@ -11317,6 +11350,12 @@ export class WorkspaceServiceEngine implements WorkspaceService {
           minConfidence: input.minConfidence,
           requireTypeAware: input.requireTypeAware,
           signal: input.signal,
+          languageIdResolve: (symbolId) =>
+            workspaceSymbolLanguageIdGet(
+              index,
+              symbolId,
+              this.typeAwareBridgeLanguageIdsByExtension,
+            ),
         },
       ));
   }
