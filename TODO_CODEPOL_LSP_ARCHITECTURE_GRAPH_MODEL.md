@@ -790,8 +790,7 @@ All nine phases ship in `_done_` form above. This section is a single-screen ind
 
 ### Explicitly deferred
 
-- **Cycle-member gutter decorations** + the `codepol.diagnostics.showCycleDecorations` user setting (Phase 5 `deferred:` block above; belongs with the `codepol/architecture` diagnostic source landed in Phase 6 / refined by Phase 8). Editor-level toggle plus gutter-marker plumbing.
-- **`queryDependencyDiff` editor surface** (Phase 6 deliverable; Phase 2 user-visible bullet 4 cross-references this). Protocol client method + CLI (`codepol graph snapshot` / `graph diff`) ship; no dedicated diff panel yet. The clean follow-up is a panel that mirrors the dependency-path / dead-modules pattern (chip-based `--baseline-label` selector, `added` / `removed` rows, click-to-open).
+- **Dedicated `queryDependencyDiff` editor surface.** Phase 6 already ships the client-side baseline overlay plus the CLI (`codepol graph snapshot` / `graph diff`), but there is still no dedicated diff panel. The clean follow-up is a panel that mirrors the dependency-path / dead-modules pattern (chip-based `--baseline-label` selector, `added` / `removed` rows, click-to-open).
 - **Daemon-backed graph queries (shared warm graph) for the CLI** (Phase 4 landed-notes). Each `codepol graph <subcommand>` builds an in-process `WorkspaceService` per invocation. Promoting the CLI to attach to the daemon socket — same shape as the LSP client — makes warm-graph reuse transparent across CLI calls and shaves the cold-start cost on large monorepos.
 - **`GraphSnapshotStore` Q1-Option-D in-memory ring buffer** (Phase 6 landed-notes). Slot reserved behind the `GraphSnapshotStore` interface; only the Q1-B sidecar implementation exists today. Useful for editor "what changed since this morning" workflows without touching disk.
 
@@ -827,7 +826,7 @@ Buckets are about scope, not value — anything in any bucket can be picked up n
 - **Trivial (ship when convenient):** `IndexCapabilities.typeHierarchy` flag (~1 LOC); symmetric cursor-path kind guard for `showCallGraph` / `findCallbacks` (~10 LOC + 4 tests).
 - **Small, well-scoped:** `BASE_SCRIPT` contract test (small refactor of `render.ts`); Q1-Option-D in-memory ring buffer for the editor.
 - **Medium, well-scoped:** Python type-aware transport provider module for the host bridge seam; `queryDependencyDiff` editor panel; daemon-backed graph queries for the CLI; Q6 cycle-diagnostic volume implementation (one-per-cycle + cap + truncation summary).
-- **Larger, design-first:** cycle-member gutter decorations + the user setting; editor menu hiding via context keys; Python `memberShape` query (needs Protocol-semantics design); Q2 dedicated `[layers.<name>]` schema; Q4 `includeExternal` flag implementation; Q3 promotion to first-class `role = "test"` (when a real case appears).
+- **Larger, design-first:** editor menu hiding via context keys; Python `memberShape` query (needs Protocol-semantics design); Q2 dedicated `[layers.<name>]` schema; Q4 `includeExternal` flag implementation; Q3 promotion to first-class `role = "test"` (when a real case appears).
 
 ## Open Questions
 
