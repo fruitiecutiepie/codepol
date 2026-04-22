@@ -1,12 +1,16 @@
 {
-  "name": "@codepol/daemon",
+  "name": "@codepol/type-aware-provider",
   "version": "1.0.0",
-  "description": "Codepol workspace daemon",
+  "description": "Hybrid editor-native or subprocess type-aware provider for codepol hosts",
   "type": "commonjs",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "bin": {
-    "codepol-workspace-daemon": "./dist/index.js"
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.js"
+    }
   },
   "files": [
     "dist"
@@ -16,8 +20,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@codepol/type-aware-provider": "workspace:^",
-    "@codepol/workspace-service": "workspace:*"
+    "@codepol/workspace-service": "workspace:*",
+    "vscode-jsonrpc": "^8.2.1"
   },
   "devDependencies": {
     "@types/node": "^25.0.3",
@@ -29,7 +33,7 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/fruitiecutiepie/codepol",
-    "directory": "apps/daemon"
+    "directory": "packages/type-aware-provider"
   },
   "license": "MIT"
 }

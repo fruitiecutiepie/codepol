@@ -15,6 +15,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   WorkspaceServiceEngine,
@@ -171,6 +172,7 @@ async function pythonFixtureSetup(
   service: WorkspaceService;
   clientSessionId: string;
   workspaceId: string;
+  fileUri: string;
   animalId: string;
   dogId: string;
 }> {
@@ -186,6 +188,7 @@ async function pythonFixtureSetup(
     `class Animal:\n    pass\n\nclass Dog(Animal):\n    pass\n`,
     'utf8',
   );
+  const fileUri = pathToFileURL(path.join(root, 'src', 'animals.py')).href;
 
   const service = options.engine
     ? workspaceServiceCreate({ engine: options.engine })
@@ -213,6 +216,7 @@ async function pythonFixtureSetup(
     service,
     clientSessionId,
     workspaceId,
+    fileUri,
     animalId: animalLookup.symbols[0]!.symbolId,
     dogId: dogLookup.symbols[0]!.symbolId,
   };
@@ -419,5 +423,106 @@ describe('workspace-service queryTypeHierarchy type-aware merge', () => {
     );
     expect(typeAwareEdge).toBeDefined();
     expect(typeAwareEdge!.typeRelationConfidence).toBe('type-aware');
+  });
+
+  it('provider runtime forwards lifecycle events and resolves python transport per workspace', async () => {
+    const events: string[] = [];
+    const engine = new WorkspaceServiceEngine();
+    workspaceTypeAwareBridgeSourcesRegister({
+      engine,
+      provider: {
+        transports: {
+          python: {
+            transportResolve(context) {
+              events.push(`resolve:${context.workspaceId}`);
+              return {
+                async request<T>(method: string, params: unknown): Promise<T> {
+                  if (method === 'textDocument/implementation') {
+                    const uri =
+                      (params as { textDocument?: { uri?: string } }).textDocument?.uri
+                      ?? 'file:///missing.py';
+                    return [
+                      {
+                        uri,
+                        range: {
+                          start: { line: 3, character: 6 },
+                          end: { line: 3, character: 9 },
+                        },
+                      },
+                    ] as T;
+                  }
+                  throw new Error(`unexpected LSP method: ${method}`);
+                },
+              };
+            },
+          },
+        },
+        lifecycle: {
+          async workspaceAttached(input) {
+            events.push(`attach:${input.workspaceId}`);
+          },
+          async overlayOpened(input) {
+            events.push(`open:${input.uri}`);
+          },
+          async overlayUpdated(input) {
+            events.push(`update:${input.uri}:${input.version}`);
+          },
+          async overlayClosed(input) {
+            events.push(`close:${input.uri}`);
+          },
+          async workspaceDetached(input) {
+            events.push(`detach:${input.workspaceId}`);
+          },
+        },
+      },
+    });
+    const { service, clientSessionId, workspaceId, fileUri, animalId, dogId } =
+      await pythonFixtureSetup({ engine });
+
+    await service.openOverlay({
+      clientSessionId,
+      workspaceId,
+      uri: fileUri,
+      version: 1,
+      text: `class Animal:\n    pass\n\nclass Dog(Animal):\n    pass\n`,
+    });
+    await service.updateOverlay({
+      clientSessionId,
+      workspaceId,
+      uri: fileUri,
+      version: 2,
+      text: `class Animal:\n    pass\n\nclass Dog(Animal):\n    pass\n\nclass Cat(Animal):\n    pass\n`,
+    });
+    await service.closeOverlay({
+      clientSessionId,
+      workspaceId,
+      uri: fileUri,
+    });
+
+    const result = await service.queryTypeHierarchy({
+      clientSessionId,
+      workspaceId,
+      symbolId: animalId,
+      direction: 'subtypes',
+      requireTypeAware: true,
+    });
+    const typeAwareEdge = result.edges.find(
+      (edge) =>
+        edge.fromUri.endsWith(encodeURIComponent(dogId)) &&
+        edge.toUri.endsWith(encodeURIComponent(animalId)),
+    );
+    expect(typeAwareEdge).toBeDefined();
+    expect(typeAwareEdge!.typeRelationConfidence).toBe('type-aware');
+
+    await service.closeClientSession({
+      clientSessionId,
+    });
+
+    expect(events).toContain(`attach:${workspaceId}`);
+    expect(events).toContain(`open:${fileUri}`);
+    expect(events).toContain(`update:${fileUri}:2`);
+    expect(events).toContain(`close:${fileUri}`);
+    expect(events).toContain(`resolve:${workspaceId}`);
+    expect(events).toContain(`detach:${workspaceId}`);
   });
 });

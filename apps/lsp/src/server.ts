@@ -74,6 +74,7 @@ import {
   CODEPOL_LSP_REQUEST_SYMBOL_LOOKUP,
   CODEPOL_LSP_REQUEST_SYMBOLS_IN_FILE_WITH_CALL_COUNTS,
 } from './protocol';
+import { workspaceTypeAwareBridgeProviderCreate } from '@codepol/type-aware-provider';
 
 const APPLY_EDIT_PLAN_COMMAND = CODEPOL_LSP_COMMAND_APPLY_EDIT_PLAN;
 const GO_TO_SEMANTIC_DEFINITION_COMMAND =
@@ -136,10 +137,12 @@ async function workspaceServiceDefaultCreate(): Promise<WorkspaceService> {
   const engine = new runtime.WorkspaceServiceEngine({
     backgroundWarmup: true,
   });
-  const transports = await runtime.workspaceTypeAwareBridgeTransportsResolve();
+  const provider = await runtime.workspaceTypeAwareBridgeProviderResolve({
+    defaultProviderFactory: workspaceTypeAwareBridgeProviderCreate,
+  });
   runtime.workspaceTypeAwareBridgeSourcesRegister({
     engine,
-    transports,
+    provider,
   });
   return runtime.workspaceServiceCreate({
     engine,

@@ -144,6 +144,9 @@ importers:
 
   apps/daemon:
     dependencies:
+      '@codepol/type-aware-provider':
+        specifier: workspace:^
+        version: link:../../packages/type-aware-provider
       '@codepol/workspace-service':
         specifier: workspace:*
         version: link:../../packages/workspace-service
@@ -163,6 +166,9 @@ importers:
       '@codepol/daemon':
         specifier: workspace:*
         version: link:../daemon
+      '@codepol/type-aware-provider':
+        specifier: workspace:^
+        version: link:../../packages/type-aware-provider
       '@codepol/workspace-service':
         specifier: workspace:*
         version: link:../../packages/workspace-service
@@ -344,6 +350,22 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  packages/type-aware-provider:
+    dependencies:
+      '@codepol/workspace-service':
+        specifier: workspace:*
+        version: link:../workspace-service
+      vscode-jsonrpc:
+        specifier: ^8.2.1
+        version: 8.2.1
+    devDependencies:
+      '@types/node':
+        specifier: ^25.0.3
+        version: 25.0.3
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
   packages/typescript-language-bridge:
     devDependencies:
       '@codepol/core':
@@ -377,10 +399,10 @@ importers:
         specifier: workspace:*
         version: link:../plugin-vulture
       '@codepol/python-language-bridge':
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../python-language-bridge
       '@codepol/typescript-language-bridge':
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../typescript-language-bridge
       chokidar:
         specifier: ^5.0.0
@@ -3582,6 +3604,10 @@ packages:
 
   vscode-jsonrpc@8.2.0:
     resolution: {integrity: sha512-C+r0eKJUIfiDIfwJhria30+TYWPtuHJXHtI7J0YlOmKAo7ogxP20T0zxB7HZQIFhIyvoBPwWskjxrvAtfjyZfA==}
+    engines: {node: '>=14.0.0'}
+
+  vscode-jsonrpc@8.2.1:
+    resolution: {integrity: sha512-kdjOSJ2lLIn7r1rtrMbbNCHjyMPfRnowdKjBQ+mGq6NAW5QY2bEZC/khaC5OR8svbbjvLEaIXkOq45e2X9BIbQ==}
     engines: {node: '>=14.0.0'}
 
   vscode-languageclient@9.0.1:
@@ -7060,6 +7086,8 @@ snapshots:
       - yaml
 
   vscode-jsonrpc@8.2.0: {}
+
+  vscode-jsonrpc@8.2.1: {}
 
   vscode-languageclient@9.0.1:
     dependencies:

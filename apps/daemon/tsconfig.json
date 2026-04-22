@@ -5,12 +5,14 @@
     "rootDir": "./src",
     "baseUrl": "../..",
     "paths": {
+      "@codepol/type-aware-provider": ["./packages/type-aware-provider/src/index.ts"],
       "@codepol/workspace-service": ["./packages/workspace-service/src/index.ts"]
     }
   },
   "include": ["src/**/*.ts"],
   "exclude": ["dist", "node_modules"],
   "references": [
+    { "path": "../../packages/type-aware-provider" },
     { "path": "../../packages/workspace-service" }
   ]
 }

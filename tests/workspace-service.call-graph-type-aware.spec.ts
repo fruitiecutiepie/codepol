@@ -25,6 +25,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   WorkspaceServiceEngine,
@@ -109,6 +110,7 @@ type FixtureSetup = {
   engine: WorkspaceServiceEngine;
   clientSessionId: string;
   workspaceId: string;
+  fileUri: string;
   callerId: string;
   calleeId: string;
 };
@@ -120,6 +122,7 @@ type FixtureSetup = {
  */
 async function callerCalleeFixtureCreate(
   prefix: string,
+  options: { engine?: WorkspaceServiceEngine } = {},
 ): Promise<FixtureSetup> {
   const root = tempWorkspaceCreate(prefix);
   fs.mkdirSync(path.join(root, 'src'), { recursive: true });
@@ -134,8 +137,9 @@ async function callerCalleeFixtureCreate(
       `export function caller(): number { return callee(); }\n`,
     'utf8',
   );
+  const fileUri = pathToFileURL(path.join(root, 'src', 'a.ts')).href;
 
-  const engine = new WorkspaceServiceEngine();
+  const engine = options.engine ?? new WorkspaceServiceEngine();
   const service = workspaceServiceCreate({ engine });
   const { clientSessionId, workspaceId } = await clientWorkspaceAttach(
     service,
@@ -144,7 +148,7 @@ async function callerCalleeFixtureCreate(
   );
   const callerId = await symbolIdLookup(service, clientSessionId, workspaceId, 'caller');
   const calleeId = await symbolIdLookup(service, clientSessionId, workspaceId, 'callee');
-  return { service, engine, clientSessionId, workspaceId, callerId, calleeId };
+  return { service, engine, clientSessionId, workspaceId, fileUri, callerId, calleeId };
 }
 
 function staticSourceCreate(edges: TypeAwareCallEdge[]): TypeAwareCallGraphSource {
@@ -450,5 +454,140 @@ describe('workspace-service queryCallGraph (type-aware merge)', () => {
     expect(typeAwareEdge).toBeDefined();
     expect(typeAwareEdge!.callGraphConfidence).toBe('type-aware');
     expect(typeAwareEdge!.callGraphKind).toBe('dynamic-dispatch');
+  });
+
+  it('provider runtime forwards lifecycle events and resolves transport per workspace', async () => {
+    const events: string[] = [];
+    const engine = new WorkspaceServiceEngine();
+    workspaceTypeAwareBridgeSourcesRegister({
+      engine,
+      provider: {
+        transports: {
+          typescript: {
+            transportResolve(context) {
+              events.push(`resolve:${context.workspaceId}`);
+              return {
+                async request<T>(method: string, params: unknown): Promise<T> {
+                  if (method === 'textDocument/prepareCallHierarchy') {
+                    const uri =
+                      (params as { textDocument?: { uri?: string } }).textDocument?.uri
+                      ?? 'file:///missing.ts';
+                    return [
+                      {
+                        name: 'caller',
+                        kind: 12,
+                        uri,
+                        range: {
+                          start: { line: 1, character: 0 },
+                          end: { line: 1, character: 16 },
+                        },
+                        selectionRange: {
+                          start: { line: 1, character: 16 },
+                          end: { line: 1, character: 22 },
+                        },
+                      },
+                    ] as T;
+                  }
+                  if (method === 'callHierarchy/outgoingCalls') {
+                    const uri =
+                      (params as { item?: { uri?: string } }).item?.uri ?? 'file:///missing.ts';
+                    return [
+                      {
+                        to: {
+                          name: 'callee',
+                          kind: 12,
+                          uri,
+                          range: {
+                            start: { line: 0, character: 0 },
+                            end: { line: 0, character: 16 },
+                          },
+                          selectionRange: {
+                            start: { line: 0, character: 16 },
+                            end: { line: 0, character: 22 },
+                          },
+                          detail: 'dynamic dispatch via interface',
+                        },
+                        fromRanges: [],
+                      },
+                    ] as T;
+                  }
+                  throw new Error(`unexpected LSP method: ${method}`);
+                },
+              };
+            },
+          },
+        },
+        lifecycle: {
+          async workspaceAttached(input) {
+            events.push(`attach:${input.workspaceId}`);
+          },
+          async overlayOpened(input) {
+            events.push(`open:${input.uri}`);
+          },
+          async overlayUpdated(input) {
+            events.push(`update:${input.uri}:${input.version}`);
+          },
+          async overlayClosed(input) {
+            events.push(`close:${input.uri}`);
+          },
+          async workspaceDetached(input) {
+            events.push(`detach:${input.workspaceId}`);
+          },
+        },
+      },
+    });
+    const { service, clientSessionId, workspaceId, fileUri, callerId, calleeId } =
+      await callerCalleeFixtureCreate('codepol-cg-provider-runtime-', { engine });
+
+    await service.openOverlay({
+      clientSessionId,
+      workspaceId,
+      uri: fileUri,
+      version: 1,
+      text:
+        `export function callee(): number { return 1; }\n` +
+        `export function caller(): number { return callee(); }\n`,
+    });
+    await service.updateOverlay({
+      clientSessionId,
+      workspaceId,
+      uri: fileUri,
+      version: 2,
+      text:
+        `export function callee(): number { return 1; }\n` +
+        `export function caller(): number { return callee(); }\n` +
+        `export const marker = 1;\n`,
+    });
+    await service.closeOverlay({
+      clientSessionId,
+      workspaceId,
+      uri: fileUri,
+    });
+
+    const result = await service.queryCallGraph({
+      clientSessionId,
+      workspaceId,
+      symbolId: callerId,
+      direction: 'callees',
+      requireTypeAware: true,
+    });
+    const typeAwareEdge = result.edges.find(
+      (edge) =>
+        edge.fromUri.endsWith(encodeURIComponent(callerId)) &&
+        edge.toUri.endsWith(encodeURIComponent(calleeId)),
+    );
+    expect(typeAwareEdge).toBeDefined();
+    expect(typeAwareEdge!.callGraphConfidence).toBe('type-aware');
+
+    await service.closeClientSession({
+      clientSessionId,
+    });
+
+    expect(events).toContain(`attach:${workspaceId}`);
+    expect(events).toContain(`open:${fileUri}`);
+    expect(events).toContain(`update:${fileUri}:2`);
+    expect(events).toContain(`close:${fileUri}`);
+    expect(events).toContain(`resolve:${workspaceId}`);
+    expect(events).toContain(`detach:${workspaceId}`);
   });
 });

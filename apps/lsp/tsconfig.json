@@ -5,6 +5,7 @@
     "rootDir": "./src",
     "baseUrl": "../..",
     "paths": {
+      "@codepol/type-aware-provider": ["./packages/type-aware-provider/src/index.ts"],
       "@codepol/workspace-service": ["./packages/workspace-service/src/index.ts"],
       "@codepol/workspace-service/daemon": ["./packages/workspace-service/src/daemon.ts"],
       "@codepol/workspace-service/contracts": ["./packages/workspace-service/src/contracts.ts"]
@@ -14,6 +15,7 @@
   "exclude": ["dist", "node_modules"],
   "references": [
     { "path": "../../packages/core" },
+    { "path": "../../packages/type-aware-provider" },
     { "path": "../../packages/workspace-service" }
   ]
 }

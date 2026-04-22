@@ -16,6 +16,7 @@ import {
   WorkspaceDaemonServiceClient,
   WorkspaceDaemonSession,
   workspaceDaemonHello,
+  workspaceTypeAwareBridgeSourcesRegister,
   WorkspaceServiceEngine,
   workspaceServiceCreate,
   WORKSPACE_DAEMON_PROTOCOL_VERSION,
@@ -2632,6 +2633,12 @@ describe('CodepolLspServer', () => {
       rootPath: workspaceRoot,
       configPath: path.join(workspaceRoot, 'codepol.toml'),
     });
+    await service.subscribeDiagnostics({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+      scope: 'workspace',
+    });
     await service.completeReplay({
       clientSessionId: registered.clientSessionId,
       workspaceId: attached.workspaceId,
@@ -2760,6 +2767,12 @@ describe('CodepolLspServer', () => {
       rootPath: workspaceRoot,
       configPath: path.join(workspaceRoot, 'codepol.toml'),
     });
+    await service.subscribeDiagnostics({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+      scope: 'workspace',
+    });
     await service.completeReplay({
       clientSessionId: registered.clientSessionId,
       workspaceId: attached.workspaceId,
@@ -2779,6 +2792,225 @@ describe('CodepolLspServer', () => {
     expect(animalLookup.symbols.length).toBeGreaterThan(0);
     expect(dogLookup.symbols.length).toBeGreaterThan(0);
 
+    const result = await service.queryTypeHierarchy({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      symbolId: animalLookup.symbols[0]!.symbolId,
+      direction: 'subtypes',
+      requireTypeAware: true,
+    });
+    const typeAwareEdge = result.edges.find(
+      (edge) =>
+        edge.fromUri.endsWith(encodeURIComponent(dogLookup.symbols[0]!.symbolId)) &&
+        edge.toUri.endsWith(encodeURIComponent(animalLookup.symbols[0]!.symbolId)),
+    );
+    expect(typeAwareEdge).toBeDefined();
+    expect(typeAwareEdge!.typeRelationConfidence).toBe('type-aware');
+  });
+
+  it('wires an injected type-aware bridge provider into the in-process host', async () => {
+    const events: string[] = [];
+    const workspaceRoot = tempWorkspaceCreate('codepol-lsp-in-process-provider-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'codepol.toml'),
+      pythonTypeHierarchyConfigContentCreate(),
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'src', 'animals.py'),
+      `class Animal:\n    pass\n\nclass Dog(Animal):\n    pass\n`,
+      'utf8',
+    );
+
+    const service = await lspWorkspaceServiceResolve({
+      env: {
+        ...process.env,
+        CODEPOL_WORKSPACE_SERVICE_MODE: 'in_process',
+      },
+      clientInstanceId: 'lsp-in-process-python-provider',
+      typeAwareBridgeProvider: {
+        transports: {
+          python: {
+            transportResolve(context) {
+              events.push(`resolve:${context.workspaceId}`);
+              return {
+                async request<T>(method: string, params: unknown): Promise<T> {
+                  if (method === 'textDocument/implementation') {
+                    const uri =
+                      (params as { textDocument?: { uri?: string } }).textDocument?.uri
+                      ?? 'file:///missing.py';
+                    return [
+                      {
+                        uri,
+                        range: {
+                          start: { line: 3, character: 6 },
+                          end: { line: 3, character: 9 },
+                        },
+                      },
+                    ] as T;
+                  }
+                  throw new Error(`unexpected LSP method: ${method}`);
+                },
+              };
+            },
+          },
+        },
+        lifecycle: {
+          async workspaceAttached(input) {
+            events.push(`attach:${input.workspaceId}`);
+          },
+          async workspaceDetached(input) {
+            events.push(`detach:${input.workspaceId}`);
+          },
+        },
+      },
+    });
+
+    const registered = await service.registerClientSession({
+      clientKind: 'lsp',
+      clientInstanceId: 'resolved-service-client',
+    });
+    const attached = await service.attachWorkspace({
+      clientSessionId: registered.clientSessionId,
+      rootPath: workspaceRoot,
+      configPath: path.join(workspaceRoot, 'codepol.toml'),
+    });
+    await service.completeReplay({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+    });
+
+    const animalLookup = await service.querySymbolLookup({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      name: 'Animal',
+    });
+    const dogLookup = await service.querySymbolLookup({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      name: 'Dog',
+    });
+
+    const result = await service.queryTypeHierarchy({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      symbolId: animalLookup.symbols[0]!.symbolId,
+      direction: 'subtypes',
+      requireTypeAware: true,
+    });
+    const typeAwareEdge = result.edges.find(
+      (edge) =>
+        edge.fromUri.endsWith(encodeURIComponent(dogLookup.symbols[0]!.symbolId)) &&
+        edge.toUri.endsWith(encodeURIComponent(animalLookup.symbols[0]!.symbolId)),
+    );
+    expect(typeAwareEdge).toBeDefined();
+    expect(typeAwareEdge!.typeRelationConfidence).toBe('type-aware');
+
+    await service.closeClientSession({
+      clientSessionId: registered.clientSessionId,
+    });
+
+    expect(events).toContain(`attach:${attached.workspaceId}`);
+    expect(events).toContain(`resolve:${attached.workspaceId}`);
+    expect(events).toContain(`detach:${attached.workspaceId}`);
+  });
+
+  it('wires an injected type-aware bridge provider through the daemon path', async () => {
+    const runtimeDir = tempWorkspaceCreate('codepol-lsp-daemon-provider-runtime-');
+    createdDirs.push(runtimeDir);
+    const workspaceRoot = tempWorkspaceCreate('codepol-lsp-daemon-provider-workspace-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'codepol.toml'),
+      pythonTypeHierarchyConfigContentCreate(),
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'src', 'animals.py'),
+      `class Animal:\n    pass\n\nclass Dog(Animal):\n    pass\n`,
+      'utf8',
+    );
+
+    const engine = new WorkspaceServiceEngine();
+    workspaceTypeAwareBridgeSourcesRegister({
+      engine,
+      provider: {
+        transports: {
+          python: {
+            transportResolve() {
+              return {
+                async request<T>(method: string, params: unknown): Promise<T> {
+                  if (method === 'textDocument/implementation') {
+                    const uri =
+                      (params as { textDocument?: { uri?: string } }).textDocument?.uri
+                      ?? 'file:///missing.py';
+                    return [
+                      {
+                        uri,
+                        range: {
+                          start: { line: 3, character: 6 },
+                          end: { line: 3, character: 9 },
+                        },
+                      },
+                    ] as T;
+                  }
+                  throw new Error(`unexpected LSP method: ${method}`);
+                },
+              };
+            },
+          },
+        },
+      },
+    });
+
+    const { descriptor } = workspaceDaemonDescriptorCreate({ runtimeDir });
+    workspaceDaemonDescriptorWrite(runtimeDir, descriptor);
+    const connect = daemonConnectCreate({
+      descriptor,
+      service: engine,
+    });
+
+    const service = await lspWorkspaceServiceResolve({
+      env: {
+        ...process.env,
+        CODEPOL_DAEMON_RUNTIME_DIR: runtimeDir,
+      },
+      clientInstanceId: 'lsp-daemon-provider-test',
+      connect,
+      startDaemon: async () => {
+        throw new Error('startDaemon should not run for a healthy daemon descriptor');
+      },
+    });
+
+    const registered = await service.registerClientSession({
+      clientKind: 'lsp',
+      clientInstanceId: 'resolved-service-client',
+    });
+    const attached = await service.attachWorkspace({
+      clientSessionId: registered.clientSessionId,
+      rootPath: workspaceRoot,
+      configPath: path.join(workspaceRoot, 'codepol.toml'),
+    });
+    await service.completeReplay({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+    });
+
+    const animalLookup = await service.querySymbolLookup({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      name: 'Animal',
+    });
+    const dogLookup = await service.querySymbolLookup({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      name: 'Dog',
+    });
     const result = await service.queryTypeHierarchy({
       clientSessionId: registered.clientSessionId,
       workspaceId: attached.workspaceId,

@@ -184,7 +184,11 @@ import {
   graphSnapshotFromDependencyGraphResult as graphSnapshotFromGraphInternal,
   graphSnapshotWorkspaceRootIdCompute as graphSnapshotWorkspaceRootIdComputeInternal,
 } from './graphSnapshotStore';
-import type { WorkspaceTypeAwareBridgeSymbolTable } from './typeAwareBridgeHost';
+import type {
+  WorkspaceTypeAwareBridgeExecutionContext,
+  WorkspaceTypeAwareBridgeLifecycle,
+  WorkspaceTypeAwareBridgeSymbolTable,
+} from './typeAwareBridgeHost';
 
 export * from './daemon';
 export {
@@ -5551,6 +5555,34 @@ function workspaceTypeAwareBridgeSymbolTableCreate(
   };
 }
 
+type WorkspaceTypeAwareBridgeActiveContext = {
+  execution: WorkspaceTypeAwareBridgeExecutionContext;
+  symbolTable: WorkspaceTypeAwareBridgeSymbolTable;
+};
+
+async function workspaceTypeAwareBridgeLifecycleCall(
+  lifecycleCall: Promise<void> | void,
+): Promise<void> {
+  try {
+    await lifecycleCall;
+  } catch {
+    // Type-aware backends are optional upgrades; lifecycle failures
+    // must not break core workspace attach / overlay behavior.
+  }
+}
+
+function workspaceTypeAwareBridgeExecutionContextCreate(input: {
+  clientSessionId: ClientSessionId;
+  workspace: WorkspaceContextState & { workspaceId: string };
+}): WorkspaceTypeAwareBridgeExecutionContext {
+  return {
+    clientSessionId: input.clientSessionId,
+    workspaceId: input.workspace.workspaceId,
+    rootPath: input.workspace.rootPath,
+    configPath: input.workspace.configPath,
+  };
+}
+
 function workspaceSymbolLookupResultCreate(
   state: WorkspaceDocumentsState,
   index: ProjectIndex,
@@ -9916,8 +9948,9 @@ export class WorkspaceServiceEngine implements WorkspaceService {
    * one does not require or affect the other.
    */
   private readonly typeAwareTypeHierarchySourceRegistry: TypeAwareTypeHierarchySourceRegistry;
-  private readonly typeAwareBridgeSymbolTableContext =
-    new AsyncLocalStorage<WorkspaceTypeAwareBridgeSymbolTable>();
+  private readonly typeAwareBridgeContext =
+    new AsyncLocalStorage<WorkspaceTypeAwareBridgeActiveContext>();
+  private typeAwareBridgeLifecycle: WorkspaceTypeAwareBridgeLifecycle | undefined;
   // Per-workspace pending debounced persist. Keyed by `workspaceId` because
   // every attached client session sees the same in-memory workspace state.
   private readonly persistTimers = new Map<string, PersistTimerEntry>();
@@ -9975,6 +10008,18 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     );
   }
 
+  typeAwareBridgeExecutionContextGet():
+    | WorkspaceTypeAwareBridgeExecutionContext
+    | undefined {
+    return this.typeAwareBridgeContext.getStore()?.execution;
+  }
+
+  typeAwareBridgeLifecycleSet(
+    lifecycle: WorkspaceTypeAwareBridgeLifecycle | undefined,
+  ): void {
+    this.typeAwareBridgeLifecycle = lifecycle;
+  }
+
   /**
    * Resolve the symbol-table callbacks the language-bridge wrappers use
    * to translate between workspace `symbolId`s and LSP
@@ -9989,7 +10034,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
   typeAwareBridgeSymbolTableGet(
     symbolId: SymbolId,
   ): WorkspaceTypeAwareBridgeSymbolTable | undefined {
-    const active = this.typeAwareBridgeSymbolTableContext.getStore();
+    const active = this.typeAwareBridgeContext.getStore()?.symbolTable;
     if (active) {
       return active;
     }
@@ -10250,6 +10295,14 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       }
       workspace.attachedClientSessionIds.delete(input.clientSessionId);
       if (workspace.attachedClientSessionIds.size === 0) {
+        await workspaceTypeAwareBridgeLifecycleCall(
+          this.typeAwareBridgeLifecycle?.workspaceDetached?.(
+            workspaceTypeAwareBridgeExecutionContextCreate({
+              clientSessionId: input.clientSessionId,
+              workspace,
+            }),
+          ),
+        );
         // Flush any pending debounced persist before tearing down the
         // watcher so the latest analysis lands on disk even if the user
         // disconnects within the debounce window.
@@ -10258,6 +10311,14 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       }
     }
     this.clientSessions.delete(input.clientSessionId);
+    const hasAttachedClients = [...this.workspaces.values()].some(
+      (workspace) => workspace.attachedClientSessionIds.size > 0,
+    );
+    if (!hasAttachedClients) {
+      await workspaceTypeAwareBridgeLifecycleCall(
+        this.typeAwareBridgeLifecycle?.dispose?.(),
+      );
+    }
   }
 
   async attachWorkspace(input: {
@@ -10387,6 +10448,15 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       });
     }
 
+    await workspaceTypeAwareBridgeLifecycleCall(
+      this.typeAwareBridgeLifecycle?.workspaceAttached?.(
+        workspaceTypeAwareBridgeExecutionContextCreate({
+          clientSessionId: input.clientSessionId,
+          workspace,
+        }),
+      ),
+    );
+
     return {
       workspaceId,
       workspaceInstanceId: workspace.workspaceInstanceId,
@@ -10485,6 +10555,17 @@ export class WorkspaceServiceEngine implements WorkspaceService {
         );
       }
     }
+    await workspaceTypeAwareBridgeLifecycleCall(
+      this.typeAwareBridgeLifecycle?.overlayOpened?.({
+        ...workspaceTypeAwareBridgeExecutionContextCreate({
+          clientSessionId: input.clientSessionId,
+          workspace,
+        }),
+        uri: input.uri,
+        version: input.version,
+        text: input.text,
+      }),
+    );
   }
 
   async updateOverlay(input: {
@@ -10494,7 +10575,50 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     version: number;
     text: string;
   }): Promise<void> {
-    await this.openOverlay(input);
+    const { workspace, workspaceSession } = workspaceSessionGet(
+      this.workspaces,
+      this.clientSessions,
+      input.clientSessionId,
+      input.workspaceId,
+    );
+    const filePath = workspaceUriToPath(input.uri);
+    workspaceSession.documents.set(input.uri, {
+      uri: input.uri,
+      filePath,
+      version: input.version,
+      text: input.text,
+    });
+    workspaceSessionInvalidate(workspaceSession, { dirtyFiles: [filePath] });
+
+    if (workspaceSession.indexState && workspaceSession.indexState.files.includes(filePath)) {
+      const didUpdate = projectIndexUpdateFileFromSource(
+        workspaceSession.indexState.store,
+        filePath,
+        input.text,
+      );
+      if (didUpdate) {
+        crossFileResolveForFile(workspaceSession.indexState.store, filePath, {
+          baseDir: workspace.rootPath,
+          extensions: DEFAULT_EXTENSIONS,
+          workspacePackages: workspaceSession.indexState.workspacePackages,
+        });
+        workspaceSession.indexState.index = projectIndexCreate(
+          workspaceSession.indexState.store,
+          workspaceSession.indexState.capabilities,
+        );
+      }
+    }
+    await workspaceTypeAwareBridgeLifecycleCall(
+      this.typeAwareBridgeLifecycle?.overlayUpdated?.({
+        ...workspaceTypeAwareBridgeExecutionContextCreate({
+          clientSessionId: input.clientSessionId,
+          workspace,
+        }),
+        uri: input.uri,
+        version: input.version,
+        text: input.text,
+      }),
+    );
   }
 
   async closeOverlay(input: {
@@ -10516,6 +10640,15 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     if (filePath) {
       workspaceIndexRefreshFromDisk(workspace, workspaceSession, filePath);
     }
+    await workspaceTypeAwareBridgeLifecycleCall(
+      this.typeAwareBridgeLifecycle?.overlayClosed?.({
+        ...workspaceTypeAwareBridgeExecutionContextCreate({
+          clientSessionId: input.clientSessionId,
+          workspace,
+        }),
+        uri: input.uri,
+      }),
+    );
   }
 
   async queryDiagnostics(input: {
@@ -11093,7 +11226,11 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       workspaceSession,
       index,
     );
-    return await this.typeAwareBridgeSymbolTableContext.run(symbolTable, async () =>
+    const execution = workspaceTypeAwareBridgeExecutionContextCreate({
+      clientSessionId: input.clientSessionId,
+      workspace,
+    });
+    return await this.typeAwareBridgeContext.run({ execution, symbolTable }, async () =>
       workspaceCallGraphResultCreate(
         workspace,
         index,
@@ -11163,7 +11300,11 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       workspaceSession,
       index,
     );
-    return await this.typeAwareBridgeSymbolTableContext.run(symbolTable, async () =>
+    const execution = workspaceTypeAwareBridgeExecutionContextCreate({
+      clientSessionId: input.clientSessionId,
+      workspace,
+    });
+    return await this.typeAwareBridgeContext.run({ execution, symbolTable }, async () =>
       workspaceTypeHierarchyResultCreate(
         workspace,
         index,

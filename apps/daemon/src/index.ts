@@ -8,13 +8,14 @@ import {
   WORKSPACE_DAEMON_BUILD_ID,
   WORKSPACE_DAEMON_ENGINE_VERSION,
   workspaceDaemonDefaultCacheDirResolve,
+  workspaceTypeAwareBridgeProviderResolve,
   workspaceDaemonServerStart,
   workspaceTypeAwareBridgeSourcesRegister,
-  workspaceTypeAwareBridgeTransportsResolve,
   workspaceWatcherCreate,
   workspaceWarmCacheEnvironmentIdCreate,
   workspaceWarmCacheFsStoreCreate,
 } from '@codepol/workspace-service';
+import { workspaceTypeAwareBridgeProviderCreate } from '@codepol/type-aware-provider';
 
 async function main(): Promise<void> {
   // A WASM abort permanently poisons the shared tree-sitter module for
@@ -33,7 +34,9 @@ async function main(): Promise<void> {
   // under a separate cache dir so they survive reboot on Linux desktops
   // where XDG_RUNTIME_DIR is tmpfs.
   const cacheDir = workspaceDaemonDefaultCacheDirResolve();
-  const typeAwareBridgeTransports = await workspaceTypeAwareBridgeTransportsResolve();
+  const typeAwareBridgeProvider = await workspaceTypeAwareBridgeProviderResolve({
+    defaultProviderFactory: workspaceTypeAwareBridgeProviderCreate,
+  });
   const engine = new WorkspaceServiceEngine({
     backgroundWarmup: true,
     watcherCreate: workspaceWatcherCreate,
@@ -46,7 +49,7 @@ async function main(): Promise<void> {
   });
   workspaceTypeAwareBridgeSourcesRegister({
     engine,
-    transports: typeAwareBridgeTransports,
+    provider: typeAwareBridgeProvider,
   });
 
   const server = await workspaceDaemonServerStart({

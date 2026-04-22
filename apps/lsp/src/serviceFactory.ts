@@ -9,7 +9,11 @@ import {
   WORKSPACE_DAEMON_PROTOCOL_VERSION,
   type WorkspaceDaemonConnectFn,
 } from '@codepol/workspace-service/daemon';
-import type { WorkspaceTypeAwareBridgeTransports } from '@codepol/workspace-service';
+import { workspaceTypeAwareBridgeProviderCreate } from '@codepol/type-aware-provider';
+import type {
+  WorkspaceTypeAwareBridgeProviderRuntime,
+  WorkspaceTypeAwareBridgeTransports,
+} from '@codepol/workspace-service';
 import type { WorkspaceService } from '@codepol/workspace-service/contracts';
 
 const nodeRequire = createRequire(__filename);
@@ -27,6 +31,7 @@ const daemonRuntimePackageIds = [
   '@codepol/plugin-eslint',
   '@codepol/plugin-ruff',
   '@codepol/plugin-vulture',
+  '@codepol/type-aware-provider',
 ];
 
 export type LspWorkspaceServiceMode = 'in_process' | 'daemon';
@@ -148,19 +153,22 @@ function errorAsError(error: unknown): Error {
 
 async function workspaceServiceInProcessCreate(options: {
   env?: NodeJS.ProcessEnv;
+  typeAwareBridgeProvider?: WorkspaceTypeAwareBridgeProviderRuntime;
   typeAwareBridgeTransports?: WorkspaceTypeAwareBridgeTransports;
 } = {}): Promise<WorkspaceService> {
   const runtime = await import('@codepol/workspace-service');
   const engine = new runtime.WorkspaceServiceEngine({
     backgroundWarmup: true,
   });
-  const transports = await runtime.workspaceTypeAwareBridgeTransportsResolve({
+  const provider = await runtime.workspaceTypeAwareBridgeProviderResolve({
     env: options.env,
+    provider: options.typeAwareBridgeProvider,
     transports: options.typeAwareBridgeTransports,
+    defaultProviderFactory: workspaceTypeAwareBridgeProviderCreate,
   });
   runtime.workspaceTypeAwareBridgeSourcesRegister({
     engine,
-    transports,
+    provider,
   });
   return runtime.workspaceServiceCreate({
     engine,
@@ -173,6 +181,7 @@ export async function lspWorkspaceServiceResolve(options: {
   connect?: WorkspaceDaemonConnectFn;
   startDaemon?: () => Promise<void> | void;
   allowInProcessFallback?: boolean;
+  typeAwareBridgeProvider?: WorkspaceTypeAwareBridgeProviderRuntime;
   typeAwareBridgeTransports?: WorkspaceTypeAwareBridgeTransports;
   onResolved?: (info: LspWorkspaceServiceResolvedInfo) => void;
 } = {}): Promise<WorkspaceService> {
@@ -185,6 +194,7 @@ export async function lspWorkspaceServiceResolve(options: {
     }
     const service = await workspaceServiceInProcessCreate({
       env,
+      typeAwareBridgeProvider: options.typeAwareBridgeProvider,
       typeAwareBridgeTransports: options.typeAwareBridgeTransports,
     });
     options.onResolved?.({ mode: 'in_process' });
@@ -224,6 +234,7 @@ export async function lspWorkspaceServiceResolve(options: {
 
     const service = await workspaceServiceInProcessCreate({
       env,
+      typeAwareBridgeProvider: options.typeAwareBridgeProvider,
       typeAwareBridgeTransports: options.typeAwareBridgeTransports,
     });
     options.onResolved?.({
