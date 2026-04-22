@@ -10,6 +10,27 @@ export const SYMBOLS_QUERY = `
 (class_definition
   name: (identifier) @name) @decl.class
 
+; Protocol contracts are indexed as interface symbols so the
+; structural-shape pass can reuse the same interface/type vs class
+; partition it already uses for TypeScript. The broad class capture
+; above still matches these declarations; the adapter core dedupes the
+; final symbol and prefers interface over class for the same
+; declaration range.
+(class_definition
+  name: (identifier) @name
+  superclasses: (argument_list
+    (identifier) @protocol_base)
+  (#eq? @protocol_base "Protocol")) @decl.interface
+
+(class_definition
+  name: (identifier) @name
+  superclasses: (argument_list
+    (attribute
+      object: (identifier) @protocol_module
+      attribute: (identifier) @protocol_base))
+  (#eq? @protocol_module "typing")
+  (#eq? @protocol_base "Protocol")) @decl.interface
+
 ; =========================
 ;  Functions / Methods
 ; =========================

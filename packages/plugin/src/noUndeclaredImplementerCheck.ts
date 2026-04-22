@@ -65,6 +65,27 @@ function fileMatchesAny(
   return globs.some((pattern) => minimatch(relative, pattern, { dot: true }));
 }
 
+function undeclaredImplementerMessage(
+  contractFile: string,
+  implementerName: string,
+  contractName: string,
+): string {
+  if (path.extname(contractFile) === '.py' || path.extname(contractFile) === '.pyw') {
+    return (
+      `Class \`${implementerName}\` satisfies protocol ` +
+      `\`${contractName}\` by shape only. Inherit from \`${contractName}\` ` +
+      `to make the relationship explicit, or rename a member to break ` +
+      `the accidental match.`
+    );
+  }
+  return (
+    `Class \`${implementerName}\` satisfies interface ` +
+    `\`${contractName}\` by shape only. Add \`implements ${contractName}\` ` +
+    `to make the relationship explicit, or rename a member to break ` +
+    `the accidental match.`
+  );
+}
+
 /**
  * The check function. Walks every interface symbol in the index,
  * pulls its full subtype set via `subTypesGet({ confidence: 'all' })`,
@@ -134,17 +155,20 @@ export const noUndeclaredImplementerCheck: ArchitectureCheckFn = (
           filePath: iface.file,
           line: 1,
           column: 1,
-          message: `interface declaration`,
+          message:
+            path.extname(iface.file) === '.py' || path.extname(iface.file) === '.pyw'
+              ? 'protocol declaration'
+              : 'interface declaration',
         },
       ];
       violations.push({
         ruleId,
         filePath: implementerSymbol.file,
-        message:
-          `Class \`${implementerSymbol.name}\` satisfies interface ` +
-          `\`${iface.name}\` by shape only. Add \`implements ${iface.name}\` ` +
-          `to make the relationship explicit, or rename a member to break ` +
-          `the accidental match.`,
+        message: undeclaredImplementerMessage(
+          iface.file,
+          implementerSymbol.name,
+          iface.name,
+        ),
         line: 1,
         column: 1,
         relatedLocations: related,

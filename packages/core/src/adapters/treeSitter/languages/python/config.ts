@@ -16,6 +16,7 @@ import { IMPORTS_QUERY } from './queries/imports';
 import { EXPORTS_QUERY } from './queries/exports';
 import { SYMBOL_FLOW_QUERY } from './queries/symbolFlow';
 import { TYPE_RELATIONS_QUERY } from './queries/typeRelations';
+import { MEMBER_SHAPE_QUERY } from './queries/memberShape';
 
 /**
  * Reference filter for Python.
@@ -92,11 +93,13 @@ export function pythonConfigCreate(language: Language): LangConfig {
       exports: EXPORTS_QUERY,
       symbolFlow: SYMBOL_FLOW_QUERY,
       typeRelations: TYPE_RELATIONS_QUERY,
+      memberShape: MEMBER_SHAPE_QUERY,
     },
     captures: CAPTURE_NAMES_DEFAULT,
     symbolKinds: {
       byCaptureSuffix: {
         'class': 'class' as const,
+        'interface': 'interface' as const,
         'function': 'function' as const,
         'method': 'method' as const,
         'parameter': 'parameter' as const,

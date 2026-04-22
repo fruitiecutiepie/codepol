@@ -216,19 +216,29 @@ function memberShapeEntryBuild(
 /**
  * Map a captured member node to its canonical {@link MemberShapeKind}.
  *
- * The query covers `method_definition` / `method_signature` /
- * `abstract_method_signature` (methods, possibly accessors) and
- * `public_field_definition` / `property_signature` (properties).
- * Accessor (`get` / `set`) detection looks for the keyword child on
- * the AST node since tree-sitter exposes them as method-shaped nodes
- * with a leading `get` / `set` token.
+ * The query covers TypeScript member nodes
+ * (`method_definition` / `method_signature` /
+ * `abstract_method_signature`, `public_field_definition` /
+ * `property_signature`) plus Python `function_definition` and
+ * `assignment` nodes captured from class bodies.
+ *
+ * Accessor detection is language-specific:
+ *
+ * - TypeScript: inspect keyword children on the AST node (`get` / `set`)
+ * - Python: inspect decorators on an enclosing `decorated_definition`
  */
 function memberKindOf(memberNode: Parser.SyntaxNode): MemberShapeKind {
   if (
+    memberNode.type === 'assignment' ||
     memberNode.type === 'public_field_definition' ||
     memberNode.type === 'property_signature'
   ) {
     return 'property';
+  }
+  const pythonDecoratorKinds = memberDecoratorKindsGet(memberNode);
+  if (pythonDecoratorKinds.has('setter')) return 'setter';
+  if (pythonDecoratorKinds.has('getter') || pythonDecoratorKinds.has('property')) {
+    return 'getter';
   }
   // Methods (and accessors). Inspect the token children for a leading
   // `get` / `set` keyword to distinguish accessor pairs.
@@ -253,8 +263,17 @@ function memberKindOf(memberNode: Parser.SyntaxNode): MemberShapeKind {
 function memberParamArityOf(memberNode: Parser.SyntaxNode): number | undefined {
   const params =
     memberNode.childForFieldName('parameters') ??
-    childOfType(memberNode, 'formal_parameters');
+    childOfType(memberNode, 'formal_parameters') ??
+    childOfType(memberNode, 'parameters');
   if (!params) return undefined;
+  if (memberNode.type === 'function_definition') {
+    const countableParams = namedChildrenGet(params).filter(pythonParameterCountsTowardArity);
+    let arity = countableParams.length;
+    if (!memberHasModifier(memberNode, 'static') && arity > 0) {
+      arity -= 1;
+    }
+    return arity;
+  }
   let arity = 0;
   for (let i = 0; i < params.namedChildCount; i++) {
     const child = params.namedChild(i);
@@ -273,6 +292,12 @@ function memberHasModifier(
   memberNode: Parser.SyntaxNode,
   modifier: 'static' | 'private',
 ): boolean {
+  if (modifier === 'static') {
+    const decorators = memberDecoratorKindsGet(memberNode);
+    if (decorators.has('staticmethod') || decorators.has('classmethod')) {
+      return true;
+    }
+  }
   // Modifiers appear as bare token children before the member name.
   for (let i = 0; i < memberNode.childCount; i++) {
     const child = memberNode.child(i);
@@ -319,6 +344,59 @@ function memberIsPrivate(
   return false;
 }
 
+function memberDecoratorKindsGet(memberNode: Parser.SyntaxNode): ReadonlySet<string> {
+  const decoratedParent =
+    memberNode.parent?.type === 'decorated_definition'
+      ? memberNode.parent
+      : undefined;
+  if (!decoratedParent) return EMPTY_DECORATOR_SET;
+  const kinds = new Set<string>();
+  for (let i = 0; i < decoratedParent.namedChildCount; i++) {
+    const child = decoratedParent.namedChild(i);
+    if (!child || child.type !== 'decorator') continue;
+    const expression = child.namedChild(0);
+    if (!expression) continue;
+    const decoratorKind = decoratorKindResolve(expression);
+    if (decoratorKind) {
+      kinds.add(decoratorKind);
+    }
+  }
+  return kinds;
+}
+
+function decoratorKindResolve(expression: Parser.SyntaxNode): string | undefined {
+  if (expression.type === 'identifier') {
+    if (
+      expression.text === 'property' ||
+      expression.text === 'staticmethod' ||
+      expression.text === 'classmethod'
+    ) {
+      return expression.text;
+    }
+    return undefined;
+  }
+  if (expression.type === 'attribute') {
+    const attribute = expression.childForFieldName('attribute');
+    if (!attribute) return undefined;
+    if (attribute.text === 'getter' || attribute.text === 'setter') {
+      return attribute.text;
+    }
+  }
+  return undefined;
+}
+
+function pythonParameterCountsTowardArity(node: Parser.SyntaxNode): boolean {
+  return (
+    node.type === 'identifier' ||
+    node.type === 'default_parameter' ||
+    node.type === 'typed_parameter' ||
+    node.type === 'typed_default_parameter' ||
+    node.type === 'list_splat_pattern' ||
+    node.type === 'dictionary_splat_pattern' ||
+    node.type === 'tuple_pattern'
+  );
+}
+
 function findOwnerSymbol(
   symbolsByName: Map<string, SymbolRecord[]>,
   name: string,
@@ -348,6 +426,19 @@ function childOfType(node: Parser.SyntaxNode, type: string): Parser.SyntaxNode |
   }
   return undefined;
 }
+
+function namedChildrenGet(node: Parser.SyntaxNode): Parser.SyntaxNode[] {
+  const children: Parser.SyntaxNode[] = [];
+  for (let i = 0; i < node.namedChildCount; i++) {
+    const child = node.namedChild(i);
+    if (child) {
+      children.push(child);
+    }
+  }
+  return children;
+}
+
+const EMPTY_DECORATOR_SET = new Set<string>();
 
 function sliceText(source: string, start: number, end: number): string {
   return source.slice(start, end);

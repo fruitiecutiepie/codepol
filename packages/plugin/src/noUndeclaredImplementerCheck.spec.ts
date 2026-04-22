@@ -16,7 +16,8 @@ import path from 'node:path';
 import os from 'node:os';
 
 const tsTarget: PolicyRuleTarget = { language: 'typescript', files: ['**/*.ts'] };
-const policy: PolicyFile = { targets: { ts: tsTarget }, rules: [] };
+const pyTarget: PolicyRuleTarget = { language: 'python', files: ['**/*.py'] };
+const policy: PolicyFile = { targets: { ts: tsTarget, py: pyTarget }, rules: [] };
 
 function fixtureCreate(files: Record<string, string>): {
   dir: string;
@@ -39,10 +40,11 @@ function contextCreate(
   dir: string,
   index: ProjectIndex,
   ruleArgs?: unknown,
+  targets: string[] = ['ts'],
 ): { rule: PolicyRule; context: ArchitectureCheckContext } {
   const rule: PolicyRule = {
     ruleId: 'no-undeclared-implementer',
-    targets: ['ts'],
+    targets,
     args: ruleArgs,
   };
   return {
@@ -60,6 +62,7 @@ function contextCreate(
 describe('noUndeclaredImplementerCheck', () => {
   beforeAll(async () => {
     langAdd({ langId: 'typescript', fileExtensions: ['.ts'] });
+    langAdd({ langId: 'python', fileExtensions: ['.py'] });
     await parserInit();
   });
 
@@ -191,5 +194,56 @@ export class RunnerB {
     const names = violations.map((v) => v.message).sort();
     expect(names.some((m) => m.includes('RunnerA'))).toBe(true);
     expect(names.some((m) => m.includes('RunnerB'))).toBe(true);
+  });
+
+  it('emits a Python-specific violation for a class that matches a Protocol by shape only', () => {
+    const { dir, paths } = fixtureCreate({
+      'protocol.py': `
+from typing import Protocol
+
+class ReaderProtocol(Protocol):
+    def read(self) -> str:
+        ...
+`,
+      'duck.py': `
+class DuckReader:
+    def read(self) -> str:
+        return ''
+`,
+    });
+    const { index } = projectIndexBuildSync({ files: paths, dir });
+    const { rule, context } = contextCreate(dir, index, undefined, ['py']);
+
+    const violations = noUndeclaredImplementerCheck(rule, context);
+    expect(violations).toHaveLength(1);
+    expect(violations[0].message).toContain('DuckReader');
+    expect(violations[0].message).toContain('ReaderProtocol');
+    expect(violations[0].message).toContain('protocol');
+    expect(violations[0].message).toContain('Inherit from `ReaderProtocol`');
+    expect(violations[0].relatedLocations?.[0]?.message).toBe('protocol declaration');
+  });
+
+  it('emits no Python violation when the class explicitly inherits the Protocol', () => {
+    const { dir, paths } = fixtureCreate({
+      'protocol.py': `
+from typing import Protocol
+
+class ReaderProtocol(Protocol):
+    def read(self) -> str:
+        ...
+`,
+      'declared.py': `
+from .protocol import ReaderProtocol
+
+class DeclaredReader(ReaderProtocol):
+    def read(self) -> str:
+        return ''
+`,
+    });
+    const { index } = projectIndexBuildSync({ files: paths, dir });
+    const { rule, context } = contextCreate(dir, index, undefined, ['py']);
+
+    const violations = noUndeclaredImplementerCheck(rule, context);
+    expect(violations).toEqual([]);
   });
 });

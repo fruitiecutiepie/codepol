@@ -224,9 +224,9 @@ function indexCapabilitiesSymbolFlowCompute(
 
 /**
  * Whether the index has at least one language adapter that emits
- * {@link MemberShapeRelation}s (Phase 9.4 / Gap 3). Today only the
- * TypeScript / TSX pack does; Python and other languages will opt in
- * once they ship the query + extractor wiring.
+ * {@link MemberShapeRelation}s (Phase 9.4 / Gap 3). TypeScript / TSX
+ * and Python currently opt in; other languages can follow once they
+ * ship the query + extractor wiring.
  *
  * Centralized here so adding a new language with member-shape support
  * is a one-line change.
@@ -234,7 +234,11 @@ function indexCapabilitiesSymbolFlowCompute(
 function indexCapabilitiesMemberShapeCompute(
   supportedLanguages: Set<string>,
 ): boolean {
-  return supportedLanguages.has('typescript') || supportedLanguages.has('tsx');
+  return (
+    supportedLanguages.has('typescript') ||
+    supportedLanguages.has('tsx') ||
+    supportedLanguages.has('python')
+  );
 }
 
 /**
@@ -1127,12 +1131,13 @@ function structuralShapeResolve(store: IndexStore): void {
       if (classShape.memberCountTruncated) continue;
       if (classShape.ownerSymbolId === supertype.ownerSymbolId) continue;
 
-      // Skip when a declared `implements` already resolves to this
-      // supertype — declared takes precedence and we never duplicate.
+      // Skip when a declared `implements` / `extends` already resolves
+      // to this supertype — declared takes precedence and we never
+      // duplicate.
       const declared = store.typeRelationsForSymbolGet(classShape.ownerSymbolId);
       const alreadyDeclared = declared.some(
         (rel) =>
-          rel.relationKind === 'implements' &&
+          (rel.relationKind === 'implements' || rel.relationKind === 'extends') &&
           rel.resolvedTargetId === supertype.ownerSymbolId &&
           (rel.confidence === undefined || rel.confidence === 'declared'),
       );

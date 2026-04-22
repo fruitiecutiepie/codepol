@@ -521,6 +521,17 @@ function symbolKindAdjust(
   return kind;
 }
 
+function symbolKindPreference(kind: SymbolKind): number {
+  switch (kind) {
+    case 'interface':
+      return 2;
+    case 'class':
+      return 1;
+    default:
+      return 0;
+  }
+}
+
 /**
  * Extract symbol declarations from Tree-sitter query captures.
  */
@@ -532,6 +543,7 @@ function symbolsExtract(
   scopes: ScopeRecord[]
 ): { symbols: SymbolRecord[]; declRanges: Set<string> } {
   const symbols: SymbolRecord[] = [];
+  const symbolIndexesByRange = new Map<string, number>();
   const declRanges = new Set<string>();
 
   const query = cfg.language.query(cfg.queries.symbols);
@@ -595,8 +607,7 @@ function symbolsExtract(
       const qualName = buildQualifiedName(scopes, scopeId, name);
       const id = symbolIdCreate(cfg.languageId, file, kind, qualName, entry.nameNode.startIndex);
       const symbolRange = nodeRangeGet(declNode);
-
-      symbols.push({
+      const nextSymbol: SymbolRecord = {
         id,
         kind,
         name,
@@ -606,7 +617,20 @@ function symbolsExtract(
         qualName,
         flags: symbolFlagsGet(entry.nameNode, declNode),
         binding: entry.binding,
-      });
+      };
+      const symbolKey =
+        `${symbolRange.start}:${symbolRange.end}:${nameRange.start}:${nameRange.end}`;
+      const existingIndex = symbolIndexesByRange.get(symbolKey);
+      if (existingIndex !== undefined) {
+        const existing = symbols[existingIndex];
+        if (symbolKindPreference(nextSymbol.kind) > symbolKindPreference(existing.kind)) {
+          symbols[existingIndex] = nextSymbol;
+        }
+        continue;
+      }
+
+      symbolIndexesByRange.set(symbolKey, symbols.length);
+      symbols.push(nextSymbol);
     }
   }
 

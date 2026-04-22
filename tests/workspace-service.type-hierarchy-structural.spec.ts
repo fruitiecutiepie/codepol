@@ -31,18 +31,24 @@ function tempWorkspaceCreate(prefix: string): string {
   return dir;
 }
 
-function pluginConfigContentCreate(): string {
+function targetConfigContentCreate(language: 'typescript' | 'python'): string {
+  const files = language === 'python' ? 'src/**/*.py' : 'src/**/*.ts';
   return `[[plugins]]
 id = "@codepol/plugin"
 source = { kind = "builtin" }
 
 [targets.src]
-language = "typescript"
-files = ["src/**/*.ts"]
+language = "${language}"
+files = ["${files}"]
 
 [[rules]]
-ruleId = "@codepol/plugin/no-interface"
+id = "no-cycles"
+ruleId = "@codepol/plugin/no-cycles"
+description = "Reject circular imports"
 targets = ["src"]
+
+[rules.args]
+maxCycles = 50
 `;
 }
 
@@ -66,28 +72,30 @@ async function clientWorkspaceAttach(
   };
 }
 
-async function workspaceFixtureSetup(): Promise<{
+async function workspaceFixtureSetup(input: {
+  language: 'typescript' | 'python';
+  files: Record<string, string>;
+}): Promise<{
   service: WorkspaceService;
   clientSessionId: string;
   workspaceId: string;
 }> {
-  const root = tempWorkspaceCreate('codepol-ws-typehier-shape-');
+  const prefix =
+    input.language === 'python'
+      ? 'codepol-ws-typehier-shape-python-'
+      : 'codepol-ws-typehier-shape-';
+  const root = tempWorkspaceCreate(prefix);
   fs.mkdirSync(path.join(root, 'src'), { recursive: true });
   fs.writeFileSync(
     path.join(root, 'codepol.toml'),
-    pluginConfigContentCreate(),
+    targetConfigContentCreate(input.language),
     'utf8',
   );
-  fs.writeFileSync(
-    path.join(root, 'src', 'iface.ts'),
-    `export interface IShape {\n  area(): number;\n}\n`,
-    'utf8',
-  );
-  fs.writeFileSync(
-    path.join(root, 'src', 'duck.ts'),
-    `export class Duck {\n  area(): number { return 1; }\n}\n`,
-    'utf8',
-  );
+  for (const [relativePath, contents] of Object.entries(input.files)) {
+    const filePath = path.join(root, relativePath);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, contents, 'utf8');
+  }
   const service = workspaceServiceCreate();
   const { clientSessionId, workspaceId } = await clientWorkspaceAttach(
     service,
@@ -114,7 +122,13 @@ async function symbolIdLookup(
 
 describe('workspace-service queryTypeHierarchy structural-shape', () => {
   it('default mode is byte-identical to the legacy result (no structural edges)', async () => {
-    const { service, clientSessionId, workspaceId } = await workspaceFixtureSetup();
+    const { service, clientSessionId, workspaceId } = await workspaceFixtureSetup({
+      language: 'typescript',
+      files: {
+        'src/iface.ts': `export interface IShape {\n  area(): number;\n}\n`,
+        'src/duck.ts': `export class Duck {\n  area(): number { return 1; }\n}\n`,
+      },
+    });
     const ifaceId = await symbolIdLookup(service, clientSessionId, workspaceId, 'IShape');
 
     const result = await service.queryTypeHierarchy({
@@ -134,7 +148,13 @@ describe('workspace-service queryTypeHierarchy structural-shape', () => {
   });
 
   it('surfaces structural-shape edges when includeStructural=true', async () => {
-    const { service, clientSessionId, workspaceId } = await workspaceFixtureSetup();
+    const { service, clientSessionId, workspaceId } = await workspaceFixtureSetup({
+      language: 'typescript',
+      files: {
+        'src/iface.ts': `export interface IShape {\n  area(): number;\n}\n`,
+        'src/duck.ts': `export class Duck {\n  area(): number { return 1; }\n}\n`,
+      },
+    });
     const ifaceId = await symbolIdLookup(service, clientSessionId, workspaceId, 'IShape');
     const duckId = await symbolIdLookup(service, clientSessionId, workspaceId, 'Duck');
 
@@ -160,7 +180,13 @@ describe('workspace-service queryTypeHierarchy structural-shape', () => {
   });
 
   it('minConfidence=type-aware drops structural-shape edges', async () => {
-    const { service, clientSessionId, workspaceId } = await workspaceFixtureSetup();
+    const { service, clientSessionId, workspaceId } = await workspaceFixtureSetup({
+      language: 'typescript',
+      files: {
+        'src/iface.ts': `export interface IShape {\n  area(): number;\n}\n`,
+        'src/duck.ts': `export class Duck {\n  area(): number { return 1; }\n}\n`,
+      },
+    });
     const ifaceId = await symbolIdLookup(service, clientSessionId, workspaceId, 'IShape');
 
     const result = await service.queryTypeHierarchy({
@@ -179,5 +205,51 @@ describe('workspace-service queryTypeHierarchy structural-shape', () => {
     expect(
       result.edges.every((e) => e.typeRelationConfidence === 'type-aware'),
     ).toBe(true);
+  });
+
+  it('surfaces structural-shape edges for Python Protocol contracts too', async () => {
+    const { service, clientSessionId, workspaceId } = await workspaceFixtureSetup({
+      language: 'python',
+      files: {
+        'src/protocols.py': [
+          'from typing import Protocol',
+          '',
+          'class ReaderProtocol(Protocol):',
+          '    def read(self, size):',
+          '        ...',
+          '',
+        ].join('\n'),
+        'src/duck.py': [
+          'class DuckReader:',
+          '    def read(self, size):',
+          "        return ''",
+          '',
+        ].join('\n'),
+      },
+    });
+    const protocolId = await symbolIdLookup(
+      service,
+      clientSessionId,
+      workspaceId,
+      'ReaderProtocol',
+    );
+    const duckId = await symbolIdLookup(service, clientSessionId, workspaceId, 'DuckReader');
+
+    const result = await service.queryTypeHierarchy({
+      clientSessionId,
+      workspaceId,
+      symbolId: protocolId,
+      direction: 'subtypes',
+      includeStructural: true,
+    });
+
+    const symbolIds = result.nodes.map((n) => n.symbolId).sort();
+    expect(symbolIds).toContain(protocolId);
+    expect(symbolIds).toContain(duckId);
+
+    const structuralEdge = result.edges.find(
+      (edge) => edge.typeRelationConfidence === 'structural-shape',
+    );
+    expect(structuralEdge).toBeDefined();
   });
 });
