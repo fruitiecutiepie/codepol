@@ -41,6 +41,16 @@ The Python adapter is feature-complete for the structural pipeline. Items below 
 
 Until a host supplies that transport, `queryTypeHierarchy` for Python symbols remains structural-only by default even though the bridge package itself exists and is tested.
 
+### Type-aware supplement for instance-attribute Protocol matches
+
+The Python type-aware hierarchy bridge opens a narrower follow-up than "teach tree-sitter every `self.attr = ...` pattern." Pyright / pylance can often confirm Protocol implementers through `textDocument/implementation` even when satisfaction depends on inferred instance attributes assigned inside methods (`self.name = ...` in `__init__`, etc.). Today that signal is confined to the workspace-service type-hierarchy overlay:
+
+- it can improve `queryTypeHierarchy` as a `type-aware` edge when a host/provider transport is available
+- it does **not** populate index-time `MemberShapeRelation`s
+- it does **not** affect `ProjectIndex.subTypesGet(...)` consumers like `no-undeclared-implementer`
+
+A future slice could decide whether Python should consult `TypeAwareTypeHierarchySource` for those attribute-backed implementers instead of widening the tree-sitter structural extractor. If that lands, keep the confidence tier explicit (`type-aware`, not `structural-shape`) unless the architecture intentionally changes to let policy/index consumers depend on language-server-confirmed edges.
+
 ### Symbol-id discovery and editor-side guard symmetry (cross-language)
 
 Not Python-specific — the `cursorSymbolResolve` kind guard added for `showTypeHierarchy` (rejects non-class/interface/type cursors) does not yet have a sibling for `showCallGraph` / `findCallbacks` (which would reject non-function/method cursors). The Python adapter is correctly impacted by both — Python class symbols vs Python function symbols — but the gap is in `extension-vscode/src/commands.ts`, not the adapter.
