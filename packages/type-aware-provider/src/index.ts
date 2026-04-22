@@ -19,10 +19,27 @@ export {
   WORKSPACE_TYPE_AWARE_EDITOR_BRIDGE_PROVIDER_ENV,
 } from './editorAdapterBackend';
 export {
+  workspaceTypeAwareLspSubprocessArgsResolve,
+  workspaceTypeAwareLspSubprocessBackendCreate,
+  workspaceTypeAwareLspSubprocessConnectionHandlersInstallDefault,
+  workspaceTypeAwareLspSubprocessInitializeParamsCreateDefault,
+  workspaceTypeAwareLspSubprocessLaunchSpecResolve,
+  workspaceTypeAwareLspSubprocessRuntimeCreate,
+} from './lspSubprocessBackend';
+export {
   WORKSPACE_TYPE_AWARE_PYRIGHT_ARGS_JSON_ENV,
   WORKSPACE_TYPE_AWARE_PYRIGHT_BIN_ENV,
 } from './pyrightBackend';
 export type { WorkspaceTypeAwareProviderBackend } from './providerBackend';
+export type {
+  WorkspaceTypeAwareLspSubprocessBackendOptions,
+  WorkspaceTypeAwareLspSubprocessConnectionHandlersInstall,
+  WorkspaceTypeAwareLspSubprocessInitializeParamsCreate,
+  WorkspaceTypeAwareLspSubprocessLaunchSpec,
+  WorkspaceTypeAwareLspSubprocessSessionFactory,
+  WorkspaceTypeAwareLspSubprocessSessionFactoryInput,
+  WorkspaceTypeAwareLspSubprocessSessionHandle,
+} from './lspSubprocessBackend';
 
 export type WorkspaceTypeAwareBridgeProviderCreateOptions = {
   env?: NodeJS.ProcessEnv;
