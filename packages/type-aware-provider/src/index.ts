@@ -17,6 +17,11 @@ import {
   WORKSPACE_TYPE_AWARE_PYRIGHT_ARGS_JSON_ENV,
   WORKSPACE_TYPE_AWARE_PYRIGHT_BIN_ENV,
 } from './pyrightBackend';
+import {
+  workspaceTypeAwareRustAnalyzerBackendCreate,
+  WORKSPACE_TYPE_AWARE_RUST_ANALYZER_ARGS_JSON_ENV,
+  WORKSPACE_TYPE_AWARE_RUST_ANALYZER_BIN_ENV,
+} from './rustAnalyzerBackend';
 import type { WorkspaceTypeAwareProviderBackend } from './providerBackend';
 import { workspaceTypeAwareBridgeLifecycleCompose } from './providerBackend';
 
@@ -41,6 +46,12 @@ export {
   WORKSPACE_TYPE_AWARE_PYRIGHT_ARGS_JSON_ENV,
   WORKSPACE_TYPE_AWARE_PYRIGHT_BIN_ENV,
 } from './pyrightBackend';
+export {
+  WORKSPACE_TYPE_AWARE_RUST_ANALYZER_ARGS_JSON_ENV,
+  WORKSPACE_TYPE_AWARE_RUST_ANALYZER_BIN_ENV,
+  workspaceTypeAwareRustAnalyzerBackendCreate,
+  workspaceTypeAwareRustAnalyzerRuntimeCreate,
+} from './rustAnalyzerBackend';
 export type { WorkspaceTypeAwareProviderBackend } from './providerBackend';
 export type {
   WorkspaceTypeAwareLspSubprocessBackendOptions,
