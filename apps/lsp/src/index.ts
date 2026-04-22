@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 
 import { diagnosticsRuntimeSetOverrides } from '@codepol/core';
+import { workspaceTypeAwareBridgeProviderCreate } from '@codepol/type-aware-provider';
+import type { WorkspaceService } from '@codepol/workspace-service/contracts';
+import { codepolLspEditorTypeAwareProviderCreate } from './editorTypeAwareProvider';
 import { CodepolLspServer } from './server';
 import {
   lspWorkspaceServiceResolve,
@@ -37,13 +40,25 @@ function workspaceServiceModeLog(info: LspWorkspaceServiceResolvedInfo): void {
 }
 
 const clientInstanceId = `codepol-lsp-${process.pid}`;
-const server = new CodepolLspServer({
-  clientInstanceId,
-  serviceFactory: () =>
-    lspWorkspaceServiceResolve({
-      clientInstanceId,
-      onResolved: workspaceServiceModeLog,
+let server: CodepolLspServer;
+const serviceFactory = async (): Promise<WorkspaceService> =>
+  await lspWorkspaceServiceResolve({
+    clientInstanceId,
+    onResolved: workspaceServiceModeLog,
+    typeAwareBridgeProvider: await workspaceTypeAwareBridgeProviderCreate({
+      env: process.env,
+      editorBackend: {
+        backendId: 'lsp-client-editor',
+        runtimeCreate: async () =>
+          codepolLspEditorTypeAwareProviderCreate({
+            clientRequest: (method, params) => server.requestClient(method, params),
+          }),
+      },
     }),
+  });
+server = new CodepolLspServer({
+  clientInstanceId,
+  serviceFactory,
   sendMessage: frameWrite,
 });
 
@@ -75,7 +90,7 @@ process.stdin.on('data', (chunk: Buffer) => {
     const payload = buffer.subarray(bodyStart, bodyEnd).toString('utf8');
     buffer = buffer.subarray(bodyEnd);
 
-    void server.handleMessage(JSON.parse(payload) as never).catch((error) => {
+    void server.handleMessage(JSON.parse(payload) as never).catch((error: unknown) => {
       const message = error instanceof Error
         ? (error.stack ?? error.message)
         : String(error);

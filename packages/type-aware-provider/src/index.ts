@@ -1,5 +1,9 @@
 import type {
+  WorkspaceTypeAwareBridgeExecutionContext,
   WorkspaceTypeAwareBridgeProviderRuntime,
+  WorkspaceTypeAwareBridgeTransport,
+  WorkspaceTypeAwareBridgeTransportResolver,
+  WorkspaceTypeAwareBridgeTransportSource,
   WorkspaceTypeAwareBridgeTransports,
 } from '@codepol/workspace-service';
 import { workspaceTypeAwareEditorAdapterBackendCreate } from './editorAdapterBackend';
@@ -46,7 +50,14 @@ export async function workspaceTypeAwareBridgeProviderCreate(
     selectedRuntimes.add(editorRuntime);
   }
 
-  if (editorRuntime?.transports?.python) {
+  if (editorRuntime?.transports?.python && pyrightRuntime?.transports?.python) {
+    transports.python = workspaceTypeAwareBridgeTransportSourceFallbackCompose(
+      editorRuntime.transports.python,
+      pyrightRuntime.transports.python,
+    );
+    selectedRuntimes.add(editorRuntime);
+    selectedRuntimes.add(pyrightRuntime);
+  } else if (editorRuntime?.transports?.python) {
     transports.python = editorRuntime.transports.python;
     selectedRuntimes.add(editorRuntime);
   } else if (pyrightRuntime?.transports?.python) {
@@ -81,4 +92,54 @@ async function providerRuntimeGet(
   } catch {
     return undefined;
   }
+}
+
+function workspaceTypeAwareBridgeTransportSourceFallbackCompose(
+  primary: WorkspaceTypeAwareBridgeTransportSource,
+  fallback: WorkspaceTypeAwareBridgeTransportSource,
+): WorkspaceTypeAwareBridgeTransportResolver {
+  return {
+    transportResolve(context: WorkspaceTypeAwareBridgeExecutionContext) {
+      const primaryTransport = workspaceTypeAwareBridgeTransportResolve(primary, context);
+      const fallbackTransport = workspaceTypeAwareBridgeTransportResolve(fallback, context);
+      if (primaryTransport && fallbackTransport) {
+        return workspaceTypeAwareBridgeTransportFallbackCreate(
+          primaryTransport,
+          fallbackTransport,
+        );
+      }
+      return primaryTransport ?? fallbackTransport;
+    },
+  };
+}
+
+function workspaceTypeAwareBridgeTransportResolve(
+  source: WorkspaceTypeAwareBridgeTransportSource,
+  context: WorkspaceTypeAwareBridgeExecutionContext,
+): WorkspaceTypeAwareBridgeTransport | undefined {
+  if (workspaceTypeAwareBridgeTransportResolverLike(source)) {
+    return source.transportResolve(context);
+  }
+  return source;
+}
+
+function workspaceTypeAwareBridgeTransportFallbackCreate(
+  primary: WorkspaceTypeAwareBridgeTransport,
+  fallback: WorkspaceTypeAwareBridgeTransport,
+): WorkspaceTypeAwareBridgeTransport {
+  return {
+    async request<T>(method: string, params: unknown): Promise<T> {
+      try {
+        return await primary.request<T>(method, params);
+      } catch {
+        return await fallback.request<T>(method, params);
+      }
+    },
+  };
+}
+
+function workspaceTypeAwareBridgeTransportResolverLike(
+  value: WorkspaceTypeAwareBridgeTransportSource,
+): value is WorkspaceTypeAwareBridgeTransportResolver {
+  return 'transportResolve' in value;
 }

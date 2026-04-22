@@ -38,6 +38,8 @@ export const CODEPOL_LSP_REQUEST_DIAGNOSTICS_CONFIG =
   'codepol/diagnosticsConfig';
 export const CODEPOL_LSP_REQUEST_DIAGNOSTICS_ESCALATIONS =
   'codepol/diagnosticsEscalations';
+export const CODEPOL_LSP_CLIENT_REQUEST_EDITOR_TYPE_AWARE =
+  'codepol/editorTypeAwareRequest';
 export const CODEPOL_LSP_COMMAND_CONFIGURE_DIAGNOSTICS =
   'codepol.diagnostics.configure';
 export const CODEPOL_LSP_COMMAND_ESCALATE_DIAGNOSTICS =

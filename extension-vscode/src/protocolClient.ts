@@ -244,12 +244,15 @@ export type CodepolProtocolClient = {
 };
 
 export class VscodeLanguageClientProtocol implements CodepolProtocolClient {
-  private readonly client: Pick<LanguageClient, 'start' | 'state' | 'stop' | 'sendRequest'>;
+  private readonly client: Pick<
+    LanguageClient,
+    'start' | 'state' | 'stop' | 'sendRequest' | 'onRequest'
+  >;
   private startPromise: Promise<void> | undefined;
   private startError: unknown;
 
   constructor(
-    client?: Pick<LanguageClient, 'start' | 'state' | 'stop' | 'sendRequest'>,
+    client?: Pick<LanguageClient, 'start' | 'state' | 'stop' | 'sendRequest' | 'onRequest'>,
   ) {
     if (client) {
       this.client = client;
@@ -314,6 +317,13 @@ export class VscodeLanguageClientProtocol implements CodepolProtocolClient {
     await this.client.stop();
     this.startPromise = undefined;
     this.startError = undefined;
+  }
+
+  serverRequestHandlerRegister(
+    method: string,
+    handler: (params: unknown) => unknown | Promise<unknown>,
+  ): void {
+    this.client.onRequest(method, handler);
   }
 
   private async ensureStarted(): Promise<void> {

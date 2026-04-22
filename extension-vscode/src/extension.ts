@@ -70,6 +70,7 @@ import {
   VscodeLanguageClientProtocol,
   type CodepolProtocolClient,
 } from './protocolClient';
+import { codepolTypeAwareEditorBridgeRegister } from './typeAwareEditorBridge';
 import { CodepolSidebarViewProvider } from './sidebarView';
 import {
   semanticSearchInitialQueryResolve,
@@ -680,6 +681,7 @@ async function semanticSearchPick(input: {
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const protocol = new VscodeLanguageClientProtocol();
+  codepolTypeAwareEditorBridgeRegister(protocol);
   protocolClient = protocol;
   const readiness = new CodepolReadinessController(protocol);
   const statusBarItem = vscode.window.createStatusBarItem(

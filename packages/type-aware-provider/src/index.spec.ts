@@ -61,11 +61,56 @@ describe('workspaceTypeAwareBridgeProviderCreate', () => {
       })),
     });
 
-    expect(runtime?.transports?.python).toBe(editorPythonTransport);
+    const pythonTransport = runtime?.transports?.python;
+    const resolvedPython =
+      pythonTransport && 'transportResolve' in pythonTransport
+        ? pythonTransport.transportResolve(workspaceInputCreate())
+        : pythonTransport;
+    const pythonResult = await resolvedPython?.request<Array<{ source: string }>>(
+      'textDocument/implementation',
+      {},
+    );
+    expect(pythonResult).toEqual([]);
     expect(runtime?.transports?.typescript).toBe(editorPythonTransport);
     await runtime?.lifecycle?.workspaceAttached?.(workspaceInputCreate());
     expect(editorAttached).toBe(1);
-    expect(pyrightAttached).toBe(0);
+    expect(pyrightAttached).toBe(1);
+  });
+
+  it('falls back to pyright per request when the editor transport rejects', async () => {
+    const runtime = await workspaceTypeAwareBridgeProviderCreate({
+      env: {},
+      editorBackend: backendCreate('editor', async () => ({
+        transports: {
+          python: {
+            async request(): Promise<never> {
+              throw new Error('editor request unsupported');
+            },
+          },
+        },
+      })),
+      pyrightBackend: backendCreate('pyright', async () => ({
+        transports: {
+          python: {
+            async request<T>(): Promise<T> {
+              return [{ source: 'pyright' }] as T;
+            },
+          },
+        },
+      })),
+    });
+
+    const pythonTransport = runtime?.transports?.python;
+    expect(pythonTransport).toBeDefined();
+    const resolved =
+      pythonTransport && 'transportResolve' in pythonTransport
+        ? pythonTransport.transportResolve(workspaceInputCreate())
+        : pythonTransport;
+    const result = await resolved?.request<Array<{ source: string }>>(
+      'textDocument/implementation',
+      {},
+    );
+    expect(result).toEqual([{ source: 'pyright' }]);
   });
 
   it('falls back to pyright when the editor backend is unavailable', async () => {

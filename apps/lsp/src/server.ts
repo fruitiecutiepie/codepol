@@ -2484,6 +2484,10 @@ export class CodepolLspServer {
     });
   }
 
+  requestClient(method: string, params: unknown): Promise<unknown> {
+    return this.clientRequest(method, params);
+  }
+
   private clientRequestSendNoWait(method: string, params: unknown): void {
     const id = this.nextRequestId;
     this.nextRequestId += 1;
