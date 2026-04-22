@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import fs from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
@@ -183,6 +184,7 @@ import {
   graphSnapshotFromDependencyGraphResult as graphSnapshotFromGraphInternal,
   graphSnapshotWorkspaceRootIdCompute as graphSnapshotWorkspaceRootIdComputeInternal,
 } from './graphSnapshotStore';
+import type { WorkspaceTypeAwareBridgeSymbolTable } from './typeAwareBridgeHost';
 
 export * from './daemon';
 export {
@@ -194,6 +196,7 @@ export {
 } from './daemonSelfWatch';
 export { builtinPluginsRefresh, ensureWorkspaceRuntimeReady } from './runtime';
 export * from './warmCache';
+export * from './typeAwareBridgeHost';
 export {
   fileSystemGraphSnapshotStoreCreate,
   graphSnapshotFromDependencyGraphResult,
@@ -5497,6 +5500,57 @@ function workspaceSymbolDescriptorCreate(
   };
 }
 
+function workspaceTypeAwareBridgeSymbolTableCreate(
+  state: WorkspaceDocumentsState,
+  index: ProjectIndex,
+): WorkspaceTypeAwareBridgeSymbolTable {
+  return {
+    symbolLocate(symbolId) {
+      const symbol = index.symbolGet(symbolId);
+      if (!symbol || !workspaceSymbolDescriptorKindIs(symbol.kind)) {
+        return undefined;
+      }
+      const source = workspaceSourceGet(state, symbol.file);
+      let targetByteStart = symbol.byteRange.start;
+      if (symbol.name) {
+        const declarationSlice = source.slice(symbol.byteRange.start, symbol.byteRange.end);
+        const nameOffset = declarationSlice.indexOf(symbol.name);
+        if (nameOffset >= 0) {
+          targetByteStart = symbol.byteRange.start + nameOffset;
+        }
+      }
+      const nameRange = workspaceRangeFromByteRange(source, {
+        start: targetByteStart,
+        end: Math.min(targetByteStart + Math.max(symbol.name.length, 1), symbol.byteRange.end),
+      });
+      return {
+        uri: workspacePathToUri(symbol.file),
+        line: nameRange.start.line,
+        character: nameRange.start.character,
+      };
+    },
+    symbolIdResolve(location) {
+      const result = workspaceSymbolAtPositionResultCreate(state, index, {
+        uri: location.uri,
+        position: {
+          line: location.line,
+          character: location.character,
+        },
+      });
+      return result.symbol?.symbolId;
+    },
+    symbolKindResolve(symbolId) {
+      const symbol = index.symbolGet(symbolId);
+      if (!symbol || !workspaceSymbolDescriptorKindIs(symbol.kind)) {
+        return undefined;
+      }
+      if (symbol.kind === 'interface') return 'interface';
+      if (symbol.kind === 'class') return 'class';
+      return 'other';
+    },
+  };
+}
+
 function workspaceSymbolLookupResultCreate(
   state: WorkspaceDocumentsState,
   index: ProjectIndex,
@@ -9862,6 +9916,8 @@ export class WorkspaceServiceEngine implements WorkspaceService {
    * one does not require or affect the other.
    */
   private readonly typeAwareTypeHierarchySourceRegistry: TypeAwareTypeHierarchySourceRegistry;
+  private readonly typeAwareBridgeSymbolTableContext =
+    new AsyncLocalStorage<WorkspaceTypeAwareBridgeSymbolTable>();
   // Per-workspace pending debounced persist. Keyed by `workspaceId` because
   // every attached client session sees the same in-memory workspace state.
   private readonly persistTimers = new Map<string, PersistTimerEntry>();
@@ -9917,6 +9973,42 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       languageId,
       source,
     );
+  }
+
+  /**
+   * Resolve the symbol-table callbacks the language-bridge wrappers use
+   * to translate between workspace `symbolId`s and LSP
+   * `(uri, line, character)` tuples.
+   *
+   * When called during `queryCallGraph` / `queryTypeHierarchy`, the
+   * method returns the exact active workspace/session table for that
+   * query via an async-local context. Outside that path it falls back to
+   * the first attached workspace session whose cached index currently
+   * contains the symbol.
+   */
+  typeAwareBridgeSymbolTableGet(
+    symbolId: SymbolId,
+  ): WorkspaceTypeAwareBridgeSymbolTable | undefined {
+    const active = this.typeAwareBridgeSymbolTableContext.getStore();
+    if (active) {
+      return active;
+    }
+    for (const clientSession of this.clientSessions.values()) {
+      for (const [workspaceId, workspaceSession] of clientSession.workspaces) {
+        if (!this.workspaces.has(workspaceId)) {
+          continue;
+        }
+        const indexState = workspaceSession.indexState;
+        if (!indexState?.index.symbolGet(symbolId)) {
+          continue;
+        }
+        return workspaceTypeAwareBridgeSymbolTableCreate(
+          workspaceSession,
+          indexState.index,
+        );
+      }
+    }
+    return undefined;
   }
 
   private workspacePersistSchedule(
@@ -10997,18 +11089,23 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       signal: input.signal,
     });
     workspaceAnalysisGenerationValidate(workspaceSession, input);
-    return await workspaceCallGraphResultCreate(
-      workspace,
+    const symbolTable = workspaceTypeAwareBridgeSymbolTableCreate(
+      workspaceSession,
       index,
-      this.typeAwareCallGraphSourceRegistry,
-      {
-        symbolId: input.symbolId,
-        direction: input.direction,
-        depth: input.depth,
-        requireTypeAware: input.requireTypeAware,
-        signal: input.signal,
-      },
     );
+    return await this.typeAwareBridgeSymbolTableContext.run(symbolTable, async () =>
+      workspaceCallGraphResultCreate(
+        workspace,
+        index,
+        this.typeAwareCallGraphSourceRegistry,
+        {
+          symbolId: input.symbolId,
+          direction: input.direction,
+          depth: input.depth,
+          requireTypeAware: input.requireTypeAware,
+          signal: input.signal,
+        },
+      ));
   }
 
   async querySymbolFlow(input: {
@@ -11062,20 +11159,25 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       signal: input.signal,
     });
     workspaceAnalysisGenerationValidate(workspaceSession, input);
-    return await workspaceTypeHierarchyResultCreate(
-      workspace,
+    const symbolTable = workspaceTypeAwareBridgeSymbolTableCreate(
+      workspaceSession,
       index,
-      this.typeAwareTypeHierarchySourceRegistry,
-      {
-        symbolId: input.symbolId,
-        direction: input.direction,
-        depth: input.depth,
-        includeStructural: input.includeStructural,
-        minConfidence: input.minConfidence,
-        requireTypeAware: input.requireTypeAware,
-        signal: input.signal,
-      },
     );
+    return await this.typeAwareBridgeSymbolTableContext.run(symbolTable, async () =>
+      workspaceTypeHierarchyResultCreate(
+        workspace,
+        index,
+        this.typeAwareTypeHierarchySourceRegistry,
+        {
+          symbolId: input.symbolId,
+          direction: input.direction,
+          depth: input.depth,
+          includeStructural: input.includeStructural,
+          minConfidence: input.minConfidence,
+          requireTypeAware: input.requireTypeAware,
+          signal: input.signal,
+        },
+      ));
   }
 
   async queryDependencyDiff(input: {

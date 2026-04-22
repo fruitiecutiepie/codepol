@@ -9,6 +9,8 @@ import {
   WORKSPACE_DAEMON_ENGINE_VERSION,
   workspaceDaemonDefaultCacheDirResolve,
   workspaceDaemonServerStart,
+  workspaceTypeAwareBridgeSourcesRegister,
+  workspaceTypeAwareBridgeTransportsResolve,
   workspaceWatcherCreate,
   workspaceWarmCacheEnvironmentIdCreate,
   workspaceWarmCacheFsStoreCreate,
@@ -31,18 +33,24 @@ async function main(): Promise<void> {
   // under a separate cache dir so they survive reboot on Linux desktops
   // where XDG_RUNTIME_DIR is tmpfs.
   const cacheDir = workspaceDaemonDefaultCacheDirResolve();
+  const typeAwareBridgeTransports = await workspaceTypeAwareBridgeTransportsResolve();
+  const engine = new WorkspaceServiceEngine({
+    backgroundWarmup: true,
+    watcherCreate: workspaceWatcherCreate,
+    warmCache: workspaceWarmCacheFsStoreCreate({
+      cacheDir,
+      engineVersion: WORKSPACE_DAEMON_ENGINE_VERSION,
+      buildId: WORKSPACE_DAEMON_BUILD_ID,
+      environmentId: workspaceWarmCacheEnvironmentIdCreate(process.env),
+    }),
+  });
+  workspaceTypeAwareBridgeSourcesRegister({
+    engine,
+    transports: typeAwareBridgeTransports,
+  });
 
   const server = await workspaceDaemonServerStart({
-    service: new WorkspaceServiceEngine({
-      backgroundWarmup: true,
-      watcherCreate: workspaceWatcherCreate,
-      warmCache: workspaceWarmCacheFsStoreCreate({
-        cacheDir,
-        engineVersion: WORKSPACE_DAEMON_ENGINE_VERSION,
-        buildId: WORKSPACE_DAEMON_BUILD_ID,
-        environmentId: workspaceWarmCacheEnvironmentIdCreate(process.env),
-      }),
-    }),
+    service: engine,
     policyCheck: workspacePolicyCheck,
   });
 

@@ -18,6 +18,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   WorkspaceServiceEngine,
+  workspaceTypeAwareBridgeSourcesRegister,
   workspaceServiceCreate,
   type WorkspaceService,
 } from '@codepol/workspace-service';
@@ -51,8 +52,33 @@ language = "typescript"
 files = ["src/**/*.ts"]
 
 [[rules]]
-ruleId = "@codepol/plugin/no-interface"
+id = "no-cycles"
+ruleId = "@codepol/plugin/no-cycles"
+description = "Reject circular imports"
 targets = ["src"]
+
+[rules.args]
+maxCycles = 50
+`;
+}
+
+function pythonConfigContentCreate(): string {
+  return `[[plugins]]
+id = "@codepol/plugin"
+source = { kind = "builtin" }
+
+[targets.src]
+language = "python"
+files = ["src/**/*.py"]
+
+[[rules]]
+id = "no-cycles"
+ruleId = "@codepol/plugin/no-cycles"
+description = "Reject circular imports"
+targets = ["src"]
+
+[rules.args]
+maxCycles = 50
 `;
 }
 
@@ -136,6 +162,59 @@ async function fixtureSetup(
     workspaceId,
     ifaceId: ifaceLookup.symbols[0]!.symbolId,
     duckId: duckLookup.symbols[0]!.symbolId,
+  };
+}
+
+async function pythonFixtureSetup(
+  options: { engine?: WorkspaceServiceEngine } = {},
+): Promise<{
+  service: WorkspaceService;
+  clientSessionId: string;
+  workspaceId: string;
+  animalId: string;
+  dogId: string;
+}> {
+  const root = tempWorkspaceCreate('codepol-ws-typeaware-python-');
+  fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+  fs.writeFileSync(
+    path.join(root, 'codepol.toml'),
+    pythonConfigContentCreate(),
+    'utf8',
+  );
+  fs.writeFileSync(
+    path.join(root, 'src', 'animals.py'),
+    `class Animal:\n    pass\n\nclass Dog(Animal):\n    pass\n`,
+    'utf8',
+  );
+
+  const service = options.engine
+    ? workspaceServiceCreate({ engine: options.engine })
+    : workspaceServiceCreate();
+  const { clientSessionId, workspaceId } = await clientWorkspaceAttach(
+    service,
+    root,
+    path.join(root, 'codepol.toml'),
+  );
+
+  const animalLookup = await service.querySymbolLookup({
+    clientSessionId,
+    workspaceId,
+    name: 'Animal',
+  });
+  const dogLookup = await service.querySymbolLookup({
+    clientSessionId,
+    workspaceId,
+    name: 'Dog',
+  });
+  expect(animalLookup.symbols.length).toBeGreaterThan(0);
+  expect(dogLookup.symbols.length).toBeGreaterThan(0);
+
+  return {
+    service,
+    clientSessionId,
+    workspaceId,
+    animalId: animalLookup.symbols[0]!.symbolId,
+    dogId: dogLookup.symbols[0]!.symbolId,
   };
 }
 
@@ -295,5 +374,50 @@ describe('workspace-service queryTypeHierarchy type-aware merge', () => {
     expect(
       result.edges.some((e) => e.typeRelationConfidence === 'type-aware'),
     ).toBe(true);
+  });
+
+  it('host bridge registration wires a Python transport into queryTypeHierarchy', async () => {
+    const engine = new WorkspaceServiceEngine();
+    workspaceTypeAwareBridgeSourcesRegister({
+      engine,
+      transports: {
+        python: {
+          async request<T>(method: string, params: unknown): Promise<T> {
+            if (method === 'textDocument/implementation') {
+              const uri =
+                (params as { textDocument?: { uri?: string } }).textDocument?.uri
+                ?? 'file:///missing.py';
+              return [
+                {
+                  uri,
+                  range: {
+                    start: { line: 3, character: 6 },
+                    end: { line: 3, character: 9 },
+                  },
+                },
+              ] as T;
+            }
+            throw new Error(`unexpected LSP method: ${method}`);
+          },
+        },
+      },
+    });
+    const { service, clientSessionId, workspaceId, animalId, dogId } =
+      await pythonFixtureSetup({ engine });
+
+    const result = await service.queryTypeHierarchy({
+      clientSessionId,
+      workspaceId,
+      symbolId: animalId,
+      direction: 'subtypes',
+      requireTypeAware: true,
+    });
+    const typeAwareEdge = result.edges.find(
+      (edge) =>
+        edge.fromUri.endsWith(encodeURIComponent(dogId)) &&
+        edge.toUri.endsWith(encodeURIComponent(animalId)),
+    );
+    expect(typeAwareEdge).toBeDefined();
+    expect(typeAwareEdge!.typeRelationConfidence).toBe('type-aware');
   });
 });

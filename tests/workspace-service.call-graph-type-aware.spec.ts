@@ -28,6 +28,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   WorkspaceServiceEngine,
+  workspaceTypeAwareBridgeSourcesRegister,
   workspaceServiceCreate,
   type WorkspaceService,
 } from '@codepol/workspace-service';
@@ -381,5 +382,73 @@ describe('workspace-service queryCallGraph (type-aware merge)', () => {
     // alpha has no callees structurally and the source returns nothing
     // — so the merge should yield an empty edge list with no errors.
     expect(result.edges).toEqual([]);
+  });
+
+  it('host bridge registration wires a TypeScript transport into queryCallGraph', async () => {
+    const { engine, service, clientSessionId, workspaceId, callerId, calleeId } =
+      await callerCalleeFixtureCreate('codepol-cg-host-bridge-');
+    workspaceTypeAwareBridgeSourcesRegister({
+      engine,
+      transports: {
+        typescript: {
+          async request<T>(method: string, params: unknown): Promise<T> {
+            if (method === 'textDocument/prepareCallHierarchy') {
+              const uri =
+                (params as { textDocument?: { uri?: string } }).textDocument?.uri
+                ?? 'file:///missing.ts';
+              return [
+                {
+                  name: 'caller',
+                  kind: 12,
+                  uri,
+                  range: { start: { line: 1, character: 0 }, end: { line: 1, character: 16 } },
+                  selectionRange: {
+                    start: { line: 1, character: 16 },
+                    end: { line: 1, character: 22 },
+                  },
+                },
+              ] as T;
+            }
+            if (method === 'callHierarchy/outgoingCalls') {
+              const uri =
+                (params as { item?: { uri?: string } }).item?.uri ?? 'file:///missing.ts';
+              return [
+                {
+                  to: {
+                    name: 'callee',
+                    kind: 12,
+                    uri,
+                    range: { start: { line: 0, character: 0 }, end: { line: 0, character: 16 } },
+                    selectionRange: {
+                      start: { line: 0, character: 16 },
+                      end: { line: 0, character: 22 },
+                    },
+                    detail: 'dynamic dispatch via interface',
+                  },
+                  fromRanges: [],
+                },
+              ] as T;
+            }
+            throw new Error(`unexpected LSP method: ${method}`);
+          },
+        },
+      },
+    });
+
+    const result = await service.queryCallGraph({
+      clientSessionId,
+      workspaceId,
+      symbolId: callerId,
+      direction: 'callees',
+      requireTypeAware: true,
+    });
+    const typeAwareEdge = result.edges.find(
+      (edge) =>
+        edge.fromUri.endsWith(encodeURIComponent(callerId)) &&
+        edge.toUri.endsWith(encodeURIComponent(calleeId)),
+    );
+    expect(typeAwareEdge).toBeDefined();
+    expect(typeAwareEdge!.callGraphConfidence).toBe('type-aware');
+    expect(typeAwareEdge!.callGraphKind).toBe('dynamic-dispatch');
   });
 });

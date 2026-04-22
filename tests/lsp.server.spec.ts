@@ -37,8 +37,33 @@ language = "typescript"
 files = ["src/**/*.ts"]
 
 [[rules]]
-ruleId = "@codepol/plugin/no-interface"
+id = "no-cycles"
+ruleId = "@codepol/plugin/no-cycles"
+description = "Reject circular imports"
 targets = ["src"]
+
+[rules.args]
+maxCycles = 50
+`;
+}
+
+function pythonTypeHierarchyConfigContentCreate(): string {
+  return `[[plugins]]
+id = "@codepol/plugin"
+source = { kind = "builtin" }
+
+[targets.src]
+language = "python"
+files = ["src/**/*.py"]
+
+[[rules]]
+id = "no-cycles"
+ruleId = "@codepol/plugin/no-cycles"
+description = "Reject circular imports"
+targets = ["src"]
+
+[rules.args]
+maxCycles = 50
 `;
 }
 
@@ -2680,6 +2705,94 @@ describe('CodepolLspServer', () => {
     expect(resolved).toEqual([{ mode: 'in_process' }]);
     expect(registered.daemonSessionId).toBeDefined();
     expect(diagnostics).toHaveLength(1);
+  });
+
+  it('wires injected type-aware bridge transports into the in-process host', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-lsp-in-process-python-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'codepol.toml'),
+      pythonTypeHierarchyConfigContentCreate(),
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'src', 'animals.py'),
+      `class Animal:\n    pass\n\nclass Dog(Animal):\n    pass\n`,
+      'utf8',
+    );
+
+    const service = await lspWorkspaceServiceResolve({
+      env: {
+        ...process.env,
+        CODEPOL_WORKSPACE_SERVICE_MODE: 'in_process',
+      },
+      clientInstanceId: 'lsp-in-process-python-typeaware',
+      typeAwareBridgeTransports: {
+        python: {
+          async request<T>(method: string, params: unknown): Promise<T> {
+            if (method === 'textDocument/implementation') {
+              const uri =
+                (params as { textDocument?: { uri?: string } }).textDocument?.uri
+                ?? 'file:///missing.py';
+              return [
+                {
+                  uri,
+                  range: {
+                    start: { line: 3, character: 6 },
+                    end: { line: 3, character: 9 },
+                  },
+                },
+              ] as T;
+            }
+            throw new Error(`unexpected LSP method: ${method}`);
+          },
+        },
+      },
+    });
+
+    const registered = await service.registerClientSession({
+      clientKind: 'lsp',
+      clientInstanceId: 'resolved-service-client',
+    });
+    const attached = await service.attachWorkspace({
+      clientSessionId: registered.clientSessionId,
+      rootPath: workspaceRoot,
+      configPath: path.join(workspaceRoot, 'codepol.toml'),
+    });
+    await service.completeReplay({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+    });
+
+    const animalLookup = await service.querySymbolLookup({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      name: 'Animal',
+    });
+    const dogLookup = await service.querySymbolLookup({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      name: 'Dog',
+    });
+    expect(animalLookup.symbols.length).toBeGreaterThan(0);
+    expect(dogLookup.symbols.length).toBeGreaterThan(0);
+
+    const result = await service.queryTypeHierarchy({
+      clientSessionId: registered.clientSessionId,
+      workspaceId: attached.workspaceId,
+      symbolId: animalLookup.symbols[0]!.symbolId,
+      direction: 'subtypes',
+      requireTypeAware: true,
+    });
+    const typeAwareEdge = result.edges.find(
+      (edge) =>
+        edge.fromUri.endsWith(encodeURIComponent(dogLookup.symbols[0]!.symbolId)) &&
+        edge.toUri.endsWith(encodeURIComponent(animalLookup.symbols[0]!.symbolId)),
+    );
+    expect(typeAwareEdge).toBeDefined();
+    expect(typeAwareEdge!.typeRelationConfidence).toBe('type-aware');
   });
 
   it('falls back to an in-process workspace service when daemon startup fails', async () => {

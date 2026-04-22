@@ -40,15 +40,15 @@ The TypeScript adapter ships a `memberShape` query that captures interface and c
 
 Adding this is non-trivial. Python's structural-shape semantics differ from TypeScript's: duck typing means there's no static `implements` declaration to verify against, and the closest analogue (`typing.Protocol`) needs `runtime_checkable` semantics that aren't visible to the parser. A first pass could mirror the TypeScript shape extraction against `class_definition` body methods and `typing.Protocol`-marked classes, but the design needs a separate decision about which Python idioms count as "structural shape" — convention-based duck-typed parameters? Annotated parameter types referencing classes that exist in the codebase? Both?
 
-### `TypeAwareTypeHierarchySource` binding for Python (Phase 9.5 follow-up)
+### `TypeAwareTypeHierarchySource` host wiring for Python (Phase 9.5 follow-up)
 
-`@codepol/python-language-bridge` currently ships only the call-graph factory (`pythonCallGraphSourceCreate`). The TypeScript bridge ships both call-graph and type-hierarchy factories. To close parity:
+`@codepol/python-language-bridge` now ships both `pythonCallGraphSourceCreate` and `pythonTypeHierarchySourceCreate`, and the Python type-hierarchy bridge has the same fake-transport contract coverage shape as the TypeScript package. The remaining parity work is host wiring:
 
-- add `pythonTypeHierarchySourceCreate({ transport, symbolLocate, symbolIdResolve })` implementing `TypeAwareTypeHierarchySource`
-- back it with pyright/pylance's `textDocument/implementation` + `textDocument/typeDefinition` over the standard LSP transport supplied by the host
-- mirror the existing `typeScriptTypeHierarchySource.spec.ts` contract tests against a fake transport
+- provide a concrete pyright / pylance `LspTransport` provider module (or direct in-process transport injection in tests)
+- feed that transport through `workspaceTypeAwareBridgeSourcesRegister(...)` so the workspace engine registers the Python call-graph and type-hierarchy bridges at startup
+- keep symbol-id / location translation inside workspace-service's bridge symbol-table seam instead of reaching into `ProjectIndex` from app code
 
-When this lands, `queryTypeHierarchy` for Python symbols can return type-aware edges in addition to the declared / structural-shape ones — closing the same `no first-party consumer` gap that the call-graph bridge had before.
+Until a host supplies that transport, `queryTypeHierarchy` for Python symbols remains structural-only by default even though the bridge package itself exists and is tested.
 
 ### Symbol-id discovery and editor-side guard symmetry (cross-language)
 

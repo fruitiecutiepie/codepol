@@ -131,17 +131,24 @@ type SendMessage = (message: JsonRpcRequest | JsonRpcNotification | JsonRpcRespo
 type WorkspaceServiceFactory = () => WorkspaceService | Promise<WorkspaceService>;
 type TimeoutHandle = ReturnType<typeof setTimeout>;
 const bundledRuntime = process.env.CODEPOL_BUNDLED_RUNTIME === '1';
+async function workspaceServiceDefaultCreate(): Promise<WorkspaceService> {
+  const runtime = await import('@codepol/workspace-service');
+  const engine = new runtime.WorkspaceServiceEngine({
+    backgroundWarmup: true,
+  });
+  const transports = await runtime.workspaceTypeAwareBridgeTransportsResolve();
+  runtime.workspaceTypeAwareBridgeSourcesRegister({
+    engine,
+    transports,
+  });
+  return runtime.workspaceServiceCreate({
+    engine,
+  });
+}
 const workspaceServiceDefaultFactory: WorkspaceServiceFactory | undefined =
   bundledRuntime
     ? undefined
-    : async () => {
-        const runtime = await import('@codepol/workspace-service');
-        return runtime.workspaceServiceCreate({
-          engine: new runtime.WorkspaceServiceEngine({
-            backgroundWarmup: true,
-          }),
-        });
-      };
+    : () => workspaceServiceDefaultCreate();
 
 function promiseLikeIs<T>(value: T | Promise<T>): value is Promise<T> {
   return (
