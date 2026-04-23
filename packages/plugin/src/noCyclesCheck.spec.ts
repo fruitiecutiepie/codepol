@@ -105,6 +105,7 @@ describe('noCyclesCheck', () => {
     // 2 cycles + 1 summary
     expect(violations.length).toBe(3);
     expect(violations[2]!.message).toContain('1 additional circular import');
+    expect(violations[2]!.filePath).toBe(dir); // Default context.cwd when configPath is absent
   });
 
   it('respects minSize to skip self-imports', () => {

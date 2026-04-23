@@ -118,7 +118,7 @@ export const noCyclesCheck: ArchitectureCheckFn = (
   }
 
   if (truncatedCount > 0 && violations.length > 0) {
-    const summaryAnchor = violations[0]!.filePath;
+    const summaryAnchor = context.configPath ?? context.cwd;
     violations.push({
       ruleId,
       filePath: summaryAnchor,

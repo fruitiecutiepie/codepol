@@ -817,7 +817,7 @@ Cross-reference the per-question prose below; every Q is one of `Resolved` / `Op
 - **Q3 — Test-file semantics.** _Open._ Option A in effect by default (exclude tests via the existing policy `exclude` globs); Option C (first-class `role = "test"` axis with `ArchitectureCheckContext.filesGetByRole(...)`) remains a future promotion, deferred until a real "test-only layer violation" case appears.
 - **Q4 — External package representation.** _Open._ `includeExternal` flag is drafted in `QueryDependencyGraphInput` but not implemented. Phase 1 / Phase 2 still drop unresolved imports. Adopting Option B (`external:<packageName>` synthetic nodes, gated by the flag) is the next step.
 - **Q5 — Call graph fidelity.** _Resolved (Phase 9.1 / 9.2)._ See the inline annotation on the question header.
-- **Q6 — Cycle diagnostic volume.** _Open._ Phase 6 `codepol/architecture` diagnostic source ships, but the proposed C+A combination (one diagnostic per cycle anchored on the alphabetically-first member, capped at `args.maxCycles` default 50, plus a single truncation-summary diagnostic at the workspace root) is not yet wired in the cycle-diagnostic path.
+- **Q6 — Cycle diagnostic volume.** _Done._ The proposed C+A combination (one diagnostic per cycle anchored on the alphabetically-first member, capped at `args.maxCycles` default 50, plus a single truncation-summary diagnostic at the workspace root) is wired into the `no-cycles` plugin rule.
 
 ### Priority summary
 
@@ -825,7 +825,7 @@ Buckets are about scope, not value — anything in any bucket can be picked up n
 
 - **Trivial (ship when convenient):** `IndexCapabilities.typeHierarchy` flag (~1 LOC); symmetric cursor-path kind guard for `showCallGraph` / `findCallbacks` (~10 LOC + 4 tests).
 - **Small, well-scoped:** `BASE_SCRIPT` contract test (small refactor of `render.ts`); Q1-Option-D in-memory ring buffer for the editor.
-- **Medium, well-scoped:** Python type-aware transport provider module for the host bridge seam; `queryDependencyDiff` editor panel; daemon-backed graph queries for the CLI; Q6 cycle-diagnostic volume implementation (one-per-cycle + cap + truncation summary).
+- **Medium, well-scoped:** Python type-aware transport provider module for the host bridge seam; `queryDependencyDiff` editor panel; daemon-backed graph queries for the CLI.
 - **Larger, design-first:** editor menu hiding via context keys; Python `memberShape` query (needs Protocol-semantics design); Q2 dedicated `[layers.<name>]` schema; Q4 `includeExternal` flag implementation; Q3 promotion to first-class `role = "test"` (when a real case appears).
 
 ## Open Questions
@@ -1010,7 +1010,7 @@ Restrict Phase 7 to `queryCallersOfExport(symbolId)`. That is the high-confidenc
 
 **Proposed default.** **A for the panel + D for LSP**: the panel renders the structural graph with an explicit label. The LSP hover/CodeLens surfaces only "callers of exports" because that's the one direction we can vouch for. Option B gets revisited only if we collect specific missed cases.
 
-### Q6. Cycle diagnostic volume — _open (Phase 6 `codepol/architecture` source ships, but the proposed C+A combination — one-per-cycle anchored on first member, capped at `args.maxCycles` default 50, plus a single truncation-summary diagnostic — is not yet wired)_
+### Q6. Cycle diagnostic volume — _done (capped at `args.maxCycles` default 50, plus a single truncation-summary diagnostic at the workspace root)_
 
 **Context.** `moduleCyclesGet()` can return thousands of SCCs on legacy codebases. Surfacing all of them as diagnostics would flood the Problems panel and destroy signal.
 
