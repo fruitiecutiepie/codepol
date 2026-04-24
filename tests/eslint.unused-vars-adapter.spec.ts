@@ -100,6 +100,35 @@ args.reportUsedIgnorePattern = true
 `,
 );
 
+const bridgeConfigPath = path.join(tempDir, 'codepol-with-eslint-bridge.toml');
+fs.writeFileSync(
+  bridgeConfigPath,
+  `[[plugins]]
+id = "@codepol/plugin"
+source = { kind = "builtin" }
+
+[targets.src]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[[rules]]
+ruleId = "@codepol/plugin/eslint"
+targets = ["src"]
+args.configPath = "./eslint.config.mjs"
+
+[[rules]]
+id = "no-unused-vars"
+ruleId = "@codepol/plugin/no-unused-vars"
+targets = ["src"]
+args.args = "all"
+args.argsIgnorePattern = "^(?:_|ignored)"
+args.caughtErrorsIgnorePattern = "^ignored"
+args.destructuredArrayIgnorePattern = "^_"
+args.ignoreRestSiblings = true
+args.reportUsedIgnorePattern = true
+`,
+);
+
 let cwdSpy: ReturnType<typeof vi.spyOn>;
 
 beforeAll(async () => {
@@ -228,5 +257,48 @@ describe('eslint adapter with native no-unused-vars', () => {
       filePath: path.join(tempDir, 'src', 'shipped-invalid.ts'),
     });
     expect(fixedResult?.output).toBe(shippedPluginFixedSource);
+  });
+
+  it('does not emit the eslint bridge as a direct ESLint rule', async () => {
+    const plugin = eslintPluginCreate(pluginRules);
+    const providerRules = await providerRulesConfigGet(
+      'eslint',
+      bridgeConfigPath,
+    ) as Linter.RulesRecord;
+
+    expect(providerRules['codepol/eslint']).toBeUndefined();
+    expect(providerRules['codepol/no-unused-vars']).toBeDefined();
+
+    const lint = new ESLint({
+      cwd: tempDir,
+      ignore: false,
+      overrideConfigFile: true,
+      plugins: {
+        codepol: plugin as any,
+      },
+      overrideConfig: [
+        {
+          files: ['**/*.ts'],
+          languageOptions: {
+            parser: tseslint.parser as any,
+            parserOptions: {
+              ecmaVersion: 2022,
+              sourceType: 'module',
+            },
+          },
+          rules: providerRules,
+        },
+      ],
+    });
+
+    const [result] = await lint.lintText(shippedPluginInvalidSource, {
+      filePath: path.join(tempDir, 'src', 'shipped-invalid.ts'),
+    });
+    expect(result?.messages).toEqual([
+      expect.objectContaining({
+        ruleId: 'codepol/no-unused-vars',
+        message: "'unused' is assigned a value but never used.",
+      }),
+    ]);
   });
 });

@@ -357,6 +357,12 @@ export async function providerRulesConfigGet(
   const rules: Record<string, unknown> = {};
 
   for (const rule of policy.rules) {
+    if (provider === 'eslint' && rule.ruleId === '@codepol/plugin/eslint') {
+      // The bridge rule only tells Codepol to invoke ESLint. It is not an
+      // ESLint rule exported by the `codepol` plugin.
+      continue;
+    }
+
     // Skip if rule specifies providers and this provider is not included
     if (rule.providers && rule.providers.length > 0 && !rule.providers.includes(provider)) {
       continue;
