@@ -13,7 +13,6 @@ import {
   providerParserRuntimeInit,
   providerRulesConfigGet,
 } from '@codepol/core';
-import { parserRuntimeStateGet } from '../packages/core/src/parser/parserRuntimeState';
 
 const tempDir = fs.mkdtempSync(
   path.join(os.tmpdir(), 'codepol-eslint-provider-runtime-'),
@@ -21,17 +20,6 @@ const tempDir = fs.mkdtempSync(
 const configPath = path.join(tempDir, 'codepol.toml');
 const filePath = path.join(tempDir, 'src', 'contracts.ts');
 const source = `interface DemoContract {\n  name: string;\n}\n`;
-
-function parserRuntimeReset(): void {
-  const state = parserRuntimeStateGet();
-  state.parserOwner = undefined;
-  state.parserInitialized = false;
-  state.parserInitPromise = undefined;
-  state.registeredLangs.clear();
-  state.fileExtensionsToLangId.clear();
-  state.loadedLanguages.clear();
-  state.parsersByLanguage.clear();
-}
 
 describe('providerParserRuntimeInit eslint integration', () => {
   let cwdSpy: ReturnType<typeof vi.spyOn>;
@@ -55,14 +43,12 @@ ruleId = "@codepol/plugin/no-interface"
 targets = ["src"]
 `,
     );
-    parserRuntimeReset();
     pluginBuiltinRegister('@codepol/plugin', codepolBuiltin);
     cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(tempDir);
   });
 
   afterAll(() => {
     cwdSpy?.mockRestore();
-    parserRuntimeReset();
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 

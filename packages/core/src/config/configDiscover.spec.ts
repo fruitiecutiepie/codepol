@@ -314,17 +314,12 @@ targets = ["ts-src"]
       });
     });
 
-    it('should reject mixing tools runs with legacy bridge rules for the same tool', () => {
+    it('should reject legacy external bridge rules', () => {
       expect(() =>
         configParseFromSource(`
 [targets.ts-src]
 language = "typescript"
 files = ["src/**/*.ts"]
-
-[tools.eslint]
-[[tools.eslint.runs]]
-targets = ["ts-src"]
-configPath = "./eslint.config.mjs"
 
 [[rules]]
 ruleId = "@codepol/plugin/eslint"
@@ -334,7 +329,7 @@ args.configPath = "./eslint.config.mjs"
           configPath: '/tmp/codepol.toml',
         }),
       ).toThrow(
-        'config.tools.eslint.runs: cannot be used together with legacy bridge rule "@codepol/plugin/eslint" in config.rules',
+        'config.rules[0].ruleId: External ESLint bridge rules are no longer supported.',
       );
     });
   });

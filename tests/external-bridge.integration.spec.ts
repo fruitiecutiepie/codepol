@@ -146,7 +146,7 @@ function biomePolicyConfigCreate(
   };
 }
 
-describe('external bridge rules integration', () => {
+describe('external tool runs integration', () => {
   const createdDirs: string[] = [];
 
   afterEach(() => {
@@ -156,7 +156,7 @@ describe('external bridge rules integration', () => {
     createdDirs.length = 0;
   });
 
-  it('@codepol/plugin/ruff: args.select reaches the ruff binary and violations surface', async () => {
+  it('tools.ruff.runs: select reaches the ruff binary and violations surface', async () => {
     const projectDir = tempProjectCreate('codepol-ext-bridge-ruff-');
     createdDirs.push(projectDir);
     fixtureCopy('ruff', projectDir);
@@ -203,7 +203,7 @@ describe('external bridge rules integration', () => {
     }
   });
 
-  it('@codepol/plugin/biome: args.configPath reaches the biome binary', async () => {
+  it('tools.biome.runs: configPath reaches the biome binary', async () => {
     const projectDir = tempProjectCreate('codepol-ext-bridge-biome-');
     createdDirs.push(projectDir);
     fixtureCopy('biome', projectDir);

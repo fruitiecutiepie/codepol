@@ -218,9 +218,9 @@ export {
 } from './graphSnapshotStore';
 
 const BIOME_FILE_EXTENSIONS = ['.js', '.mjs', '.cjs', '.jsx', '.ts', '.mts', '.cts', '.tsx'];
-const ESLINT_BRIDGE_RULE_ID = '@codepol/plugin/eslint';
-const BIOME_BRIDGE_RULE_ID = '@codepol/plugin/biome';
-const RUFF_BRIDGE_RULE_ID = '@codepol/plugin/ruff';
+const ESLINT_TOOL_RUN_RULE_ID = 'codepol/tool-run/eslint';
+const BIOME_TOOL_RUN_RULE_ID = 'codepol/tool-run/biome';
+const RUFF_TOOL_RUN_RULE_ID = 'codepol/tool-run/ruff';
 const PYTHON_FILE_EXTENSIONS = ['.py', '.pyw'];
 const WORKSPACE_WATCH_IGNORED = ['**/node_modules/**', '**/.git/**'];
 const WORKSPACE_SYMBOL_LIMIT_DEFAULT = 50;
@@ -249,14 +249,9 @@ function workspaceAbortSignalThrowIfAborted(signal?: AbortSignal): void {
 }
 
 type LintProviderEntry = {
+  source: 'policy_rule' | 'external_tool_run';
   provider: LintProvider;
   ruleId: string;
-  /**
-   * Optional rule id surfaced in analyzer scorecards. Synthetic `tools.*.runs`
-   * entries omit this so external tool activation no longer masquerades as a
-   * user-facing Codepol rule.
-   */
-  reportRuleId?: string;
   ruleArgs?: unknown;
   severity?: LintSeverity;
   /**
@@ -408,8 +403,7 @@ export type WorkspaceExternalToolAnalyzerKey = 'eslint' | 'biome' | 'ruff';
 /**
  * One external tool config file referenced by the policy. Resolved to an
  * absolute path against the policy config directory at workspace-context
- * construction time. The orchestrator collects these from normalized external
- * tool runs (legacy bridge rules plus `tools.*.runs`) via
+ * construction time. The orchestrator collects these from `tools.*.runs` via
  * `externalToolConfigsResolve`.
  */
 export type WorkspaceExternalToolConfigEntry = {
@@ -419,18 +413,12 @@ export type WorkspaceExternalToolConfigEntry = {
 
 type WorkspaceExternalToolRun = {
   analyzerId: WorkspaceExternalToolAnalyzerKey;
-  source: 'legacy_bridge_rule' | 'tools_run';
   /**
    * Internal rule used only for target resolution and analyzer grouping.
-   * Legacy bridge configs reuse the real policy rule object; `tools.*.runs`
-   * synthesize one so existing group/match machinery can stay uniform.
+   * `tools.*.runs` synthesize one so existing group/match machinery can stay
+   * uniform without leaking tool runs into the public rule model.
    */
   rule: PolicyRule;
-  /**
-   * Optional rule id to surface in analyzer scorecards. Legacy bridge rules
-   * keep their historical scorecard ids; synthetic `tools.*.runs` omit them.
-   */
-  reportRuleId?: string;
 };
 
 type WorkspaceContextState = {
@@ -1418,13 +1406,6 @@ function externalToolRunRuleCreate(input: {
   };
 }
 
-function externalToolLegacyRuleEnabledForPlatform(
-  rule: PolicyRule,
-  analyzerId: WorkspaceExternalToolAnalyzerKey,
-): boolean {
-  return !(rule.providers && rule.providers.length > 0 && !rule.providers.includes(analyzerId));
-}
-
 function externalToolRunProviderCreate(
   analyzerId: WorkspaceExternalToolAnalyzerKey,
 ): LintProvider {
@@ -1453,51 +1434,12 @@ function externalToolRunProviderCreate(
 function externalToolRunsCollect(config: CodepolConfig): WorkspaceExternalToolRun[] {
   const runs: WorkspaceExternalToolRun[] = [];
 
-  for (const rule of config.rules) {
-    if (
-      rule.ruleId === ESLINT_BRIDGE_RULE_ID &&
-      externalToolLegacyRuleEnabledForPlatform(rule, 'eslint')
-    ) {
-      runs.push({
-        analyzerId: 'eslint',
-        source: 'legacy_bridge_rule',
-        rule,
-        reportRuleId: rule.ruleId,
-      });
-      continue;
-    }
-    if (
-      rule.ruleId === BIOME_BRIDGE_RULE_ID &&
-      externalToolLegacyRuleEnabledForPlatform(rule, 'biome')
-    ) {
-      runs.push({
-        analyzerId: 'biome',
-        source: 'legacy_bridge_rule',
-        rule,
-        reportRuleId: rule.ruleId,
-      });
-      continue;
-    }
-    if (
-      rule.ruleId === RUFF_BRIDGE_RULE_ID &&
-      externalToolLegacyRuleEnabledForPlatform(rule, 'ruff')
-    ) {
-      runs.push({
-        analyzerId: 'ruff',
-        source: 'legacy_bridge_rule',
-        rule,
-        reportRuleId: rule.ruleId,
-      });
-    }
-  }
-
   for (const [index, run] of (config.tools?.eslint?.runs ?? []).entries()) {
     runs.push({
       analyzerId: 'eslint',
-      source: 'tools_run',
       rule: externalToolRunRuleCreate({
         toolPath: `tools.eslint.runs[${index}]`,
-        ruleId: ESLINT_BRIDGE_RULE_ID,
+        ruleId: ESLINT_TOOL_RUN_RULE_ID,
         targets: run.targets,
         args: externalToolRunArgsCreate(run as PolicyEslintRun),
       }),
@@ -1506,10 +1448,9 @@ function externalToolRunsCollect(config: CodepolConfig): WorkspaceExternalToolRu
   for (const [index, run] of (config.tools?.biome?.runs ?? []).entries()) {
     runs.push({
       analyzerId: 'biome',
-      source: 'tools_run',
       rule: externalToolRunRuleCreate({
         toolPath: `tools.biome.runs[${index}]`,
-        ruleId: BIOME_BRIDGE_RULE_ID,
+        ruleId: BIOME_TOOL_RUN_RULE_ID,
         targets: run.targets,
         args: externalToolRunArgsCreate(run as PolicyBiomeRun),
       }),
@@ -1518,10 +1459,9 @@ function externalToolRunsCollect(config: CodepolConfig): WorkspaceExternalToolRu
   for (const [index, run] of (config.tools?.ruff?.runs ?? []).entries()) {
     runs.push({
       analyzerId: 'ruff',
-      source: 'tools_run',
       rule: externalToolRunRuleCreate({
         toolPath: `tools.ruff.runs[${index}]`,
-        ruleId: RUFF_BRIDGE_RULE_ID,
+        ruleId: RUFF_TOOL_RUN_RULE_ID,
         targets: run.targets,
         args: externalToolRunArgsCreate(run as PolicyRuffRun),
       }),
@@ -1535,9 +1475,9 @@ function externalToolRunEntriesCollect(
   runs: WorkspaceExternalToolRun[],
 ): LintProviderEntry[] {
   return runs.map((run) => ({
+    source: 'external_tool_run',
     provider: externalToolRunProviderCreate(run.analyzerId),
     ruleId: run.rule.ruleId,
-    reportRuleId: run.reportRuleId,
     ruleArgs: run.rule.args,
     rule: run.rule,
   }));
@@ -1548,21 +1488,22 @@ async function externalToolRunMatchesCollect(
   runs: WorkspaceExternalToolRun[],
   cwd: string,
 ): Promise<RuleMatch[]> {
-  const syntheticRuns = runs.filter((run) => run.source === 'tools_run');
-  if (syntheticRuns.length === 0) {
+  if (runs.length === 0) {
     return [];
   }
   return ruleMatchesGet(
     {
       ...policy,
-      rules: syntheticRuns.map((run) => run.rule),
+      rules: runs.map((run) => run.rule),
     },
     cwd,
   );
 }
 
 function lintProviderEntryReportRuleIdsCollect(entries: LintProviderEntry[]): string[] {
-  return entries.flatMap((entry) => (entry.reportRuleId ? [entry.reportRuleId] : []));
+  return entries
+    .filter((entry) => entry.source === 'policy_rule')
+    .map((entry) => entry.ruleId);
 }
 
 function biomeProviderConfigKey(config: BiomeProviderConfig | undefined): string {
@@ -1594,7 +1535,7 @@ function biomeProviderConfigResolve(entry: LintProviderEntry): BiomeProviderConf
   for (const [key, value] of Object.entries(args)) {
     if (!allowedKeys.has(key as keyof BiomeProviderConfig)) {
       console.warn(
-        `[codepol] @codepol/plugin/biome rule "${entry.ruleId}" ignoring unknown args key "${key}".`,
+        `[codepol] Biome provider entry "${entry.rule.id ?? entry.ruleId}" ignoring unknown args key "${key}".`,
       );
       continue;
     }
@@ -1637,7 +1578,7 @@ function ruffProviderConfigResolve(entry: LintProviderEntry): RuffProviderConfig
   for (const [key, value] of Object.entries(args)) {
     if (!allowedKeys.has(key as keyof RuffProviderConfig)) {
       console.warn(
-        `[codepol] @codepol/plugin/ruff rule "${entry.ruleId}" ignoring unknown args key "${key}".`,
+        `[codepol] Ruff provider entry "${entry.rule.id ?? entry.ruleId}" ignoring unknown args key "${key}".`,
       );
       continue;
     }
@@ -1680,7 +1621,7 @@ function ruffProviderConfigKey(config: RuffProviderConfig | undefined): string {
  * single biome invocation; distinct configs each run in their own group.
  *
  * Unlike the prior `biomeRuleIdToConfigMapBuild`, this does NOT throw when the
- * same ruleId resolves to different configs — that is a legitimate multi-bridge
+ * same ruleId resolves to different configs — that is a legitimate multi-run
  * policy shape.
  */
 function biomeGroupsBuild(
@@ -1750,7 +1691,7 @@ function eslintGroupsBuild(
     if (entry.provider.platform !== 'eslint') {
       continue;
     }
-    if (entry.ruleId !== ESLINT_BRIDGE_RULE_ID) {
+    if (entry.source !== 'external_tool_run') {
       nonBridgeEntries.push(entry);
       continue;
     }
@@ -1808,7 +1749,7 @@ function analyzerGroupFilesCollect(
   return files;
 }
 
-const ESLINT_BRIDGE_MIGRATION_HINT =
+const ESLINT_TOOL_RUN_MIGRATION_HINT =
   'Add an ESLint tool run to your policy:\n' +
   '\n' +
   '  [tools.eslint]\n' +
@@ -1817,9 +1758,8 @@ const ESLINT_BRIDGE_MIGRATION_HINT =
   '  configPath = "./eslint.config.mjs"';
 
 /**
- * Walks normalized external tool runs (legacy bridge rules plus top-level
- * `tools.*.runs`) and collects every `configPath` into a stable, deduped,
- * sorted list.
+ * Walks external tool runs from top-level `tools.*.runs` and collects every
+ * `configPath` into a stable, deduped, sorted list.
  *
  * The returned `configPath` values are absolute, resolved against the
  * directory of the policy config file. Runs without a `configPath` contribute
@@ -1856,25 +1796,6 @@ function externalToolConfigsResolve(
   return entries;
 }
 
-/**
- * Convenience wrapper for ESLint analyzer-time resolution. Returns the empty
- * string when no ESLint tool run is declared with a `configPath`; the analyzer
- * then produces a migration-pointing error.
- *
- * Kept as a wrapper so the analyzer's args-time resolution mirrors ruff/biome
- * (which read their own configs from `LintProviderEntry.ruleArgs`) rather
- * than reaching into `WorkspaceContextState`.
- */
-function eslintBridgeConfigPathResolve(
-  configPath: string,
-  config: CodepolConfig,
-): string {
-  const eslintEntry = externalToolConfigsResolve(configPath, config).find(
-    (entry) => entry.analyzerId === 'eslint',
-  );
-  return eslintEntry?.configPath ?? '';
-}
-
 function policyRuleTargetsGet(policy: PolicyFile): PolicyRuleTargetContext[] {
   const targets: PolicyRuleTargetContext[] = [];
   for (const rule of policy.rules) {
@@ -1906,7 +1827,7 @@ function eslintConfigGet(
     if (entry.provider.platform !== 'eslint') {
       continue;
     }
-    if (entry.ruleId === ESLINT_BRIDGE_RULE_ID) {
+    if (entry.source === 'external_tool_run') {
       // External tool runs trigger ESLint invocation but contribute no rules to
       // the override config; the user's eslint.config.mjs drives enablement.
       continue;
@@ -2662,13 +2583,6 @@ function lintProviderEntriesCollect(
 ): LintProviderEntry[] {
   const lintProviderEntries: LintProviderEntry[] = [];
   for (const rule of policy.rules) {
-    if (
-      rule.ruleId === ESLINT_BRIDGE_RULE_ID ||
-      rule.ruleId === BIOME_BRIDGE_RULE_ID ||
-      rule.ruleId === RUFF_BRIDGE_RULE_ID
-    ) {
-      continue;
-    }
     const lookup = pluginGetForRule(pluginRulesMap, rule.ruleId);
     if (!lookup) {
       continue;
@@ -2679,9 +2593,9 @@ function lintProviderEntriesCollect(
         continue;
       }
       lintProviderEntries.push({
+        source: 'policy_rule',
         provider,
         ruleId: lookup.resolvedId,
-        reportRuleId: lookup.resolvedId,
         ruleArgs: rule.args,
         severity: rule.severity,
         rule,
@@ -7098,7 +7012,7 @@ function workspaceNodeModulePackageManifestResolve(
  * Returned paths are absolute and may be `undefined` (filtered out by the
  * caller). The extractor receives the workspace context so it can derive tool
  * config paths from `externalToolConfigs` (resolved by
- * `externalToolConfigsResolve` from the bridge rules in the policy).
+ * `externalToolConfigsResolve` from `tools.*.runs`).
  */
 type WorkspaceProviderFingerprintExtractor = (
   workspace: WorkspaceContextState,
@@ -8553,13 +8467,13 @@ async function eslintAnalyzerRun(
     );
   }
 
-  const hasBridgeEntry = eligibleEntries.some(
-    (entry) => entry.ruleId === ESLINT_BRIDGE_RULE_ID,
+  const hasToolRunEntry = eligibleEntries.some(
+    (entry) => entry.source === 'external_tool_run',
   );
-  if (!hasBridgeEntry) {
+  if (!hasToolRunEntry) {
     throw new Error(
       'ESLint-backed policy rule found without an ESLint tool run. ' +
-      ESLINT_BRIDGE_MIGRATION_HINT,
+      ESLINT_TOOL_RUN_MIGRATION_HINT,
     );
   }
 
@@ -8592,7 +8506,7 @@ async function eslintAnalyzerRun(
   if (groups.size === 0) {
     throw new Error(
       '`tools.eslint.runs` requires `configPath` (e.g. "./eslint.config.mjs"). ' +
-      ESLINT_BRIDGE_MIGRATION_HINT,
+      ESLINT_TOOL_RUN_MIGRATION_HINT,
     );
   }
 

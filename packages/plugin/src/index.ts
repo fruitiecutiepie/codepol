@@ -23,17 +23,6 @@ import { noCrossPackageInternalImportRule } from './noCrossPackageInternalImport
 import { maxFanInRule } from './maxFanInRule';
 import { maxFanOutRule } from './maxFanOutRule';
 import { entryPointAllowlistRule } from './entryPointAllowlistRule';
-import {
-  biomeBridgeRule,
-  eslintBridgeRule,
-  ruffBridgeRule,
-} from './externalBridgeRules';
-
-export {
-  biomeBridgeRule,
-  eslintBridgeRule,
-  ruffBridgeRule,
-} from './externalBridgeRules';
 
 export { unusedExportsRule };
 export { unusedExportsCheck };
@@ -109,7 +98,4 @@ export default [
   maxFanOutRule,
   entryPointAllowlistRule,
   noUndeclaredImplementerRule,
-  eslintBridgeRule,
-  biomeBridgeRule,
-  ruffBridgeRule,
 ];

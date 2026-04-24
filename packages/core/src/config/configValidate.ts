@@ -309,33 +309,42 @@ const ESLINT_CONFIG_PATH_MIGRATION_MESSAGE =
   '\n' +
   'See docs/policy-schema.md for details.';
 
-const TOOL_BRIDGE_RULE_IDS: Record<keyof PolicyTools, string> = {
-  eslint: '@codepol/plugin/eslint',
-  biome: '@codepol/plugin/biome',
-  ruff: '@codepol/plugin/ruff',
-};
+const LEGACY_EXTERNAL_TOOL_RULE_MIGRATIONS = new Map<string, string>([
+  [
+    '@codepol/plugin/eslint',
+    'External ESLint bridge rules are no longer supported. Configure ESLint under:\n' +
+      '\n' +
+      '  [tools.eslint]\n' +
+      '  [[tools.eslint.runs]]\n' +
+      '  targets = ["<target-name>"]\n' +
+      '  configPath = "./eslint.config.mjs"',
+  ],
+  [
+    '@codepol/plugin/biome',
+    'External Biome bridge rules are no longer supported. Configure Biome under:\n' +
+      '\n' +
+      '  [tools.biome]\n' +
+      '  [[tools.biome.runs]]\n' +
+      '  targets = ["<target-name>"]\n' +
+      '  configPath = "./biome.json"',
+  ],
+  [
+    '@codepol/plugin/ruff',
+    'External Ruff bridge rules are no longer supported. Configure Ruff under:\n' +
+      '\n' +
+      '  [tools.ruff]\n' +
+      '  [[tools.ruff.runs]]\n' +
+      '  targets = ["<target-name>"]\n' +
+      '  select = ["E", "F"]',
+  ],
+]);
 
-function legacyBridgeAndToolsMixedValidate(config: {
-  rules: PolicyRule[];
-  tools?: PolicyTools;
-}): void {
-  if (!config.tools) {
-    return;
-  }
-  for (const [toolName, ruleId] of Object.entries(TOOL_BRIDGE_RULE_IDS) as Array<
-    [keyof PolicyTools, string]
-  >) {
-    const tool = config.tools[toolName];
-    if (!tool?.runs || tool.runs.length === 0) {
-      continue;
+function legacyExternalToolRulesValidate(rules: PolicyRule[]): void {
+  for (const [index, rule] of rules.entries()) {
+    const message = LEGACY_EXTERNAL_TOOL_RULE_MIGRATIONS.get(rule.ruleId);
+    if (message) {
+      validationError(`config.rules[${index}].ruleId`, message);
     }
-    if (!config.rules.some((rule) => rule.ruleId === ruleId)) {
-      continue;
-    }
-    validationError(
-      `config.tools.${toolName}.runs`,
-      `cannot be used together with legacy bridge rule "${ruleId}" in config.rules`,
-    );
   }
 }
 
@@ -353,7 +362,7 @@ export function configValidate(raw: unknown): CodepolConfig {
     plugins: pluginsParse(record.plugins, 'config.plugins'),
     tools: toolsParse(record.tools, 'config.tools'),
   };
-  legacyBridgeAndToolsMixedValidate(config);
+  legacyExternalToolRulesValidate(config.rules);
 
   return config;
 }

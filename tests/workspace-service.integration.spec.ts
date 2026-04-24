@@ -1507,7 +1507,7 @@ demo();
     );
   });
 
-  it('allows eslint bridge configs that already define the codepol plugin', async () => {
+  it('allows eslint tool-run configs that already define the codepol plugin', async () => {
     const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
     createdDirs.push(workspaceRoot);
     fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
