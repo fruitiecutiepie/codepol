@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, it, expect } from 'vitest';
 import type { Language } from 'web-tree-sitter';
 import {
@@ -85,6 +88,43 @@ describe('parserLangs', () => {
       expect(registered!.fileExtensions).toContain('.mb');
     });
 
+    it('should merge when duplicate langId uses different path strings for the same file', () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-lang-'));
+      try {
+        const realWasm = path.join(tmp, 'real.wasm');
+        fs.writeFileSync(realWasm, '');
+        const linkWasm = path.join(tmp, 'link.wasm');
+        fs.symlinkSync(realWasm, linkWasm);
+        langAdd({ langId: 'testlang-symlink', fileExtensions: ['.s1'], wasmPath: realWasm });
+        langAdd({ langId: 'testlang-symlink', fileExtensions: ['.s2'], wasmPath: linkWasm });
+        const registered = langsGet().find(l => l.langId === 'testlang-symlink');
+        expect(registered).toBeDefined();
+        expect(registered!.fileExtensions).toContain('.s1');
+        expect(registered!.fileExtensions).toContain('.s2');
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+
+    it('should merge when duplicate langId uses two paths with identical wasm bytes', () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-lang-'));
+      try {
+        const wasmA = path.join(tmp, 'a.wasm');
+        const wasmB = path.join(tmp, 'b.wasm');
+        const bytes = Buffer.from('fake wasm payload');
+        fs.writeFileSync(wasmA, bytes);
+        fs.writeFileSync(wasmB, bytes);
+        langAdd({ langId: 'testlang-dupbytes', fileExtensions: ['.u1'], wasmPath: wasmA });
+        langAdd({ langId: 'testlang-dupbytes', fileExtensions: ['.u2'], wasmPath: wasmB });
+        const registered = langsGet().find(l => l.langId === 'testlang-dupbytes');
+        expect(registered).toBeDefined();
+        expect(registered!.fileExtensions).toContain('.u1');
+        expect(registered!.fileExtensions).toContain('.u2');
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+
     it('should throw when duplicate langId with different wasmPath', () => {
       langAdd({ langId: 'testlang-conflict', fileExtensions: ['.cc'], wasmPath: '/path/a.wasm' });
 
@@ -111,6 +151,8 @@ describe('parserLangs', () => {
       expect(ids).toContain('testlang-a');
       expect(ids).toContain('testlang-b');
       expect(ids).toContain('testlang-merge');
+      expect(ids).toContain('testlang-symlink');
+      expect(ids).toContain('testlang-dupbytes');
     });
   });
 

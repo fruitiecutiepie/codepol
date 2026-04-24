@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Language } from 'web-tree-sitter';
@@ -12,6 +13,39 @@ export type Lang = {
   wasmPath?: string;
   fileExtensions: string[];
 };
+
+/**
+ * Canonical path for registry compare/store. Multiple bundled copies of
+ * `@codepol/core` in one process share parser runtime state on `globalThis`,
+ * but each copy resolves default grammar paths from its own `__dirname`;
+ * `realpathSync` collapses those to one key when they refer to the same file.
+ */
+function wasmPathRegistryCanonical(wasmPath: string): string {
+  const resolved = path.resolve(wasmPath);
+  try {
+    return fs.realpathSync(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
+/** Same grammar file copied into two package paths (e.g. pnpm nested install). */
+function wasmGrammarFilesContentEqual(pathA: string, pathB: string): boolean {
+  const ra = path.resolve(pathA);
+  const rb = path.resolve(pathB);
+  try {
+    const sa = fs.statSync(ra);
+    const sb = fs.statSync(rb);
+    if (sa.size !== sb.size) {
+      return false;
+    }
+    const ha = crypto.createHash('sha256').update(fs.readFileSync(ra)).digest('hex');
+    const hb = crypto.createHash('sha256').update(fs.readFileSync(rb)).digest('hex');
+    return ha === hb;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Resolves the path to a bundled WASM grammar file.
@@ -71,10 +105,14 @@ export function langAdd(lang: Lang): void {
   if (lang.wasmPath != null) {
     wasmPath = lang.wasmPath;
   }
+  const wasmPathCanonical = wasmPathRegistryCanonical(wasmPath);
 
   const existing = state.registeredLangs.get(langId);
   if (existing) {
-    if (existing.wasmPath !== wasmPath) {
+    const pathsEquivalent =
+      wasmPathRegistryCanonical(existing.wasmPath) === wasmPathCanonical ||
+      wasmGrammarFilesContentEqual(existing.wasmPath, wasmPath);
+    if (!pathsEquivalent) {
       throw new Error(
         `Language "${langId}" is already registered with a different wasmPath.`
       );
@@ -86,6 +124,7 @@ export function langAdd(lang: Lang): void {
     }
     state.registeredLangs.set(langId, {
       ...existing,
+      wasmPath: wasmPathCanonical,
       fileExtensions: [...mergedExtensions],
     });
     return;
@@ -97,7 +136,7 @@ export function langAdd(lang: Lang): void {
   }
   const registeredLang: RegisteredLang = {
     langId,
-    wasmPath,
+    wasmPath: wasmPathCanonical,
     fileExtensions: normalisedExtensions,
   };
   state.registeredLangs.set(langId, registeredLang);

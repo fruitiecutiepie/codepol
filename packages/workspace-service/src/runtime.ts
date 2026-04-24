@@ -39,22 +39,11 @@ type CoreRuntimeApi = {
 };
 
 function runtimeCoreModulesGet(): CoreRuntimeApi[] {
-  const runtimes: CoreRuntimeApi[] = [{ langAdd, parserInit }];
-  if (runtimeBundled) {
-    return runtimes;
-  }
-  try {
-    const packagedCore = nodeRequire('@codepol/core') as Partial<CoreRuntimeApi>;
-    if (
-      typeof packagedCore.langAdd === 'function' &&
-      typeof packagedCore.parserInit === 'function'
-    ) {
-      runtimes.push(packagedCore as CoreRuntimeApi);
-    }
-  } catch {
-    // Source-loaded tests may not have built package artifacts yet.
-  }
-  return runtimes;
+  // Parser language registry lives on `globalThis` (see `@codepol/core`); a second
+  // `require('@codepol/core')` can resolve to another physical install with a
+  // different `__dirname` and duplicate `.wasm` paths. Calling `langAdd` on both
+  // then throws even though the grammar is the same.
+  return [{ langAdd, parserInit }];
 }
 
 async function runtimeLanguageSupportEnsure(): Promise<void> {
