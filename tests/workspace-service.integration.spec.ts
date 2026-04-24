@@ -172,6 +172,21 @@ targets = ["src"]
 `;
 }
 
+function eslintConfigWithCodepolPluginContentCreate(): string {
+  return `export default [
+  {
+    files: ['**/*.ts'],
+    plugins: {
+      codepol: { rules: {} },
+    },
+    rules: {
+      'no-debugger': 'error',
+    },
+  },
+];
+`;
+}
+
 function dottedTargetConfigContentCreate(): string {
   return `targets.codepol-src.language = "typescript"
 targets.codepol-src.files = ["src/**/*.ts"]
@@ -1488,6 +1503,61 @@ demo();
           'tree_only_code_actions',
           'wrapped_external_fix:eslint',
         ]),
+      }),
+    );
+  });
+
+  it('allows eslint bridge configs that already define the codepol plugin', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = workspacePathToUri(filePath);
+    fs.writeFileSync(filePath, 'debugger;\n', 'utf8');
+
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(configPath, noUnusedVarsConfigContentCreate(), 'utf8');
+    fs.writeFileSync(
+      path.join(workspaceRoot, 'eslint.config.mjs'),
+      eslintConfigWithCodepolPluginContentCreate(),
+      'utf8',
+    );
+
+    const engine = new WorkspaceServiceEngine();
+    const service = workspaceServiceCreate({ engine });
+    const attached = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'eslint-duplicate-plugin-client',
+    });
+
+    await expect(
+      service.queryDiagnostics({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        uri,
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        source: 'eslint',
+        code: 'no-debugger',
+        message: 'Unexpected \'debugger\' statement.',
+      }),
+    ]);
+
+    expect(
+      analyzerScorecardGet(engine, {
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+      }),
+    ).toContainEqual(
+      expect.objectContaining({
+        analyzerId: 'eslint',
+        platform: 'eslint',
+        status: 'ran',
+        issueCount: 0,
+        ownedRuleIds: ['@codepol/plugin/eslint'],
       }),
     );
   });

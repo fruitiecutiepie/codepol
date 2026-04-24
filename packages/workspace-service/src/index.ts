@@ -1756,6 +1756,14 @@ function eslintConfigGet(
   return { rules };
 }
 
+function eslintPluginRedefinitionErrorIs(error: unknown, pluginName: string): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes(`Cannot redefine plugin "${pluginName}"`) ||
+    message.includes(`Cannot redefine plugin '${pluginName}'`)
+  );
+}
+
 function policyRuleMatches(policyRuleId: string, candidateRuleId: string): boolean {
   if (policyRuleId === candidateRuleId) {
     return true;
@@ -8473,6 +8481,9 @@ async function eslintAnalyzerRun(
   const startedAt = Date.now();
   const lintResults: EslintLintResult[] = [];
   const formatterOutputs: string[] = [];
+  const codepolEslintPlugin = eslintPluginCreate(
+    Array.from(input.pluginRules.values()).map((entry) => entry.pluginRule),
+  ) as unknown as import('eslint').ESLint.Plugin;
   for (const [key, group] of groups) {
     const filesForGroup = groupFiles.get(key);
     if (!filesForGroup) {
@@ -8481,51 +8492,72 @@ async function eslintAnalyzerRun(
     if (filesForGroup.overlay.length === 0 && filesForGroup.closed.length === 0) {
       continue;
     }
-    const eslint = new ESLintClass({
-      overrideConfigFile: group.configPath,
-      plugins: {
-        codepol: eslintPluginCreate(
-          Array.from(input.pluginRules.values()).map((entry) => entry.pluginRule),
-        ) as unknown as import('eslint').ESLint.Plugin,
-      },
-      overrideConfig: eslintConfigGet(group.entries, {
-        policy: input.policy,
-        configPath: input.configPath,
-        cwd: input.cwd,
-        ruleTargets: input.ruleTargets,
-      }),
-      fix: input.fix,
+    const overrideConfig = eslintConfigGet(group.entries, {
+      policy: input.policy,
+      configPath: input.configPath,
       cwd: input.cwd,
+      ruleTargets: input.ruleTargets,
     });
+    const eslintGroupRun = async (
+      injectCodepolPlugin: boolean,
+    ): Promise<{ results: EslintLintResult[]; formattedOutput: string }> => {
+      const eslint = new ESLintClass({
+        overrideConfigFile: group.configPath,
+        ...(injectCodepolPlugin
+          ? {
+              plugins: {
+                codepol: codepolEslintPlugin,
+              },
+            }
+          : {}),
+        overrideConfig,
+        fix: input.fix,
+        cwd: input.cwd,
+      });
 
-    const groupRunResults: EslintLintResult[] = [];
-    for (const filePath of filesForGroup.overlay) {
-      const source = input.sourceByFilePath.get(filePath)!;
-      const overlayRunResults = (await eslint.lintText(source, {
-        filePath,
-      })) as EslintLintResult[];
-      groupRunResults.push(...overlayRunResults);
-    }
-
-    if (filesForGroup.closed.length > 0) {
-      const closedRunResults = (await eslint.lintFiles(
-        filesForGroup.closed,
-      )) as EslintLintResult[];
-      groupRunResults.push(...closedRunResults);
-    }
-
-    lintResults.push(...groupRunResults);
-
-    if (input.collectOutput && groupRunResults.length > 0) {
-      const formatter = await eslint.loadFormatter('stylish');
-      const formatted = (
-        await formatter.format(
-          groupRunResults as unknown as Awaited<ReturnType<typeof eslint.lintFiles>>,
-        )
-      ).trim();
-      if (formatted.length > 0) {
-        formatterOutputs.push(formatted);
+      const groupRunResults: EslintLintResult[] = [];
+      for (const filePath of filesForGroup.overlay) {
+        const source = input.sourceByFilePath.get(filePath)!;
+        const overlayRunResults = (await eslint.lintText(source, {
+          filePath,
+        })) as EslintLintResult[];
+        groupRunResults.push(...overlayRunResults);
       }
+
+      if (filesForGroup.closed.length > 0) {
+        const closedRunResults = (await eslint.lintFiles(
+          filesForGroup.closed,
+        )) as EslintLintResult[];
+        groupRunResults.push(...closedRunResults);
+      }
+
+      let formattedOutput = '';
+      if (input.collectOutput && groupRunResults.length > 0) {
+        const formatter = await eslint.loadFormatter('stylish');
+        formattedOutput = (
+          await formatter.format(
+            groupRunResults as unknown as Awaited<ReturnType<typeof eslint.lintFiles>>,
+          )
+        ).trim();
+      }
+
+      return { results: groupRunResults, formattedOutput };
+    };
+
+    let groupRun;
+    try {
+      groupRun = await eslintGroupRun(true);
+    } catch (error) {
+      if (!eslintPluginRedefinitionErrorIs(error, ESLINT_PLUGIN_NAME_DEFAULT)) {
+        throw error;
+      }
+      groupRun = await eslintGroupRun(false);
+    }
+
+    lintResults.push(...groupRun.results);
+
+    if (groupRun.formattedOutput.length > 0) {
+      formatterOutputs.push(groupRun.formattedOutput);
     }
   }
 
