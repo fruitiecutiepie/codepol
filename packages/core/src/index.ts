@@ -41,6 +41,10 @@ export type {
   PolicyTargetMap,
   PolicyRuleTargetContext,
   PolicyFile,
+  PolicyTools,
+  PolicyEslintRun,
+  PolicyBiomeRun,
+  PolicyRuffRun,
   TreeCheckProvider,
   LintProviderContext,
   LintProvider,
@@ -193,8 +197,6 @@ export {
 /** Default ESLint plugin name for codepol rules */
 export const ESLINT_PLUGIN_NAME_DEFAULT = 'codepol';
 
-import { parserInit } from './parser/parserInit';
-import { langAdd } from './parser/parserLangs';
 import type {
   CodepolPluginRule,
   LintProvider,
@@ -297,6 +299,8 @@ export function rulePluginLanguagesGet(plugin: CodepolPluginRule): string[] {
 /**
  * Generates lint provider rules config from codepol config.
  * Users spread this into their lint config (e.g., eslint.config.mts).
+ * Parser/runtime bootstrap is explicit; call `providerParserRuntimeInit()`
+ * separately before executing adapted rules.
  *
  * @param provider - The lint provider platform (e.g., 'eslint')
  * @param configPath - Path to config file (auto-discovered if not specified)
@@ -305,7 +309,13 @@ export function rulePluginLanguagesGet(plugin: CodepolPluginRule): string[] {
  * @example
  * ```javascript
  * // eslint.config.mts
- * import { providerRulesConfigGet, defineConfig } from '@codepol/core';
+ * import {
+ *   providerParserRuntimeInit,
+ *   providerRulesConfigGet,
+ *   defineConfig,
+ * } from '@codepol/core';
+ *
+ * await providerParserRuntimeInit('eslint');
  *
  * export default defineConfig([{
  *   plugins: { codepol: eslintPluginCreate(codepolPlugin) },
@@ -319,11 +329,6 @@ export async function providerRulesConfigGet(
   provider: string,
   configPath?: string
 ): Promise<Record<string, unknown>> {
-  // Register languages and initialize tree-sitter parser for rules that need cross-file analysis
-  langAdd({ langId: 'typescript', fileExtensions: ['.ts', '.mts', '.cts', '.js', '.mjs', '.cjs'] });
-  langAdd({ langId: 'tsx', fileExtensions: ['.tsx', '.jsx'] });
-  await parserInit();
-  
   const cwd = process.cwd();
   
   // Load config: explicit path or auto-discover
@@ -358,8 +363,8 @@ export async function providerRulesConfigGet(
 
   for (const rule of policy.rules) {
     if (provider === 'eslint' && rule.ruleId === '@codepol/plugin/eslint') {
-      // The bridge rule only tells Codepol to invoke ESLint. It is not an
-      // ESLint rule exported by the `codepol` plugin.
+      // Legacy bridge rules only tell Codepol to invoke ESLint. They are not
+      // ESLint rules exported by the `codepol` plugin.
       continue;
     }
 
@@ -465,6 +470,8 @@ export {
 
 // Tree-sitter checking
 export { parserInit, parserGetForFile, parserGetForLanguage } from './parser/parserInit';
+export type { ProviderParserRuntime } from './parser/providerParserRuntimeInit';
+export { providerParserRuntimeInit } from './parser/providerParserRuntimeInit';
 export {
   parserParseTrace,
   parserParseAbortHandlerSet,

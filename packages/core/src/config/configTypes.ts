@@ -3,12 +3,10 @@ import type { PolicyFile } from '../policy/policyTypes';
 /**
  * Full codepol configuration.
  *
- * This is the schema for `codepol.toml`. All enforcement behavior is expressed
- * as policy rules; there are no top-level runtime flags.
+ * This is the schema for `codepol.toml`. Codepol rules live under `[[rules]]`,
+ * while external analyzer executions live under top-level `tools`.
  *
- * External linters (ESLint, Biome, Ruff) are enabled by referencing the
- * corresponding bridge rule from `@codepol/plugin` and configuring the tool
- * via its per-rule `args`:
+ * External linters (ESLint, Biome, Ruff) are configured under `tools`:
  *
  * @example
  * ```toml
@@ -20,10 +18,10 @@ import type { PolicyFile } from '../policy/policyTypes';
  * language = "typescript"
  * files = ["src/**\/*.ts"]
  *
- * [[rules]]
- * ruleId = "@codepol/plugin/eslint"
+ * [tools.eslint]
+ * [[tools.eslint.runs]]
  * targets = ["typescript-src"]
- * args.configPath = "./eslint.config.mjs"
+ * configPath = "./eslint.config.mjs"
  * ```
  */
 export type CodepolConfig = PolicyFile;

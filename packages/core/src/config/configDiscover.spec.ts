@@ -261,5 +261,81 @@ targets = ["ts-src"]
         },
       ]);
     });
+
+    it('should parse external tool runs from top-level tools', () => {
+      const config = configParseFromSource(`
+[targets.ts-src]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[targets.py-src]
+language = "python"
+files = ["src/**/*.py"]
+
+[tools.eslint]
+[[tools.eslint.runs]]
+targets = ["ts-src"]
+configPath = "./eslint.config.mjs"
+
+[tools.ruff]
+[[tools.ruff.runs]]
+targets = ["py-src"]
+select = ["E", "F"]
+
+[[rules]]
+ruleId = "test-rule"
+targets = ["ts-src"]
+`, {
+        configPath: '/tmp/codepol.toml',
+      });
+
+      expect(config.tools).toEqual({
+        eslint: {
+          runs: [
+            {
+              targets: ['ts-src'],
+              configPath: './eslint.config.mjs',
+            },
+          ],
+        },
+        ruff: {
+          runs: [
+            {
+              targets: ['py-src'],
+              select: ['E', 'F'],
+              ruffBin: undefined,
+              ignore: undefined,
+              configPath: undefined,
+              fixable: undefined,
+              extraArgs: undefined,
+            },
+          ],
+        },
+      });
+    });
+
+    it('should reject mixing tools runs with legacy bridge rules for the same tool', () => {
+      expect(() =>
+        configParseFromSource(`
+[targets.ts-src]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[tools.eslint]
+[[tools.eslint.runs]]
+targets = ["ts-src"]
+configPath = "./eslint.config.mjs"
+
+[[rules]]
+ruleId = "@codepol/plugin/eslint"
+targets = ["ts-src"]
+args.configPath = "./eslint.config.mjs"
+`, {
+          configPath: '/tmp/codepol.toml',
+        }),
+      ).toThrow(
+        'config.tools.eslint.runs: cannot be used together with legacy bridge rule "@codepol/plugin/eslint" in config.rules',
+      );
+    });
   });
 });

@@ -89,8 +89,8 @@ type PolicyPluginOptions = {
 };
 ```
 
-The ESLint config path is declared on the `@codepol/plugin/eslint` rule in
-`codepol.toml` via `args.configPath`.
+The ESLint config path is declared under `tools.eslint.runs[*].configPath` in
+`codepol.toml`.
 
 ## How It Works
 

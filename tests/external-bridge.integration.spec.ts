@@ -6,10 +6,6 @@ import type { CodepolConfig } from '@codepol/core';
 import { policyCheck } from '../apps/cli/src/index';
 import { configValidate } from '../packages/core/src/config/configValidate';
 
-const ESLINT_BRIDGE_RULE_ID = '@codepol/plugin/eslint';
-const BIOME_BRIDGE_RULE_ID = '@codepol/plugin/biome';
-const RUFF_BRIDGE_RULE_ID = '@codepol/plugin/ruff';
-
 const FIXTURES_DIR = path.join(__dirname, 'fixtures', 'external-bridge');
 
 function tempProjectCreate(prefix: string): string {
@@ -109,23 +105,18 @@ function ruffPolicyConfigCreate(
         files: ['src/**/*.py'],
       },
     },
-    plugins: [
-      {
-        id: '@codepol/plugin',
-        source: { kind: 'builtin' },
-      },
-    ],
-    rules: [
-      {
-        ruleId: RUFF_BRIDGE_RULE_ID,
-        targets: ['py'],
-        providers: ['ruff'],
-        args: {
+    rules: [],
+    tools: {
+      ruff: {
+        runs: [
+          {
+            targets: ['py'],
           ruffBin,
-          ...args,
-        },
+            ...args,
+          },
+        ],
       },
-    ],
+    },
   };
 }
 
@@ -140,23 +131,18 @@ function biomePolicyConfigCreate(
         files: ['src/**/*.ts'],
       },
     },
-    plugins: [
-      {
-        id: '@codepol/plugin',
-        source: { kind: 'builtin' },
-      },
-    ],
-    rules: [
-      {
-        ruleId: BIOME_BRIDGE_RULE_ID,
-        targets: ['ts'],
-        providers: ['biome'],
-        args: {
+    rules: [],
+    tools: {
+      biome: {
+        runs: [
+          {
+            targets: ['ts'],
           biomeBin,
-          ...args,
-        },
+            ...args,
+          },
+        ],
       },
-    ],
+    },
   };
 }
 
@@ -271,10 +257,10 @@ describe('external bridge rules integration', () => {
         targets: {},
         rules: [],
       }),
-    ).toThrowError(/@codepol\/plugin\/eslint/);
+    ).toThrowError(/tools\.eslint/);
   });
 
-  it('codepol-defined ESLint rule without the bridge: analyzer throws with migration hint', async () => {
+  it('codepol-defined ESLint rule without tools.eslint.runs: analyzer throws with migration hint', async () => {
     const projectDir = tempProjectCreate('codepol-ext-bridge-no-bridge-');
     createdDirs.push(projectDir);
     fixtureCopy('eslint', projectDir);
@@ -312,10 +298,10 @@ describe('external bridge rules integration', () => {
           CODEPOL_WORKSPACE_SERVICE_MODE: 'in_process',
         },
       }),
-    ).rejects.toThrowError(/@codepol\/plugin\/eslint/);
+    ).rejects.toThrowError(/tools\.eslint/);
   });
 
-  it('@codepol/plugin/eslint alone triggers ESLint against user eslint.config.mjs', async () => {
+  it('tools.eslint.runs alone triggers ESLint against user eslint.config.mjs', async () => {
     const projectDir = tempProjectCreate('codepol-ext-bridge-eslint-');
     createdDirs.push(projectDir);
     fixtureCopy('eslint', projectDir);
@@ -328,21 +314,17 @@ describe('external bridge rules integration', () => {
           files: ['src/**/*.ts'],
         },
       },
-      plugins: [
-        {
-          id: '@codepol/plugin',
-          source: { kind: 'builtin' },
+      rules: [],
+      tools: {
+        eslint: {
+          runs: [
+            {
+              targets: ['ts'],
+              configPath: './eslint.config.mjs',
+            },
+          ],
         },
-      ],
-      rules: [
-        {
-          ruleId: ESLINT_BRIDGE_RULE_ID,
-          targets: ['ts'],
-          args: {
-            configPath: './eslint.config.mjs',
-          },
-        },
-      ],
+      },
     };
 
     const result = await policyCheck({
@@ -363,7 +345,7 @@ describe('external bridge rules integration', () => {
     expect(hasDebuggerDiag).toBe(true);
   });
 
-  it('@codepol/plugin/ruff: two bridge entries with distinct args each produce their own ruff invocation', async () => {
+  it('tools.ruff.runs: two runs with distinct args each produce their own ruff invocation', async () => {
     const projectDir = tempProjectCreate('codepol-ext-bridge-ruff-multi-');
     createdDirs.push(projectDir);
     fixtureCopy('ruff', projectDir);
@@ -376,26 +358,15 @@ describe('external bridge rules integration', () => {
           files: ['src/**/*.py'],
         },
       },
-      plugins: [
-        {
-          id: '@codepol/plugin',
-          source: { kind: 'builtin' },
+      rules: [],
+      tools: {
+        ruff: {
+          runs: [
+            { targets: ['py'], ruffBin, select: ['E'] },
+            { targets: ['py'], ruffBin, select: ['F'] },
+          ],
         },
-      ],
-      rules: [
-        {
-          ruleId: RUFF_BRIDGE_RULE_ID,
-          targets: ['py'],
-          providers: ['ruff'],
-          args: { ruffBin, select: ['E'] },
-        },
-        {
-          ruleId: RUFF_BRIDGE_RULE_ID,
-          targets: ['py'],
-          providers: ['ruff'],
-          args: { ruffBin, select: ['F'] },
-        },
-      ],
+      },
     };
 
     const originalEnv = process.env.MOCK_RUFF_TRACE;
@@ -435,7 +406,7 @@ describe('external bridge rules integration', () => {
     }
   });
 
-  it('@codepol/plugin/biome: two bridge entries with distinct configPath each produce their own biome invocation (and no conflict throw)', async () => {
+  it('tools.biome.runs: two runs with distinct configPath each produce their own biome invocation', async () => {
     const projectDir = tempProjectCreate('codepol-ext-bridge-biome-multi-');
     createdDirs.push(projectDir);
     fixtureCopy('biome', projectDir);
@@ -455,26 +426,15 @@ describe('external bridge rules integration', () => {
           files: ['src/**/*.ts'],
         },
       },
-      plugins: [
-        {
-          id: '@codepol/plugin',
-          source: { kind: 'builtin' },
+      rules: [],
+      tools: {
+        biome: {
+          runs: [
+            { targets: ['ts'], biomeBin, configPath: biomeConfigPathA },
+            { targets: ['ts'], biomeBin, configPath: biomeConfigPathB },
+          ],
         },
-      ],
-      rules: [
-        {
-          ruleId: BIOME_BRIDGE_RULE_ID,
-          targets: ['ts'],
-          providers: ['biome'],
-          args: { biomeBin, configPath: biomeConfigPathA },
-        },
-        {
-          ruleId: BIOME_BRIDGE_RULE_ID,
-          targets: ['ts'],
-          providers: ['biome'],
-          args: { biomeBin, configPath: biomeConfigPathB },
-        },
-      ],
+      },
     };
 
     const originalEnv = process.env.MOCK_BIOME_TRACE;
@@ -519,7 +479,7 @@ describe('external bridge rules integration', () => {
     }
   });
 
-  it('@codepol/plugin/eslint: two bridge entries with distinct configPath each run ESLint against their own config', async () => {
+  it('tools.eslint.runs: two runs with distinct configPath each run ESLint against their own config', async () => {
     const projectDir = tempProjectCreate('codepol-ext-bridge-eslint-multi-');
     createdDirs.push(projectDir);
     fixtureCopy('eslint', projectDir);
@@ -552,24 +512,15 @@ describe('external bridge rules integration', () => {
           files: ['src/**/*.ts'],
         },
       },
-      plugins: [
-        {
-          id: '@codepol/plugin',
-          source: { kind: 'builtin' },
+      rules: [],
+      tools: {
+        eslint: {
+          runs: [
+            { targets: ['ts'], configPath: './eslint.config.mjs' },
+            { targets: ['ts'], configPath: './eslint.config.extra.mjs' },
+          ],
         },
-      ],
-      rules: [
-        {
-          ruleId: ESLINT_BRIDGE_RULE_ID,
-          targets: ['ts'],
-          args: { configPath: './eslint.config.mjs' },
-        },
-        {
-          ruleId: ESLINT_BRIDGE_RULE_ID,
-          targets: ['ts'],
-          args: { configPath: './eslint.config.extra.mjs' },
-        },
-      ],
+      },
     };
 
     const result = await policyCheck({

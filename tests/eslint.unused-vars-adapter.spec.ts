@@ -14,9 +14,8 @@ import {
 import pluginRules, { noUnusedVarsRule } from '@codepol/plugin';
 import {
   configCacheClear,
-  langAdd,
-  parserInit,
   pluginBuiltinRegister,
+  providerParserRuntimeInit,
   providerRulesConfigGet,
 } from '@codepol/core';
 
@@ -100,9 +99,9 @@ args.reportUsedIgnorePattern = true
 `,
 );
 
-const bridgeConfigPath = path.join(tempDir, 'codepol-with-eslint-bridge.toml');
+const toolsConfigPath = path.join(tempDir, 'codepol-with-eslint-tools.toml');
 fs.writeFileSync(
-  bridgeConfigPath,
+  toolsConfigPath,
   `[[plugins]]
 id = "@codepol/plugin"
 source = { kind = "builtin" }
@@ -111,10 +110,10 @@ source = { kind = "builtin" }
 language = "typescript"
 files = ["src/**/*.ts"]
 
-[[rules]]
-ruleId = "@codepol/plugin/eslint"
+[tools.eslint]
+[[tools.eslint.runs]]
 targets = ["src"]
-args.configPath = "./eslint.config.mjs"
+configPath = "./eslint.config.mjs"
 
 [[rules]]
 id = "no-unused-vars"
@@ -132,9 +131,7 @@ args.reportUsedIgnorePattern = true
 let cwdSpy: ReturnType<typeof vi.spyOn>;
 
 beforeAll(async () => {
-  langAdd({ langId: 'typescript', fileExtensions: ['.ts'] });
-  langAdd({ langId: 'tsx', fileExtensions: ['.tsx'] });
-  await parserInit();
+  await providerParserRuntimeInit('eslint');
 
   configCacheClear();
   policyCacheClear();
@@ -259,11 +256,11 @@ describe('eslint adapter with native no-unused-vars', () => {
     expect(fixedResult?.output).toBe(shippedPluginFixedSource);
   });
 
-  it('does not emit the eslint bridge as a direct ESLint rule', async () => {
+  it('does not emit tool runs as a direct ESLint rule', async () => {
     const plugin = eslintPluginCreate(pluginRules);
     const providerRules = await providerRulesConfigGet(
       'eslint',
-      bridgeConfigPath,
+      toolsConfigPath,
     ) as Linter.RulesRecord;
 
     expect(providerRules['codepol/eslint']).toBeUndefined();

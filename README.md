@@ -113,10 +113,13 @@ Add to your `eslint.config.js` if you want direct ESLint integration:
 import { eslintPluginCreate } from '@codepol/plugin-eslint';
 import {
   pluginBuiltinRegister,
+  providerParserRuntimeInit,
   policyPluginRulesGet,
   providerRulesConfigGet,
 } from '@codepol/core';
 import codepolBuiltin from '@codepol/plugin';
+
+await providerParserRuntimeInit('eslint');
 
 pluginBuiltinRegister('@codepol/plugin', codepolBuiltin);
 

@@ -45,10 +45,10 @@ source = { kind = "builtin" }
 language = "typescript"
 files = ["src/**/*.ts"]
 
-[[rules]]
-ruleId = "@codepol/plugin/eslint"
+[tools.eslint]
+[[tools.eslint.runs]]
 targets = ["src"]
-args.configPath = "./eslint.config.mjs"
+configPath = "./eslint.config.mjs"
 
 [[rules]]
 ruleId = "@codepol/plugin/no-unused-vars"

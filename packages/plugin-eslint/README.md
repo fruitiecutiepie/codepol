@@ -21,10 +21,13 @@ pnpm add -D @codepol/plugin-eslint @codepol/core @codepol/plugin eslint
 import { eslintPluginCreate } from '@codepol/plugin-eslint';
 import {
   pluginBuiltinRegister,
+  providerParserRuntimeInit,
   policyPluginRulesGet,
   providerRulesConfigGet,
 } from '@codepol/core';
 import codepolBuiltin from '@codepol/plugin';
+
+await providerParserRuntimeInit('eslint');
 
 pluginBuiltinRegister('@codepol/plugin', codepolBuiltin);
 
@@ -46,6 +49,8 @@ export default [
 If your policy file lives somewhere else, pass `configPath` to both helpers:
 
 ```javascript
+await providerParserRuntimeInit('eslint');
+
 const codepol = eslintPluginCreate(
   await policyPluginRulesGet('./config/codepol.toml')
 );
@@ -62,6 +67,7 @@ export default [
 
 ## Notes
 
+- `providerParserRuntimeInit('eslint')` explicitly initializes the parser/runtime dependencies for adapted tree-check rules.
 - `providerRulesConfigGet('eslint')` returns rule severity and options from `codepol.toml`.
 - `policyPluginRulesGet()` resolves the configured built-in and subprocess plugins into concrete ESLint-adaptable rules.
 - If you only use the CLI or the esbuild plugin, you do not need to set this up manually because those hosts inject the ESLint adapter themselves.

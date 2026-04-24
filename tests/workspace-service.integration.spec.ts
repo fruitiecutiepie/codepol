@@ -161,10 +161,10 @@ source = { kind = "builtin" }
 language = "typescript"
 files = ["src/**/*.ts"]
 
-[[rules]]
-ruleId = "@codepol/plugin/eslint"
+[tools.eslint]
+[[tools.eslint.runs]]
 targets = ["src"]
-args.configPath = "./eslint.config.mjs"
+configPath = "./eslint.config.mjs"
 
 [[rules]]
 ruleId = "@codepol/plugin/no-unused-vars"
@@ -1479,7 +1479,7 @@ demo();
         analyzerId: 'eslint',
         platform: 'eslint',
         status: 'ran',
-        ownedRuleIds: ['@codepol/plugin/eslint'],
+        ownedRuleIds: [],
         skippedRuleIds: ['@codepol/plugin/no-unused-vars'],
         skippedReason: 'native_preferred',
       }),
@@ -1557,7 +1557,7 @@ demo();
         platform: 'eslint',
         status: 'ran',
         issueCount: 0,
-        ownedRuleIds: ['@codepol/plugin/eslint'],
+        ownedRuleIds: [],
       }),
     );
   });
@@ -6201,9 +6201,7 @@ targets = ["src"]
       biomeConfigPath: string;
       ruffConfigPath: string;
     }): string {
-      return `[[plugins]]
-id = "@codepol/plugin"
-source = { kind = "builtin" }
+      return `rules = []
 
 [targets.ts-src]
 language = "typescript"
@@ -6213,20 +6211,20 @@ files = ["src/**/*.ts"]
 language = "python"
 files = ["src/**/*.py"]
 
-[[rules]]
-ruleId = "@codepol/plugin/eslint"
+[tools.eslint]
+[[tools.eslint.runs]]
 targets = ["ts-src"]
-args.configPath = "${input.eslintConfigPath}"
+configPath = "${input.eslintConfigPath}"
 
-[[rules]]
-ruleId = "@codepol/plugin/biome"
+[tools.biome]
+[[tools.biome.runs]]
 targets = ["ts-src"]
-args.configPath = "${input.biomeConfigPath}"
+configPath = "${input.biomeConfigPath}"
 
-[[rules]]
-ruleId = "@codepol/plugin/ruff"
+[tools.ruff]
+[[tools.ruff.runs]]
 targets = ["python-src"]
-args.configPath = "${input.ruffConfigPath}"
+configPath = "${input.ruffConfigPath}"
 `;
     }
 

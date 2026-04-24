@@ -118,13 +118,12 @@ const config = defineConfig({
   targets: {
     'typescript-src': { language: 'typescript', files: ['src/**/*.ts'] },
   },
-  rules: [
-    {
-      ruleId: '@codepol/plugin/eslint',
-      targets: ['typescript-src'],
-      args: { configPath: './eslint.config.mjs' },
+  rules: [],
+  tools: {
+    eslint: {
+      runs: [{ targets: ['typescript-src'], configPath: './eslint.config.mjs' }],
     },
-  ],
+  },
 });
 ```
 
@@ -280,13 +279,14 @@ Full codepol configuration. All enforcement behavior is expressed as policy rule
 type CodepolConfig = PolicyFile;
 ```
 
-External linters (ESLint, Biome, Ruff) are enabled by referencing the corresponding bridge rule from `@codepol/plugin` and setting per-rule `args`:
+External linters (ESLint, Biome, Ruff) are configured under top-level
+`tools.<tool>.runs`:
 
 ```toml
-[[rules]]
-ruleId = "@codepol/plugin/eslint"
+[tools.eslint]
+[[tools.eslint.runs]]
 targets = ["typescript-src"]
-args.configPath = "./eslint.config.mjs"
+configPath = "./eslint.config.mjs"
 ```
 
 ---
@@ -319,6 +319,33 @@ const policy = policyFileGet('./legacy-config.json');
 
 ---
 
+### providerParserRuntimeInit
+
+Explicitly initializes parser/runtime dependencies for lint-provider hosts that adapt tree-check rules.
+
+```typescript
+async function providerParserRuntimeInit(
+  provider: 'eslint' | 'biome' | 'ruff'
+): Promise<void>
+```
+
+**Parameters:**
+
+- `provider`: The lint provider whose adapted rules need parser support
+
+**Returns:** Promise that resolves once the provider's parser/runtime dependencies are ready
+
+**Example:**
+
+```javascript
+// eslint.config.js
+import { providerParserRuntimeInit } from '@codepol/core';
+
+await providerParserRuntimeInit('eslint');
+```
+
+---
+
 ### providerRulesConfigGet
 
 Generates lint provider rules config from the codepol config. Users spread this into their lint config (e.g., eslint.config.js).
@@ -344,10 +371,13 @@ async function providerRulesConfigGet(
 import { eslintPluginCreate } from '@codepol/plugin-eslint';
 import {
   pluginBuiltinRegister,
+  providerParserRuntimeInit,
   policyPluginRulesGet,
   providerRulesConfigGet,
 } from '@codepol/core';
 import codepolBuiltin from '@codepol/plugin';
+
+await providerParserRuntimeInit('eslint');
 
 pluginBuiltinRegister('@codepol/plugin', codepolBuiltin);
 
@@ -361,6 +391,8 @@ export default [{
   },
 }];
 ```
+
+`providerRulesConfigGet()` only returns rule settings. Runtime bootstrap is handled separately by `providerParserRuntimeInit()`.
 
 Severity is read from the config per rule (default: `'error'`):
 
@@ -2982,8 +3014,8 @@ type PolicyPluginOptions = {
 };
 ```
 
-The ESLint config path is declared on the `@codepol/plugin/eslint` rule in
-`codepol.toml` via `args.configPath`; it is not an esbuild plugin option.
+The ESLint config path is declared under `tools.eslint.runs[*].configPath` in
+`codepol.toml`; it is not an esbuild plugin option.
 
 **Returns:** esbuild Plugin
 

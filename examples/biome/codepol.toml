@@ -1,4 +1,5 @@
 exclude = ["node_modules/**", "dist/**"]
+rules = []
 
 [targets.ts-src]
 language = "typescript"
@@ -8,7 +9,7 @@ files = ["src/**/*.ts"]
 id = "@codepol/plugin"
 source = { kind = "builtin" }
 
-[[rules]]
-ruleId = "@codepol/plugin/biome"
+[tools.biome]
+[[tools.biome.runs]]
 targets = ["ts-src"]
-args.configPath = "./biome.json"
+configPath = "./biome.json"

@@ -62,10 +62,10 @@ exclude = [
 
 # Enable ESLint on the typescript-src target; required for any ESLint-backed
 # rule (including @codepol/plugin/no-unused-vars) to run.
-[[rules]]
-ruleId = "@codepol/plugin/eslint"
+[tools.eslint]
+[[tools.eslint.runs]]
 targets = ["typescript-src"]
-args.configPath = "./eslint.config.mjs"
+configPath = "./eslint.config.mjs"
 
 [[rules]]
 id = "function-logging"
@@ -95,11 +95,14 @@ The config file is auto-discovered from your project root. Supported format:
 import { eslintPluginCreate } from '@codepol/plugin-eslint';
 import {
   pluginBuiltinRegister,
+  providerParserRuntimeInit,
   policyPluginRulesGet,
   providerRulesConfigGet,
 } from '@codepol/core';
 import codepolBuiltin from '@codepol/plugin';
 import tseslint from 'typescript-eslint';
+
+await providerParserRuntimeInit('eslint');
 
 pluginBuiltinRegister('@codepol/plugin', codepolBuiltin);
 
@@ -160,7 +163,7 @@ If a loaded rule exposes a `platform = "biome"` lint provider, `codepol` **deleg
 Rules:
 
 - The provider selects how to invoke Biome (`biomeBin`, optional `configPath`, optional `extraArgs`). It does **not** register custom rules inside Biome; enforcement comes from Biome’s own configuration.
-- Distinct provider configs are run as **separate** `biome lint` invocations (grouped by normalized config). Declaring the same bridge rule multiple times with different `args` is supported: each distinct resolved config runs once over the files matched by its policy rule. The same grouping applies to `@codepol/plugin/eslint` and `@codepol/plugin/ruff`.
+- Distinct provider configs are run as **separate** `biome lint` invocations (grouped by normalized config). Declaring multiple `tools.<tool>.runs` entries with different config fields is supported: each distinct resolved config runs once over the files matched by that run's targets. The same grouping applies to `tools.eslint.runs` and `tools.ruff.runs`.
 - Policy `severity` and `args` do **not** currently change Biome’s behavior (unlike ESLint, where severity is passed through `overrideConfig`). Configure severity in `biome.json` / Biome CLI options instead.
 
 ## Step 4: Create Your Logger
@@ -380,8 +383,8 @@ codepol
 codepol --config ./codepol.toml
 ```
 
-The ESLint config path is declared on the `@codepol/plugin/eslint` rule via
-`args.configPath`; there is no CLI override for it.
+The ESLint config path is declared under `tools.eslint.runs[*].configPath`;
+there is no CLI override for it.
 
 ## Tuning diagnostics
 

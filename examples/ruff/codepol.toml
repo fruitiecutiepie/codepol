@@ -1,4 +1,5 @@
 exclude = ["**/__pycache__/**", ".venv/**"]
+rules = []
 
 [targets.python-src]
 language = "python"
@@ -8,8 +9,8 @@ files = ["src/**/*.py"]
 id = "@codepol/plugin"
 source = { kind = "builtin" }
 
-[[rules]]
-ruleId = "@codepol/plugin/ruff"
+[tools.ruff]
+[[tools.ruff.runs]]
 targets = ["python-src"]
-args.select = ["E", "F", "I"]
-args.ignore = ["E501"]
+select = ["E", "F", "I"]
+ignore = ["E501"]

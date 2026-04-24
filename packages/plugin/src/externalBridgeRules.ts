@@ -2,18 +2,16 @@
  * @packageDocumentation
  * External linter bridge rules.
  *
- * Trigger-only rules that declare a `LintProvider` for each supported
- * external tool (ESLint, Biome, Ruff). Referencing a bridge rule from
- * `codepol.toml` causes `workspaceAnalysisRun` to invoke the corresponding
- * analyzer on matched files; the tool's own rule logic is resolved from
- * the tool's native config (`eslint.config.*`, `biome.json`, `ruff.toml`
- * or `pyproject.toml`).
+ * Legacy compatibility layer for the pre-`tools.*.runs` config surface.
  *
- * Policy `args` carry per-platform provider config overrides and are the
- * single consistent surface across all three bridges. See
- * `ruffProviderConfigResolve`, `biomeProviderConfigResolve`, and
- * `eslintBridgeConfigPathResolve` in `@codepol/workspace-service` for the
- * args-to-provider-config mapping.
+ * New configs should declare external analyzers under top-level `tools`
+ * instead of referencing these trigger-only rules from `[[rules]]`. The
+ * workspace-service still understands these bridge rules so existing configs
+ * continue to work during migration.
+ *
+ * Once the `tools.*.runs` surface has fully replaced legacy bridge usage, this
+ * module can be removed along with the compatibility readers in
+ * `@codepol/workspace-service`.
  */
 
 import type { CodepolPluginRule } from '@codepol/core';

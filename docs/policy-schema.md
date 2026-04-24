@@ -9,10 +9,10 @@ Codepol uses a TOML config file so the policy stays language-agnostic and easy t
 - `targets` define which files belong to a named scope.
 - `rules` define what to enforce against those targets.
 - `plugins` declare where rule capabilities come from.
+- `tools` declare when external analyzers should run.
 
-External linters (ESLint, Biome, Ruff) are enabled by referencing the
-corresponding bridge rule from `@codepol/plugin` with per-rule `args`.
-There are no top-level runtime flags; every setting lives on a rule.
+External linters (ESLint, Biome, Ruff) are configured under top-level
+`tools.<tool>.runs`. Codepol rules still live under `[[rules]]`.
 
 ## Complete Example
 
@@ -37,10 +37,10 @@ language = "typescript"
 files = ["src/**/*.ts", "src/**/*.tsx"]
 exclude = ["**/*.spec.ts", "**/*.test.ts"]
 
-[[rules]]
-ruleId = "@codepol/plugin/eslint"
+[tools.eslint]
+[[tools.eslint.runs]]
 targets = ["typescript-src"]
-args.configPath = "./eslint.config.mjs"
+configPath = "./eslint.config.mjs"
 
 [[rules]]
 id = "function-logging"
@@ -67,42 +67,44 @@ targets = ["typescript-src"]
 | `targets` | table | Yes | Named target definitions referenced by rules |
 | `rules` | array of tables | Yes | Enforcement rules |
 | `plugins` | array of tables | No | Built-in or subprocess plugin declarations |
+| `tools` | table | No | External analyzer executions grouped by tool |
 | `exclude` | string array | No | Global file patterns to exclude |
 
-### External Linter Bridge Rules
+### External Tool Runs
 
-Codepol ships three trigger-only bridge rules that invoke the matching external
-linter on files that match the rule's targets. The tool's own config file
-decides which rules fire; codepol only decides when/where the tool runs and
-normalizes the resulting diagnostics.
+Codepol ships first-class tool-run configuration for external analyzers. Each
+run decides which targets the tool sees and which tool-specific config should
+be applied. The tool's own config file still decides which native rules fire;
+Codepol decides when/where the tool runs and normalizes the resulting
+diagnostics.
 
-| Rule ID | Platform | `args` |
-| ------- | -------- | ------ |
-| `@codepol/plugin/eslint` | ESLint (JS/TS/JSX/TSX) | `configPath` (required) |
-| `@codepol/plugin/biome` | Biome (JS/TS/JSX/TSX) | `biomeBin`, `configPath`, `extraArgs` |
-| `@codepol/plugin/ruff` | Ruff (Python) | `ruffBin`, `select`, `ignore`, `fixable`, `configPath`, `extraArgs` |
+| Tool | Run fields |
+| ---- | ---------- |
+| `tools.eslint.runs` | `targets`, `configPath` |
+| `tools.biome.runs` | `targets`, `biomeBin`, `configPath`, `extraArgs` |
+| `tools.ruff.runs` | `targets`, `ruffBin`, `select`, `ignore`, `fixable`, `configPath`, `extraArgs` |
 
 ```toml
-[[rules]]
-ruleId = "@codepol/plugin/ruff"
+[tools.ruff]
+[[tools.ruff.runs]]
 targets = ["python-src"]
-args.select = ["E", "F", "I"]
-args.ignore = ["E501"]
+select = ["E", "F", "I"]
+ignore = ["E501"]
 
-[[rules]]
-ruleId = "@codepol/plugin/biome"
+[tools.biome]
+[[tools.biome.runs]]
 targets = ["ts-src"]
-args.configPath = "./biome.json"
+configPath = "./biome.json"
 
-[[rules]]
-ruleId = "@codepol/plugin/eslint"
+[tools.eslint]
+[[tools.eslint.runs]]
 targets = ["ts-src"]
-args.configPath = "./eslint.config.mjs"
+configPath = "./eslint.config.mjs"
 ```
 
-The `@codepol/plugin/eslint` rule is required whenever any ESLint-backed rule
-appears in the policy (for example `@codepol/plugin/no-unused-vars`); without
-it, the ESLint analyzer cannot resolve a config and fails at load time.
+An ESLint run is required whenever any ESLint-backed rule appears in the policy
+(for example `@codepol/plugin/no-unused-vars`); without it, the ESLint analyzer
+cannot resolve a config and fails at load time.
 
 ## Targets
 
@@ -300,10 +302,10 @@ Common provider values:
 
 If omitted, the rule applies everywhere the host can adapt it.
 
-`biome` providers are executed by the CLI via `biome lint` on JS/TS files that match **this rule’s** targets (and only when the rule selects the `biome` provider, if `providers` is set). Biome’s own config discovery still applies unless the provider supplies an explicit `configPath`. Multiple distinct Biome provider configurations result in multiple `biome lint` subprocess runs (one per normalized config group), and each group only sees the files actually matched by its own policy rule(s). The same grouping model applies to the `@codepol/plugin/eslint` and `@codepol/plugin/ruff` bridges — declaring any bridge multiple times with different `args` (e.g. different `configPath`, `extraArgs`, or ruff `select`/`ignore`) fans out into one subprocess invocation per distinct resolved config. Policy `severity` and `args` do not currently alter Biome diagnostics; configure rules in Biome’s config instead.
+`biome` providers are executed by the CLI via `biome lint` on JS/TS files that match **that run's** targets (and only when the rule selects the `biome` provider, if `providers` is set). Biome’s own config discovery still applies unless the run supplies an explicit `configPath`. Multiple distinct tool-run configurations result in multiple subprocess runs (one per normalized config group), and each group only sees the files actually matched by its configured targets. The same grouping model applies to `tools.eslint.runs` and `tools.ruff.runs` — declaring the same tool multiple times with different config fields (for example `configPath`, `extraArgs`, or Ruff `select` / `ignore`) fans out into one subprocess invocation per distinct resolved config. Policy `severity` does not currently alter Biome diagnostics; configure rule behavior in Biome’s config instead.
 
 ## Notes
 
 - `codepol.toml` is the only discovered config format.
 - Built-in rule IDs keep their namespaced form, for example `@codepol/plugin/no-interface`, `@codepol/plugin/forbidden-declarations`, or `@codepol/plugin/enforce-casing`.
-- Direct ESLint usage should combine `policyPluginRulesGet()` with `providerRulesConfigGet('eslint')`.
+- Direct ESLint usage should combine `providerParserRuntimeInit('eslint')`, `policyPluginRulesGet()`, and `providerRulesConfigGet('eslint')`.

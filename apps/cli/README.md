@@ -57,14 +57,14 @@ codepol --config ./config/codepol.toml
 
 ### Custom ESLint Config
 
-The ESLint config path is declared on the `@codepol/plugin/eslint` rule in
+The ESLint config path is declared under `tools.eslint.runs` in
 `codepol.toml`:
 
 ```toml
-[[rules]]
-ruleId = "@codepol/plugin/eslint"
+[tools.eslint]
+[[tools.eslint.runs]]
 targets = ["typescript-src"]
-args.configPath = "./config/eslint.config.mjs"
+configPath = "./config/eslint.config.mjs"
 ```
 
 ### Tuning diagnostics

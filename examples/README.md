@@ -1,15 +1,15 @@
 # Examples
 
 Minimal end-to-end example workspaces showing how to enable external linters
-through codepol's bridge rules. Each subdirectory is a self-contained project:
+through `tools.<tool>.runs`. Each subdirectory is a self-contained project:
 a `codepol.toml`, the matching tool config, one source file with a deliberate
 violation, and a README explaining what to expect.
 
-| Example | Bridge rule | Demonstrates |
-| ------- | ----------- | ------------ |
-| [eslint](./eslint) | `@codepol/plugin/eslint` | Triggering ESLint on JS/TS files via the bridge rule |
-| [biome](./biome) | `@codepol/plugin/biome` | Triggering Biome on JS/TS files with `biome.json` selecting the rule |
-| [ruff](./ruff) | `@codepol/plugin/ruff` | Triggering Ruff on Python files with `select`/`ignore` driven from `args` |
+| Example | Tool run | Demonstrates |
+| ------- | -------- | ------------ |
+| [eslint](./eslint) | `tools.eslint.runs` | Triggering ESLint on JS/TS files via explicit ESLint runs |
+| [biome](./biome) | `tools.biome.runs` | Triggering Biome on JS/TS files with `biome.json` selecting the rule |
+| [ruff](./ruff) | `tools.ruff.runs` | Triggering Ruff on Python files with `select`/`ignore` driven from run config |
 
 ## Running an example
 
@@ -24,26 +24,26 @@ You also need the matching tool installed and resolvable on your `PATH`
 (`eslint` is included via this repo's dev dependencies; `biome` and `ruff`
 must be installed separately for their respective examples).
 
-## Bridge rule shape
+## Tool run shape
 
-All three examples use the same `args.configPath` shape on the bridge rule.
-ESLint requires `args.configPath`; Biome and Ruff treat it as optional and
-fall back to their own config discovery when omitted.
+All three examples use top-level tool runs. ESLint requires `configPath`;
+Biome and Ruff treat it as optional and fall back to their own config
+discovery when omitted.
 
 ```toml
-[[rules]]
-ruleId = "@codepol/plugin/<eslint|biome|ruff>"
+[tools.<eslint|biome|ruff>]
+[[tools.<eslint|biome|ruff>.runs]]
 targets = ["<target-name>"]
-args.configPath = "./<tool-config-file>"
+configPath = "./<tool-config-file>"
 ```
 
-A bridge rule may be declared more than once with different `args` (e.g. a
-second `@codepol/plugin/eslint` entry pointing at a different `configPath`, or
-a second `@codepol/plugin/ruff` entry with different `select`/`ignore`).
+A tool may be declared more than once with different run config (for example,
+a second `tools.eslint.runs` entry pointing at a different `configPath`, or a
+second `tools.ruff.runs` entry with different `select` / `ignore`).
 Each distinct resolved config runs as its own subprocess invocation over the
-files matched by its policy rule's targets; entries that resolve to identical
+files matched by that run's targets; entries that resolve to identical
 configs are merged into a single invocation.
 
-See [docs/policy-schema.md](../docs/policy-schema.md) for the complete bridge
-rule reference, including Ruff's `select` / `ignore` / `fixable` args and
-Biome's `biomeBin` / `extraArgs` args.
+See [docs/policy-schema.md](../docs/policy-schema.md) for the complete tool-run
+reference, including Ruff's `select` / `ignore` / `fixable` fields and
+Biome's `biomeBin` / `extraArgs` fields.

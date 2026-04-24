@@ -4,13 +4,11 @@ import tseslint from 'typescript-eslint';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { eslintAdapter, policyCacheClear } from '@codepol/plugin-eslint';
 import { loggerEnterExitRule } from '@codepol/plugin';
-import { langAdd, parserInit } from '@codepol/core';
+import { providerParserRuntimeInit } from '@codepol/core';
 
 // Initialize tree-sitter parser before tests
 beforeAll(async () => {
-  langAdd({ langId: 'typescript', fileExtensions: ['.ts'] });
-  langAdd({ langId: 'tsx', fileExtensions: ['.tsx'] });
-  await parserInit();
+  await providerParserRuntimeInit('eslint');
   policyCacheClear();
 });
 

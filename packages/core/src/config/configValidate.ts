@@ -1,12 +1,16 @@
 import type { CodepolConfig } from './configTypes';
 import type {
   LintSeverity,
+  PolicyBiomeRun,
+  PolicyEslintRun,
   PolicyPluginDeclaration,
   PolicyPluginSource,
+  PolicyRuffRun,
   PolicyRule,
   PolicyRuleFixMode,
   PolicyRuleTarget,
   PolicyTargetMap,
+  PolicyTools,
 } from '../policy/policyTypes';
 
 function valueTypeGet(value: unknown): string {
@@ -199,6 +203,92 @@ function rulesParse(value: unknown, path: string): PolicyRule[] {
   return value.map((rule, index) => ruleParse(rule, `${path}[${index}]`));
 }
 
+function eslintRunParse(value: unknown, path: string): PolicyEslintRun {
+  const record = recordExpect(value, path);
+  keysAllowed(record, ['targets', 'configPath'], path);
+  return {
+    targets: stringArrayExpect(record.targets, `${path}.targets`),
+    configPath: stringExpect(record.configPath, `${path}.configPath`),
+  };
+}
+
+function biomeRunParse(value: unknown, path: string): PolicyBiomeRun {
+  const record = recordExpect(value, path);
+  keysAllowed(record, ['targets', 'biomeBin', 'configPath', 'extraArgs'], path);
+  return {
+    targets: stringArrayExpect(record.targets, `${path}.targets`),
+    biomeBin: stringOptional(record.biomeBin, `${path}.biomeBin`),
+    configPath: stringOptional(record.configPath, `${path}.configPath`),
+    extraArgs: stringArrayOptional(record.extraArgs, `${path}.extraArgs`),
+  };
+}
+
+function ruffRunParse(value: unknown, path: string): PolicyRuffRun {
+  const record = recordExpect(value, path);
+  keysAllowed(
+    record,
+    ['targets', 'ruffBin', 'select', 'ignore', 'configPath', 'fixable', 'extraArgs'],
+    path,
+  );
+  return {
+    targets: stringArrayExpect(record.targets, `${path}.targets`),
+    ruffBin: stringOptional(record.ruffBin, `${path}.ruffBin`),
+    select: stringArrayOptional(record.select, `${path}.select`),
+    ignore: stringArrayOptional(record.ignore, `${path}.ignore`),
+    configPath: stringOptional(record.configPath, `${path}.configPath`),
+    fixable: stringArrayOptional(record.fixable, `${path}.fixable`),
+    extraArgs: stringArrayOptional(record.extraArgs, `${path}.extraArgs`),
+  };
+}
+
+function toolRunsParse<T>(
+  value: unknown,
+  path: string,
+  runParse: (value: unknown, path: string) => T,
+): T[] {
+  if (!Array.isArray(value)) {
+    validationError(path, `expected array, received ${valueTypeGet(value)}`);
+  }
+  return value.map((run, index) => runParse(run, `${path}[${index}]`));
+}
+
+function eslintToolParse(value: unknown, path: string): NonNullable<PolicyTools['eslint']> {
+  const record = recordExpect(value, path);
+  keysAllowed(record, ['runs'], path);
+  return {
+    runs: toolRunsParse(record.runs, `${path}.runs`, eslintRunParse),
+  };
+}
+
+function biomeToolParse(value: unknown, path: string): NonNullable<PolicyTools['biome']> {
+  const record = recordExpect(value, path);
+  keysAllowed(record, ['runs'], path);
+  return {
+    runs: toolRunsParse(record.runs, `${path}.runs`, biomeRunParse),
+  };
+}
+
+function ruffToolParse(value: unknown, path: string): NonNullable<PolicyTools['ruff']> {
+  const record = recordExpect(value, path);
+  keysAllowed(record, ['runs'], path);
+  return {
+    runs: toolRunsParse(record.runs, `${path}.runs`, ruffRunParse),
+  };
+}
+
+function toolsParse(value: unknown, path: string): PolicyTools | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const record = recordExpect(value, path);
+  keysAllowed(record, ['eslint', 'biome', 'ruff'], path);
+  return {
+    eslint: record.eslint === undefined ? undefined : eslintToolParse(record.eslint, `${path}.eslint`),
+    biome: record.biome === undefined ? undefined : biomeToolParse(record.biome, `${path}.biome`),
+    ruff: record.ruff === undefined ? undefined : ruffToolParse(record.ruff, `${path}.ruff`),
+  };
+}
+
 function pluginsParse(value: unknown, path: string): PolicyPluginDeclaration[] | undefined {
   if (value === undefined) {
     return undefined;
@@ -210,26 +300,60 @@ function pluginsParse(value: unknown, path: string): PolicyPluginDeclaration[] |
 }
 
 const ESLINT_CONFIG_PATH_MIGRATION_MESSAGE =
-  'Top-level `eslintConfigPath` is no longer supported. Enable ESLint by adding the bridge rule:\n' +
+  'Top-level `eslintConfigPath` is no longer supported. Configure ESLint under `tools`:\n' +
   '\n' +
-  '  [[rules]]\n' +
-  '  ruleId = "@codepol/plugin/eslint"\n' +
+  '  [tools.eslint]\n' +
+  '  [[tools.eslint.runs]]\n' +
   '  targets = ["<target-name>"]\n' +
-  '  args.configPath = "./eslint.config.mjs"\n' +
+  '  configPath = "./eslint.config.mjs"\n' +
   '\n' +
   'See docs/policy-schema.md for details.';
+
+const TOOL_BRIDGE_RULE_IDS: Record<keyof PolicyTools, string> = {
+  eslint: '@codepol/plugin/eslint',
+  biome: '@codepol/plugin/biome',
+  ruff: '@codepol/plugin/ruff',
+};
+
+function legacyBridgeAndToolsMixedValidate(config: {
+  rules: PolicyRule[];
+  tools?: PolicyTools;
+}): void {
+  if (!config.tools) {
+    return;
+  }
+  for (const [toolName, ruleId] of Object.entries(TOOL_BRIDGE_RULE_IDS) as Array<
+    [keyof PolicyTools, string]
+  >) {
+    const tool = config.tools[toolName];
+    if (!tool?.runs || tool.runs.length === 0) {
+      continue;
+    }
+    if (!config.rules.some((rule) => rule.ruleId === ruleId)) {
+      continue;
+    }
+    validationError(
+      `config.tools.${toolName}.runs`,
+      `cannot be used together with legacy bridge rule "${ruleId}" in config.rules`,
+    );
+  }
+}
 
 export function configValidate(raw: unknown): CodepolConfig {
   const record = recordExpect(raw, 'config');
   if ('eslintConfigPath' in record) {
     validationError('config.eslintConfigPath', ESLINT_CONFIG_PATH_MIGRATION_MESSAGE);
   }
-  keysAllowed(record, ['targets', 'rules', 'exclude', 'plugins'], 'config');
+  keysAllowed(record, ['targets', 'rules', 'exclude', 'plugins', 'tools'], 'config');
 
-  return {
+  const config: CodepolConfig = {
     targets: targetsParse(record.targets, 'config.targets'),
     rules: rulesParse(record.rules, 'config.rules'),
     exclude: stringArrayOptional(record.exclude, 'config.exclude'),
     plugins: pluginsParse(record.plugins, 'config.plugins'),
+    tools: toolsParse(record.tools, 'config.tools'),
   };
+  legacyBridgeAndToolsMixedValidate(config);
+
+  return config;
 }

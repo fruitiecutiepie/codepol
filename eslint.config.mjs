@@ -1,19 +1,16 @@
 import tseslint from 'typescript-eslint';
 import { eslintPluginCreate } from '@codepol/plugin-eslint';
 import {
-  langAdd,
-  parserInit,
   providerRulesConfigGet,
+  providerParserRuntimeInit,
   policyPluginRulesGet,
   pluginBuiltinRegister,
 } from '@codepol/core';
 import codepolBuiltin from '@codepol/plugin';
 
-// Initialize tree-sitter so cross-file analysis rules (no-unused-exports)
-// can build the project index. Must happen before rules execute.
-langAdd({ langId: 'typescript', fileExtensions: ['.ts', '.mts', '.cts'] });
-langAdd({ langId: 'tsx', fileExtensions: ['.tsx'] });
-await parserInit();
+// Explicit dependency: adapted tree-check rules require parser runtime
+// initialization before ESLint executes them.
+await providerParserRuntimeInit('eslint');
 
 pluginBuiltinRegister('@codepol/plugin', codepolBuiltin);
 

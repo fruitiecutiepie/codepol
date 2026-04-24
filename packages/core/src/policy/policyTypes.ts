@@ -160,6 +160,65 @@ export type PolicyRule = {
 };
 
 /**
+ * One explicit ESLint execution configured by the workspace.
+ *
+ * Unlike `PolicyRule`, this does not describe a Codepol rule. It describes an
+ * external tool invocation scoped to named targets.
+ */
+export type PolicyEslintRun = {
+  /** Array of target names referencing entries in top-level targets */
+  targets: string[];
+  /** Path to eslint.config.* */
+  configPath: string;
+};
+
+/**
+ * One explicit Biome execution configured by the workspace.
+ */
+export type PolicyBiomeRun = {
+  /** Array of target names referencing entries in top-level targets */
+  targets: string[];
+  /** Path to the biome binary (default: 'biome') */
+  biomeBin?: string;
+  /** Path to biome.json or biome.jsonc */
+  configPath?: string;
+  /** Extra CLI arguments */
+  extraArgs?: string[];
+};
+
+/**
+ * One explicit Ruff execution configured by the workspace.
+ */
+export type PolicyRuffRun = {
+  /** Array of target names referencing entries in top-level targets */
+  targets: string[];
+  /** Path to the ruff binary (default: 'ruff') */
+  ruffBin?: string;
+  /** Ruff rule codes to enable (e.g., ['E', 'F', 'I']) */
+  select?: string[];
+  /** Ruff rule codes to ignore */
+  ignore?: string[];
+  /** Path to ruff.toml or pyproject.toml */
+  configPath?: string;
+  /** Fixable rule codes */
+  fixable?: string[];
+  /** Extra CLI arguments */
+  extraArgs?: string[];
+};
+
+export type PolicyTools = {
+  eslint?: {
+    runs: PolicyEslintRun[];
+  };
+  biome?: {
+    runs: PolicyBiomeRun[];
+  };
+  ruff?: {
+    runs: PolicyRuffRun[];
+  };
+};
+
+/**
  * The complete policy file structure.
  * This is the schema for `codepol.toml`.
  */
@@ -172,6 +231,8 @@ export type PolicyFile = {
   exclude?: string[];
   /** Plugin declarations used by this policy */
   plugins?: PolicyPluginDeclaration[];
+  /** External analyzer executions configured for this workspace */
+  tools?: PolicyTools;
 };
 
 /**
