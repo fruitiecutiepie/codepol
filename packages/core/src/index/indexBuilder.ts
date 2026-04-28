@@ -44,6 +44,8 @@ export type IndexBuildOptions = {
   pathAliases?: Record<string, string[]>;
   /** Workspace package name → source entry file (from package.json) */
   workspacePackages?: Map<string, string>;
+  /** Optional progress callback for coarse build phases. */
+  onProgress?: (progress: IndexBuildProgress) => void;
 };
 
 /**
@@ -59,6 +61,16 @@ export type IndexBuildResult = {
     errors: string[];
   };
 };
+
+export type IndexBuildProgress =
+  | {
+      phase: 'indexing_files';
+      completed: number;
+      total: number;
+    }
+  | {
+      phase: 'resolving_relations';
+    };
 
 // ============================================================================
 // Adapter Registry
@@ -122,8 +134,13 @@ function projectIndexBuildImpl(options: IndexBuildOptions): IndexBuildResult {
   };
 
   const supportedLanguages = new Set<string>();
+  options.onProgress?.({
+    phase: 'indexing_files',
+    completed: 0,
+    total: options.files.length,
+  });
 
-  for (const file of options.files) {
+  for (const [index, file] of options.files.entries()) {
     try {
       // Get language for file
       const language = langGetForFile(file);
@@ -173,12 +190,21 @@ function projectIndexBuildImpl(options: IndexBuildOptions): IndexBuildResult {
       stats.filesIndexed++;
     } catch (error) {
       stats.errors.push(`${file}: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      options.onProgress?.({
+        phase: 'indexing_files',
+        completed: index + 1,
+        total: options.files.length,
+      });
     }
   }
 
   // Perform cross-file resolution if enabled (default: true)
   const doCrossFileResolution = options.crossFileResolution !== false;
   if (doCrossFileResolution) {
+    options.onProgress?.({
+      phase: 'resolving_relations',
+    });
     crossFileResolve(store, {
       baseDir: options.dir,
       extensions: DEFAULT_EXTENSIONS,

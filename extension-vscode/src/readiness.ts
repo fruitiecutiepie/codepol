@@ -253,7 +253,31 @@ function statusBarIconResolve(state: CodepolReadinessState): string {
   }
 }
 
-function statusBarLabelResolve(state: CodepolReadinessState): string {
+function statusBarProgressLabelResolve(status: IndexStatusResult | null | undefined): string | undefined {
+  switch (status?.progress?.phase) {
+    case 'starting_index_build':
+      return 'Starting';
+    case 'building_index_files':
+      return 'Indexing';
+    case 'resolving_index_graph':
+      return 'Resolving';
+    case 'restoring_index':
+      return 'Restoring';
+    case 'applying_index_overlays':
+      return 'Applying';
+    default:
+      return undefined;
+  }
+}
+
+function statusBarLabelResolve(
+  state: CodepolReadinessState,
+  status: IndexStatusResult | null | undefined,
+): string {
+  const progressLabel = statusBarProgressLabelResolve(status);
+  if (progressLabel) {
+    return progressLabel;
+  }
   switch (state) {
     case 'cold':
       return 'Preparing';
@@ -290,7 +314,7 @@ export function codepolStatusBarPresentationCreate(
   lines.push('Click to open the Codepol view.');
 
   return {
-    text: `${statusBarIconResolve(state)} Codepol ${statusBarLabelResolve(state)}`,
+    text: `${statusBarIconResolve(state)} Codepol ${statusBarLabelResolve(state, snapshot.status)}`,
     tooltip: lines.join('\n'),
     tone: indexStatus.tone,
   };

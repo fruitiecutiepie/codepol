@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, vi } from 'vitest';
 import { isOk, isErr } from '../result/result';
 import { langAdd } from './parserLangs';
-import { parserInit, parserGetForFile } from './parserInit';
+import { parserInit, parserGetForFile, parserRuntimeIsReady } from './parserInit';
 
 // Vitest isolates each file in its own worker, so parserInitialized starts as false
 // and global Maps in parserLangs are empty.
@@ -33,6 +33,7 @@ describe('parserInit', () => {
       // parserInit completed without throwing — that's the assertion.
       // Calling again should be a no-op (idempotent).
       await expect(parserInit()).resolves.toBeUndefined();
+      expect(parserRuntimeIsReady()).toBe(true);
     });
 
     it('should return Ok with a parser for a known file extension', () => {

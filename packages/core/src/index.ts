@@ -173,6 +173,8 @@ export type {
   WorkspaceApplyResult,
   WorkspaceFeatureReadiness,
   WorkspaceFeatureStatus,
+  IndexStatusProgressPhase,
+  IndexStatusProgress,
   IndexStatusFeatureStatus,
   IndexStatusResult,
 } from './types';
@@ -463,7 +465,12 @@ export {
 } from './policy/policyGet';
 
 // Tree-sitter checking
-export { parserInit, parserGetForFile, parserGetForLanguage } from './parser/parserInit';
+export {
+  parserGetForFile,
+  parserGetForLanguage,
+  parserInit,
+  parserRuntimeIsReady,
+} from './parser/parserInit';
 export type { ProviderParserRuntime } from './parser/providerParserRuntimeInit';
 export { providerParserRuntimeInit } from './parser/providerParserRuntimeInit';
 export {
@@ -784,7 +791,11 @@ export type {
 } from './index/indexTypes';
 
 // Index builder
-export type { IndexBuildOptions, IndexBuildResult } from './index/indexBuilder';
+export type {
+  IndexBuildOptions,
+  IndexBuildProgress,
+  IndexBuildResult,
+} from './index/indexBuilder';
 export {
   projectIndexBuild,
   projectIndexBuildSync,

@@ -252,6 +252,28 @@ describe('extension-vscode sidebar models', () => {
     });
   });
 
+  it('prefers structured index progress in the sidebar detail', () => {
+    const status: IndexStatusResult = {
+      workspaceId: 'workspace-1',
+      workspaceInstanceId: 'instance-1',
+      status: 'warming',
+      replayState: 'applied',
+      workspaceReady: false,
+      indexedFileCount: 42,
+      openDocumentCount: 3,
+      overlayCount: 1,
+      analysisGeneration: 9,
+      progress: {
+        phase: 'resolving_index_graph',
+        message: 'Resolving workspace index graph',
+      },
+    };
+
+    expect(sidebarIndexStatusCreate({ status }).detail).toBe(
+      'Resolving workspace index graph • workspace not ready • replay applied',
+    );
+  });
+
   it('deduplicates and caps recent semantic targets', () => {
     const first = sidebarRecentTargetCreate({
       uri: 'file:///workspace/packages/lib/src/index.ts',

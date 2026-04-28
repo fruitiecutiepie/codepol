@@ -4,8 +4,11 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  indexStoreNew,
   pluginModuleRegister,
   pluginRuleNew,
+  projectIndexBuildSync,
+  projectIndexStoreSnapshotCreate,
   treeCheckProviderNew,
   workspacePathToUri,
 } from '@codepol/core';
@@ -2376,6 +2379,198 @@ targets = ["src"]
       openDocumentCount: 0,
       overlayCount: 0,
       analysisGeneration: 1,
+    });
+  });
+
+  it('reports structured index-build progress while an index-required analysis is running', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(configPath, unusedExportsConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = workspacePathToUri(filePath);
+    fs.writeFileSync(filePath, 'export const sharedValue = 1;\n', 'utf8');
+
+    let buildStartedResolve: (() => void) | undefined;
+    const buildStarted = new Promise<void>((resolve) => {
+      buildStartedResolve = resolve;
+    });
+    let allowBuildResolve: (() => void) | undefined;
+    const allowBuild = new Promise<void>((resolve) => {
+      allowBuildResolve = resolve;
+    });
+    const engine = new WorkspaceServiceEngine({
+      indexBuildHost: {
+        async build(input) {
+          input.onProgress?.({
+            phase: 'building_index_files',
+            message: 'Building workspace index (1/1 files)',
+            current: 1,
+            total: 1,
+          });
+          buildStartedResolve?.();
+          await allowBuild;
+          const store = indexStoreNew();
+          const { index } = projectIndexBuildSync({
+            files: input.request.files,
+            dir: input.request.dir,
+            store,
+            workspacePackages: new Map(input.request.workspacePackages),
+          });
+          return {
+            snapshot: projectIndexStoreSnapshotCreate(store, index.capabilities),
+          };
+        },
+      },
+    });
+    const service = workspaceServiceCreate({ engine });
+    const attached = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'status-progress-client',
+    });
+
+    const diagnosticsPromise = service.queryDiagnostics({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      uri,
+    });
+    await buildStarted;
+
+    expect(
+      await service.queryIndexStatus({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+      }),
+    ).toMatchObject({
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+      status: 'warming',
+      replayState: 'pending',
+      workspaceReady: false,
+      progress: {
+        phase: 'building_index_files',
+        message: 'Building workspace index (1/1 files)',
+        current: 1,
+        total: 1,
+      },
+      featureStatus: {
+        workspaceIndex: {
+          readiness: 'warming',
+          detail: 'Building workspace index (1/1 files)',
+        },
+      },
+    });
+
+    allowBuildResolve?.();
+    await diagnosticsPromise;
+
+    expect(
+      await service.queryIndexStatus({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+      }),
+    ).toMatchObject({
+      status: 'ready',
+      replayState: 'pending',
+      workspaceReady: false,
+    });
+    expect(
+      await service.queryIndexStatus({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+      }),
+    ).not.toHaveProperty('progress');
+  });
+
+  it('cancels an abandoned index build after overlay invalidation and reruns cleanly', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-service-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(configPath, unusedExportsConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = workspacePathToUri(filePath);
+    fs.writeFileSync(filePath, 'export const sharedValue = 1;\n', 'utf8');
+
+    let buildCallCount = 0;
+    let firstBuildStartedResolve: (() => void) | undefined;
+    const firstBuildStarted = new Promise<void>((resolve) => {
+      firstBuildStartedResolve = resolve;
+    });
+    let firstBuildAbortedResolve: (() => void) | undefined;
+    const firstBuildAborted = new Promise<void>((resolve) => {
+      firstBuildAbortedResolve = resolve;
+    });
+    const engine = new WorkspaceServiceEngine({
+      indexBuildHost: {
+        async build(input) {
+          buildCallCount += 1;
+          if (buildCallCount === 1) {
+            firstBuildStartedResolve?.();
+            return new Promise((_, reject) => {
+              input.signal?.addEventListener(
+                'abort',
+                () => {
+                  firstBuildAbortedResolve?.();
+                  reject(new Error('aborted by test'));
+                },
+                { once: true },
+              );
+            });
+          }
+          const store = indexStoreNew();
+          const { index } = projectIndexBuildSync({
+            files: input.request.files,
+            dir: input.request.dir,
+            store,
+            workspacePackages: new Map(input.request.workspacePackages),
+          });
+          return {
+            snapshot: projectIndexStoreSnapshotCreate(store, index.capabilities),
+          };
+        },
+      },
+    });
+    const service = workspaceServiceCreate({ engine });
+    const attached = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'status-cancel-client',
+    });
+
+    const diagnosticsPromise = service.queryDiagnostics({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      uri,
+    });
+    await firstBuildStarted;
+
+    await service.openOverlay({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      uri,
+      version: 1,
+      text: 'export const sharedValue = 2;\n',
+    });
+    await firstBuildAborted;
+
+    const diagnostics = await diagnosticsPromise;
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.code).toBe('@codepol/plugin/no-unused-exports');
+    expect(buildCallCount).toBe(2);
+    expect(
+      await service.queryIndexStatus({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+      }),
+    ).toMatchObject({
+      status: 'ready',
+      replayState: 'pending',
+      workspaceReady: false,
     });
   });
 

@@ -1172,6 +1172,20 @@ export type WorkspaceFeatureStatus = {
   detail?: string;
 };
 
+export type IndexStatusProgressPhase =
+  | 'starting_index_build'
+  | 'building_index_files'
+  | 'resolving_index_graph'
+  | 'restoring_index'
+  | 'applying_index_overlays';
+
+export type IndexStatusProgress = {
+  phase: IndexStatusProgressPhase;
+  message?: string;
+  current?: number;
+  total?: number;
+};
+
 export type IndexStatusFeatureStatus = {
   diagnostics: WorkspaceFeatureStatus;
   codeActions: WorkspaceFeatureStatus;
@@ -1192,6 +1206,7 @@ export type IndexStatusResult = {
   replayEpoch?: number;
   workspaceReady?: boolean;
   featureStatus?: IndexStatusFeatureStatus;
+  progress?: IndexStatusProgress;
   indexedFileCount: number;
   openDocumentCount: number;
   overlayCount: number;

@@ -21,6 +21,27 @@ describe('builtinPluginsRefresh', () => {
   });
 });
 
+describe('ensureWorkspaceRuntimeReady', () => {
+  it('reinitializes when another parser owner invalidates global parser state', async () => {
+    const runtime = await import('./runtime.js');
+    await runtime.ensureWorkspaceRuntimeReady();
+
+    const core = await import('@codepol/core');
+    expect(core.parserRuntimeIsReady()).toBe(true);
+
+    const { parserRuntimeStateForOwnerGet } = await import(
+      '../../core/src/parser/parserRuntimeState.js'
+    );
+    parserRuntimeStateForOwnerGet({ owner: 'runtime-spec' });
+    expect(core.parserRuntimeIsReady()).toBe(false);
+
+    await runtime.ensureWorkspaceRuntimeReady();
+
+    expect(core.parserRuntimeIsReady()).toBe(true);
+    expect(core.isErr(core.parserGetForFile('example.ts'))).toBe(false);
+  });
+});
+
 describe('workspaceAnalysisRun builtin refresh', () => {
   it('invokes builtinPluginsRefresh before resolving plugins', async () => {
     const runtime = await import('./runtime.js');

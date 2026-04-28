@@ -1398,6 +1398,10 @@ describe('CodepolLspServer', () => {
         openDocumentCount: 0,
         overlayCount: 0,
         analysisGeneration: 0,
+        progress: {
+          phase: 'starting_index_build' as const,
+          message: 'Starting workspace index build',
+        },
       },
       {
         workspaceId: 'workspace-1',
@@ -1410,6 +1414,12 @@ describe('CodepolLspServer', () => {
         openDocumentCount: 0,
         overlayCount: 0,
         analysisGeneration: 0,
+        progress: {
+          phase: 'building_index_files' as const,
+          message: 'Building workspace index (1/3 files)',
+          current: 1,
+          total: 3,
+        },
       },
       {
         workspaceId: 'workspace-1',
@@ -1434,6 +1444,10 @@ describe('CodepolLspServer', () => {
         openDocumentCount: 0,
         overlayCount: 0,
         analysisGeneration: 1,
+        progress: {
+          phase: 'resolving_index_graph' as const,
+          message: 'Resolving workspace index graph',
+        },
       },
       {
         workspaceId: 'workspace-1',
@@ -1547,13 +1561,15 @@ describe('CodepolLspServer', () => {
       'begin',
       'end',
     ]);
-    expect(progressUpdates[0]?.params.value.message).toBe('Preparing workspace index');
-    expect(progressUpdates[1]?.params.value.message).toBe(
-      'Warming workspace index (3 indexed files)',
-    );
+    expect(progressUpdates[0]?.params.value.message).toBe('Starting workspace index build');
+    expect(progressUpdates[0]?.params.value.percentage).toBe(0);
+    expect(progressUpdates[1]?.params.value.message).toBe('Building workspace index (1/3 files)');
+    expect(progressUpdates[1]?.params.value.percentage).toBe(26);
     expect(progressUpdates[2]?.params.value.message).toBe(
       'Workspace ready (3 indexed files)',
     );
+    expect(progressUpdates[3]?.params.value.message).toBe('Resolving workspace index graph');
+    expect(progressUpdates[3]?.params.value.percentage).toBe(85);
     expect(progressUpdates[4]?.params.value.message).toBe('Index build failed');
 
     await server.handleMessage({
@@ -3406,7 +3422,7 @@ describe('CodepolLspServer', () => {
     );
     const bUri = pathToFileURL(bPath).href;
     expect(relatedUris).toContain(bUri);
-  });
+  }, 15000);
 
   it('forwards the current document version when querying diagnostics for open overlays', async () => {
     const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');

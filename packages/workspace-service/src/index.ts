@@ -34,7 +34,6 @@ import {
   policyRuleTargetsResolve,
   policyViolationToWorkspaceDiagnostic,
   policyViolationsGetFromDir,
-  projectIndexBuildSync,
   projectIndexCreate,
   projectIndexRemoveFiles,
   projectIndexStoreRestore,
@@ -60,6 +59,7 @@ import {
   type FixProvider,
   type IndexStatusFeatureStatus,
   type IndexCapabilities,
+  type IndexStatusProgress,
   type IndexStatusResult,
   type LintDiagnostic,
   type LintProvider,
@@ -167,6 +167,10 @@ import {
 } from './fixMode';
 import { workspaceFileLineCountGet } from './dependencyGraphLoc';
 import {
+  workspaceIndexBuildHostCreate,
+  type WorkspaceIndexBuildHost,
+} from './indexBuildHost';
+import {
   builtinPluginArtifactPathsResolve,
   builtinPluginsRefresh,
   ensureWorkspaceRuntimeReady,
@@ -207,6 +211,12 @@ export {
   type DaemonSelfWatchEntryFileOptions,
 } from './daemonSelfWatch';
 export { builtinPluginsRefresh, ensureWorkspaceRuntimeReady } from './runtime';
+export {
+  workspaceIndexBuildHostCreate,
+  type WorkspaceIndexBuildHost,
+  type WorkspaceIndexBuildRequest,
+  type WorkspaceIndexBuildResult,
+} from './indexBuildHost';
 export * from './warmCache';
 export * from './typeAwareBridgeHost';
 export {
@@ -242,10 +252,56 @@ function workspaceRequestCancelledErrorCreate(): Error {
   return new Error('Request cancelled');
 }
 
+function workspaceRequestCancelledErrorIs(error: unknown): boolean {
+  return error instanceof Error && error.message === 'Request cancelled';
+}
+
 function workspaceAbortSignalThrowIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw workspaceRequestCancelledErrorCreate();
   }
+}
+
+function workspaceAbortSignalMerge(
+  signals: Array<AbortSignal | undefined>,
+): {
+  signal?: AbortSignal;
+  dispose: () => void;
+} {
+  const activeSignals = signals.filter((signal): signal is AbortSignal => signal !== undefined);
+  if (activeSignals.length === 0) {
+    return {
+      dispose() {},
+    };
+  }
+  if (activeSignals.length === 1) {
+    return {
+      signal: activeSignals[0],
+      dispose() {},
+    };
+  }
+  const controller = new AbortController();
+  const onAbort = (): void => {
+    controller.abort();
+  };
+  for (const signal of activeSignals) {
+    if (signal.aborted) {
+      controller.abort();
+      return {
+        signal: controller.signal,
+        dispose() {},
+      };
+    }
+    signal.addEventListener('abort', onAbort, { once: true });
+  }
+  return {
+    signal: controller.signal,
+    dispose() {
+      for (const signal of activeSignals) {
+        signal.removeEventListener('abort', onAbort);
+      }
+    },
+  };
 }
 
 type LintProviderEntry = {
@@ -544,6 +600,7 @@ export type WorkspaceServiceEngineOptions = {
   backgroundTaskSchedule?: (task: () => Promise<void>) => void;
   warmCache?: WorkspaceWarmCacheStore;
   timers?: WorkspaceServiceEngineTimers;
+  indexBuildHost?: WorkspaceIndexBuildHost;
   /**
    * Type-aware call-graph source registry (Phase 9.2 / Gap 1).
    * Optional — when omitted, the engine creates a fresh empty
@@ -560,8 +617,17 @@ export type WorkspaceServiceEngineOptions = {
   typeAwareTypeHierarchySourceRegistry?: TypeAwareTypeHierarchySourceRegistry;
 };
 
-type WorkspaceSessionState = WorkspaceDocumentsState &
+type WorkspaceIndexBuildState = WorkspaceDocumentsState &
   WorkspaceAnalysisCacheState & {
+    analysisRevision?: number;
+    indexProgress?: IndexStatusProgress;
+    activeIndexBuild?: {
+      abort: () => void;
+      analysisRevision: number;
+    };
+  };
+
+type WorkspaceSessionState = WorkspaceIndexBuildState & {
     workspaceId: string;
     workspaceInstanceId: WorkspaceInstanceId;
     replayEpoch: number;
@@ -943,6 +1009,7 @@ export type WorkspaceFeatureStatusState = {
     featureStatus: IndexStatusFeatureStatus;
   };
   workspaceIndexRequired?: boolean;
+  indexProgress?: IndexStatusProgress;
 };
 
 export type WorkspaceDocumentVersionState = {
@@ -1122,6 +1189,8 @@ export function workspaceFeatureStatusesCreate(
     state.workspaceIndexRequired === false
       ? 'Workspace index not built for this session'
       : undefined;
+  const workspaceIndexDetail =
+    state.workspaceIndexRequired === false ? 'Not required by current policy' : state.indexProgress?.message;
   return {
     diagnostics: workspaceFeatureStatusCreate({
       readiness: state.status,
@@ -1136,10 +1205,11 @@ export function workspaceFeatureStatusesCreate(
       state.workspaceIndexRequired === false
         ? workspaceFeatureStatusCreate({
             readiness: 'ready',
-            detail: 'Not required by current policy',
+            detail: workspaceIndexDetail,
           })
         : workspaceFeatureStatusCreate({
             readiness: state.status,
+            detail: workspaceIndexDetail,
           }),
     workspaceSymbols: workspaceFeatureStatusCreate({
       readiness: indexBackedReadiness,
@@ -1182,6 +1252,9 @@ function workspaceSessionInvalidate(
     flushAnalyzerCache?: boolean;
   } = {},
 ): void {
+  state.activeIndexBuild?.abort();
+  state.activeIndexBuild = undefined;
+  state.indexProgress = undefined;
   if (options.clearIndexState) {
     state.indexState = undefined;
   }
@@ -6690,18 +6763,20 @@ function workspaceIndexStateApplyFileDelta(input: {
   );
 }
 
-function workspaceIndexGetOrBuild(
-  workspace: WorkspaceContextState,
-  state: WorkspaceDocumentsState & WorkspaceAnalysisCacheState,
-  files: string[],
-): ProjectIndex {
-  const baseIndexState = workspaceBaseIndexStateGetOrBuild(workspace, files);
+async function workspaceIndexGetOrBuild(input: {
+  workspace: WorkspaceContextState;
+  state: WorkspaceIndexBuildState;
+  files: string[];
+  indexBuildHost: WorkspaceIndexBuildHost;
+  signal?: AbortSignal;
+}): Promise<ProjectIndex> {
+  const baseIndexState = workspaceBaseIndexStateGetOrBuild(input.workspace, input.files);
   const effectiveWorkspacePackages = workspacePackageMapResolve(
-    workspace,
-    state,
+    input.workspace,
+    input.state,
     baseIndexState.files,
   );
-  let indexState = state.indexState;
+  let indexState = input.state.indexState;
 
   const packageMapMatches =
     indexState && workspacePackageMapEquals(indexState.workspacePackages, effectiveWorkspacePackages);
@@ -6719,35 +6794,91 @@ function workspaceIndexGetOrBuild(
     (indexState.fileKey !== baseIndexState.fileKey && !canApplyDelta) ||
     packageMapMatches === false
   ) {
-    const store = indexStoreNew();
-    const { index } = projectIndexBuildSync({
-      files: baseIndexState.files,
-      dir: workspace.rootPath,
-      store,
-      workspacePackages: effectiveWorkspacePackages,
-    });
-
-    indexState = {
-      store,
-      index,
-      capabilities: index.capabilities,
-      files: baseIndexState.files,
-      fileKey: baseIndexState.fileKey,
-      workspacePackages: effectiveWorkspacePackages,
+    const analysisRevision = input.state.analysisRevision ?? 0;
+    const buildAbortController = new AbortController();
+    const mergedSignal = workspaceAbortSignalMerge([
+      input.signal,
+      buildAbortController.signal,
+    ]);
+    const activeBuild = {
+      abort: () => buildAbortController.abort(),
+      analysisRevision,
     };
-    state.indexState = indexState;
+    input.state.activeIndexBuild = activeBuild;
+    input.state.indexProgress = {
+      phase: 'starting_index_build',
+      message: 'Starting workspace index build',
+    };
+    try {
+      const buildResult = await input.indexBuildHost.build({
+        request: {
+          files: baseIndexState.files,
+          dir: input.workspace.rootPath,
+          workspacePackages: [...effectiveWorkspacePackages.entries()],
+        },
+        signal: mergedSignal.signal,
+        onProgress: (progress) => {
+          if (input.state.activeIndexBuild !== activeBuild) {
+            return;
+          }
+          input.state.indexProgress = progress;
+        },
+      });
+      workspaceAbortSignalThrowIfAborted(mergedSignal.signal);
+      if (input.state.activeIndexBuild !== activeBuild) {
+        throw workspaceRequestCancelledErrorCreate();
+      }
+      input.state.indexProgress = {
+        phase: 'restoring_index',
+        message: 'Restoring workspace index',
+      };
+      const restored = projectIndexStoreRestore(buildResult.snapshot);
+      indexState = {
+        store: restored.store,
+        index: restored.index,
+        capabilities: restored.index.capabilities,
+        files: baseIndexState.files,
+        fileKey: baseIndexState.fileKey,
+        workspacePackages: effectiveWorkspacePackages,
+      };
+      input.state.indexState = indexState;
+    } catch (error) {
+      if (mergedSignal.signal?.aborted) {
+        throw workspaceRequestCancelledErrorCreate();
+      }
+      throw error;
+    } finally {
+      mergedSignal.dispose();
+      if (input.state.activeIndexBuild === activeBuild) {
+        input.state.activeIndexBuild = undefined;
+      }
+    }
   } else if (indexState.fileKey !== baseIndexState.fileKey && canApplyDelta) {
     workspaceIndexStateApplyFileDelta({
-      workspace,
+      workspace: input.workspace,
       indexState,
       baseIndexState,
     });
   }
 
+  if (!indexState) {
+    throw new Error('Workspace index unavailable');
+  }
   const indexedFiles = new Set(indexState.files);
   let updated = false;
-  for (const document of state.documents.values()) {
+  const overlayTotal = input.state.documents.size;
+  let overlayCurrent = 0;
+  if (overlayTotal > 0) {
+    input.state.indexProgress = {
+      phase: 'applying_index_overlays',
+      message: `Applying workspace overlays (0/${overlayTotal})`,
+      current: 0,
+      total: overlayTotal,
+    };
+  }
+  for (const document of input.state.documents.values()) {
     if (!indexedFiles.has(document.filePath)) {
+      overlayCurrent += 1;
       continue;
     }
     const didUpdate = projectIndexUpdateFileFromSource(
@@ -6755,11 +6886,20 @@ function workspaceIndexGetOrBuild(
       document.filePath,
       document.text,
     );
+    overlayCurrent += 1;
+    if (overlayTotal > 0) {
+      input.state.indexProgress = {
+        phase: 'applying_index_overlays',
+        message: `Applying workspace overlays (${overlayCurrent}/${overlayTotal})`,
+        current: overlayCurrent,
+        total: overlayTotal,
+      };
+    }
     if (!didUpdate) {
       continue;
     }
     crossFileResolveForFile(indexState.store, document.filePath, {
-      baseDir: workspace.rootPath,
+      baseDir: input.workspace.rootPath,
       extensions: DEFAULT_EXTENSIONS,
       workspacePackages: indexState.workspacePackages,
     });
@@ -6770,6 +6910,7 @@ function workspaceIndexGetOrBuild(
     indexState.index = projectIndexCreate(indexState.store, indexState.capabilities);
   }
 
+  input.state.indexProgress = undefined;
   return indexState.index;
 }
 
@@ -9318,6 +9459,7 @@ function workspaceAnalyzerSliceMerge(input: {
 async function workspaceAnalysisRun(
   workspace: WorkspaceContextState,
   state: WorkspaceDocumentsState & WorkspaceAnalysisCacheState,
+  indexBuildHost: WorkspaceIndexBuildHost,
   options: {
     fix: boolean;
     collectEslintOutput: boolean;
@@ -9378,6 +9520,7 @@ async function workspaceAnalysisRun(
     return workspaceAnalysisRunFullPath({
       workspace,
       state,
+      indexBuildHost,
       options,
       policy,
       pluginRulesMap,
@@ -9398,6 +9541,7 @@ async function workspaceAnalysisRun(
   return workspaceAnalysisRunIncremental({
     workspace,
     state,
+    indexBuildHost,
     options,
     policy,
     pluginRulesMap,
@@ -9416,7 +9560,8 @@ async function workspaceAnalysisRun(
 
 type WorkspaceAnalysisRunSharedInput = {
   workspace: WorkspaceContextState;
-  state: WorkspaceDocumentsState & WorkspaceAnalysisCacheState;
+  state: WorkspaceIndexBuildState;
+  indexBuildHost: WorkspaceIndexBuildHost;
   options: {
     fix: boolean;
     collectEslintOutput: boolean;
@@ -9451,6 +9596,7 @@ async function workspaceAnalysisRunFullPath(
   const {
     workspace,
     state,
+    indexBuildHost,
     options,
     policy,
     pluginRulesMap,
@@ -9471,7 +9617,13 @@ async function workspaceAnalysisRunFullPath(
 
   if (options.fix && fixProviders.length > 0) {
     if (workspaceIndexRequired) {
-      projectIndex = workspaceIndexGetOrBuild(workspace, state, files);
+      projectIndex = await workspaceIndexGetOrBuild({
+        workspace,
+        state,
+        files,
+        indexBuildHost,
+        signal: options.signal,
+      });
     }
     await fixProvidersApply(fixProviders, {
       policy,
@@ -9487,7 +9639,13 @@ async function workspaceAnalysisRunFullPath(
 
   if (workspaceIndexRequired) {
     workspaceAbortSignalThrowIfAborted(options.signal);
-    projectIndex = workspaceIndexGetOrBuild(workspace, state, files);
+    projectIndex = await workspaceIndexGetOrBuild({
+      workspace,
+      state,
+      files,
+      indexBuildHost,
+      signal: options.signal,
+    });
   }
 
   if (options.fix) {
@@ -9506,6 +9664,7 @@ async function workspaceAnalysisRunFullPath(
   }
 
   workspaceAbortSignalThrowIfAborted(options.signal);
+  await ensureWorkspaceRuntimeReady();
   const treeResult = workspaceTreeAnalyzerRun({
     configPath: workspace.configPath,
     matches,
@@ -9556,7 +9715,13 @@ async function workspaceAnalysisRunFullPath(
 
   if (workspaceIndexRequired) {
     workspaceAbortSignalThrowIfAborted(options.signal);
-    projectIndex = workspaceIndexGetOrBuild(workspace, state, files);
+    projectIndex = await workspaceIndexGetOrBuild({
+      workspace,
+      state,
+      files,
+      indexBuildHost,
+      signal: options.signal,
+    });
   }
 
   const architectureResult = workspaceArchitectureDiagnosticsShouldRun({
@@ -9626,6 +9791,7 @@ async function workspaceAnalysisRunIncremental(
   const {
     workspace,
     state,
+    indexBuildHost,
     options,
     policy,
     pluginRulesMap,
@@ -9646,7 +9812,13 @@ async function workspaceAnalysisRunIncremental(
   let projectIndex: ProjectIndex | undefined;
   if (workspaceIndexRequired) {
     workspaceAbortSignalThrowIfAborted(options.signal);
-    projectIndex = workspaceIndexGetOrBuild(workspace, state, files);
+    projectIndex = await workspaceIndexGetOrBuild({
+      workspace,
+      state,
+      files,
+      indexBuildHost,
+      signal: options.signal,
+    });
   }
 
   const configFingerprint = workspaceConfigFingerprintCompute({ workspace, policy });
@@ -9720,6 +9892,7 @@ async function workspaceAnalysisRunIncremental(
   let treeFreshLatencyMs = 0;
   if (treePart.misses.length > 0) {
     workspaceAbortSignalThrowIfAborted(options.signal);
+    await ensureWorkspaceRuntimeReady();
     const startedAt = Date.now();
     treeFreshResult = workspaceTreeAnalyzerRun({
       configPath: workspace.configPath,
@@ -10039,28 +10212,42 @@ function workspaceLintRuleDetailsGroupsCreate(input: {
 async function workspaceSessionAnalysisGet(
   workspace: WorkspaceState,
   state: WorkspaceSessionState,
+  indexBuildHost: WorkspaceIndexBuildHost,
   options: {
     signal?: AbortSignal;
   } = {},
 ): Promise<WorkspaceAnalysis> {
-  if (!state.lastAnalysis) {
-    state.status = 'warming';
-  }
+  while (true) {
+    if (!state.lastAnalysis || state.status === 'cold') {
+      state.status = 'warming';
+    }
 
-  try {
-    await workspaceContextRefreshFromDisk(workspace);
-    const analysis = await workspaceAnalysisRun(workspace, state, {
-      fix: false,
-      collectEslintOutput: false,
-      signal: options.signal,
-    });
-    state.status = 'ready';
-    state.lastError = undefined;
-    return analysis;
-  } catch (error) {
-    state.status = 'error';
-    state.lastError = error instanceof Error ? error.message : String(error);
-    throw error;
+    try {
+      await workspaceContextRefreshFromDisk(workspace);
+      const analysis = await workspaceAnalysisRun(workspace, state, indexBuildHost, {
+        fix: false,
+        collectEslintOutput: false,
+        signal: options.signal,
+      });
+      state.status = 'ready';
+      state.lastError = undefined;
+      state.indexProgress = undefined;
+      state.activeIndexBuild = undefined;
+      return analysis;
+    } catch (error) {
+      state.indexProgress = undefined;
+      state.activeIndexBuild = undefined;
+      if (workspaceRequestCancelledErrorIs(error)) {
+        if (!options.signal?.aborted) {
+          state.lastError = undefined;
+          continue;
+        }
+        throw error;
+      }
+      state.status = 'error';
+      state.lastError = error instanceof Error ? error.message : String(error);
+      throw error;
+    }
   }
 }
 
@@ -10109,6 +10296,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
   private readonly backgroundTaskSchedule: (task: () => Promise<void>) => void;
   private readonly warmCache?: WorkspaceWarmCacheStore;
   private readonly timers: WorkspaceServiceEngineTimers;
+  private readonly indexBuildHost: WorkspaceIndexBuildHost;
   /**
    * Type-aware call-graph source registry (Phase 9.2 / Gap 1).
    *
@@ -10151,6 +10339,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     this.backgroundWarmup = options.backgroundWarmup ?? false;
     this.warmCache = options.warmCache;
     this.timers = options.timers ?? workspaceServiceEngineTimersDefault;
+    this.indexBuildHost = options.indexBuildHost ?? workspaceIndexBuildHostCreate();
     this.typeAwareCallGraphSourceRegistry =
       options.typeAwareCallGraphSourceRegistry
         ?? typeAwareCallGraphSourceRegistryCreate();
@@ -10314,7 +10503,12 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       signal?: AbortSignal;
     } = {},
   ): Promise<WorkspaceAnalysis> {
-    const analysis = await workspaceSessionAnalysisGet(workspace, workspaceSession, options);
+    const analysis = await workspaceSessionAnalysisGet(
+      workspace,
+      workspaceSession,
+      this.indexBuildHost,
+      options,
+    );
     this.workspacePersistSchedule(workspace, workspaceSession);
     return analysis;
   }
@@ -10903,9 +11097,14 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       uri: input.uri,
       documentVersion: input.version,
     });
-    const analysis = await workspaceSessionAnalysisGet(workspace, workspaceSession, {
-      signal: input.signal,
-    });
+    const analysis = await workspaceSessionAnalysisGet(
+      workspace,
+      workspaceSession,
+      this.indexBuildHost,
+      {
+        signal: input.signal,
+      },
+    );
 
     const pluginRulesResult = await policyPluginsGet(
       analysis.policy,
@@ -11035,9 +11234,14 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       uri: input.uri,
       documentVersion: input.version,
     });
-    const analysis = await workspaceSessionAnalysisGet(workspace, workspaceSession, {
-      signal: input.signal,
-    });
+    const analysis = await workspaceSessionAnalysisGet(
+      workspace,
+      workspaceSession,
+      this.indexBuildHost,
+      {
+        signal: input.signal,
+      },
+    );
 
     const pluginRulesResult = await policyPluginsGet(
       analysis.policy,
@@ -11206,6 +11410,9 @@ export class WorkspaceServiceEngine implements WorkspaceService {
         workspaceSession.replayState === 'applied' &&
         workspaceSession.status === 'ready',
       featureStatus: workspaceFeatureStatusesCreate(workspaceSession),
+      ...(workspaceSession.indexProgress
+        ? { progress: workspaceSession.indexProgress }
+        : {}),
       indexedFileCount:
         workspaceSession.indexState?.files.length ??
         workspace.baseIndexState?.files.length ??
@@ -12419,10 +12626,15 @@ export async function policyCheck(
     configPath,
     externalToolConfigs,
   });
-  const analysis = await workspaceAnalysisRun(state, state, {
+  const analysis = await workspaceAnalysisRun(
+    state,
+    state,
+    workspaceIndexBuildHostCreate(),
+    {
     fix: options.fix,
     collectEslintOutput: true,
-  });
+    },
+  );
   return {
     policy: analysis.policy,
     files: analysis.files,

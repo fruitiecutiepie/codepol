@@ -15,6 +15,7 @@ import * as pluginVultureModule from '@codepol/plugin-vulture';
 import {
   langAdd,
   parserInit,
+  parserRuntimeIsReady,
   pluginModuleRegister,
 } from '@codepol/core';
 
@@ -32,18 +33,42 @@ const BUILTIN_PLUGIN_BUNDLED_MODULES: Record<(typeof BUILTIN_PLUGIN_PACKAGES)[nu
 };
 
 let runtimeInitPromise: Promise<void> | undefined;
+let runtimeInitCompleted = false;
 
 type CoreRuntimeApi = {
   langAdd: typeof langAdd;
   parserInit: typeof parserInit;
+  parserRuntimeIsReady: typeof parserRuntimeIsReady;
 };
 
 function runtimeCoreModulesGet(): CoreRuntimeApi[] {
-  // Parser language registry lives on `globalThis` (see `@codepol/core`); a second
-  // `require('@codepol/core')` can resolve to another physical install with a
-  // different `__dirname` and duplicate `.wasm` paths. Calling `langAdd` on both
-  // then throws even though the grammar is the same.
-  return [{ langAdd, parserInit }];
+  const runtimes: CoreRuntimeApi[] = [{ langAdd, parserInit, parserRuntimeIsReady }];
+  try {
+    const runtimePkg = nodeRequire('@codepol/core') as Partial<CoreRuntimeApi>;
+    if (
+      typeof runtimePkg.langAdd === 'function' &&
+      typeof runtimePkg.parserInit === 'function' &&
+      typeof runtimePkg.parserRuntimeIsReady === 'function' &&
+      runtimePkg.langAdd !== langAdd
+    ) {
+      runtimes.push({
+        langAdd: runtimePkg.langAdd,
+        parserInit: runtimePkg.parserInit,
+        parserRuntimeIsReady: runtimePkg.parserRuntimeIsReady,
+      });
+    }
+  } catch {
+    // Source-mode tests may not have a second published install to load.
+  }
+  return runtimes;
+}
+
+function runtimeParsersReady(runtimes: CoreRuntimeApi[]): boolean {
+  return runtimes.every((runtime) => runtime.parserRuntimeIsReady());
+}
+
+async function runtimeParsersInit(runtimes: CoreRuntimeApi[]): Promise<void> {
+  await Promise.all(runtimes.map((runtime) => runtime.parserInit()));
 }
 
 async function runtimeLanguageSupportEnsure(): Promise<void> {
@@ -53,7 +78,14 @@ async function runtimeLanguageSupportEnsure(): Promise<void> {
     runtime.langAdd({ langId: 'tsx', fileExtensions: ['.tsx', '.jsx'] });
     runtime.langAdd({ langId: 'python', fileExtensions: ['.py', '.pyw'] });
   }
-  await Promise.all(runtimes.map((runtime) => runtime.parserInit()));
+  await runtimeParsersInit(runtimes);
+  if (runtimeParsersReady(runtimes)) {
+    return;
+  }
+  await runtimeParsersInit(runtimes);
+  if (!runtimeParsersReady(runtimes)) {
+    throw new Error('Codepol parser runtime was invalidated during initialization.');
+  }
 }
 
 /**
@@ -216,9 +248,21 @@ export function builtinPluginArtifactPathsResolve(moduleSpecifier: string): stri
 }
 
 export function ensureWorkspaceRuntimeReady(): Promise<void> {
-  if (!runtimeInitPromise) {
-    runtimeInitPromise = runtimeLanguageSupportEnsure();
+  const runtimes = runtimeCoreModulesGet();
+  const parserRuntimeReady = runtimeParsersReady(runtimes);
+  if (runtimeInitPromise && (!runtimeInitCompleted || parserRuntimeReady)) {
+    return runtimeInitPromise;
   }
 
+  runtimeInitCompleted = false;
+  runtimeInitPromise = runtimeLanguageSupportEnsure()
+    .then(() => {
+      runtimeInitCompleted = true;
+    })
+    .catch((error) => {
+      runtimeInitPromise = undefined;
+      runtimeInitCompleted = false;
+      throw error;
+    });
   return runtimeInitPromise;
 }

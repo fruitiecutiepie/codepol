@@ -3738,11 +3738,18 @@ describe('workspace daemon control plane', () => {
         return {
           workspaceId: 'workspace-queued',
           workspaceInstanceId: 'workspace-queued-instance',
-          status: 'ready',
+          status: 'warming',
+          replayState: 'applied',
           indexedFileCount: 1,
           openDocumentCount: 1,
           overlayCount: 1,
           analysisGeneration: 1,
+          progress: {
+            phase: 'building_index_files',
+            message: 'Building workspace index (1/4 files)',
+            current: 1,
+            total: 4,
+          },
         };
       },
     };
@@ -3877,6 +3884,13 @@ describe('workspace daemon control plane', () => {
       type: 'query_index_status_ack',
       indexStatus: {
         workspaceId: 'workspace-queued',
+        status: 'warming',
+        progress: {
+          phase: 'building_index_files',
+          message: 'Building workspace index (1/4 files)',
+          current: 1,
+          total: 4,
+        },
       },
     });
     await expect(codeActionsPromise).resolves.toEqual({

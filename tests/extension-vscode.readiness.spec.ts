@@ -188,6 +188,26 @@ describe('extension-vscode readiness helpers', () => {
     );
   });
 
+  it('uses structured index progress in the status bar label and detail', () => {
+    const presentation = codepolStatusBarPresentationCreate({
+      status: readinessStatusCreate({
+        status: 'warming',
+        workspaceReady: false,
+        progress: {
+          phase: 'building_index_files',
+          message: 'Building workspace index (12/48 files)',
+          current: 12,
+          total: 48,
+        },
+      }),
+    });
+
+    expect(presentation.text).toBe('$(sync~spin) Codepol Indexing');
+    expect(presentation.tooltip).toContain(
+      'Building workspace index (12/48 files) • workspace not ready • replay applied',
+    );
+  });
+
   it('recognizes structured superseded errors', () => {
     const error = requestSupersededErrorCreate();
 

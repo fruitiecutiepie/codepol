@@ -303,7 +303,9 @@ export function sidebarIndexStatusCreate(input: {
   }
 
   const status = input.status;
-  const detailParts = [`${status.indexedFileCount} indexed files`];
+  const detailParts = [
+    status.progress?.message ?? `${status.indexedFileCount} indexed files`,
+  ];
   if (status.workspaceReady !== undefined) {
     detailParts.push(status.workspaceReady ? 'workspace ready' : 'workspace not ready');
   }

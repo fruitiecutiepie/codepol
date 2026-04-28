@@ -98,6 +98,18 @@ export async function parserInit(diag?: Diagnostics): Promise<void> {
 }
 
 /**
+ * Returns whether the current module's Tree-sitter runtime is initialized.
+ *
+ * The parser runtime state is shared on `globalThis`; another loaded copy of
+ * web-tree-sitter can claim ownership and invalidate live parsers. Calling this
+ * uses the same owner check as `parserGetForFile`, so hosts can detect that
+ * invalidation and call `parserInit()` again before scanning.
+ */
+export function parserRuntimeIsReady(): boolean {
+  return parserRuntimeStateForOwnerGet(Parser).parserInitialized;
+}
+
+/**
  * Returns a pooled Tree-sitter parser for a specific `Language`.
  *
  * Parsers are reused across calls keyed by the `Language` object. This is

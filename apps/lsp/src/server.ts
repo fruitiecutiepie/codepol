@@ -202,10 +202,38 @@ function indexStatusProgressMessageCreate(
   if (indexStatus.status === 'ready') {
     return `Workspace ready (${indexStatus.indexedFileCount} indexed files)`;
   }
+  if (indexStatus.progress?.message) {
+    return indexStatus.progress.message;
+  }
   if (indexStatus.status === 'warming') {
     return `Warming workspace index (${indexStatus.indexedFileCount} indexed files)`;
   }
   return 'Preparing workspace index';
+}
+
+function indexStatusProgressPercentageFromStructuredResolve(
+  indexStatus: IndexStatusResult,
+): number | undefined {
+  const progress = indexStatus.progress;
+  if (!progress) {
+    return undefined;
+  }
+  const ratio =
+    progress.current !== undefined && progress.total !== undefined && progress.total > 0
+      ? Math.max(0, Math.min(1, progress.current / progress.total))
+      : undefined;
+  switch (progress.phase) {
+    case 'starting_index_build':
+      return 0;
+    case 'building_index_files':
+      return ratio !== undefined ? Math.floor(ratio * 80) : 10;
+    case 'resolving_index_graph':
+      return 85;
+    case 'restoring_index':
+      return 92;
+    case 'applying_index_overlays':
+      return ratio !== undefined ? 95 + Math.floor(ratio * 4) : 95;
+  }
 }
 
 function indexStatusProgressPercentageResolve(
@@ -213,6 +241,10 @@ function indexStatusProgressPercentageResolve(
 ): number | undefined {
   if (indexStatus.status === 'ready') {
     return 100;
+  }
+  const structured = indexStatusProgressPercentageFromStructuredResolve(indexStatus);
+  if (structured !== undefined) {
+    return structured;
   }
   if (indexStatus.status === 'warming') {
     return 50;
