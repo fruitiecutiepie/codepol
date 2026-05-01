@@ -47,7 +47,7 @@ import {
   CODEPOL_EXTENSION_VIEW_CONTAINER_ID,
   CODEPOL_EXTENSION_VIEW_CURRENT_CONTEXT_ID,
   CODEPOL_EXTENSION_VIEW_LINT_RULES_ID,
-  CODEPOL_EXTENSION_VIEW_RENAME_TARGETS_ID,
+  CODEPOL_EXTENSION_VIEW_PACKAGE_TARGETS_ID,
   CODEPOL_CONFIG_ARCHITECTURE_BASELINE_LABEL,
 } from './constants';
 import {
@@ -85,6 +85,7 @@ import {
   LintRulesTreeProvider,
   RenameTargetsTreeProvider,
 } from './treeProviders';
+import { workspacePackageAnalysisLoaderCreate } from './workspacePackageAnalysis';
 
 let protocolClient: CodepolProtocolClient | undefined;
 let sidebarProvider: CodepolSidebarViewProvider | undefined;
@@ -822,8 +823,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     activeEditorLocationGet,
     semanticSearchQueryResolve,
   );
+  const packageAnalysisRootPath = workspaceRootPathGet();
   const renameTargetsProvider = new RenameTargetsTreeProvider(
     renameTargetsLoad,
+    packageAnalysisRootPath
+      ? workspacePackageAnalysisLoaderCreate({
+          rootPath: packageAnalysisRootPath,
+          protocol,
+        })
+      : undefined,
     readiness,
   );
   const lintRulesProvider = new LintRulesTreeProvider(
@@ -1004,7 +1012,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       lintRulesProvider,
     ),
     vscode.window.registerTreeDataProvider(
-      CODEPOL_EXTENSION_VIEW_RENAME_TARGETS_ID,
+      CODEPOL_EXTENSION_VIEW_PACKAGE_TARGETS_ID,
       renameTargetsProvider,
     ),
     vscode.commands.registerCommand(

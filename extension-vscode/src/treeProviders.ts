@@ -14,6 +14,11 @@ import {
   codepolFeatureGateResolve,
   codepolRequestSupersededErrorIs,
 } from './readiness';
+import type {
+  WorkspacePackageAnalysis,
+  WorkspacePackageAnalysisLoader,
+  WorkspacePackageDependencySummary,
+} from './workspacePackageAnalysis';
 
 type RenameTargetGroupKind = RenameTargetCandidate['kind'];
 type LintRulesGroupKind = WorkspaceLintRuleSummary['ownership'];
@@ -39,6 +44,27 @@ type LintRuleDetailsState =
     }
   | LintRuleDetailsResolvedState;
 
+type WorkspacePackageAnalysisResolvedState =
+  | {
+      status: 'ready';
+      analysis: WorkspacePackageAnalysis;
+    }
+  | {
+      status: 'empty';
+    }
+  | {
+      status: 'error';
+      message: string;
+    };
+
+type WorkspacePackageAnalysisState =
+  | {
+      status: 'loading';
+      generation: number;
+      previous?: WorkspacePackageAnalysisResolvedState;
+    }
+  | WorkspacePackageAnalysisResolvedState;
+
 class StaticTreeItem extends vscode.TreeItem {
   constructor(label: string, options: Partial<vscode.TreeItem> = {}) {
     super(label, options.collapsibleState ?? vscode.TreeItemCollapsibleState.None);
@@ -48,6 +74,18 @@ class StaticTreeItem extends vscode.TreeItem {
 
 type RenameTargetGroupItem = vscode.TreeItem & {
   kind: RenameTargetGroupKind;
+};
+
+type WorkspacePackageItem = vscode.TreeItem & {
+  kind: 'workspace_package_item';
+  targetId: string;
+  candidate: RenameTargetCandidate;
+};
+
+type WorkspacePackageDependencyGroupItem = vscode.TreeItem & {
+  kind: 'workspace_package_dependency_group';
+  groupId: 'dependsOn' | 'usedBy';
+  dependencies: WorkspacePackageDependencySummary[];
 };
 
 type LintRulesGroupItem = vscode.TreeItem & {
@@ -87,14 +125,22 @@ export class RenameTargetsTreeProvider
   private readonly emitter = new vscode.EventEmitter<vscode.TreeItem | undefined>();
   readonly onDidChangeTreeData = this.emitter.event;
   private candidatesPromise: Promise<RenameTargetCandidate[]> | undefined;
+  private readonly packageItems = new Map<string, WorkspacePackageItem>();
+  private readonly packageAnalysisStates = new Map<string, WorkspacePackageAnalysisState>();
+  private refreshGeneration = 0;
 
   constructor(
     private readonly candidatesLoad: () => Promise<RenameTargetCandidate[]>,
+    private readonly packageAnalysisLoad?: WorkspacePackageAnalysisLoader,
     private readonly readiness?: CodepolReadinessSource,
   ) {}
 
   refresh(): void {
+    this.refreshGeneration += 1;
     this.candidatesPromise = undefined;
+    this.packageItems.clear();
+    this.packageAnalysisStates.clear();
+    this.packageAnalysisLoad?.refresh?.();
     this.emitter.fire(undefined);
   }
 
@@ -139,50 +185,222 @@ export class RenameTargetsTreeProvider
       return groups;
     }
 
-    const group = element as RenameTargetGroupItem;
+    const item = element as
+      | RenameTargetGroupItem
+      | WorkspacePackageItem
+      | WorkspacePackageDependencyGroupItem;
+    if (item.kind === 'workspace_package_item') {
+      return this.workspacePackageChildrenGet(item);
+    }
+    if (item.kind === 'workspace_package_dependency_group') {
+      return item.dependencies.map((dependency) =>
+        new StaticTreeItem(dependency.packageName, {
+          id: [
+            'codepol.packageTargets.dependency',
+            item.groupId,
+            dependency.packageName,
+          ].join(':'),
+          description:
+            `${dependency.edgeCount} edge${dependency.edgeCount === 1 ? '' : 's'} • ` +
+            `${dependency.fileCount} file${dependency.fileCount === 1 ? '' : 's'}`,
+          tooltip: [
+            dependency.packageName,
+            `${dependency.edgeCount} dependency edge${dependency.edgeCount === 1 ? '' : 's'}`,
+            `${dependency.fileCount} file${dependency.fileCount === 1 ? '' : 's'}`,
+          ].join('\n'),
+          iconPath: new vscode.ThemeIcon(
+            item.groupId === 'dependsOn' ? 'arrow-right' : 'arrow-left',
+          ),
+        }),
+      );
+    }
+    const group = item;
+    const matchingCandidates = candidates.filter(
+      (candidate) => candidate.kind === group.kind,
+    );
+    if (group.kind === 'workspace_package') {
+      return matchingCandidates.map((candidate) => this.workspacePackageItemGet(candidate));
+    }
+
+    return matchingCandidates.map((candidate) =>
+      new StaticTreeItem(candidate.label, {
+        description: candidate.description,
+        tooltip: [candidate.label, candidate.detail, candidate.description].join('\n'),
+        iconPath: new vscode.ThemeIcon('settings-gear'),
+        command: {
+          command: CODEPOL_EXTENSION_COMMAND_RENAME_CODEPOL_ENTITY,
+          title: 'Rename Codepol Entity',
+          arguments: [{ target: candidate.target }],
+        },
+      }),
+    );
+  }
+
+  private workspacePackageItemGet(
+    candidate: RenameTargetCandidate,
+  ): WorkspacePackageItem {
+    const existing = this.packageItems.get(candidate.target.targetId);
+    const item = existing ?? Object.assign(new StaticTreeItem(candidate.label), {
+      kind: 'workspace_package_item' as const,
+      targetId: candidate.target.targetId,
+      candidate,
+    });
+
+    Object.assign(item, {
+      id: `codepol.packageTargets.package:${candidate.target.targetId}`,
+      label: candidate.label,
+      description: candidate.description,
+      tooltip: [candidate.label, candidate.detail, candidate.description].join('\n'),
+      iconPath: new vscode.ThemeIcon('package'),
+      collapsibleState: vscode.TreeItemCollapsibleState.Collapsed,
+      command: undefined,
+    } satisfies Partial<vscode.TreeItem>);
+    item.candidate = candidate;
+    this.packageItems.set(candidate.target.targetId, item);
+    return item;
+  }
+
+  private workspacePackageRenameItemCreate(
+    candidate: RenameTargetCandidate,
+  ): vscode.TreeItem {
     const workspacePackageRenameGate = this.readiness
       ? codepolFeatureGateResolve(
           this.readiness.snapshotGet(),
           'workspacePackageRename',
         )
       : { blocked: false as const, message: undefined };
-    return candidates
-      .filter((candidate) => candidate.kind === group.kind)
-      .map(
-        (candidate) => {
-          const renameBlocked =
-            candidate.kind === 'workspace_package' &&
-            workspacePackageRenameGate.blocked;
+    const renameBlocked = workspacePackageRenameGate.blocked;
+    return new StaticTreeItem(`Rename ${candidate.label}...`, {
+      id: `codepol.packageTargets.rename:${candidate.target.targetId}`,
+      description: renameBlocked ? 'Blocked until ready' : 'Open rename prompt',
+      tooltip: renameBlocked
+        ? (workspacePackageRenameGate.message ?? 'Workspace package rename is blocked.')
+        : `Rename ${candidate.label}`,
+      iconPath: new vscode.ThemeIcon(renameBlocked ? 'lock' : 'edit'),
+      command: renameBlocked
+        ? undefined
+        : {
+            command: CODEPOL_EXTENSION_COMMAND_RENAME_CODEPOL_ENTITY,
+            title: 'Rename Codepol Entity',
+            arguments: [{ target: candidate.target }],
+          },
+    });
+  }
 
-          const tooltipParts = [
-            candidate.label,
-            candidate.detail,
-            candidate.description,
-          ];
-          if (renameBlocked && workspacePackageRenameGate.message) {
-            tooltipParts.push(workspacePackageRenameGate.message);
-          }
+  private async workspacePackageChildrenGet(
+    item: WorkspacePackageItem,
+  ): Promise<vscode.TreeItem[]> {
+    const renameItem = this.workspacePackageRenameItemCreate(item.candidate);
+    const state = this.packageAnalysisStates.get(item.targetId);
+    if (!state) {
+      this.workspacePackageAnalysisLoadStart(item);
+      return [
+        renameItem,
+        packagePassiveItemCreate({
+          id: `codepol.packageTargets.loading:${item.targetId}`,
+          label: 'Loading package analysis...',
+          iconId: 'clock',
+        }),
+      ];
+    }
 
-          return new StaticTreeItem(candidate.label, {
-            description: renameBlocked ? 'Blocked until ready' : candidate.description,
-            tooltip: tooltipParts.join('\n'),
-            iconPath: new vscode.ThemeIcon(
-              renameBlocked
-                ? 'lock'
-                : candidate.kind === 'workspace_package'
-                  ? 'package'
-                  : 'settings-gear',
-            ),
-            command: renameBlocked
-              ? undefined
-              : {
-                  command: CODEPOL_EXTENSION_COMMAND_RENAME_CODEPOL_ENTITY,
-                  title: 'Rename Codepol Entity',
-                  arguments: [{ target: candidate.target }],
-                },
+    if (state.status === 'loading') {
+      return [
+        renameItem,
+        packagePassiveItemCreate({
+          id: `codepol.packageTargets.loading:${item.targetId}`,
+          label: 'Loading package analysis...',
+          iconId: 'clock',
+        }),
+      ];
+    }
+
+    if (state.status === 'empty') {
+      return [
+        renameItem,
+        packagePassiveItemCreate({
+          id: `codepol.packageTargets.unavailable:${item.targetId}`,
+          label: 'Analysis unavailable',
+        }),
+      ];
+    }
+
+    if (state.status === 'error') {
+      return [
+        renameItem,
+        packagePassiveItemCreate({
+          id: `codepol.packageTargets.error:${item.targetId}`,
+          label: 'Unable to load package analysis',
+          tooltip: state.message,
+          iconId: 'warning',
+        }),
+      ];
+    }
+
+    return [renameItem, ...workspacePackageAnalysisChildrenCreate(state.analysis)];
+  }
+
+  private workspacePackageAnalysisLoadStart(item: WorkspacePackageItem): void {
+    const previousState = this.packageAnalysisStates.get(item.targetId);
+    const resolvedPrevious =
+      previousState && previousState.status !== 'loading' ? previousState : undefined;
+    const generation = this.refreshGeneration;
+
+    this.packageAnalysisStates.set(item.targetId, {
+      status: 'loading',
+      generation,
+      previous: resolvedPrevious,
+    });
+
+    if (!this.packageAnalysisLoad) {
+      this.packageAnalysisStates.set(item.targetId, {
+        status: 'empty',
+      });
+      this.emitter.fire(this.packageItems.get(item.targetId));
+      return;
+    }
+
+    void this.packageAnalysisLoad(item.candidate)
+      .then((analysis) => {
+        if (generation !== this.refreshGeneration) {
+          return;
+        }
+        if (!analysis) {
+          this.packageAnalysisStates.set(item.targetId, {
+            status: 'empty',
           });
-        },
-      );
+          return;
+        }
+        this.packageAnalysisStates.set(item.targetId, {
+          status: 'ready',
+          analysis,
+        });
+      })
+      .catch((error: unknown) => {
+        if (generation !== this.refreshGeneration) {
+          return;
+        }
+        if (codepolRequestSupersededErrorIs(error)) {
+          const currentState = this.packageAnalysisStates.get(item.targetId);
+          const fallbackState =
+            currentState?.status === 'loading' ? currentState.previous : undefined;
+          this.packageAnalysisStates.set(
+            item.targetId,
+            fallbackState ?? { status: 'empty' },
+          );
+          return;
+        }
+        this.packageAnalysisStates.set(item.targetId, {
+          status: 'error',
+          message: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        if (generation !== this.refreshGeneration) {
+          return;
+        }
+        this.emitter.fire(this.packageItems.get(item.targetId));
+      });
   }
 
   private groupItemCreate(
@@ -208,6 +426,218 @@ export class RenameTargetsTreeProvider
     }
     return this.candidatesPromise;
   }
+}
+
+function packagePassiveItemCreate(input: {
+  id: string;
+  label: string;
+  description?: string;
+  tooltip?: string;
+  iconId?: string;
+}): vscode.TreeItem {
+  return new StaticTreeItem(input.label, {
+    id: input.id,
+    description: input.description,
+    tooltip: input.tooltip ?? [input.label, input.description].filter(Boolean).join('\n'),
+    iconPath: new vscode.ThemeIcon(input.iconId ?? 'circle-slash'),
+  });
+}
+
+function countLabelCreate(value: number, singular: string, plural: string): string {
+  return `${value} ${value === 1 ? singular : plural}`;
+}
+
+function workspacePackageAnalysisChildrenCreate(
+  analysis: WorkspacePackageAnalysis,
+): vscode.TreeItem[] {
+  const items: vscode.TreeItem[] = [];
+
+  items.push(
+    packagePassiveItemCreate({
+      id: `codepol.packageTargets.identity:${analysis.target.targetId}`,
+      label: 'Identity',
+      description: [
+        analysis.identity.workspaceRelativePackageDir,
+        analysis.identity.workspaceRelativeEntryPointPath,
+      ].join(' • '),
+      tooltip: [
+        analysis.packageName,
+        `Semantic class: ${analysis.identity.semanticClass}`,
+        `Package dir: ${analysis.identity.workspaceRelativePackageDir}`,
+        `package.json: ${analysis.identity.workspaceRelativePackageJsonPath}`,
+        `Entry point: ${analysis.identity.workspaceRelativeEntryPointPath}`,
+      ].join('\n'),
+      iconId: 'tag',
+    }),
+  );
+
+  if (analysis.renameImpact.status === 'ready') {
+    items.push(
+      packagePassiveItemCreate({
+        id: `codepol.packageTargets.renameImpact:${analysis.target.targetId}`,
+        label: 'Rename Impact',
+        description: [
+          analysis.renameImpact.namespaceId,
+          countLabelCreate(analysis.renameImpact.impactedSiteCount, 'site', 'sites'),
+        ].join(' • '),
+        tooltip: [
+          `Namespace: ${analysis.renameImpact.namespaceId}`,
+          `Impacted sites: ${analysis.renameImpact.impactedSiteCount}`,
+          analysis.renameImpact.declarationUri
+            ? `Declaration: ${analysis.renameImpact.declarationUri}`
+            : undefined,
+        ].filter(Boolean).join('\n'),
+        iconId: 'symbol-namespace',
+      }),
+    );
+  } else {
+    items.push(
+      packagePassiveItemCreate({
+        id: `codepol.packageTargets.renameImpact:${analysis.target.targetId}`,
+        label: 'Rename Impact',
+        description: 'unavailable',
+        tooltip: analysis.renameImpact.message,
+        iconId: 'warning',
+      }),
+    );
+  }
+
+  if (analysis.semanticSummary.status === 'ready') {
+    items.push(
+      packagePassiveItemCreate({
+        id: `codepol.packageTargets.semantic:${analysis.target.targetId}`,
+        label: 'Semantic Summary',
+        description:
+          analysis.semanticSummary.summary ??
+          analysis.semanticSummary.statusText ??
+          analysis.semanticSummary.title,
+        tooltip: [
+          analysis.semanticSummary.title,
+          analysis.semanticSummary.subtitle,
+          analysis.semanticSummary.summary,
+          analysis.semanticSummary.statusText,
+          ...analysis.semanticSummary.fields.map(
+            (field) => `${field.label}: ${field.value}`,
+          ),
+        ].filter(Boolean).join('\n'),
+        iconId: 'symbol-module',
+      }),
+    );
+  } else {
+    items.push(
+      packagePassiveItemCreate({
+        id: `codepol.packageTargets.semantic:${analysis.target.targetId}`,
+        label: 'Semantic Summary',
+        description: 'unavailable',
+        tooltip: analysis.semanticSummary.message,
+      }),
+    );
+  }
+
+  if (analysis.hierarchy.status === 'ready') {
+    const hierarchyDescription = [
+      countLabelCreate(analysis.hierarchy.moduleCount, 'module', 'modules'),
+      countLabelCreate(analysis.hierarchy.symbolCount, 'symbol', 'symbols'),
+      countLabelCreate(analysis.hierarchy.entryPointCount, 'entry', 'entries'),
+    ].join(' • ');
+    items.push(
+      packagePassiveItemCreate({
+        id: `codepol.packageTargets.hierarchy:${analysis.target.targetId}`,
+        label: 'Workspace Hierarchy',
+        description: hierarchyDescription,
+        tooltip: [
+          `Boundary: ${analysis.identity.workspaceRelativePackageDir}`,
+          `Modules: ${analysis.hierarchy.moduleCount}`,
+          `Symbols: ${analysis.hierarchy.symbolCount}`,
+          `Entry points: ${analysis.hierarchy.entryPointCount}`,
+          `Cycle files: ${analysis.hierarchy.cycleFileCount}`,
+          analysis.hierarchy.loc !== undefined ? `LOC: ${analysis.hierarchy.loc}` : undefined,
+        ].filter(Boolean).join('\n'),
+        iconId: 'type-hierarchy',
+      }),
+    );
+  } else {
+    items.push(
+      packagePassiveItemCreate({
+        id: `codepol.packageTargets.hierarchy:${analysis.target.targetId}`,
+        label: 'Workspace Hierarchy',
+        description: 'unavailable',
+        tooltip: analysis.hierarchy.message,
+      }),
+    );
+  }
+
+  if (analysis.dependencies.status !== 'ready') {
+    items.push(
+      packagePassiveItemCreate({
+        id: `codepol.packageTargets.dependencies:${analysis.target.targetId}`,
+        label: 'Dependencies',
+        description: 'unavailable',
+        tooltip: analysis.dependencies.message,
+      }),
+    );
+    return items;
+  }
+
+  items.push(
+    workspacePackageDependencyGroupCreate({
+      id: `codepol.packageTargets.dependsOn:${analysis.target.targetId}`,
+      label: 'Depends On',
+      dependencies: analysis.dependencies.dependsOn,
+      groupId: 'dependsOn',
+      emptyLabel: 'No package dependencies',
+      iconId: 'arrow-right',
+    }),
+    workspacePackageDependencyGroupCreate({
+      id: `codepol.packageTargets.usedBy:${analysis.target.targetId}`,
+      label: 'Used By',
+      dependencies: analysis.dependencies.usedBy,
+      groupId: 'usedBy',
+      emptyLabel: 'No package dependents',
+      iconId: 'arrow-left',
+    }),
+  );
+
+  return items;
+}
+
+function workspacePackageDependencyGroupCreate(input: {
+  id: string;
+  label: string;
+  dependencies: WorkspacePackageDependencySummary[];
+  groupId: 'dependsOn' | 'usedBy';
+  emptyLabel: string;
+  iconId: string;
+}): vscode.TreeItem {
+  if (input.dependencies.length === 0) {
+    return packagePassiveItemCreate({
+      id: input.id,
+      label: input.label,
+      description: input.emptyLabel,
+      iconId: input.iconId,
+    });
+  }
+
+  return Object.assign(
+    new StaticTreeItem(input.label, {
+      id: input.id,
+      description: countLabelCreate(input.dependencies.length, 'package', 'packages'),
+      collapsibleState: vscode.TreeItemCollapsibleState.Collapsed,
+      tooltip: [
+        input.label,
+        ...input.dependencies.map(
+          (dependency) =>
+            `${dependency.packageName}: ${dependency.edgeCount} edge${dependency.edgeCount === 1 ? '' : 's'}`,
+        ),
+      ].join('\n'),
+      iconPath: new vscode.ThemeIcon(input.iconId),
+    }),
+    {
+      kind: 'workspace_package_dependency_group' as const,
+      groupId: input.groupId,
+      dependencies: input.dependencies,
+    },
+  );
 }
 
 function lintRuleGroupLabelResolve(kind: LintRulesGroupKind): string {

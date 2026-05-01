@@ -11,6 +11,7 @@ const stageRoot = path.join(extensionRoot, '.vsix-stage');
 const artifactDir = path.join(repoRoot, 'artifacts');
 const artifactPath = path.join(artifactDir, 'codepol-extension-vscode.vsix');
 const expectedArchivePaths = [
+  'extension/package.json',
   'extension/dist/daemon.js',
   'extension/dist/extension.js',
   'extension/dist/lsp.js',
@@ -100,6 +101,17 @@ function verifyArchive() {
     if (entry.startsWith('extension/node_modules/')) {
       throw new Error(`VSIX unexpectedly contains node_modules content: ${entry}`);
     }
+  }
+
+  const manifest = run('unzip', ['-p', artifactPath, 'extension/package.json'], {
+    captureOutput: true,
+  });
+  const parsedManifest = JSON.parse(manifest.stdout);
+  const contributedViewIds = new Set(
+    parsedManifest.contributes?.views?.codepol?.map((view) => view.id) ?? [],
+  );
+  if (!contributedViewIds.has('codepol.packageTargets')) {
+    throw new Error('VSIX manifest is missing the codepol.packageTargets view contribution.');
   }
 }
 

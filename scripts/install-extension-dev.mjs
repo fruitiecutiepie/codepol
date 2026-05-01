@@ -103,6 +103,10 @@ function bundleCopy(bundleDir, extensionDir) {
     const dst = path.join(targetDir, entry.name);
     fs.copyFileSync(src, dst);
   }
+  fs.copyFileSync(
+    path.join(repoRoot, 'extension-vscode/package.json'),
+    path.join(extensionDir, 'package.json'),
+  );
   return targetDir;
 }
 

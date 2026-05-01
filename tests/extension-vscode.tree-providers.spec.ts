@@ -50,6 +50,7 @@ import {
   LintRulesTreeProvider,
   RenameTargetsTreeProvider,
 } from '../extension-vscode/src/treeProviders';
+import type { WorkspacePackageAnalysis } from '../extension-vscode/src/workspacePackageAnalysis';
 
 function readinessStatusCreate(
   overrides: Partial<IndexStatusResult> = {},
@@ -162,6 +163,63 @@ const lintRuleDetailsResult: WorkspaceLintRuleDetailsResult = {
   ],
 };
 
+const workspacePackageAnalysis: WorkspacePackageAnalysis = {
+  packageName: '@acme/lib',
+  target: workspacePackageCandidate.target,
+  identity: {
+    semanticClass: 'domain_entity',
+    packageDir: '/workspace/packages/lib',
+    packageJsonPath: '/workspace/packages/lib/package.json',
+    entryPointPath: '/workspace/packages/lib/src/index.ts',
+    workspaceRelativePackageDir: 'packages/lib',
+    workspaceRelativePackageJsonPath: 'packages/lib/package.json',
+    workspaceRelativeEntryPointPath: 'packages/lib/src/index.ts',
+  },
+  renameImpact: {
+    status: 'ready',
+    namespaceId: 'workspace.packages:file:///workspace',
+    impactedSiteCount: 3,
+    declarationUri: 'file:///workspace/packages/lib/package.json',
+  },
+  semanticSummary: {
+    status: 'ready',
+    title: '@acme/lib',
+    subtitle: 'packages/lib/src/index.ts',
+    summary: 'Workspace package entry point.',
+    fields: [
+      {
+        label: 'Exports',
+        value: '3 symbols',
+      },
+    ],
+  },
+  hierarchy: {
+    status: 'ready',
+    moduleCount: 2,
+    symbolCount: 9,
+    entryPointCount: 1,
+    cycleFileCount: 0,
+    loc: 120,
+  },
+  dependencies: {
+    status: 'ready',
+    dependsOn: [
+      {
+        packageName: '@acme/core',
+        edgeCount: 2,
+        fileCount: 2,
+      },
+    ],
+    usedBy: [
+      {
+        packageName: '@acme/app',
+        edgeCount: 1,
+        fileCount: 1,
+      },
+    ],
+  },
+};
+
 function requestSupersededErrorCreate(): Error & {
   data: {
     kind: 'request_superseded';
@@ -179,9 +237,10 @@ function requestSupersededErrorCreate(): Error & {
 }
 
 describe('extension-vscode tree providers', () => {
-  it('renders workspace package rename targets as blocked while the index warms', async () => {
+  it('renders workspace packages as inspector nodes with rename blocked while the index warms', async () => {
     const provider = new RenameTargetsTreeProvider(
       async () => [workspacePackageCandidate, configTargetCandidate],
+      async () => workspacePackageAnalysis,
       {
         onDidChange: vi.fn(),
         refresh: async () => {},
@@ -205,6 +264,17 @@ describe('extension-vscode tree providers', () => {
 
     expect(workspaceItems[0]).toMatchObject({
       label: '@acme/lib',
+      description: 'packages/lib',
+      command: undefined,
+      collapsibleState: 1,
+      iconPath: {
+        id: 'package',
+      },
+    });
+
+    const packageChildren = await provider.getChildren(workspaceItems[0]!);
+    expect(packageChildren[0]).toMatchObject({
+      label: 'Rename @acme/lib...',
       description: 'Blocked until ready',
       command: undefined,
       iconPath: {
@@ -219,6 +289,76 @@ describe('extension-vscode tree providers', () => {
         arguments: [{ target: configTargetCandidate.target }],
       },
     });
+  });
+
+  it('lazy-loads package analysis below the rename action', async () => {
+    const analysisDeferred = deferredCreate<WorkspacePackageAnalysis | null>();
+    const analysisLoad = vi.fn(async () => analysisDeferred.promise);
+    const provider = new RenameTargetsTreeProvider(
+      async () => [workspacePackageCandidate],
+      analysisLoad,
+      {
+        onDidChange: vi.fn(),
+        refresh: async () => {},
+        snapshotGet: () => ({
+          status: readinessStatusCreate(),
+        }),
+      },
+    );
+
+    const groups = await provider.getChildren();
+    const workspaceGroup = groups[0]!;
+    const packageItem = (await provider.getChildren(workspaceGroup))[0]!;
+
+    const loadingChildren = await provider.getChildren(packageItem);
+    expect(analysisLoad).toHaveBeenCalledTimes(1);
+    expect(loadingChildren).toMatchObject([
+      {
+        label: 'Rename @acme/lib...',
+        command: {
+          command: 'codepol.extension.renameCodepolEntity',
+          arguments: [{ target: workspacePackageCandidate.target }],
+        },
+      },
+      {
+        label: 'Loading package analysis...',
+      },
+    ]);
+
+    analysisDeferred.resolve(workspacePackageAnalysis);
+    await microtasksFlush();
+
+    const children = await provider.getChildren(packageItem);
+    expect(children.map((item) => item.label)).toEqual([
+      'Rename @acme/lib...',
+      'Identity',
+      'Rename Impact',
+      'Semantic Summary',
+      'Workspace Hierarchy',
+      'Depends On',
+      'Used By',
+    ]);
+    expect(children[1]).toMatchObject({
+      label: 'Identity',
+      description: 'packages/lib • packages/lib/src/index.ts',
+    });
+    expect(children[2]).toMatchObject({
+      label: 'Rename Impact',
+      description: 'workspace.packages:file:///workspace • 3 sites',
+    });
+    expect(children[5]).toMatchObject({
+      label: 'Depends On',
+      description: '1 package',
+      collapsibleState: 1,
+    });
+
+    const dependencyChildren = await provider.getChildren(children[5]!);
+    expect(dependencyChildren).toMatchObject([
+      {
+        label: '@acme/core',
+        description: '2 edges • 2 files',
+      },
+    ]);
   });
 
   it('keeps the last lint rules result when a refresh is superseded', async () => {

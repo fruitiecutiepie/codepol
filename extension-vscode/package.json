@@ -36,7 +36,7 @@
     "onCommand:codepol.extension.refreshRenameTargets",
     "onView:codepol.currentContext",
     "onView:codepol.lintRules",
-    "onView:codepol.renameTargets"
+    "onView:codepol.packageTargets"
   ],
   "extensionKind": [
     "workspace"
@@ -130,7 +130,7 @@
       },
       {
         "command": "codepol.extension.refreshRenameTargets",
-        "title": "Codepol: Refresh Rename Targets"
+        "title": "Codepol: Refresh Packages & Targets"
       },
       {
         "command": "codepol.extension.setDiagnosticsEnvironment",
@@ -174,8 +174,8 @@
           "name": "Lint Rules"
         },
         {
-          "id": "codepol.renameTargets",
-          "name": "Rename Targets"
+          "id": "codepol.packageTargets",
+          "name": "Packages & Targets"
         }
       ]
     },
@@ -193,7 +193,7 @@
         },
         {
           "command": "codepol.extension.refreshRenameTargets",
-          "when": "view == codepol.renameTargets",
+          "when": "view == codepol.packageTargets",
           "group": "navigation"
         }
       ],

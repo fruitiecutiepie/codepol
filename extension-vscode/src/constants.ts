@@ -1,7 +1,7 @@
 export const CODEPOL_EXTENSION_VIEW_CONTAINER_ID = 'codepol';
 export const CODEPOL_EXTENSION_VIEW_CURRENT_CONTEXT_ID = 'codepol.currentContext';
 export const CODEPOL_EXTENSION_VIEW_LINT_RULES_ID = 'codepol.lintRules';
-export const CODEPOL_EXTENSION_VIEW_RENAME_TARGETS_ID = 'codepol.renameTargets';
+export const CODEPOL_EXTENSION_VIEW_PACKAGE_TARGETS_ID = 'codepol.packageTargets';
 export const CODEPOL_EXTENSION_CONTEXT_INDEX_BACKED_COMMANDS_ENABLED =
   'codepol.indexBackedCommandsEnabled';
 export const CODEPOL_EXTENSION_CONTEXT_WORKSPACE_PACKAGE_RENAME_ENABLED =
