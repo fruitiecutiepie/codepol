@@ -14,6 +14,11 @@ import type {
 import { configFileDiscover, environmentNamesList } from '@codepol/core';
 import { workspaceDaemonTerminateExternal } from '@codepol/workspace-service';
 import {
+  codepolExtensionLogDebug,
+  codepolExtensionLogError,
+  codepolExtensionLogInfo,
+} from './extensionLog';
+import {
   CodepolCommandController,
   type RenameCommandOptions,
   type SemanticSearchCommandOptions,
@@ -703,6 +708,13 @@ async function semanticSearchPick(input: {
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  const workspaceFolderCount = vscode.workspace.workspaceFolders?.length ?? 0;
+  codepolExtensionLogInfo('extension.activate.start', {
+    pid: process.pid,
+    workspaceFolderCount,
+    workspaceRoot: workspaceRootPathGet() ?? null,
+  });
+
   const protocol = new VscodeLanguageClientProtocol();
   codepolTypeAwareEditorBridgeRegister(protocol);
   protocolClient = protocol;
@@ -1266,27 +1278,50 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       CODEPOL_EXTENSION_COMMAND_RESTART_DAEMON,
       async () => {
         const runtimeDir = process.env.CODEPOL_DAEMON_RUNTIME_DIR;
+        codepolExtensionLogInfo('extension.command.restart_daemon.begin', {
+          runtimeDir: runtimeDir ?? null,
+        });
+        let endFields: Record<string, unknown> = { outcome: 'unknown' };
         try {
           const result = await workspaceDaemonTerminateExternal(runtimeDir);
           if (!result.descriptor) {
+            endFields = { outcome: 'no_descriptor' };
             void vscode.window.showInformationMessage(
               'Codepol: no running daemon was registered; the next request will spawn a fresh one.',
             );
           } else if (result.terminated) {
+            endFields = {
+              outcome: 'terminated',
+              pid: result.descriptor.pid,
+              buildId: result.descriptor.buildId,
+            };
             void vscode.window.showInformationMessage(
               `Codepol: daemon pid=${result.descriptor.pid} terminated. The next request will spawn a fresh daemon.`,
             );
           } else {
+            endFields = {
+              outcome: 'terminate_failed_descriptor_cleared',
+              pid: result.descriptor.pid,
+            };
             void vscode.window.showWarningMessage(
               `Codepol: could not terminate daemon pid=${result.descriptor.pid}. Descriptor was cleared; the next request will spawn a fresh daemon.`,
             );
           }
         } catch (err) {
+          endFields = {
+            outcome: 'error',
+            message: err instanceof Error ? err.message : String(err),
+          };
           void vscode.window.showErrorMessage(
             `Codepol: restart daemon failed: ${
               err instanceof Error ? err.message : String(err)
             }`,
           );
+          codepolExtensionLogError('extension.command.restart_daemon.error', {
+            message: err instanceof Error ? err.message : String(err),
+          });
+        } finally {
+          codepolExtensionLogInfo('extension.command.restart_daemon.end', endFields);
         }
       },
     ),
@@ -1302,6 +1337,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     }),
     vscode.window.onDidChangeActiveTextEditor(() => {
+      codepolExtensionLogDebug('extension.window.active_editor_changed', {});
       void readiness.refresh();
       void sidebarProvider?.refresh();
     }),
@@ -1317,24 +1353,36 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
   );
 
+  codepolExtensionLogInfo('extension.activate.registrations_done', {
+    subscriptionCount: context.subscriptions.length,
+  });
+
+  codepolExtensionLogInfo('extension.protocol.start_scheduled', {});
   void protocol
     .start()
     .then(async () => {
+      codepolExtensionLogInfo('extension.protocol.start_post_config.begin', {});
       await diagnosticsConfigApply(protocol, diagnosticsPatchFromSettings());
       await diagnosticsEscalationsApply(
         protocol,
         escalationInputsFromSettings(`vscode-${process.pid}`),
       );
+      codepolExtensionLogInfo('extension.protocol.start_post_config.end', {});
     })
     .catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
+      codepolExtensionLogError('extension.protocol.start_failed', { message });
       void vscode.window.showErrorMessage(`Codepol failed to start the language client: ${message}`);
     });
   readiness.start();
 
   const packageWatcher = vscode.workspace.createFileSystemWatcher('**/package.json');
   const configWatcher = vscode.workspace.createFileSystemWatcher('**/codepol.toml');
-  const refreshTargets = () => {
+  codepolExtensionLogInfo('extension.watchers.registered', {
+    patterns: ['**/package.json', '**/codepol.toml'],
+  });
+  const refreshTargets = (reason: string) => {
+    codepolExtensionLogDebug('extension.watchers.refresh_targets', { reason });
     void readiness.refresh();
     lintRulesProvider.refresh();
     renameTargetsProvider.refresh();
@@ -1343,30 +1391,41 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     packageWatcher,
     configWatcher,
-    packageWatcher.onDidCreate(refreshTargets),
-    packageWatcher.onDidChange(refreshTargets),
-    packageWatcher.onDidDelete(refreshTargets),
-    configWatcher.onDidCreate(refreshTargets),
-    configWatcher.onDidChange(refreshTargets),
-    configWatcher.onDidDelete(refreshTargets),
+    packageWatcher.onDidCreate(() => refreshTargets('package.json_create')),
+    packageWatcher.onDidChange(() => refreshTargets('package.json_change')),
+    packageWatcher.onDidDelete(() => refreshTargets('package.json_delete')),
+    configWatcher.onDidCreate(() => refreshTargets('codepol.toml_create')),
+    configWatcher.onDidChange(() => refreshTargets('codepol.toml_change')),
+    configWatcher.onDidDelete(() => refreshTargets('codepol.toml_delete')),
   );
 
   const rootPath = workspaceRootPathGet();
   if (rootPath) {
     const configPath = configFileDiscover(rootPath);
     if (!configPath) {
+      codepolExtensionLogInfo('extension.activate.config_missing', {
+        rootBasename: path.basename(rootPath),
+      });
       void vscode.window.showWarningMessage(
         `No codepol.toml found under ${path.basename(rootPath)}. Codepol commands may stay idle until a config is added.`,
       );
+    } else {
+      codepolExtensionLogInfo('extension.activate.config_resolved', {
+        configPath,
+      });
     }
   }
+
+  codepolExtensionLogInfo('extension.activate.end', {});
 }
 
 export async function deactivate(): Promise<void> {
+  codepolExtensionLogInfo('extension.deactivate.begin', {});
   sidebarProvider?.dispose();
   sidebarProvider = undefined;
   if (protocolClient) {
     await protocolClient.stop();
     protocolClient = undefined;
   }
+  codepolExtensionLogInfo('extension.deactivate.end', {});
 }

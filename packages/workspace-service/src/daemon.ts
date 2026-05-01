@@ -2140,6 +2140,7 @@ export class WorkspaceDaemonSession {
     options: { signal?: AbortSignal } = {},
   ): Promise<WorkspaceDaemonServiceResponse> {
     if (message.type === 'hello') {
+      const rpcDiag = diagnosticsRuntimeGet().getDiagnostics('daemon.rpc');
       const response = workspaceDaemonRequestHandle({
         descriptor: this.options.descriptor,
         service: this.options.service,
@@ -2147,6 +2148,12 @@ export class WorkspaceDaemonSession {
         capabilities: this.options.capabilities,
         message,
       });
+      if (response.type === 'hello_ack') {
+        rpcDiag.info('daemon.rpc.hello_ack', {
+          compatibility: response.compatibility,
+          clientKind: (message as WorkspaceDaemonClientHelloMessage).client?.kind,
+        });
+      }
       if (response.type === 'hello_ack' && response.compatibility === 'ok') {
         this.didHello = true;
       }
@@ -2228,6 +2235,10 @@ export class WorkspaceDaemonSession {
             );
           }
           const input = message as WorkspaceDaemonRegisterClientSessionRequest;
+          diagnosticsRuntimeGet().getDiagnostics('daemon.rpc').info('daemon.rpc.register_client_session', {
+            clientKind: input.clientKind,
+            clientInstanceId: input.clientInstanceId,
+          });
           const result = await this.options.service.registerClientSession({
             clientKind: input.clientKind,
             clientInstanceId: input.clientInstanceId,
@@ -2268,6 +2279,10 @@ export class WorkspaceDaemonSession {
             );
           }
           const input = message as WorkspaceDaemonAttachWorkspaceRequest;
+          diagnosticsRuntimeGet().getDiagnostics('daemon.rpc').info('daemon.rpc.attach_workspace', {
+            rootPath: input.rootPath,
+            configPath: input.configPath,
+          });
           const daemonSessionError = this.daemonSessionValidate(input);
           if (daemonSessionError) {
             return daemonSessionError;
@@ -2343,6 +2358,10 @@ export class WorkspaceDaemonSession {
             );
           }
           const input = message as WorkspaceDaemonCompleteReplayRequest;
+          diagnosticsRuntimeGet().getDiagnostics('daemon.rpc').info('daemon.rpc.complete_replay', {
+            workspaceId: input.workspaceId,
+            workspaceInstanceId: input.workspaceInstanceId,
+          });
           const daemonSessionError = this.daemonSessionValidate(input);
           if (daemonSessionError) {
             return daemonSessionError;
@@ -4899,6 +4918,11 @@ export async function workspaceDaemonLaunchOrConnect(
   options: WorkspaceDaemonLaunchOptions,
 ): Promise<WorkspaceDaemonLaunchResult> {
   const paths = workspaceDaemonRuntimePathsResolve(options.runtimeDir);
+  const launchDiag = diagnosticsRuntimeGet().getDiagnostics('daemon.launch');
+  launchDiag.info('daemon.launch.begin', {
+    runtimeDir: paths.runtimeDir,
+    clientInstanceId: options.client.instanceId,
+  });
   fs.mkdirSync(paths.runtimeDir, { recursive: true });
 
   const existing = await workspaceDaemonConnectHealthy({
@@ -4911,6 +4935,10 @@ export async function workspaceDaemonLaunchOrConnect(
     connect: options.connect,
   });
   if (existing) {
+    launchDiag.info('daemon.launch.reused_existing', {
+      daemonPid: existing.descriptor.pid,
+      socketPath: existing.descriptor.transport.path,
+    });
     return {
       ...existing,
       launched: false,
@@ -4932,19 +4960,34 @@ export async function workspaceDaemonLaunchOrConnect(
       connect: options.connect,
     });
     if (secondCheck) {
+      launchDiag.info('daemon.launch.reused_after_lock', {
+        daemonPid: secondCheck.descriptor.pid,
+        socketPath: secondCheck.descriptor.transport.path,
+      });
       return {
         ...secondCheck,
         launched: false,
       };
     }
 
+    launchDiag.info('daemon.launch.spawn_requested', {
+      runtimeDir: paths.runtimeDir,
+    });
     await options.startDaemon();
     const started = await workspaceDaemonWaitForHealthy(options);
+    launchDiag.info('daemon.launch.spawned_healthy', {
+      daemonPid: started.descriptor.pid,
+      socketPath: started.descriptor.transport.path,
+      buildId: started.descriptor.buildId,
+    });
     return {
       ...started,
       launched: true,
     };
   } finally {
+    launchDiag.debug('daemon.launch.lock_release', {
+      runtimeDir: paths.runtimeDir,
+    });
     await lock.release();
   }
 }
@@ -4953,6 +4996,12 @@ export async function workspaceDaemonServerStart(
   options: WorkspaceDaemonServerStartOptions = {},
 ): Promise<WorkspaceDaemonServer> {
   const paths = workspaceDaemonRuntimePathsResolve(options.runtimeDir);
+  const serverDiag = diagnosticsRuntimeGet().getDiagnostics('daemon.server');
+  serverDiag.info('daemon.server.start.begin', {
+    runtimeDir: paths.runtimeDir,
+    socketPath: paths.socketPath,
+    pid: process.pid,
+  });
   fs.mkdirSync(paths.runtimeDir, { recursive: true });
   socketFileRemove(paths.socketPath);
   try {
@@ -4968,7 +5017,13 @@ export async function workspaceDaemonServerStart(
     ...options.capabilities,
   };
 
+  let socketConnectionSeq = 0;
   const server = net.createServer((socket) => {
+    socketConnectionSeq += 1;
+    serverDiag.debug('daemon.server.socket_connected', {
+      seq: socketConnectionSeq,
+      remote: `${socket.remoteAddress ?? ''}:${socket.remotePort ?? ''}`,
+    });
     const session = new WorkspaceDaemonSession({
       descriptor,
       capabilities,
@@ -5025,10 +5080,21 @@ export async function workspaceDaemonServerStart(
 
   descriptorWrite(paths.descriptorPath, descriptor);
 
+  serverDiag.info('daemon.server.start.end', {
+    runtimeDir: paths.runtimeDir,
+    socketPath: paths.socketPath,
+    daemonPid: descriptor.pid,
+    buildId: descriptor.buildId,
+    sessionNonce: descriptor.sessionNonce,
+  });
+
   return {
     descriptor,
     paths,
     stop: async () => {
+      serverDiag.info('daemon.server.stop.begin', {
+        socketPath: paths.socketPath,
+      });
       await new Promise<void>((resolve, reject) => {
         server.close((error) => {
           if (error) {
@@ -5047,6 +5113,9 @@ export async function workspaceDaemonServerStart(
         // ignore descriptor cleanup races
       }
       socketFileRemove(paths.socketPath);
+      serverDiag.info('daemon.server.stop.end', {
+        socketPath: paths.socketPath,
+      });
     },
   };
 }

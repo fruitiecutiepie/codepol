@@ -9,7 +9,7 @@
 import { execFile, execFileSync, type ExecFileException } from 'node:child_process';
 import path from 'node:path';
 import type { PolicyViolation } from '@codepol/core';
-import { Ok, Err, type Result } from '@codepol/core';
+import { Ok, Err, diagnosticsRuntimeGet, type Result } from '@codepol/core';
 import type {
   BiomeDiagnostic,
   BiomeProviderConfig,
@@ -228,6 +228,10 @@ export async function biomeCheckAsync(
     return Ok([]);
   }
 
+  const biomeDiag = diagnosticsRuntimeGet().getDiagnostics('external.biome');
+  const startedAt = Date.now();
+  biomeDiag.info('external.biome.check.start', { fileCount: files.length });
+
   const bin = biomeBinGet(config);
   const args = biomeArgsGet(files, config);
 
@@ -237,6 +241,11 @@ export async function biomeCheckAsync(
     stdout = result.stdout;
   } catch (err: unknown) {
     if (execFileAbortedIs(err)) {
+      biomeDiag.info('external.biome.check.end', {
+        durationMs: Date.now() - startedAt,
+        outcome: 'aborted',
+        fileCount: files.length,
+      });
       throw err;
     }
     const execErr = err as ExecFileError;
@@ -245,12 +254,23 @@ export async function biomeCheckAsync(
       stdout = recoveredStdout;
     } else {
       const stderr = outputToString(execErr.stderr).trim();
+      biomeDiag.info('external.biome.check.end', {
+        durationMs: Date.now() - startedAt,
+        outcome: 'exec_error',
+        fileCount: files.length,
+      });
       return Err(`Failed to execute biome: ${stderr || execErr.message || String(err)}`);
     }
   }
 
   const trimmed = stdout.trim();
   if (!trimmed) {
+    biomeDiag.info('external.biome.check.end', {
+      durationMs: Date.now() - startedAt,
+      outcome: 'empty',
+      violationCount: 0,
+      fileCount: files.length,
+    });
     return Ok([]);
   }
 
@@ -258,6 +278,11 @@ export async function biomeCheckAsync(
   try {
     report = JSON.parse(trimmed) as BiomeReport;
   } catch {
+    biomeDiag.info('external.biome.check.end', {
+      durationMs: Date.now() - startedAt,
+      outcome: 'parse_error',
+      fileCount: files.length,
+    });
     return Err(`Failed to parse biome RDJSON output: ${trimmed.slice(0, 200)}`);
   }
 
@@ -266,6 +291,12 @@ export async function biomeCheckAsync(
     .map((diagnostic) => biomeDiagnosticToViolation(diagnostic))
     .filter((violation): violation is PolicyViolation => violation !== null);
 
+  biomeDiag.info('external.biome.check.end', {
+    durationMs: Date.now() - startedAt,
+    outcome: 'ok',
+    violationCount: violations.length,
+    fileCount: files.length,
+  });
   return Ok(violations);
 }
 

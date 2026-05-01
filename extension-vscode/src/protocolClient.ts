@@ -85,11 +85,15 @@ import {
   codepolRequestSupersededErrorIs,
   type CodepolProtocolConnectionState,
 } from './readiness';
+import {
+  codepolExtensionLogDebug,
+  codepolExtensionLogError,
+  codepolExtensionLogInfo,
+  codepolExtensionOutputChannelGet,
+} from './extensionLog';
 
 const nodeRequire = createRequire(__filename);
-const CODEPOL_LSP_TRACE_OUTPUT_NAME = 'Codepol LSP';
 const CODEPOL_LSP_VERBOSE_DIAGNOSTICS_SETTING = 'lsp.verboseDiagnostics';
-let traceOutputChannel: vscode.LogOutputChannel | undefined;
 
 export type CodepolProtocolQuickFixAction = {
   title: string;
@@ -143,14 +147,6 @@ function verboseDiagnosticsEnabledResolve(): boolean {
   return vscode.workspace
     .getConfiguration('codepol')
     .get<boolean>(CODEPOL_LSP_VERBOSE_DIAGNOSTICS_SETTING, false);
-}
-
-function traceOutputChannelGet(): vscode.LogOutputChannel {
-  traceOutputChannel ??= vscode.window.createOutputChannel(
-    CODEPOL_LSP_TRACE_OUTPUT_NAME,
-    { log: true },
-  );
-  return traceOutputChannel;
 }
 
 export type CodepolProtocolClient = {
@@ -256,10 +252,15 @@ export class VscodeLanguageClientProtocol implements CodepolProtocolClient {
   ) {
     if (client) {
       this.client = client;
+      codepolExtensionLogInfo('extension.protocol.client.injected', { kind: 'test_or_injected' });
       return;
     }
 
     const serverModule = bundledServerModulePathResolve() ?? nodeRequire.resolve('@codepol/lsp');
+    codepolExtensionLogInfo('extension.protocol.client.created', {
+      serverModule,
+      bundled: bundledServerModulePathResolve() !== undefined,
+    });
     const serverOptions: ServerOptions = {
       run: {
         module: serverModule,
@@ -303,18 +304,44 @@ export class VscodeLanguageClientProtocol implements CodepolProtocolClient {
         state: this.connectionStateResolve(),
       })
     ) {
+      codepolExtensionLogInfo('extension.protocol.start.begin', {
+        state: this.connectionStateResolve(),
+      });
       this.startError = undefined;
       const started = this.client.start();
-      this.startPromise = Promise.resolve(started).catch((error) => {
-        this.startError = error;
-        throw error;
+      this.startPromise = Promise.resolve(started)
+        .then(() => {
+          codepolExtensionLogInfo('extension.protocol.start.end', {
+            state: this.connectionStateResolve(),
+          });
+        })
+        .catch((error) => {
+          this.startError = error;
+          codepolExtensionLogError('extension.protocol.start.error', {
+            message: error instanceof Error ? error.message : String(error),
+          });
+          throw error;
+        });
+    } else {
+      codepolExtensionLogDebug('extension.protocol.start.skipped', {
+        state: this.connectionStateResolve(),
+        reason: 'already_starting_or_running',
       });
     }
     await this.startPromise;
   }
 
   async stop(): Promise<void> {
-    await this.client.stop();
+    codepolExtensionLogInfo('extension.protocol.stop.begin', {});
+    try {
+      await this.client.stop();
+      codepolExtensionLogInfo('extension.protocol.stop.end', {});
+    } catch (error) {
+      codepolExtensionLogError('extension.protocol.stop.error', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
     this.startPromise = undefined;
     this.startError = undefined;
   }
@@ -373,7 +400,7 @@ export class VscodeLanguageClientProtocol implements CodepolProtocolClient {
     if (data?.replacedByRequestId) {
       parts.push(`replacedByRequestId=${data.replacedByRequestId}`);
     }
-    traceOutputChannelGet().trace(`Request superseded ${parts.join(' ')}`);
+    codepolExtensionOutputChannelGet().trace(`Request superseded ${parts.join(' ')}`);
   }
 
   private async requestSendWithSupersededTrace<TResult>(
@@ -403,6 +430,9 @@ export class VscodeLanguageClientProtocol implements CodepolProtocolClient {
         throw error;
       }
 
+      codepolExtensionLogDebug('extension.protocol.request.retry_after_disposed', {
+        method,
+      });
       await this.start();
       return this.requestSendWithSupersededTrace<TResult>(method, params);
     }

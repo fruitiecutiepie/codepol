@@ -86,6 +86,18 @@ const STATUS_POLL_INTERVAL_ACTIVE_MS = 25;
 const STATUS_POLL_INTERVAL_IDLE_MS = 250;
 const PUBLISH_DIAGNOSTICS_DEBOUNCE_MS = 150;
 
+function lspLifecycleDiag() {
+  return diagnosticsRuntimeGet().getDiagnostics('lsp.lifecycle');
+}
+
+function lspStatusPollDiag() {
+  return diagnosticsRuntimeGet().getDiagnostics('lsp.status_poll');
+}
+
+function lspPublishDiag() {
+  return diagnosticsRuntimeGet().getDiagnostics('lsp.publish_diagnostics');
+}
+
 type JsonRpcId = number | string | null;
 
 type JsonRpcRequest = {
@@ -547,19 +559,46 @@ export class CodepolLspServer {
   }
 
   private async serviceGet(): Promise<WorkspaceService> {
+    const diag = lspLifecycleDiag();
     if (this.service) {
+      diag.debug('lsp.serviceGet.cache_hit', {
+        clientInstanceId: this.clientInstanceId,
+      });
       return this.service;
     }
     if (!this.servicePromise) {
+      const startedAt = Date.now();
+      diag.info('lsp.serviceGet.resolve.begin', {
+        clientInstanceId: this.clientInstanceId,
+      });
       const created = this.serviceFactory();
       if (!promiseLikeIs(created)) {
         this.service = created;
+        diag.info('lsp.serviceGet.resolve.end', {
+          clientInstanceId: this.clientInstanceId,
+          durationMs: Date.now() - startedAt,
+          kind: 'sync',
+        });
         return created;
       }
-      this.servicePromise = created.then((service) => {
-        this.service = service;
-        return service;
-      });
+      this.servicePromise = created
+        .then((service) => {
+          this.service = service;
+          diag.info('lsp.serviceGet.resolve.end', {
+            clientInstanceId: this.clientInstanceId,
+            durationMs: Date.now() - startedAt,
+            kind: 'async',
+          });
+          return service;
+        })
+        .catch((error: unknown) => {
+          diag.error('lsp.serviceGet.resolve.error', {
+            clientInstanceId: this.clientInstanceId,
+            durationMs: Date.now() - startedAt,
+            message: error instanceof Error ? error.message : String(error),
+          });
+          throw error;
+        });
     }
     return this.servicePromise;
   }
@@ -705,9 +744,14 @@ export class CodepolLspServer {
 
   private async serviceReconnect(): Promise<WorkspaceService> {
     if (this.reconnectPromise) {
+      lspLifecycleDiag().debug('lsp.serviceReconnect.await_inflight', {});
       return this.reconnectPromise;
     }
 
+    lspLifecycleDiag().info('lsp.serviceReconnect.begin', {
+      clientInstanceId: this.clientInstanceId,
+    });
+    const reconnectStartedAt = Date.now();
     this.reconnectPromise = (async () => {
       this.serviceReset();
       const service = await this.serviceGet();
@@ -735,6 +779,11 @@ export class CodepolLspServer {
       this.workspaceId = attached.workspaceId;
       this.workspaceEpochBump();
       this.statusPollingStart();
+      lspLifecycleDiag().info('lsp.serviceReconnect.end', {
+        clientInstanceId: this.clientInstanceId,
+        workspaceId: this.workspaceId ?? null,
+        durationMs: Date.now() - reconnectStartedAt,
+      });
       return service;
     })().finally(() => {
       this.reconnectPromise = undefined;
@@ -762,6 +811,9 @@ export class CodepolLspServer {
       ) {
         throw error;
       }
+      lspLifecycleDiag().info('lsp.serviceCall.recoverable_error_reconnect', {
+        message: error instanceof Error ? error.message : String(error),
+      });
       const reconnected = await this.serviceReconnect();
       if (options.signal?.aborted) {
         throw requestCancelledErrorCreate();
@@ -811,8 +863,18 @@ export class CodepolLspServer {
       !this.registeredClientSessionId ||
       !this.workspaceId
     ) {
+      lspStatusPollDiag().debug('lsp.statusPolling.skipped', {
+        supportsWorkDoneProgress: this.supportsWorkDoneProgress,
+        shutdownRequested: this.shutdownRequested,
+        hasClientSession: Boolean(this.registeredClientSessionId),
+        hasWorkspaceId: Boolean(this.workspaceId),
+      });
       return;
     }
+    lspStatusPollDiag().info('lsp.statusPolling.start', {
+      workspaceId: this.workspaceId,
+      generation: this.statusPollGeneration + 1,
+    });
     this.statusPollGeneration += 1;
     this.timers.clearTimeout(this.statusPollTimer);
     this.statusPollTimer = undefined;
@@ -824,6 +886,9 @@ export class CodepolLspServer {
       endProgress: boolean;
     },
   ): void {
+    lspStatusPollDiag().info('lsp.statusPolling.stop', {
+      endProgress: options.endProgress,
+    });
     this.statusPollGeneration += 1;
     this.timers.clearTimeout(this.statusPollTimer);
     this.statusPollTimer = undefined;
@@ -883,12 +948,23 @@ export class CodepolLspServer {
         indexStatus.status === 'cold' || indexStatus.status === 'warming'
           ? this.statusPollIntervalsMs.active
           : this.statusPollIntervalsMs.idle;
+      lspStatusPollDiag().debug('lsp.statusPoll.tick', {
+        generation,
+        indexStatus: indexStatus.status,
+        replayState: indexStatus.replayState ?? null,
+        analysisGeneration: indexStatus.analysisGeneration,
+        nextDelayMs: nextDelay,
+      });
       this.statusPollSchedule(nextDelay, generation);
     } catch (error) {
       if (generation !== this.statusPollGeneration) {
         return;
       }
       const message = error instanceof Error ? error.message : String(error);
+      lspStatusPollDiag().info('lsp.statusPoll.error', {
+        generation,
+        message,
+      });
       if (this.statusProgressActive) {
         this.statusProgressEnd(message);
       }
@@ -1232,6 +1308,12 @@ export class CodepolLspServer {
       };
     };
   }): Promise<unknown> {
+    const initStartedAt = Date.now();
+    const diag = lspLifecycleDiag();
+    diag.info('lsp.initialize.begin', {
+      clientInstanceId: this.clientInstanceId,
+      workDoneProgress: params.capabilities?.window?.workDoneProgress === true,
+    });
     this.supportsWorkDoneProgress = params.capabilities?.window?.workDoneProgress === true;
     this.shutdownRequested = false;
     const service = await this.serviceGet();
@@ -1256,6 +1338,10 @@ export class CodepolLspServer {
         }
         this.workspaceRootPath = rootPath;
         this.workspaceConfigPath = configPath;
+        diag.info('lsp.initialize.attach_workspace.begin', {
+          rootPath,
+          configPath,
+        });
         const attached = await service.attachWorkspace({
           clientSessionId: this.registeredClientSessionId,
           rootPath,
@@ -1269,10 +1355,23 @@ export class CodepolLspServer {
         this.workspaceId = attached.workspaceId;
         this.workspaceEpochBump();
         this.statusPollingStart();
-      } catch {
+        diag.info('lsp.initialize.attach_workspace.end', {
+          workspaceId: attached.workspaceId,
+          workspaceInstanceId: attached.workspaceInstanceId,
+        });
+      } catch (attachErr) {
         this.workspaceId = undefined;
+        diag.warn('lsp.initialize.attach_workspace.failed', {
+          message: attachErr instanceof Error ? attachErr.message : String(attachErr),
+        });
       }
     }
+
+    diag.info('lsp.initialize.end', {
+      durationMs: Date.now() - initStartedAt,
+      workspaceId: this.workspaceId ?? null,
+      clientSessionId: this.registeredClientSessionId ?? null,
+    });
 
     return {
       capabilities: {
@@ -1312,6 +1411,12 @@ export class CodepolLspServer {
       return;
     }
 
+    lspLifecycleDiag().debug('lsp.workspaceReplay.begin', {
+      workspaceId: input.workspaceId,
+      workspaceInstanceId: input.workspaceInstanceId,
+      openDocumentCount: this.documents.size,
+    });
+
     await input.service.subscribeDiagnostics({
       clientSessionId: this.registeredClientSessionId,
       workspaceId: input.workspaceId,
@@ -1331,6 +1436,11 @@ export class CodepolLspServer {
 
     await input.service.completeReplay({
       clientSessionId: this.registeredClientSessionId,
+      workspaceId: input.workspaceId,
+      workspaceInstanceId: input.workspaceInstanceId,
+    });
+
+    lspLifecycleDiag().debug('lsp.workspaceReplay.end', {
       workspaceId: input.workspaceId,
       workspaceInstanceId: input.workspaceInstanceId,
     });
@@ -2456,6 +2566,12 @@ export class CodepolLspServer {
     if (!this.registeredClientSessionId || !this.workspaceId) {
       return;
     }
+    const pubDiag = lspPublishDiag();
+    pubDiag.debug('lsp.publishDiagnostics.begin', {
+      uri,
+      expectedStateVersion: options.expectedStateVersion,
+      workspaceEpoch: this.workspaceEpoch,
+    });
     const expectedWorkspaceEpoch = this.workspaceEpoch;
     const expectedClientSessionId = this.registeredClientSessionId;
     const expectedWorkspaceId = this.workspaceId;
@@ -2485,6 +2601,10 @@ export class CodepolLspServer {
         expectedWorkspaceId,
       })
     ) {
+      pubDiag.debug('lsp.publishDiagnostics.stale_skip', {
+        uri,
+        expectedStateVersion: options.expectedStateVersion,
+      });
       return;
     }
     this.sendMessage({
@@ -2494,6 +2614,10 @@ export class CodepolLspServer {
         uri,
         diagnostics: diagnosticsToLsp(diagnostics),
       },
+    });
+    pubDiag.debug('lsp.publishDiagnostics.end', {
+      uri,
+      diagnosticCount: diagnostics.length,
     });
   }
 

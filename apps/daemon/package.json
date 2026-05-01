@@ -16,6 +16,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@codepol/core": "workspace:*",
     "@codepol/type-aware-provider": "workspace:^",
     "@codepol/workspace-service": "workspace:*"
   },

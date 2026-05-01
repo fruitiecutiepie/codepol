@@ -8,7 +8,7 @@
 
 import { execFileSync } from 'node:child_process';
 import type { PolicyViolation } from '@codepol/core';
-import { Ok, Err, isErr, type Result } from '@codepol/core';
+import { Ok, Err, diagnosticsRuntimeGet, isErr, type Result } from '@codepol/core';
 import type { VultureFinding, VultureProviderConfig } from './vultureTypes';
 
 const VULTURE_RULE_ID = 'python-dead-code';
@@ -120,6 +120,10 @@ export function vultureFindingsGet(
     return Ok([]);
   }
 
+  const vultureDiag = diagnosticsRuntimeGet().getDiagnostics('external.vulture');
+  const startedAt = Date.now();
+  vultureDiag.info('external.vulture.check.start', { fileCount: files.length });
+
   const bin = vultureBinGet(config);
   const args = vultureArgsGet(files, config);
 
@@ -135,18 +139,41 @@ export function vultureFindingsGet(
     if ((execErr.status === 1 || execErr.status === 3) && execErr.stdout) {
       stdout = execErr.stdout;
     } else if (execErr.status === 2) {
+      vultureDiag.info('external.vulture.check.end', {
+        durationMs: Date.now() - startedAt,
+        outcome: 'config_error',
+        fileCount: files.length,
+      });
       return Err(`vulture configuration or usage error: ${execErr.stderr ?? execErr.message}`);
     } else {
+      vultureDiag.info('external.vulture.check.end', {
+        durationMs: Date.now() - startedAt,
+        outcome: 'exec_error',
+        fileCount: files.length,
+      });
       return Err(`Failed to execute vulture: ${execErr.message ?? String(err)}`);
     }
   }
 
   const trimmed = stdout.trim();
   if (!trimmed) {
+    vultureDiag.info('external.vulture.check.end', {
+      durationMs: Date.now() - startedAt,
+      outcome: 'empty',
+      findingCount: 0,
+      fileCount: files.length,
+    });
     return Ok([]);
   }
 
-  return Ok(vultureOutputParse(trimmed));
+  const findings = vultureOutputParse(trimmed);
+  vultureDiag.info('external.vulture.check.end', {
+    durationMs: Date.now() - startedAt,
+    outcome: 'ok',
+    findingCount: findings.length,
+    fileCount: files.length,
+  });
+  return Ok(findings);
 }
 
 /**

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { diagnosticsRuntimeSetOverrides } from '@codepol/core';
+import { diagnosticsRuntimeGet, diagnosticsRuntimeSetOverrides } from '@codepol/core';
 import { workspaceTypeAwareBridgeProviderCreate } from '@codepol/type-aware-provider';
 import type { WorkspaceService } from '@codepol/workspace-service/contracts';
 import { codepolLspEditorTypeAwareProviderCreate } from './editorTypeAwareProvider';
@@ -14,6 +14,10 @@ import {
 // stdout sink would corrupt it. Force the console sink (which writes to
 // stderr) before any diagnostics are emitted by this process.
 diagnosticsRuntimeSetOverrides({ sinks: ['console'] });
+diagnosticsRuntimeGet().getDiagnostics('lsp.process').info('lsp.process.boot', {
+  pid: process.pid,
+  entry: 'index',
+});
 
 function frameWrite(payload: unknown): void {
   const json = JSON.stringify(payload);
@@ -76,6 +80,9 @@ process.stdin.on('data', (chunk: Buffer) => {
     const header = buffer.subarray(0, separator).toString('utf8');
     const lengthMatch = header.match(/Content-Length:\s*(\d+)/i);
     if (!lengthMatch) {
+      diagnosticsRuntimeGet()
+        .getDiagnostics('lsp.transport')
+        .warn('lsp.stdin.bad_content_length_header', { headerPreview: header.slice(0, 200) });
       buffer = Buffer.alloc(0);
       return;
     }

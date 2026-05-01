@@ -8,7 +8,7 @@
 
 import { execFile, execFileSync, type ExecFileException } from 'node:child_process';
 import type { PolicyViolation } from '@codepol/core';
-import { Ok, Err, type Result } from '@codepol/core';
+import { Ok, Err, diagnosticsRuntimeGet, type Result } from '@codepol/core';
 import type { RuffDiagnostic, RuffProviderConfig } from './ruffTypes';
 
 function ruffBinGet(config?: RuffProviderConfig): string {
@@ -213,6 +213,10 @@ export async function ruffCheckAsync(
     return Ok([]);
   }
 
+  const ruffDiag = diagnosticsRuntimeGet().getDiagnostics('external.ruff');
+  const startedAt = Date.now();
+  ruffDiag.info('external.ruff.check.start', { fileCount: files.length });
+
   const bin = ruffBinGet(config);
   const args = ruffArgsGet(files, config);
 
@@ -222,20 +226,41 @@ export async function ruffCheckAsync(
     stdout = result.stdout;
   } catch (err: unknown) {
     if (execFileAbortedIs(err)) {
+      ruffDiag.info('external.ruff.check.end', {
+        durationMs: Date.now() - startedAt,
+        outcome: 'aborted',
+        fileCount: files.length,
+      });
       throw err;
     }
     const execErr = err as ExecFileError;
     if (execErr.status === 1 && execErr.stdout) {
       stdout = outputToString(execErr.stdout);
     } else if (execErr.status === 2) {
+      ruffDiag.info('external.ruff.check.end', {
+        durationMs: Date.now() - startedAt,
+        outcome: 'config_error',
+        fileCount: files.length,
+      });
       return Err(`ruff configuration or usage error: ${outputToString(execErr.stderr) || execErr.message}`);
     } else {
+      ruffDiag.info('external.ruff.check.end', {
+        durationMs: Date.now() - startedAt,
+        outcome: 'exec_error',
+        fileCount: files.length,
+      });
       return Err(`Failed to execute ruff: ${execErr.message ?? String(err)}`);
     }
   }
 
   const trimmed = stdout.trim();
   if (!trimmed || trimmed === '[]') {
+    ruffDiag.info('external.ruff.check.end', {
+      durationMs: Date.now() - startedAt,
+      outcome: 'empty',
+      violationCount: 0,
+      fileCount: files.length,
+    });
     return Ok([]);
   }
 
@@ -243,10 +268,22 @@ export async function ruffCheckAsync(
   try {
     diagnostics = JSON.parse(trimmed) as RuffDiagnostic[];
   } catch {
+    ruffDiag.info('external.ruff.check.end', {
+      durationMs: Date.now() - startedAt,
+      outcome: 'parse_error',
+      fileCount: files.length,
+    });
     return Err(`Failed to parse ruff JSON output: ${trimmed.slice(0, 200)}`);
   }
 
-  return Ok(diagnostics.map(ruffDiagnosticToViolation));
+  const violations = diagnostics.map(ruffDiagnosticToViolation);
+  ruffDiag.info('external.ruff.check.end', {
+    durationMs: Date.now() - startedAt,
+    outcome: 'ok',
+    violationCount: violations.length,
+    fileCount: files.length,
+  });
+  return Ok(violations);
 }
 
 /**

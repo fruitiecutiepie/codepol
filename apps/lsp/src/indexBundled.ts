@@ -1,10 +1,17 @@
 #!/usr/bin/env node
 
+import { diagnosticsRuntimeGet, diagnosticsRuntimeSetOverrides } from '@codepol/core';
 import { CodepolLspServer } from './server';
 import {
   lspWorkspaceServiceResolve,
   type LspWorkspaceServiceResolvedInfo,
 } from './serviceFactoryBundled';
+
+diagnosticsRuntimeSetOverrides({ sinks: ['console'] });
+diagnosticsRuntimeGet().getDiagnostics('lsp.process').info('lsp.process.boot', {
+  pid: process.pid,
+  entry: 'indexBundled',
+});
 
 function frameWrite(payload: unknown): void {
   const json = JSON.stringify(payload);
@@ -43,6 +50,9 @@ process.stdin.on('data', (chunk: Buffer) => {
     const header = buffer.subarray(0, separator).toString('utf8');
     const lengthMatch = header.match(/Content-Length:\s*(\d+)/i);
     if (!lengthMatch) {
+      diagnosticsRuntimeGet()
+        .getDiagnostics('lsp.transport')
+        .warn('lsp.stdin.bad_content_length_header', { headerPreview: header.slice(0, 200) });
       buffer = Buffer.alloc(0);
       return;
     }

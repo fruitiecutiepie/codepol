@@ -1343,6 +1343,10 @@ export function workspaceWatcherCreate(input: {
       configPath,
     })),
   });
+  diagnosticsRuntimeGet().getDiagnostics('workspace.engine').info('workspace.watcher.create', {
+    rootPath: input.rootPath,
+    watchPathCount: watchItems.length,
+  });
   return chokidar.watch(watchItems, {
     ignoreInitial: true,
     ignored: WORKSPACE_WATCH_IGNORED,
@@ -1397,7 +1401,17 @@ async function workspaceWatcherEnsure(input: {
       input.workspace.externalToolConfigs,
     ),
   });
-  watcher.on('all', (_eventName, filePath) => {
+  diagnosticsRuntimeGet().getDiagnostics('workspace.engine').info('workspace.watcher.ensure', {
+    workspaceId: input.workspace.workspaceId,
+    rootPath: input.workspace.rootPath,
+    watchItemsKeyLength: watchItemsKey.length,
+  });
+  watcher.on('all', (eventName, filePath) => {
+    diagnosticsRuntimeGet().getDiagnostics('workspace.engine').debug('workspace.watcher.event', {
+      workspaceId: input.workspace.workspaceId,
+      eventName,
+      filePath,
+    });
     input.onInvalidate(filePath);
   });
   // Chokidar emits EventEmitter "error" events. Without a listener those
@@ -9494,6 +9508,15 @@ async function workspaceAnalysisRun(
   );
   const analyzerMatches = [...matches, ...externalToolRunMatches];
   const files = Array.from(new Set(analyzerMatches.flatMap((match) => match.files)));
+  const workspaceIdForLog =
+    'workspaceId' in workspace ? (workspace as WorkspaceState).workspaceId : 'policy_check';
+  diagnosticsRuntimeGet().getDiagnostics('workspace.engine').info('workspace.analysis.run.dispatch', {
+    workspaceId: workspaceIdForLog,
+    fileCount: files.length,
+    incremental: !options.fix && !options.collectEslintOutput,
+    fix: options.fix,
+    collectEslintOutput: options.collectEslintOutput,
+  });
   const sourceByFilePath = workspaceSourceOverridesGet(state);
   const policyWorkspaceIndexRequired = matchedRulesRequireProjectIndex(
     matches,
@@ -10217,12 +10240,19 @@ async function workspaceSessionAnalysisGet(
     signal?: AbortSignal;
   } = {},
 ): Promise<WorkspaceAnalysis> {
+  const engineDiag = diagnosticsRuntimeGet().getDiagnostics('workspace.engine');
   while (true) {
     if (!state.lastAnalysis || state.status === 'cold') {
       state.status = 'warming';
     }
 
     try {
+      const iterationStartedAt = Date.now();
+      engineDiag.info('workspace.analysis.iteration.start', {
+        workspaceId: workspace.workspaceId,
+        sessionStatus: state.status,
+        analysisRevision: state.analysisRevision,
+      });
       await workspaceContextRefreshFromDisk(workspace);
       const analysis = await workspaceAnalysisRun(workspace, state, indexBuildHost, {
         fix: false,
@@ -10233,6 +10263,16 @@ async function workspaceSessionAnalysisGet(
       state.lastError = undefined;
       state.indexProgress = undefined;
       state.activeIndexBuild = undefined;
+      const ranAnalyzers = analysis.analyzerScorecard.filter((row) => row.status === 'ran').length;
+      engineDiag.info('workspace.analysis.iteration.end', {
+        workspaceId: workspace.workspaceId,
+        durationMs: Date.now() - iterationStartedAt,
+        fileCount: analysis.files.length,
+        violationCount: analysis.violations.length + analysis.treeViolations.length,
+        diagnosticCount: analysis.diagnostics.length,
+        analyzerRanCount: ranAnalyzers,
+        analyzerScorecardCount: analysis.analyzerScorecard.length,
+      });
       return analysis;
     } catch (error) {
       state.indexProgress = undefined;
@@ -10246,6 +10286,10 @@ async function workspaceSessionAnalysisGet(
       }
       state.status = 'error';
       state.lastError = error instanceof Error ? error.message : String(error);
+      engineDiag.info('workspace.analysis.iteration.error', {
+        workspaceId: workspace.workspaceId,
+        message: state.lastError,
+      });
       throw error;
     }
   }
@@ -10534,14 +10578,24 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     workspace: WorkspaceState,
     workspaceSession: WorkspaceSessionState,
   ): void {
+    const engineDiag = diagnosticsRuntimeGet().getDiagnostics('workspace.engine');
     if (!this.backgroundWarmup || workspaceSession.replayState !== 'applied') {
+      engineDiag.debug('workspace.warmup.skip', {
+        workspaceId: workspace.workspaceId,
+        reason: !this.backgroundWarmup ? 'background_warmup_disabled' : 'replay_not_applied',
+      });
       return;
     }
     if (workspaceSession.lastAnalysis && workspaceSession.status === 'ready') {
+      engineDiag.debug('workspace.warmup.skip', {
+        workspaceId: workspace.workspaceId,
+        reason: 'already_ready',
+      });
       return;
     }
     if (workspaceSession.backgroundWarmupRunning) {
       workspaceSession.backgroundWarmupQueued = true;
+      engineDiag.debug('workspace.warmup.queued', { workspaceId: workspace.workspaceId });
       return;
     }
 
@@ -10554,11 +10608,32 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       workspaceSession.status = 'warming';
     }
 
+    engineDiag.info('workspace.warmup.task.scheduled', {
+      workspaceId: workspace.workspaceId,
+      hasPendingWork,
+    });
+
     this.backgroundTaskSchedule(async () => {
+      const warmupStartedAt = Date.now();
+      engineDiag.info('workspace.warmup.run.start', {
+        workspaceId: workspace.workspaceId,
+        analysisRevision: startRevision,
+      });
       try {
         await this.workspaceSessionAnalysisEnsure(workspace, workspaceSession);
-      } catch {}
-      finally {
+        engineDiag.info('workspace.warmup.run.end', {
+          workspaceId: workspace.workspaceId,
+          durationMs: Date.now() - warmupStartedAt,
+          ok: true,
+        });
+      } catch (error) {
+        engineDiag.info('workspace.warmup.run.end', {
+          workspaceId: workspace.workspaceId,
+          durationMs: Date.now() - warmupStartedAt,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
         workspaceSession.backgroundWarmupRunning = false;
         const staleRun = workspaceSession.analysisRevision !== startRevision;
         if (staleRun) {
@@ -10728,6 +10803,12 @@ export class WorkspaceServiceEngine implements WorkspaceService {
 
     const rootPath = path.resolve(input.rootPath);
     const configPath = path.resolve(rootPath, input.configPath);
+    const engineDiag = diagnosticsRuntimeGet().getDiagnostics('workspace.engine');
+    engineDiag.info('workspace.attach.start', {
+      clientSessionId: input.clientSessionId,
+      rootPath,
+      configPath,
+    });
     configCacheClear();
     const { config, configPath: resolvedConfigPath } = await configGetFromPath(configPath);
     const clientSession = clientSessionGet(this.clientSessions, input.clientSessionId);
@@ -10855,6 +10936,16 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       ),
     );
 
+    const clientSessionForAttach = clientSessionGet(this.clientSessions, input.clientSessionId);
+    const workspaceSessionAfter = clientSessionForAttach.workspaces.get(workspaceId);
+    engineDiag.info('workspace.attach.end', {
+      workspaceId,
+      workspaceInstanceId: workspace.workspaceInstanceId,
+      replayState: workspaceSessionAfter?.replayState,
+      indexStatus: workspaceSessionAfter?.status,
+      hasCachedAnalysis: Boolean(workspaceSessionAfter?.lastAnalysis),
+    });
+
     return {
       workspaceId,
       workspaceInstanceId: workspace.workspaceInstanceId,
@@ -10879,6 +10970,11 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     }
     workspaceSession.replayEpoch += 1;
     workspaceSession.replayState = 'applied';
+    diagnosticsRuntimeGet().getDiagnostics('workspace.engine').info('workspace.replay.complete', {
+      workspaceId: workspace.workspaceId,
+      workspaceInstanceId: workspace.workspaceInstanceId,
+      replayEpoch: workspaceSession.replayEpoch,
+    });
     this.workspaceBackgroundWarmupSchedule(workspace, workspaceSession);
     return {
       workspaceId: workspace.workspaceId,

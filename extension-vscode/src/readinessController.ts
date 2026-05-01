@@ -11,6 +11,7 @@ import {
   type CodepolReadinessSnapshot,
   codepolWorkspacePackageRenameEnabledResolve,
 } from './readiness';
+import { codepolExtensionLogDebug, codepolExtensionLogInfo } from './extensionLog';
 
 function errorMessageResolve(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -43,6 +44,7 @@ export class CodepolReadinessController
   }
 
   start(): void {
+    codepolExtensionLogInfo('extension.readiness.start', {});
     this.contextKeysUpdate();
     void this.refresh();
   }
@@ -64,16 +66,29 @@ export class CodepolReadinessController
       nextSnapshot = {
         status: await this.protocol.queryIndexStatus(),
       };
+      codepolExtensionLogDebug('extension.readiness.refresh.ok', {
+        requestId,
+        indexStatus: nextSnapshot.status?.status ?? null,
+        replayState: nextSnapshot.status?.replayState ?? null,
+      });
     } catch (error) {
       if (codepolRequestSupersededErrorIs(error)) {
+        codepolExtensionLogDebug('extension.readiness.refresh.superseded', { requestId });
         return;
       }
       if (codepolConnectionDisposedErrorIs(error)) {
+        codepolExtensionLogDebug('extension.readiness.refresh.connection_disposed', {
+          requestId,
+        });
         nextSnapshot = {
           status: this.snapshot.status ?? null,
         };
         forcePoll = true;
       } else {
+        codepolExtensionLogInfo('extension.readiness.refresh.error', {
+          requestId,
+          message: errorMessageResolve(error),
+        });
         nextSnapshot = {
           status: null,
           errorMessage: errorMessageResolve(error),
@@ -110,6 +125,10 @@ export class CodepolReadinessController
     }
 
     this.pollHandle = setTimeout(() => {
+      codepolExtensionLogDebug('extension.readiness.poll.tick', {
+        intervalMs: this.pollIntervalMs,
+        force,
+      });
       void this.refresh();
     }, this.pollIntervalMs);
   }

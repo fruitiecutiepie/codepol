@@ -20,9 +20,6 @@ importers:
       '@codepol/plugin-biome':
         specifier: workspace:*
         version: link:packages/plugin-biome
-      '@codepol/plugin-esbuild':
-        specifier: workspace:*
-        version: link:packages/plugin-esbuild
       '@codepol/plugin-eslint':
         specifier: workspace:*
         version: link:packages/plugin-eslint
@@ -144,6 +141,9 @@ importers:
 
   apps/daemon:
     dependencies:
+      '@codepol/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@codepol/type-aware-provider':
         specifier: workspace:^
         version: link:../../packages/type-aware-provider

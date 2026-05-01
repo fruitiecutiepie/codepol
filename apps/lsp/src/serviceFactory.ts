@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { diagnosticsRuntimeGet } from '@codepol/core';
 import {
   WorkspaceDaemonServiceClient,
   workspaceDaemonLaunchOrConnect,
@@ -61,10 +62,20 @@ function daemonEntryPathResolve(): string {
 }
 
 function daemonProcessStart(env: NodeJS.ProcessEnv = process.env): void {
-  const child = spawn(process.execPath, [daemonEntryPathResolve()], {
+  const daemonEntry = daemonEntryPathResolve();
+  diagnosticsRuntimeGet().getDiagnostics('lsp.daemon_spawn').info('lsp.daemon.spawn.begin', {
+    execPath: process.execPath,
+    daemonEntry,
+    lspPid: process.pid,
+  });
+  const child = spawn(process.execPath, [daemonEntry], {
     detached: true,
     stdio: 'ignore',
     env: { ...process.env, ...env, NODE_NO_WARNINGS: '1' },
+  });
+  diagnosticsRuntimeGet().getDiagnostics('lsp.daemon_spawn').info('lsp.daemon.spawn.end', {
+    childPid: child.pid ?? null,
+    daemonEntry,
   });
   child.unref();
 }
@@ -192,6 +203,7 @@ export async function lspWorkspaceServiceResolve(options: {
     if (runtimeBundled) {
       throw new Error('CODEPOL_WORKSPACE_SERVICE_MODE=in_process is unavailable in the bundled runtime');
     }
+    diagnosticsRuntimeGet().getDiagnostics('lsp.workspace_service').info('lsp.workspace_service.resolve.in_process', {});
     const service = await workspaceServiceInProcessCreate({
       env,
       typeAwareBridgeProvider: options.typeAwareBridgeProvider,
@@ -202,7 +214,14 @@ export async function lspWorkspaceServiceResolve(options: {
   }
 
   const clientInstanceId = options.clientInstanceId ?? `codepol-lsp-${process.pid}`;
+  const svcDiag = diagnosticsRuntimeGet().getDiagnostics('lsp.workspace_service');
   try {
+    svcDiag.info('lsp.workspace_service.resolve.begin', {
+      mode: 'daemon',
+      clientInstanceId,
+      runtimeDir: env.CODEPOL_DAEMON_RUNTIME_DIR ?? null,
+      buildId: WORKSPACE_DAEMON_BUILD_ID,
+    });
     const minStartedAtUnixMs = daemonMinStartedAtUnixMsResolve();
     const launched = await workspaceDaemonLaunchOrConnect({
       client: {
@@ -221,6 +240,13 @@ export async function lspWorkspaceServiceResolve(options: {
       startDaemon: options.startDaemon ?? (() => daemonProcessStart(env)),
     });
 
+    svcDiag.info('lsp.workspace_service.resolve.daemon_ready', {
+      launched: launched.launched,
+      daemonPid: launched.descriptor.pid,
+      socketPath: launched.descriptor.transport.path,
+      buildId: launched.descriptor.buildId,
+    });
+
     options.onResolved?.({
       mode: 'daemon',
       launched: launched.launched,
@@ -232,6 +258,9 @@ export async function lspWorkspaceServiceResolve(options: {
       throw daemonError;
     }
 
+    svcDiag.warn('lsp.workspace_service.resolve.fallback_in_process', {
+      message: daemonError.message,
+    });
     const service = await workspaceServiceInProcessCreate({
       env,
       typeAwareBridgeProvider: options.typeAwareBridgeProvider,
