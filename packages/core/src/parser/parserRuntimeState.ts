@@ -22,51 +22,83 @@ export type ParserRuntimeState = {
    * so recreating parsers per call eventually aborts the module with
    * `RuntimeError: Aborted()`. Pooling keeps the heap bounded.
    *
-   * Cleared when `parserOwner` changes so we never hand back a parser
-   * that was allocated inside a now-defunct WASM module instance.
+   * Scoped to a single `web-tree-sitter` module owner so parsers from one
+   * WASM module instance are never reused with another.
    */
   parsersByLanguage: Map<Language, Parser>;
 };
 
 const parserRuntimeStateKey = Symbol.for('codepol.parser-runtime-state');
 
-type GlobalParserRuntimeState = typeof globalThis & {
-  [parserRuntimeStateKey]?: ParserRuntimeState;
+type SharedParserRuntimeState = {
+  registeredLangs: Map<string, RegisteredLang>;
+  fileExtensionsToLangId: Map<string, string>;
+  ownerStates: Map<unknown, ParserRuntimeState>;
+  defaultOwnerState: ParserRuntimeState;
 };
 
-export function parserRuntimeStateGet(): ParserRuntimeState {
+type GlobalParserRuntimeState = typeof globalThis & {
+  [parserRuntimeStateKey]?: SharedParserRuntimeState;
+};
+
+function parserOwnerStateCreate(
+  parserOwner: unknown,
+  registeredLangs: Map<string, RegisteredLang>,
+  fileExtensionsToLangId: Map<string, string>,
+): ParserRuntimeState {
+  return {
+    parserOwner,
+    parserInitialized: false,
+    parserInitPromise: undefined,
+    registeredLangs,
+    fileExtensionsToLangId,
+    loadedLanguages: new Map(),
+    parsersByLanguage: new Map(),
+  };
+}
+
+function sharedParserRuntimeStateGet(): SharedParserRuntimeState {
   const globalRuntime = globalThis as GlobalParserRuntimeState;
-  if (!globalRuntime[parserRuntimeStateKey]) {
-    globalRuntime[parserRuntimeStateKey] = {
-      parserOwner: undefined,
-      parserInitialized: false,
-      parserInitPromise: undefined,
-      registeredLangs: new Map(),
-      fileExtensionsToLangId: new Map(),
-      loadedLanguages: new Map(),
-      parsersByLanguage: new Map(),
+  let shared = globalRuntime[parserRuntimeStateKey];
+  if (!shared) {
+    const registeredLangs = new Map<string, RegisteredLang>();
+    const fileExtensionsToLangId = new Map<string, string>();
+    shared = {
+      registeredLangs,
+      fileExtensionsToLangId,
+      ownerStates: new Map(),
+      defaultOwnerState: parserOwnerStateCreate(
+        undefined,
+        registeredLangs,
+        fileExtensionsToLangId,
+      ),
     };
+    globalRuntime[parserRuntimeStateKey] = shared;
   }
-  return globalRuntime[parserRuntimeStateKey]!;
+  return shared;
+}
+
+export function parserRuntimeStateGet(): ParserRuntimeState {
+  return sharedParserRuntimeStateGet().defaultOwnerState;
 }
 
 /**
- * Keeps language registrations global while invalidating live parser state
- * whenever a different web-tree-sitter module instance is observed.
+ * Keeps language registrations global while isolating live parser state per
+ * web-tree-sitter module instance. Editor hosts can load multiple package
+ * copies in one process; one owner must not mark another owner uninitialized.
  */
 export function parserRuntimeStateForOwnerGet(
   parserOwner: unknown,
 ): ParserRuntimeState {
-  const state = parserRuntimeStateGet();
-  if (state.parserOwner !== parserOwner) {
-    state.parserOwner = parserOwner;
-    state.parserInitialized = false;
-    state.parserInitPromise = undefined;
-    state.loadedLanguages.clear();
-    // Parsers from a defunct WASM module instance cannot be safely reused
-    // or even `.delete()`d — drop the references and let GC handle the JS
-    // wrappers. The native memory dies with the old module.
-    state.parsersByLanguage.clear();
+  const shared = sharedParserRuntimeStateGet();
+  let state = shared.ownerStates.get(parserOwner);
+  if (!state) {
+    state = parserOwnerStateCreate(
+      parserOwner,
+      shared.registeredLangs,
+      shared.fileExtensionsToLangId,
+    );
+    shared.ownerStates.set(parserOwner, state);
   }
   return state;
 }

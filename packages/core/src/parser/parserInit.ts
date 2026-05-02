@@ -11,7 +11,6 @@ import {
 } from './parserLangs';
 import {
   parserRuntimeStateForOwnerGet,
-  parserRuntimeStateGet,
 } from './parserRuntimeState';
 import type { Diagnostics } from '../diagnostics/diagnosticsTypes';
 import { diagnosticsRuntimeGet } from '../diagnostics/diagnosticsRuntimeGlobal';
@@ -43,15 +42,11 @@ export async function parserInit(diag?: Diagnostics): Promise<void> {
     d.debug('core_wasm.initializing');
     state.parserInitPromise = Parser.init({ locateFile: treeSitterWasmLocate })
       .then(() => {
-        if (parserRuntimeStateGet().parserOwner === Parser) {
-          state.parserInitialized = true;
-        }
+        state.parserInitialized = true;
         d.debug('core_wasm.initialized');
       })
       .catch((error) => {
-        if (parserRuntimeStateGet().parserOwner === Parser) {
-          state.parserInitPromise = undefined;
-        }
+        state.parserInitPromise = undefined;
         const message = error instanceof Error ? error.message : String(error);
         d.error('core_wasm.init_failed', { errorMessage: message });
         throw error;
@@ -69,17 +64,17 @@ export async function parserInit(diag?: Diagnostics): Promise<void> {
         ? fs.statSync(lang.wasmPath).size
         : undefined,
       fileExtensions: lang.fileExtensions,
-      alreadyLoaded: langExists(lang.langId),
+      alreadyLoaded: langExists(state, lang.langId),
     })),
   }));
   await Promise.all(
     langs.map(async lang => {
-      if (langExists(lang.langId)) {
+      if (langExists(state, lang.langId)) {
         return;
       }
       try {
         const language = await Parser.Language.load(lang.wasmPath);
-        langSet(lang.langId, language);
+        langSet(state, lang.langId, language);
         d.debug('grammar.loaded', () => ({
           langId: lang.langId,
           wasmPath: lang.wasmPath,
@@ -156,7 +151,7 @@ export function parserGetForFile(filePath: string): Result<Parser, string> {
     console.error(error);
     return Err(error);
   }
-  const language = langGetForFile(filePath);
+  const language = langGetForFile(state, filePath);
   if (!language) {
     const error = `No language registered for file "${filePath}". Register one with langAdd().`;
     console.error(error);

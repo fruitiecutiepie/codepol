@@ -4,6 +4,7 @@ import path from 'node:path';
 import { Language } from 'web-tree-sitter';
 import {
   parserRuntimeStateGet,
+  type ParserRuntimeState,
   type RegisteredLang,
 } from './parserRuntimeState';
 
@@ -146,17 +147,69 @@ export function langsGet(): Required<Lang>[] {
   return [...parserRuntimeStateGet().registeredLangs.values()];
 }
 
-export function langSet(langId: string, language: Language): void {
-  parserRuntimeStateGet().loadedLanguages.set(langId, language);
+export function langSet(langId: string, language: Language): void;
+export function langSet(
+  state: ParserRuntimeState,
+  langId: string,
+  language: Language,
+): void;
+export function langSet(
+  stateOrLangId: ParserRuntimeState | string,
+  langIdOrLanguage: string | Language,
+  language?: Language,
+): void {
+  const state = typeof stateOrLangId === 'string'
+    ? parserRuntimeStateGet()
+    : stateOrLangId;
+  const langId = typeof stateOrLangId === 'string'
+    ? stateOrLangId
+    : langIdOrLanguage as string;
+  const loadedLanguage = typeof stateOrLangId === 'string'
+    ? langIdOrLanguage as Language
+    : language;
+  if (!loadedLanguage) {
+    throw new Error('langSet requires a Language instance.');
+  }
+  state.loadedLanguages.set(langId, loadedLanguage);
 }
 
-export function langExists(langId: string): boolean {
-  return parserRuntimeStateGet().loadedLanguages.has(langId);
+export function langExists(langId: string): boolean;
+export function langExists(state: ParserRuntimeState, langId: string): boolean;
+export function langExists(
+  stateOrLangId: ParserRuntimeState | string,
+  langId?: string,
+): boolean {
+  const state = typeof stateOrLangId === 'string'
+    ? parserRuntimeStateGet()
+    : stateOrLangId;
+  const resolvedLangId = typeof stateOrLangId === 'string'
+    ? stateOrLangId
+    : langId;
+  if (!resolvedLangId) {
+    return false;
+  }
+  return state.loadedLanguages.has(resolvedLangId);
 }
 
-export function langGetForFile(filePath: string): Language | null {
-  const state = parserRuntimeStateGet();
-  const extension = path.extname(filePath).toLowerCase();
+export function langGetForFile(filePath: string): Language | null;
+export function langGetForFile(
+  state: ParserRuntimeState,
+  filePath: string,
+): Language | null;
+export function langGetForFile(
+  stateOrFilePath: ParserRuntimeState | string,
+  filePath?: string,
+): Language | null {
+  const state = typeof stateOrFilePath === 'string'
+    ? parserRuntimeStateGet()
+    : stateOrFilePath;
+  const resolvedFilePath = typeof stateOrFilePath === 'string'
+    ? stateOrFilePath
+    : filePath;
+  if (!resolvedFilePath) {
+    return null;
+  }
+  const extension = path.extname(resolvedFilePath).toLowerCase();
   if (!extension) {
     return null;
   }
