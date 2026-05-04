@@ -3,6 +3,8 @@ import path from 'node:path';
 import * as TOML from '@iarna/toml';
 import type { CodepolConfig, ConfigFileResult } from './configTypes';
 import { configValidate } from './configValidate';
+import { andThen, Err, isErr, Ok, type Result, resultMessageFromUnknown, resultFrom } from '../result/result';
+import { WorkspaceFault } from '../workspace/workspaceFault';
 
 /** Supported config filename. */
 const CONFIG_FILENAME = 'codepol.toml' as const;
@@ -25,14 +27,6 @@ export function configCacheClear(): void {
  *
  * @param startDir - Directory to start searching from
  * @returns Absolute path to the config file, or null if not found
- *
- * @example
- * ```ts
- * const configPath = configFileDiscover(process.cwd());
- * if (configPath) {
- *   console.log(`Found config at: ${configPath}`);
- * }
- * ```
  */
 export function configFileDiscover(startDir: string): string | null {
   let currentDir = path.resolve(startDir);
@@ -65,159 +59,114 @@ export function configParseFromSource(
   source: string,
   options: {
     configPath?: string;
-  } = {},
-): CodepolConfig {
-  try {
-    const parsed = TOML.parse(source) as unknown;
-    return configValidate(parsed);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const configPath = options.configPath ?? '<inline>';
-    throw new Error(`Failed to parse config file ${configPath}: ${message}`);
+  } = {}
+): Result<CodepolConfig, WorkspaceFault> {
+  const configPath = options.configPath ?? '<inline>';
+  const parsedR = resultFrom<unknown, unknown>(() => TOML.parse(source) as unknown);
+  if (isErr(parsedR)) {
+    const message = resultMessageFromUnknown(parsedR.Err);
+    return Err(new WorkspaceFault(`Failed to parse config file ${configPath}: ${message}`));
   }
+  return configValidate(parsedR.Ok);
 }
 
-/**
- * Parses TOML from disk and validates it against the runtime config schema.
- */
-function configFileParse(configPath: string): CodepolConfig {
+function configFileParse(configPath: string): Result<CodepolConfig, WorkspaceFault> {
   const raw = fs.readFileSync(configPath, 'utf8');
   return configParseFromSource(raw, { configPath });
 }
 
-/**
- * Loads and parses a config file (async version).
- *
- * @param configPath - Absolute path to the config file
- * @returns The parsed config object
- */
-async function configFileLoadAsync(configPath: string): Promise<CodepolConfig> {
+async function configFileLoadAsync(
+  configPath: string
+): Promise<Result<CodepolConfig, WorkspaceFault>> {
   const cached = configCache.get(configPath);
   if (cached) {
-    return cached;
+    return Ok(cached);
   }
 
-  const config = configFileParse(configPath);
-  configCache.set(configPath, config);
-  return config;
+  const configR = configFileParse(configPath);
+  if (isErr(configR)) {
+    return configR;
+  }
+  configCache.set(configPath, configR.Ok);
+  return Ok(configR.Ok);
 }
 
-/**
- * Loads and parses a config file synchronously.
- * Used by ESLint adapter which requires sync execution.
- *
- * @param configPath - Absolute path to the config file
- * @returns The parsed config object
- */
-function configFileLoadSync(configPath: string): CodepolConfig {
+function configFileLoadSync(configPath: string): Result<CodepolConfig, WorkspaceFault> {
   const cached = configCache.get(configPath);
   if (cached) {
-    return cached;
+    return Ok(cached);
   }
 
-  const config = configFileParse(configPath);
-  configCache.set(configPath, config);
-  return config;
+  const configR = configFileParse(configPath);
+  if (isErr(configR)) {
+    return configR;
+  }
+  configCache.set(configPath, configR.Ok);
+  return Ok(configR.Ok);
 }
 
 /**
  * Discovers and loads the codepol config file.
- * Walks up from the current directory to find the nearest config file.
- *
- * @param cwd - Working directory to start search from (default: process.cwd())
- * @returns The loaded config and its path
- * @throws If no config file is found
- *
- * @example
- * ```ts
- * import { configGet } from '@codepol/core';
- *
- * const { config, configPath } = await configGet();
- * console.log(`Loaded config from: ${configPath}`);
- * console.log(`Rules: ${config.rules.length}`);
- * ```
  */
-export async function configGet(cwd?: string): Promise<ConfigFileResult> {
+export async function configGet(
+  cwd?: string
+): Promise<Result<ConfigFileResult, WorkspaceFault>> {
   const startDir = cwd ?? process.cwd();
   const configPath = configFileDiscover(startDir);
 
   if (!configPath) {
-    throw new Error(`No codepol config found. Create ${CONFIG_FILENAME}.`);
+    return Err(new WorkspaceFault(`No codepol config found. Create ${CONFIG_FILENAME}.`));
   }
 
-  const config = await configFileLoadAsync(configPath);
-  return { config, configPath };
+  return andThen(await configFileLoadAsync(configPath), (config) =>
+    Ok({ config, configPath })
+  );
 }
 
 /**
  * Discovers and loads the codepol config file synchronously.
- * Used by ESLint adapter which requires sync execution.
- *
- * @param cwd - Working directory to start search from (default: process.cwd())
- * @returns The loaded config and its path
- * @throws If no config file is found
- *
- * @example
- * ```ts
- * import { configGetSync } from '@codepol/core';
- *
- * const { config, configPath } = configGetSync();
- * ```
  */
-export function configGetSync(cwd?: string): ConfigFileResult {
+export function configGetSync(cwd?: string): Result<ConfigFileResult, WorkspaceFault> {
   const startDir = cwd ?? process.cwd();
   const configPath = configFileDiscover(startDir);
 
   if (!configPath) {
-    throw new Error(`No codepol config found. Create ${CONFIG_FILENAME}.`);
+    return Err(new WorkspaceFault(`No codepol config found. Create ${CONFIG_FILENAME}.`));
   }
 
-  const config = configFileLoadSync(configPath);
-  return { config, configPath };
+  return andThen(configFileLoadSync(configPath), (config) => Ok({ config, configPath }));
 }
 
 /**
  * Loads a config file from a specific path.
- * Use this when you have an explicit path (e.g., from --config flag).
- *
- * @param configPath - Path to the config file (absolute or relative)
- * @returns The loaded config and its resolved path
- *
- * @example
- * ```ts
- * const { config } = await configGetFromPath('./codepol.toml');
- * ```
  */
-export async function configGetFromPath(configPath: string): Promise<ConfigFileResult> {
+export async function configGetFromPath(
+  configPath: string
+): Promise<Result<ConfigFileResult, WorkspaceFault>> {
   const absolutePath = path.resolve(configPath);
 
   if (!fs.existsSync(absolutePath)) {
-    throw new Error(`Config file not found: ${absolutePath}`);
+    return Err(new WorkspaceFault(`Config file not found: ${absolutePath}`));
   }
 
-  const config = await configFileLoadAsync(absolutePath);
-  return { config, configPath: absolutePath };
+  return andThen(await configFileLoadAsync(absolutePath), (config) =>
+    Ok({ config, configPath: absolutePath })
+  );
 }
 
 /**
  * Loads a config file from a specific path synchronously.
- * Used by ESLint adapter which requires sync execution.
- *
- * @param configPath - Path to the config file (absolute or relative)
- * @returns The loaded config and its resolved path
- *
- * @example
- * ```ts
- * const { config } = configGetFromPathSync('./codepol.toml');
- * ```
  */
-export function configGetFromPathSync(configPath: string): ConfigFileResult {
+export function configGetFromPathSync(
+  configPath: string
+): Result<ConfigFileResult, WorkspaceFault> {
   const absolutePath = path.resolve(configPath);
 
   if (!fs.existsSync(absolutePath)) {
-    throw new Error(`Config file not found: ${absolutePath}`);
+    return Err(new WorkspaceFault(`Config file not found: ${absolutePath}`));
   }
 
-  const config = configFileLoadSync(absolutePath);
-  return { config, configPath: absolutePath };
+  return andThen(configFileLoadSync(absolutePath), (config) =>
+    Ok({ config, configPath: absolutePath })
+  );
 }

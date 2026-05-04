@@ -44,7 +44,7 @@ import type {
   WorkspaceTypeHierarchyDirection,
   WorkspaceTypeHierarchyEdgeConfidence,
 } from '@codepol/core';
-import { diagnosticsRuntimeGet } from '@codepol/core';
+import { diagnosticsRuntimeGet, WorkspaceFault, workspaceThrownMessageFromUnknown } from '@codepol/core';
 import type {
   WorkspaceDiagnosticsSubscriptionResult,
   WorkspaceDiagnosticsSubscriptionScope,
@@ -1316,6 +1316,7 @@ export class WorkspaceDaemonConnection implements WorkspaceDaemonRequestClient {
     options: WorkspaceDaemonRequestOptions = {},
   ): Promise<TResponse> {
     if (options.signal?.aborted) {
+      // TODO(result-refactor): align cancellation plumbing with Result vs Promise.reject — backlog in packages/core/src/result/result.ts.
       return Promise.reject<TResponse>(requestCancelledErrorCreate());
     }
     const id = this.nextId;
@@ -1413,7 +1414,7 @@ export async function workspaceDaemonHello(
         : undefined,
   });
   if (response.type !== 'hello_ack') {
-    throw new Error(`Unexpected daemon hello response: ${String(response.type)}`);
+    throw new WorkspaceFault(`Unexpected daemon hello response: ${String(response.type)}`);
   }
   if (response.compatibility !== 'ok') {
     throw new WorkspaceDaemonHelloError(
@@ -1424,7 +1425,7 @@ export async function workspaceDaemonHello(
     (capability) => response.capabilities[capability] !== true,
   );
   if (missingCapabilities.length > 0) {
-    throw new Error(
+    throw new WorkspaceFault(
       `Daemon missing required capabilities: ${missingCapabilities.join(', ')}`,
     );
   }
@@ -3647,7 +3648,7 @@ export class WorkspaceDaemonSession {
     } catch (error) {
       return messageErrorCreate(
         'request_failed',
-        error instanceof Error ? error.message : String(error),
+        workspaceThrownMessageFromUnknown(error),
       );
     }
   }
@@ -4885,7 +4886,7 @@ async function workspaceDaemonLaunchLockAcquire(
     }
   }
 
-  throw new Error(`Timed out waiting for daemon launch lock at ${lockPath}`);
+  throw new WorkspaceFault(`Timed out waiting for daemon launch lock at ${lockPath}`);
 }
 
 async function workspaceDaemonWaitForHealthy(
@@ -4911,7 +4912,7 @@ async function workspaceDaemonWaitForHealthy(
     }
     await sleep(50);
   }
-  throw new Error('Timed out waiting for daemon to become healthy');
+  throw new WorkspaceFault('Timed out waiting for daemon to become healthy');
 }
 
 export async function workspaceDaemonLaunchOrConnect(
@@ -5056,7 +5057,7 @@ export async function workspaceDaemonServerStart(
               errorEnvelopeCreate(
                 parsed.id,
                 'internal_error',
-                error instanceof Error ? error.message : String(error),
+                workspaceThrownMessageFromUnknown(error),
               ),
             );
           });

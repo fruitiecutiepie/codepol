@@ -6,6 +6,7 @@ import {
   policyFileGetChecked,
   ruleMatchesGet,
 } from './policyGet';
+import { isErr, isOk } from '../result/result';
 import type { PolicyFile, PolicyRule, PolicyRuleTarget } from './policyTypes';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -42,22 +43,29 @@ describe('policyGet', () => {
       });
       const rule = policyRuleNew({ ruleId: 'my-rule', targets: ['ts', 'tsx'] });
 
-      const resolved = policyRuleTargetsResolve(rule, policy);
+      const resolvedR = policyRuleTargetsResolve(rule, policy);
+      expect(isOk(resolvedR)).toBe(true);
+      if (!isOk(resolvedR)) return;
+      const resolved = resolvedR.Ok;
       expect(resolved).toHaveLength(2);
       expect(resolved[0]).toBe(tsTarget);
       expect(resolved[1]).toBe(tsxTarget);
     });
 
-    it('throws when a target reference is missing', () => {
+    it('returns Err when a target reference is missing', () => {
       const policy = policyFileNew({
         targets: { ts: policyRuleTargetNew({ language: 'typescript', files: ['src/**/*.ts'] }) },
         rules: [],
       });
       const rule = policyRuleNew({ ruleId: 'bad-rule', targets: ['nonexistent'] });
 
-      expect(() => policyRuleTargetsResolve(rule, policy)).toThrow(
-        'Rule "bad-rule" references target "nonexistent" which is not defined in policy.targets'
-      );
+      const r = policyRuleTargetsResolve(rule, policy);
+      expect(isErr(r)).toBe(true);
+      if (isErr(r)) {
+        expect(r.Err.message).toContain(
+          'Rule "bad-rule" references target "nonexistent" which is not defined in policy.targets',
+        );
+      }
     });
   });
 
@@ -110,11 +118,13 @@ describe('policyGet', () => {
     const cwd = '/project';
 
     it('returns true for a file matching a rule target', () => {
-      expect(policyFileGetChecked(policy, '/project/src/utils/foo.ts', cwd)).toBe(true);
+      const r = policyFileGetChecked(policy, '/project/src/utils/foo.ts', cwd);
+      expect(isOk(r) && r.Ok).toBe(true);
     });
 
     it('returns false for a file not matching any target', () => {
-      expect(policyFileGetChecked(policy, '/project/lib/bar.js', cwd)).toBe(false);
+      const r = policyFileGetChecked(policy, '/project/lib/bar.js', cwd);
+      expect(isOk(r) && !r.Ok).toBe(true);
     });
 
     it('returns false for a file excluded by global exclude', () => {
@@ -123,7 +133,8 @@ describe('policyGet', () => {
         rules: [policyRuleNew({ ruleId: 'my-rule', targets: ['ts'] })],
         exclude: ['src/utils/**'],
       });
-      expect(policyFileGetChecked(policyWithExclude, '/project/src/utils/foo.ts', cwd)).toBe(false);
+      const r = policyFileGetChecked(policyWithExclude, '/project/src/utils/foo.ts', cwd);
+      expect(isOk(r) && !r.Ok).toBe(true);
     });
 
     it('returns false for a file excluded by target exclude', () => {
@@ -136,7 +147,8 @@ describe('policyGet', () => {
         targets: { ts: tsTargetWithExclude },
         rules: [policyRuleNew({ ruleId: 'my-rule', targets: ['ts'] })],
       });
-      expect(policyFileGetChecked(policyTargetExclude, '/project/src/generated/types.ts', cwd)).toBe(false);
+      const r = policyFileGetChecked(policyTargetExclude, '/project/src/generated/types.ts', cwd);
+      expect(isOk(r) && !r.Ok).toBe(true);
     });
 
     it('returns false when file matches target glob but not the language', () => {
@@ -149,9 +161,11 @@ describe('policyGet', () => {
         rules: [policyRuleNew({ ruleId: 'tsx-rule', targets: ['tsx'] })],
       });
       // .ts file does not match tsx-only language
-      expect(policyFileGetChecked(policyTsx, '/project/src/foo.ts', cwd)).toBe(false);
+      const rTs = policyFileGetChecked(policyTsx, '/project/src/foo.ts', cwd);
+      expect(isOk(rTs) && !rTs.Ok).toBe(true);
       // .tsx file does match
-      expect(policyFileGetChecked(policyTsx, '/project/src/App.tsx', cwd)).toBe(true);
+      const rTsx = policyFileGetChecked(policyTsx, '/project/src/App.tsx', cwd);
+      expect(isOk(rTsx) && rTsx.Ok).toBe(true);
     });
   });
 
@@ -183,7 +197,10 @@ describe('policyGet', () => {
         rules: [policyRuleNew({ ruleId: 'rule-a', targets: ['ts'] })],
       });
 
-      const matches = await ruleMatchesGet(policy, testDir);
+      const matchesR = await ruleMatchesGet(policy, testDir);
+      expect(isOk(matchesR)).toBe(true);
+      if (!isOk(matchesR)) return;
+      const matches = matchesR.Ok;
       expect(matches).toHaveLength(1);
       expect(matches[0].rule.ruleId).toBe('rule-a');
       // Should find the 3 .ts files (helpers.ts, format.ts, types.ts)
@@ -201,7 +218,10 @@ describe('policyGet', () => {
         exclude: ['src/generated/**'],
       });
 
-      const matches = await ruleMatchesGet(policy, testDir);
+      const matchesR = await ruleMatchesGet(policy, testDir);
+      expect(isOk(matchesR)).toBe(true);
+      if (!isOk(matchesR)) return;
+      const matches = matchesR.Ok;
       expect(matches).toHaveLength(1);
       const basenames = matches[0].files.map(f => path.basename(f)).sort();
       expect(basenames).toEqual(['format.ts', 'helpers.ts']);
@@ -219,7 +239,10 @@ describe('policyGet', () => {
         rules: [policyRuleNew({ ruleId: 'rule-c', targets: ['ts'] })],
       });
 
-      const matches = await ruleMatchesGet(policy, testDir);
+      const matchesR = await ruleMatchesGet(policy, testDir);
+      expect(isOk(matchesR)).toBe(true);
+      if (!isOk(matchesR)) return;
+      const matches = matchesR.Ok;
       expect(matches).toHaveLength(1);
       const basenames = matches[0].files.map(f => path.basename(f)).sort();
       expect(basenames).toEqual(['types.ts']);
@@ -236,7 +259,10 @@ describe('policyGet', () => {
         rules: [policyRuleNew({ ruleId: 'tsx-rule', targets: ['tsx'] })],
       });
 
-      const matches = await ruleMatchesGet(policy, testDir);
+      const matchesR = await ruleMatchesGet(policy, testDir);
+      expect(isOk(matchesR)).toBe(true);
+      if (!isOk(matchesR)) return;
+      const matches = matchesR.Ok;
       expect(matches).toHaveLength(1);
       // Only .tsx files should remain after language filtering
       expect(matches[0].files).toHaveLength(1);
@@ -252,7 +278,10 @@ describe('policyGet', () => {
         rules: [policyRuleNew({ ruleId: 'multi-target', targets: ['ts', 'tsx'] })],
       });
 
-      const matches = await ruleMatchesGet(policy, testDir);
+      const matchesR = await ruleMatchesGet(policy, testDir);
+      expect(isOk(matchesR)).toBe(true);
+      if (!isOk(matchesR)) return;
+      const matches = matchesR.Ok;
       // One match per target
       expect(matches).toHaveLength(2);
       expect(matches[0].target.language).toBe('typescript');
@@ -277,21 +306,29 @@ describe('policyGet', () => {
       // policyRuleTargetsResolve iterates in order and should throw on the bad one.
       const rule = policyRuleNew({ ruleId: 'mixed-rule', targets: ['ts', 'nonexistent'] });
 
-      expect(() => policyRuleTargetsResolve(rule, policy)).toThrow(
-        'Rule "mixed-rule" references target "nonexistent" which is not defined in policy.targets'
-      );
+      const r = policyRuleTargetsResolve(rule, policy);
+      expect(isErr(r)).toBe(true);
+      if (isErr(r)) {
+        expect(r.Err.message).toContain(
+          'Rule "mixed-rule" references target "nonexistent" which is not defined in policy.targets',
+        );
+      }
     });
 
-    it('throws for empty targets map when a rule references any target', () => {
+    it('returns Err for empty targets map when a rule references any target', () => {
       const policy = policyFileNew({
         targets: {},
         rules: [],
       });
       const rule = policyRuleNew({ ruleId: 'orphan-rule', targets: ['missing'] });
 
-      expect(() => policyRuleTargetsResolve(rule, policy)).toThrow(
-        'Rule "orphan-rule" references target "missing" which is not defined in policy.targets'
-      );
+      const r = policyRuleTargetsResolve(rule, policy);
+      expect(isErr(r)).toBe(true);
+      if (isErr(r)) {
+        expect(r.Err.message).toContain(
+          'Rule "orphan-rule" references target "missing" which is not defined in policy.targets',
+        );
+      }
     });
 
     it('handles a rule with empty targets array (no-op)', () => {
@@ -304,8 +341,11 @@ describe('policyGet', () => {
       // Rule with no target references — policyRuleTargetsResolve should return []
       const rule = policyRuleNew({ ruleId: 'no-targets-rule', targets: [] });
 
-      const resolved = policyRuleTargetsResolve(rule, policy);
-      expect(resolved).toEqual([]);
+      const resolvedR = policyRuleTargetsResolve(rule, policy);
+      expect(isOk(resolvedR)).toBe(true);
+      if (isOk(resolvedR)) {
+        expect(resolvedR.Ok).toEqual([]);
+      }
     });
   });
 });

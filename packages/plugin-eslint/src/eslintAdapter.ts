@@ -67,8 +67,11 @@ type MessageIds = 'treeCheckViolation' | 'treeCheckSuggestion';
 function policyRuleTargetsGet(policy: PolicyFile): PolicyRuleTargetContext[] {
   const targets: PolicyRuleTargetContext[] = [];
   for (const rule of policy.rules) {
-    const resolvedTargets = policyRuleTargetsResolve(rule, policy);
-    for (const target of resolvedTargets) {
+    const resolvedTargetsR = policyRuleTargetsResolve(rule, policy);
+    if (isErr(resolvedTargetsR)) {
+      continue;
+    }
+    for (const target of resolvedTargetsR.Ok) {
       targets.push({
         ruleId: rule.ruleId,  // Use plugin rule ID for matching, not user-defined rule.id
         description: rule.description,
@@ -242,8 +245,11 @@ function discoverIndexableFiles(policy: PolicyFile, cwd: string): string[] {
   const globalExclude = policy.exclude ?? [];
 
   for (const rule of policy.rules) {
-    const targets = policyRuleTargetsResolve(rule, policy);
-    for (const target of targets) {
+    const targetsR = policyRuleTargetsResolve(rule, policy);
+    if (isErr(targetsR)) {
+      continue;
+    }
+    for (const target of targetsR.Ok) {
       // Only index if target language is indexable
       if (target.language && !INDEXABLE_LANGUAGES.includes(target.language)) {
         continue;
@@ -410,19 +416,20 @@ function createAdaptedRule(
       // Uses sync loading since ESLint's create() must be synchronous
       let policy: PolicyFile;
       let configPath: string;
-      try {
-        if (ruleOptions.configPath) {
-          const result = configGetFromPathSync(ruleOptions.configPath);
-          policy = result.config;
-          configPath = result.configPath;
-        } else {
-          const result = configGetSync(process.cwd());
-          policy = result.config;
-          configPath = result.configPath;
+      if (ruleOptions.configPath) {
+        const result = configGetFromPathSync(ruleOptions.configPath);
+        if (isErr(result)) {
+          return {};
         }
-      } catch {
-        // Config file not found or invalid, skip checking
-        return {};
+        policy = result.Ok.config;
+        configPath = result.Ok.configPath;
+      } else {
+        const result = configGetSync(process.cwd());
+        if (isErr(result)) {
+          return {};
+        }
+        policy = result.Ok.config;
+        configPath = result.Ok.configPath;
       }
 
       const policyExclude = ruleOptions.policyExclude ?? policy.exclude ?? [];

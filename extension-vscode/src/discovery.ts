@@ -3,6 +3,8 @@ import path from 'node:path';
 import {
   configFileDiscover,
   configParseFromSource,
+  isErr,
+  resultFrom,
   workspacePackageRecordsDiscover,
   type WorkspaceSupportedRenameTarget,
 } from '@codepol/core';
@@ -60,30 +62,28 @@ export function configRenameTargetsDiscover(rootPath: string): RenameTargetCandi
     return [];
   }
 
-  let source: string;
-  try {
-    source = fs.readFileSync(configPath, 'utf8');
-  } catch {
+  const sourceR = resultFrom(() => fs.readFileSync(configPath, 'utf8'));
+  if (isErr(sourceR)) {
     return [];
   }
 
-  try {
-    const config = configParseFromSource(source, { configPath });
-    return Object.keys(config.targets)
-      .sort((left, right) => left.localeCompare(right))
-      .map((targetName) => ({
-        kind: 'config_target',
-        label: targetName,
-        description: workspaceRelativeLabel(rootPath, configPath),
-        detail: 'Codepol config target',
-        target: {
-          semanticClass: 'config_component',
-          targetId: `target:${targetName}`,
-        },
-      }));
-  } catch {
+  const configR = configParseFromSource(sourceR.Ok, { configPath });
+  if (isErr(configR)) {
     return [];
   }
+  const config = configR.Ok;
+  return Object.keys(config.targets)
+    .sort((left, right) => left.localeCompare(right))
+    .map((targetName) => ({
+      kind: 'config_target',
+      label: targetName,
+      description: workspaceRelativeLabel(rootPath, configPath),
+      detail: 'Codepol config target',
+      target: {
+        semanticClass: 'config_component',
+        targetId: `target:${targetName}`,
+      },
+    }));
 }
 
 export function renameTargetCandidatesDiscover(rootPath: string): RenameTargetCandidate[] {

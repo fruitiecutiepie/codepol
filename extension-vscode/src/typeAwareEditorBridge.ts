@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { WorkspaceFault } from '@codepol/core';
 import { CODEPOL_LSP_CLIENT_REQUEST_EDITOR_TYPE_AWARE } from '@codepol/lsp/protocol';
 import type { VscodeLanguageClientProtocol } from './protocolClient';
 
@@ -88,7 +89,7 @@ async function codepolTypeAwareEditorRequestHandle(
     case 'callHierarchy/outgoingCalls':
       return await callHierarchyOutgoingQueryRun(request.params, callHierarchyStore);
     default:
-      throw new Error(`Unsupported editor type-aware request: ${request.method}`);
+      throw new WorkspaceFault(`Unsupported editor type-aware request: ${request.method}`);
   }
 }
 
@@ -193,7 +194,7 @@ class CodepolCallHierarchyItemStore {
     const token = callHierarchyTokenGet(item);
     const stored = this.itemsByToken.get(token);
     if (!stored) {
-      throw new Error(`Unknown call hierarchy token: ${token}`);
+      throw new WorkspaceFault(`Unknown call hierarchy token: ${token}`);
     }
     return stored;
   }
@@ -209,20 +210,20 @@ function locationParamsResolve(params: unknown): {
     !('textDocument' in params) ||
     !('position' in params)
   ) {
-    throw new Error('Expected textDocument + position params');
+    throw new WorkspaceFault('Expected textDocument + position params');
   }
   const record = params as {
     textDocument?: { uri?: unknown };
     position?: { line?: unknown; character?: unknown };
   };
   if (typeof record.textDocument?.uri !== 'string') {
-    throw new Error('Expected textDocument.uri');
+    throw new WorkspaceFault('Expected textDocument.uri');
   }
   if (
     typeof record.position?.line !== 'number' ||
     typeof record.position.character !== 'number'
   ) {
-    throw new Error('Expected position.line + position.character');
+    throw new WorkspaceFault('Expected position.line + position.character');
   }
   return {
     uri: record.textDocument.uri,
@@ -241,7 +242,7 @@ function callHierarchyItemGet(params: unknown): SerializableCallHierarchyItem {
     typeof (params as { item?: unknown }).item !== 'object' ||
     (params as { item?: unknown }).item === null
   ) {
-    throw new Error('Expected call hierarchy item params');
+    throw new WorkspaceFault('Expected call hierarchy item params');
   }
   return (params as { item: SerializableCallHierarchyItem }).item;
 }
@@ -251,7 +252,7 @@ function callHierarchyTokenGet(item: SerializableCallHierarchyItem): string {
     CODEPOL_CALL_HIERARCHY_TOKEN_KEY
   ];
   if (typeof token !== 'string') {
-    throw new Error('Missing call hierarchy token');
+    throw new WorkspaceFault('Missing call hierarchy token');
   }
   return token;
 }

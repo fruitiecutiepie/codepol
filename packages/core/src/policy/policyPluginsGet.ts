@@ -14,6 +14,7 @@ import {
   type ProcessPluginRuntimeContext,
 } from './policyPluginProcess';
 import { pluginRuleNew } from './policyTypes';
+import { WorkspaceFault } from '../workspace/workspaceFault';
 
 export type PolicyPluginsMap = Map<string, PluginRule>;
 type PolicyPluginsLoadOptions = {
@@ -28,17 +29,17 @@ const builtinPlugins = new Map<string, CodepolPluginRule[]>();
 /**
  * Normalize built-in rule plugin exports to a plain array of `CodepolPluginRule`.
  */
-function pluginRulesNormalize(input: unknown): CodepolPluginRule[] {
+function pluginRulesNormalize(input: unknown): Result<CodepolPluginRule[], string> {
   if (Array.isArray(input)) {
-    return input as CodepolPluginRule[];
+    return Ok(input as CodepolPluginRule[]);
   }
   if (input && typeof input === 'object') {
     const obj = input as Record<string, unknown>;
     if (Array.isArray(obj.pluginRules)) {
-      return obj.pluginRules as CodepolPluginRule[];
+      return Ok(obj.pluginRules as CodepolPluginRule[]);
     }
     if (Array.isArray(obj.default)) {
-      return obj.default as CodepolPluginRule[];
+      return Ok(obj.default as CodepolPluginRule[]);
     }
     if (
       obj.__esModule &&
@@ -46,10 +47,10 @@ function pluginRulesNormalize(input: unknown): CodepolPluginRule[] {
       typeof obj.default === 'object' &&
       Array.isArray((obj.default as Record<string, unknown>).default)
     ) {
-      return (obj.default as { default: CodepolPluginRule[] }).default;
+      return Ok((obj.default as { default: CodepolPluginRule[] }).default);
     }
   }
-  throw new Error(
+  return Err(
     'Expected built-in plugin rules as an array or as an object with a default/pluginRules export.'
   );
 }
@@ -58,7 +59,12 @@ function pluginRulesNormalize(input: unknown): CodepolPluginRule[] {
  * Registers built-in rule plugins for transport-neutral resolution.
  */
 export function pluginBuiltinRegister(pluginId: string, pluginRules: CodepolPluginRule[] | unknown): void {
-  builtinPlugins.set(pluginId, pluginRulesNormalize(pluginRules));
+  const normalized = pluginRulesNormalize(pluginRules);
+  if (isErr(normalized)) {
+    // TODO(result-refactor): prefer RegisterResult / Result<void,string> API instead of throw — backlog in result.ts.
+    throw new WorkspaceFault(normalized.Err);
+  }
+  builtinPlugins.set(pluginId, normalized.Ok);
 }
 
 /**
@@ -112,36 +118,43 @@ export function pluginGetForRule(
   return undefined;
 }
 
-function processPluginRulesCreate(runtimeContext: ProcessPluginRuntimeContext): CodepolPluginRule[] {
-  const described = processPluginDescribeGet(runtimeContext);
-  return described.rules.map((descriptor) => {
-    const fixProvider: FixProvider | undefined = descriptor.hasFixProvider
-      ? {
-          apply: (context) => {
-            processPluginRuleFix(runtimeContext, descriptor.id, context);
-          },
-        }
-      : undefined;
+function processPluginRulesCreate(
+  runtimeContext: ProcessPluginRuntimeContext,
+): Result<CodepolPluginRule[], string> {
+  const describedR = processPluginDescribeGet(runtimeContext);
+  if (isErr(describedR)) {
+    return describedR;
+  }
+  const described = describedR.Ok;
 
-    return pluginRuleNew({
-      id: descriptor.id,
-      capabilities: {
-      treeCheckProvider: {
-        languages: descriptor.languages,
-        check: (rule, context) => {
-            try {
-              const violations = processPluginRuleCheck(runtimeContext, descriptor.id, rule, context);
-              return Ok(violations);
-            } catch (error) {
-              return Err(error instanceof Error ? error.message : String(error));
-            }
+  return Ok(
+    described.rules.map((descriptor) => {
+      const fixProvider: FixProvider | undefined = descriptor.hasFixProvider
+        ? {
+            apply: (context) => {
+              const fixR = processPluginRuleFix(runtimeContext, descriptor.id, context);
+              if (isErr(fixR)) {
+                // TODO(result-refactor): FixProvider.apply cannot return Result yet — backlog in result.ts.
+                throw new WorkspaceFault(fixR.Err);
+              }
+            },
+          }
+        : undefined;
+
+      return pluginRuleNew({
+        id: descriptor.id,
+        capabilities: {
+          treeCheckProvider: {
+            languages: descriptor.languages,
+            check: (rule, context) =>
+              processPluginRuleCheck(runtimeContext, descriptor.id, rule, context),
           },
+          fixProvider,
+          requiresProjectIndex: descriptor.requiresProjectIndex,
         },
-        fixProvider,
-        requiresProjectIndex: descriptor.requiresProjectIndex,
-      },
-    });
-  });
+      });
+    }),
+  );
 }
 
 function pluginRulesResolve(
@@ -159,11 +172,7 @@ function pluginRulesResolve(
   }
 
   if (runtimeContext.declaration.source.kind === 'process') {
-    try {
-      return Ok(processPluginRulesCreate(runtimeContext));
-    } catch (error) {
-      return Err(error instanceof Error ? error.message : String(error));
-    }
+    return processPluginRulesCreate(runtimeContext);
   }
 
   return Err(`Unsupported plugin source for ${runtimeContext.declaration.id}.`);
@@ -236,8 +245,11 @@ export async function policyPluginsGet(
 
     const treeCheckProvider = plugin.pluginRule.capabilities.treeCheckProvider;
     if (treeCheckProvider) {
-      const targets = policyRuleTargetsResolve(rule, policy);
-      for (const target of targets) {
+      const targetsR = policyRuleTargetsResolve(rule, policy);
+      if (isErr(targetsR)) {
+        return Err(targetsR.Err.message);
+      }
+      for (const target of targetsR.Ok) {
         if (!treeCheckProviderSupportsLanguage(treeCheckProvider, target.language)) {
           return Err(`Plugin ${resolvedId} does not support language ${target.language} for rule ${rule.id || ruleId}.`);
         }

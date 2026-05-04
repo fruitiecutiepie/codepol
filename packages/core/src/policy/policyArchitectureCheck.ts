@@ -25,7 +25,7 @@ import {
 } from './policyTypes';
 import { ruleMatchesGet, policyRuleTargetsResolve } from './policyGet';
 import { policyPluginsGet, pluginGetForRule, type PolicyPluginsMap } from './policyPluginsGet';
-import { Result, Ok, Err, isErr, resultFrom } from '../result/result';
+import { Result, Ok, Err, isErr, resultFrom, resultFromAsync } from '../result/result';
 import { projectIndexBuild } from '../index/indexBuilder';
 import type { ProjectIndex } from '../index/indexQuery';
 import type { ModuleGraph } from '../index/moduleGraph';
@@ -121,14 +121,22 @@ function pluginsMapRequiresProjectIndex(pluginsMap: PolicyPluginsMap): boolean {
   return false;
 }
 
-function ruleTargetsContextCollect(rule: PolicyRule, policy: PolicyFile): PolicyRuleTargetContext[] {
-  const resolved = policyRuleTargetsResolve(rule, policy);
-  return resolved.map((target) => ({
-    ruleId: rule.id || rule.ruleId,
-    description: rule.description,
-    args: rule.args,
-    target,
-  }));
+function ruleTargetsContextCollect(
+  rule: PolicyRule,
+  policy: PolicyFile
+): Result<PolicyRuleTargetContext[], string> {
+  const resolvedR = policyRuleTargetsResolve(rule, policy);
+  if (isErr(resolvedR)) {
+    return Err(resolvedR.Err.message);
+  }
+  return Ok(
+    resolvedR.Ok.map((target) => ({
+      ruleId: rule.id || rule.ruleId,
+      description: rule.description,
+      args: rule.args,
+      target,
+    })),
+  );
 }
 
 /**
@@ -177,7 +185,11 @@ export async function policyArchitectureViolationsGetFromDir(
     return Ok([]);
   }
 
-  const matches = await ruleMatchesGet(policy, dir);
+  const matchesR = await ruleMatchesGet(policy, dir);
+  if (isErr(matchesR)) {
+    return Err(matchesR.Err.message);
+  }
+  const matches = matchesR.Ok;
   const allFiles = new Set<string>();
   for (const match of matches) {
     for (const filePath of match.files) {
@@ -187,19 +199,20 @@ export async function policyArchitectureViolationsGetFromDir(
 
   let projectIndex = options.projectIndex;
   if (!projectIndex && pluginsMapRequiresProjectIndex(pluginsMap) && allFiles.size > 0) {
-    try {
-      const indexResult = await projectIndexBuild({
+    const indexR = await resultFromAsync(() =>
+      projectIndexBuild({
         files: Array.from(allFiles),
         dir,
-      });
-      projectIndex = indexResult.index;
-    } catch (error) {
+      })
+    );
+    if (isErr(indexR)) {
       return Err(
         `Failed to build project index for architecture checks: ${
-          error instanceof Error ? error.message : String(error)
+          indexR.Err instanceof Error ? indexR.Err.message : String(indexR.Err)
         }`,
       );
     }
+    projectIndex = indexR.Ok.index;
   }
 
   if (!projectIndex) {
@@ -222,7 +235,11 @@ export async function policyArchitectureViolationsGetFromDir(
       continue;
     }
 
-    const targets = policyRuleTargetsResolve(rule, policy);
+    const targetsR = policyRuleTargetsResolve(rule, policy);
+    if (isErr(targetsR)) {
+      return Err(targetsR.Err.message);
+    }
+    const targets = targetsR.Ok;
     const providerResult = architectureProviderGet(pluginsMap, rule, targets);
     if (isErr(providerResult)) {
       return providerResult;
@@ -230,7 +247,11 @@ export async function policyArchitectureViolationsGetFromDir(
     const entry = providerResult.Ok;
     if (!entry) continue;
 
-    const ruleTargets = ruleTargetsContextCollect(rule, policy);
+    const ruleTargetsR = ruleTargetsContextCollect(rule, policy);
+    if (isErr(ruleTargetsR)) {
+      return ruleTargetsR;
+    }
+    const ruleTargets = ruleTargetsR.Ok;
     const context: ArchitectureCheckContext = {
       cwd: dir,
       policy,

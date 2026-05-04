@@ -3,7 +3,7 @@
  */
 
 import type { PolicyCheckContext, PolicyRule, PolicyViolation } from '@codepol/core';
-import { isErr } from '@codepol/core';
+import { WorkspaceFault, isErr } from '@codepol/core';
 import { vultureFindingToViolation, vultureFindingsGet } from './vultureRunner';
 import type { VultureProviderConfig } from './vultureTypes';
 import { vultureFindingMatchesFile } from './vulturePathMatch';
@@ -25,7 +25,7 @@ export function pythonDeadCodeCheck(
       console.warn(`[python-dead-code] ${err}`);
       return [];
     }
-    throw new Error(err);
+    throw new WorkspaceFault(err);
   }
 
   const ruleId = rule.ruleId;

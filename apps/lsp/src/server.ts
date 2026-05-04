@@ -3,6 +3,8 @@ import {
   configFileDiscover,
   diagnosticsRuntimeGet,
   workspaceUriToPath,
+  WorkspaceFault,
+  workspaceThrownMessageFromUnknown,
   type DiagnosticsConfig,
   type DiagnosticsConfigPatch,
   type EscalationRule,
@@ -455,7 +457,7 @@ function errorDataResolve(error: unknown): unknown {
 }
 
 function staleDocumentVersionErrorIs(error: unknown): boolean {
-  return error instanceof Error && error.message.includes('Document version mismatch');
+  return workspaceThrownMessageFromUnknown(error).includes('Document version mismatch');
 }
 
 function requestSupersededErrorIs(error: unknown): boolean {
@@ -473,7 +475,7 @@ function requestSupersededErrorIs(error: unknown): boolean {
       return true;
     }
   }
-  return error instanceof Error && error.message.includes('Request superseded');
+  return workspaceThrownMessageFromUnknown(error).includes('Request superseded');
 }
 
 export class CodepolLspServer {
@@ -540,7 +542,7 @@ export class CodepolLspServer {
       options.serviceFactory ??
       workspaceServiceDefaultFactory ??
       (() => {
-        throw new Error('Codepol LSP requires an explicit workspace service factory in bundled mode');
+        throw new WorkspaceFault('Codepol LSP requires an explicit workspace service factory in bundled mode');
       });
     this.sendMessage = options.sendMessage;
     this.clientInstanceId = options.clientInstanceId ?? `codepol-lsp-${process.pid}`;
@@ -1334,7 +1336,7 @@ export class CodepolLspServer {
         const rootPath = workspaceUriToPath(rootUri);
         const configPath = await configFileDiscover(rootPath);
         if (!configPath) {
-          throw new Error('No codepol config file found');
+          throw new WorkspaceFault('No codepol config file found');
         }
         this.workspaceRootPath = rootPath;
         this.workspaceConfigPath = configPath;

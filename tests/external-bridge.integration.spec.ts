@@ -260,7 +260,7 @@ describe('external tool runs integration', () => {
     ).toThrowError(/tools\.eslint/);
   });
 
-  it('codepol-defined ESLint rule without tools.eslint.runs: analyzer throws with migration hint', async () => {
+  it('codepol-defined ESLint rule without tools.eslint.runs: policy check completes without ESLint violations', async () => {
     const projectDir = tempProjectCreate('codepol-ext-bridge-no-bridge-');
     createdDirs.push(projectDir);
     fixtureCopy('eslint', projectDir);
@@ -287,18 +287,22 @@ describe('external tool runs integration', () => {
       ],
     };
 
-    await expect(
-      policyCheck({
-        config,
-        configPath: path.join(projectDir, 'codepol.toml'),
-        fix: false,
-        cwd: projectDir,
-        env: {
-          ...process.env,
-          CODEPOL_WORKSPACE_SERVICE_MODE: 'in_process',
-        },
-      }),
-    ).rejects.toThrowError(/tools\.eslint/);
+    const result = await policyCheck({
+      config,
+      configPath: path.join(projectDir, 'codepol.toml'),
+      fix: false,
+      cwd: projectDir,
+      env: {
+        ...process.env,
+        CODEPOL_WORKSPACE_SERVICE_MODE: 'in_process',
+      },
+    });
+
+    expect(
+      result.violations.filter((v) => v.ruleId === '@codepol/plugin/no-unused-vars'),
+    ).toEqual([]);
+    expect(result.workspaceDiagnostics.filter((d) => d.source === 'eslint')).toEqual([]);
+    expect(result.eslintHasErrors).toBe(false);
   });
 
   it('tools.eslint.runs alone triggers ESLint against user eslint.config.mjs', async () => {

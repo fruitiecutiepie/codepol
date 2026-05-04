@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import { diagnosticsRuntimeGet } from '@codepol/core';
+import { diagnosticsRuntimeGet, WorkspaceFault } from '@codepol/core';
 import {
   WorkspaceDaemonServiceClient,
   workspaceDaemonLaunchOrConnect,
@@ -96,7 +96,7 @@ function packageRootFindFromEntry(moduleEntryPath: string, expectedName: string)
     }
     const parent = path.dirname(dir);
     if (parent === dir) {
-      throw new Error(`Could not find package root for ${expectedName}`);
+      throw new WorkspaceFault(`Could not find package root for ${expectedName}`);
     }
     dir = parent;
   }
@@ -201,7 +201,7 @@ export async function lspWorkspaceServiceResolve(options: {
 
   if (mode === 'in_process') {
     if (runtimeBundled) {
-      throw new Error('CODEPOL_WORKSPACE_SERVICE_MODE=in_process is unavailable in the bundled runtime');
+      throw new WorkspaceFault('CODEPOL_WORKSPACE_SERVICE_MODE=in_process is unavailable in the bundled runtime');
     }
     diagnosticsRuntimeGet().getDiagnostics('lsp.workspace_service').info('lsp.workspace_service.resolve.in_process', {});
     const service = await workspaceServiceInProcessCreate({

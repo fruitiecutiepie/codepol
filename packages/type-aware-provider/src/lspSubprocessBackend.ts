@@ -11,6 +11,7 @@ import type {
   WorkspaceTypeAwareBridgeTransports,
   WorkspaceTypeAwareBridgeWorkspaceLifecycleInput,
 } from '@codepol/workspace-service';
+import { WorkspaceFault } from '@codepol/core';
 import {
   createMessageConnection,
   StreamMessageReader,
@@ -213,7 +214,7 @@ function workspaceTypeAwareLspSubprocessSessionCreate(
           stdio: 'pipe',
         });
         if (!nextChild.stdout || !nextChild.stdin) {
-          throw new Error(`${input.launchSpec.binary} stdio pipes are unavailable`);
+          throw new WorkspaceFault(`${input.launchSpec.binary} stdio pipes are unavailable`);
         }
         const nextConnection = createMessageConnection(
           new StreamMessageReader(nextChild.stdout),
@@ -470,7 +471,7 @@ export function workspaceTypeAwareLspSubprocessArgsResolve(input: {
   }
   const parsed = JSON.parse(raw) as unknown;
   if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== 'string')) {
-    throw new Error(
+    throw new WorkspaceFault(
       `${input.argsEnvVar} must be a JSON array of strings`,
     );
   }

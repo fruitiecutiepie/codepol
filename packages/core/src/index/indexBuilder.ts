@@ -11,7 +11,7 @@
 
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
-import type { Language } from 'web-tree-sitter';
+import Parser, { type Language } from 'web-tree-sitter';
 import type { CallsRelation, IndexCapabilities, ImportsRelation, ImportBindingRelation, MemberShapeEntry, MemberShapeRelation, ReferencesRelation, TypeRelation, SymbolId } from './indexTypes';
 import { IndexStore, indexStoreNew } from './indexStore';
 import { projectIndexCreate, type ProjectIndex } from './indexQuery';
@@ -20,6 +20,7 @@ import { indexAdapterCreate } from '../adapters/treeSitter/adapterCore';
 import { typescriptConfigCreate } from '../adapters/treeSitter/languages/typescript/config';
 import { pythonConfigCreate } from '../adapters/treeSitter/languages/python/config';
 import { langGetForFile, langIdGetForFile } from '../parser/parserLangs';
+import { parserRuntimeStateForOwnerGet } from '../parser/parserRuntimeState';
 import { moduleResolve, pythonSubmoduleResolve, DEFAULT_EXTENSIONS, type ModuleResolveOptions } from './moduleResolver';
 
 // ============================================================================
@@ -143,7 +144,7 @@ function projectIndexBuildImpl(options: IndexBuildOptions): IndexBuildResult {
   for (const [index, file] of options.files.entries()) {
     try {
       // Get language for file
-      const language = langGetForFile(file);
+      const language = langGetForFile(parserRuntimeStateForOwnerGet(Parser), file);
       if (!language) {
         stats.filesSkipped++;
         continue;
@@ -349,7 +350,7 @@ export async function projectIndexUpdate(
   for (const file of files) {
     try {
       // Get language for file
-      const language = langGetForFile(file);
+      const language = langGetForFile(parserRuntimeStateForOwnerGet(Parser), file);
       if (!language) {
         result.skipped++;
         continue;
@@ -412,7 +413,7 @@ export function projectIndexUpdateFileSync(
 ): boolean {
   try {
     // Get language for file
-    const language = langGetForFile(file);
+    const language = langGetForFile(parserRuntimeStateForOwnerGet(Parser), file);
     if (!language) {
       return false;
     }
@@ -462,7 +463,7 @@ export function projectIndexUpdateFileFromSource(
 ): boolean {
   try {
     // Get language for file
-    const language = langGetForFile(file);
+    const language = langGetForFile(parserRuntimeStateForOwnerGet(Parser), file);
     if (!language) {
       return false;
     }

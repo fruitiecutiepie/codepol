@@ -31,6 +31,7 @@ import { createHash } from 'node:crypto';
 import { promises as fs, type Stats } from 'node:fs';
 import path from 'node:path';
 import {
+  WorkspaceFault,
   type GraphSnapshot,
   type WorkspaceDependencyGraphResult,
 } from '@codepol/core';
@@ -175,7 +176,7 @@ export function fileSystemGraphSnapshotStoreCreate(input: {
       try {
         return graphSnapshotPayloadValidate(JSON.parse(raw));
       } catch (error) {
-        throw new Error(
+        throw new WorkspaceFault(
           `Failed to parse graph snapshot at ${finalPath}: ${
             error instanceof Error ? error.message : String(error)
           }`,
@@ -243,34 +244,34 @@ const GRAPH_SNAPSHOT_LABEL_REPLACEMENTS = /[^a-zA-Z0-9._-]+/g;
 export function graphSnapshotLabelSanitize(label: string): string {
   const trimmed = label.trim();
   if (trimmed.length === 0) {
-    throw new Error('Graph snapshot label must not be empty');
+    throw new WorkspaceFault('Graph snapshot label must not be empty');
   }
   const sanitized = trimmed.replace(GRAPH_SNAPSHOT_LABEL_REPLACEMENTS, '_');
   if (sanitized.length === 0 || sanitized === '.' || sanitized === '..') {
-    throw new Error(`Graph snapshot label is not filesystem-safe: ${label}`);
+    throw new WorkspaceFault(`Graph snapshot label is not filesystem-safe: ${label}`);
   }
   return sanitized;
 }
 
 function graphSnapshotPayloadValidate(payload: unknown): GraphSnapshot {
   if (!payload || typeof payload !== 'object') {
-    throw new Error('Snapshot payload is not an object');
+    throw new WorkspaceFault('Snapshot payload is not an object');
   }
   const candidate = payload as Partial<GraphSnapshot>;
   if (candidate.schemaVersion !== 1) {
-    throw new Error(
+    throw new WorkspaceFault(
       `Unsupported snapshot schema version: ${String(candidate.schemaVersion)}`,
     );
   }
   if (typeof candidate.workspaceRootId !== 'string') {
-    throw new Error('Snapshot is missing workspaceRootId');
+    throw new WorkspaceFault('Snapshot is missing workspaceRootId');
   }
-  if (!Array.isArray(candidate.nodes)) throw new Error('Snapshot is missing nodes[]');
-  if (!Array.isArray(candidate.edges)) throw new Error('Snapshot is missing edges[]');
+  if (!Array.isArray(candidate.nodes)) throw new WorkspaceFault('Snapshot is missing nodes[]');
+  if (!Array.isArray(candidate.edges)) throw new WorkspaceFault('Snapshot is missing edges[]');
   if (!Array.isArray(candidate.entryPoints)) {
-    throw new Error('Snapshot is missing entryPoints[]');
+    throw new WorkspaceFault('Snapshot is missing entryPoints[]');
   }
-  if (!Array.isArray(candidate.cycles)) throw new Error('Snapshot is missing cycles[]');
+  if (!Array.isArray(candidate.cycles)) throw new WorkspaceFault('Snapshot is missing cycles[]');
   return candidate as GraphSnapshot;
 }
 

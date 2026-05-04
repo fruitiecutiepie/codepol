@@ -8,6 +8,7 @@ import {
   isErr,
   parserGetForFile,
   parserParseTrace,
+  WorkspaceFault,
 } from '@codepol/core';
 import type { SyntaxNode } from 'web-tree-sitter';
 import { parseJsTsSource } from './lib/jsTsTree';
@@ -99,7 +100,7 @@ function functionDefinitionsVisit(
 export function functionMatchesPyGet(source: string): FunctionMatch[] {
   const parserResult = parserGetForFile('temp.py');
   if (isErr(parserResult)) {
-    throw new Error(`Python parser not available: ${parserResult.Err}`);
+    throw new WorkspaceFault(`Python parser not available: ${parserResult.Err}`);
   }
 
   const parser = parserResult.Ok;

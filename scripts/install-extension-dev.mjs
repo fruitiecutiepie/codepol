@@ -22,6 +22,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { WorkspaceFault, workspaceThrownMessageFromUnknown } from './workspaceFault.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, '..');
@@ -87,7 +88,7 @@ function bundleFilesValidate(bundleDir) {
     (file) => !fs.existsSync(path.join(bundleDir, file)),
   );
   if (missing.length > 0) {
-    throw new Error(
+    throw new WorkspaceFault(
       `Bundle dir ${bundleDir} is missing required files: ${missing.join(', ')}. Run \`pnpm --dir extension-vscode bundle:prod\` first.`,
     );
   }
@@ -220,6 +221,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error('[install-extension-dev] failed:', error?.stack ?? error);
+  console.error('[install-extension-dev] failed:', workspaceThrownMessageFromUnknown(error));
   process.exitCode = 1;
 });

@@ -12,6 +12,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { pipeline } from 'node:stream/promises';
+import { WorkspaceFault } from './workspaceFault.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = resolve(__dirname, '..');
@@ -73,7 +74,7 @@ async function downloadFile(url, destPath) {
 
   const response = await fetch(url);
   if (!response.ok) {
-    throw new Error(`Failed to download: ${response.status} ${response.statusText}`);
+    throw new WorkspaceFault(`Failed to download: ${response.status} ${response.statusText}`);
   }
 
   const fileStream = createWriteStream(destPath);

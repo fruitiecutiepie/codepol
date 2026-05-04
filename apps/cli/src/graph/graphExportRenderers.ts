@@ -17,6 +17,7 @@
  *   bytes regardless of the underlying URI strings.
  */
 import type { WorkspaceDependencyGraphResult } from '@codepol/core';
+import { WorkspaceFault } from '@codepol/core';
 
 export type GraphExportFormat = 'json' | 'text' | 'dot' | 'mermaid' | 'graphml';
 
@@ -34,7 +35,7 @@ export function graphExportFormatParse(raw: string | undefined): GraphExportForm
   if ((GRAPH_EXPORT_FORMATS as readonly string[]).includes(lowered)) {
     return lowered as GraphExportFormat;
   }
-  throw new Error(
+  throw new WorkspaceFault(
     `Unknown graph export format "${raw}". Expected one of: ${GRAPH_EXPORT_FORMATS.join(', ')}`,
   );
 }

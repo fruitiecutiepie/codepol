@@ -8,7 +8,9 @@ import type { Plugin } from 'esbuild';
 import {
   configGet,
   configGetFromPath,
+  isErr,
   policyViolationsGetOutputPretty,
+  WorkspaceFault,
 } from '@codepol/core';
 import { policyCheck } from '@codepol/workspace-service';
 
@@ -36,7 +38,10 @@ export function esbuildPluginCreate(options: PolicyPluginOptions = {}): Plugin {
                 : path.resolve(cwd, options.configPath),
             )
           : await configGet(cwd);
-        const { config, configPath } = configResult;
+        if (isErr(configResult)) {
+          throw new WorkspaceFault(configResult.Err.message);
+        }
+        const { config, configPath } = configResult.Ok;
 
         const result = await policyCheck({
           config,
@@ -56,7 +61,7 @@ export function esbuildPluginCreate(options: PolicyPluginOptions = {}): Plugin {
         }
 
         if (result.eslintHasErrors || result.treeViolations.length > 0) {
-          throw new Error(output.join('\n\n') || 'Policy enforcement failed');
+          throw new WorkspaceFault(output.join('\n\n') || 'Policy enforcement failed');
         }
 
         if (options.fix && output.length > 0) {

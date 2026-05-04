@@ -9,7 +9,7 @@ import {
 } from './policyTypes';
 import { ruleMatchesGet } from './policyGet';
 import { policyPluginsGet, pluginGetForRule, type PolicyPluginsMap } from './policyPluginsGet';
-import { Result, Ok, Err, isErr } from '../result/result';
+import { Result, Ok, Err, isErr, isOk, resultFromAsync, resultMessageFromUnknown } from '../result/result';
 import type { ProjectIndex } from '../index/indexQuery';
 import { projectIndexBuild } from '../index/indexBuilder';
 
@@ -128,7 +128,11 @@ export async function policyViolationsGetFromDir(
     return pluginsMapResult;
   }
   const pluginsMap = pluginsMapResult.Ok;
-  const matches = await ruleMatchesGet(policy, dir);
+  const matchesR = await ruleMatchesGet(policy, dir);
+  if (isErr(matchesR)) {
+    return Err(matchesR.Err.message);
+  }
+  const matches = matchesR.Ok;
 
   // Collect all files to be checked
   const allFiles = new Set<string>();
@@ -141,18 +145,17 @@ export async function policyViolationsGetFromDir(
   // Build project index if any plugin requires it
   let projectIndex: ProjectIndex | undefined = options.projectIndex;
   if (!projectIndex && pluginsRequireProjectIndex(pluginsMap) && allFiles.size > 0) {
-    try {
-      const indexResult = await projectIndexBuild({
+    const indexR = await resultFromAsync(() =>
+      projectIndexBuild({
         files: Array.from(allFiles),
         dir,
-      });
-      projectIndex = indexResult.index;
-    } catch (error) {
-      // Log but don't fail - plugins should handle missing index gracefully
-      console.warn(
-        'Failed to build project index:',
-        error instanceof Error ? error.message : String(error)
-      );
+      }),
+    );
+    if (isOk(indexR)) {
+      projectIndex = indexR.Ok.index;
+    } else {
+      // Log but don't fail — plugins should handle missing index gracefully
+      console.warn('Failed to build project index:', resultMessageFromUnknown(indexR.Err));
     }
   }
 

@@ -1,4 +1,5 @@
 import type { SyntaxNode } from 'web-tree-sitter';
+import { WorkspaceFault } from '@codepol/core';
 import {
   nodeToLineColumns,
   parseJsTsSource,
@@ -144,7 +145,7 @@ export function exportSpecifiersGet(
       const aliasNode = specifier.childForFieldName('alias');
       const positionNode = aliasNode ?? localNode;
       if (!localNode || !positionNode) {
-        throw new Error('Malformed export specifier');
+        throw new WorkspaceFault('Malformed export specifier');
       }
       return {
         localName: localNode.text,

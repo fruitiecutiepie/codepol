@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
 import * as esbuild from 'esbuild';
+import { WorkspaceFault, workspaceThrownMessageFromUnknown } from '../../scripts/workspaceFault.mjs';
 
 const production = process.argv.includes('--production');
 const require = createRequire(import.meta.url);
@@ -100,7 +101,7 @@ function wasmAssetsCopy() {
 
   for (const [sourcePath, targetPath] of assets) {
     if (!fs.existsSync(sourcePath)) {
-      throw new Error(`Missing bundle asset: ${sourcePath}`);
+      throw new WorkspaceFault(`Missing bundle asset: ${sourcePath}`);
     }
     fs.copyFileSync(sourcePath, targetPath);
   }
@@ -113,7 +114,7 @@ function daemonBundleValidate(metafile) {
   );
 
   if (runtimeTypescriptInput) {
-    throw new Error(
+    throw new WorkspaceFault(
       `Daemon bundle regression: runtime TypeScript compiler included via ${runtimeTypescriptInput}`,
     );
   }
@@ -187,6 +188,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(error);
+  console.error(workspaceThrownMessageFromUnknown(error));
   process.exitCode = 1;
 });

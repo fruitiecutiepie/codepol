@@ -11,6 +11,7 @@ import { hideBin } from 'yargs/helpers';
 import {
   configGet,
   configGetFromPath,
+  isErr,
   diagnosticsRuntimeSetConfig,
   environmentNameParse,
   environmentNamesList,
@@ -18,6 +19,7 @@ import {
   policyRuleTargetsResolve,
   policyViolationsGetOutputPretty,
   ruleMatchesGet,
+  WorkspaceFault,
   type CodepolConfig,
   type DiagnosticSinkKind,
   type DiagnosticsConfigPatch,
@@ -418,8 +420,8 @@ async function policyPluginsValidateAndPrint(options: CliOptions): Promise<void>
   const policyPluginsResult = await policyPluginsGet(policy, cwd, {
     configPath: options.configPath,
   });
-  if ('Err' in policyPluginsResult) {
-    throw new Error(policyPluginsResult.Err);
+  if (isErr(policyPluginsResult)) {
+    throw new WorkspaceFault(String(policyPluginsResult.Err));
   }
 
   const rulePluginIds = Array.from(policyPluginsResult.Ok.keys()).sort();
@@ -543,7 +545,12 @@ async function main(): Promise<void> {
   const configResult = argv.config
     ? await configGetFromPath(argv.config as string)
     : await configGet(cwd);
-  const { config, configPath } = configResult;
+  if (isErr(configResult)) {
+    console.error(configResult.Err.message);
+    process.exitCode = 1;
+    return;
+  }
+  const { config, configPath } = configResult.Ok;
 
   const { patch: diagnosticsPatch, escalations } = diagnosticsPatchBuild({
     env: argv.env as string | undefined,
@@ -569,13 +576,23 @@ async function main(): Promise<void> {
   }
 
   const policy = config as PolicyFile;
-  const matches = await ruleMatchesGet(policy, cwd);
+  const matchesR = await ruleMatchesGet(policy, cwd);
+  if (isErr(matchesR)) {
+    console.error(matchesR.Err.message);
+    process.exitCode = 1;
+    return;
+  }
+  const matches = matchesR.Ok;
   const files = Array.from(new Set(matches.flatMap((match) => match.files)));
   const patterns = Array.from(
     new Set(
-      policy.rules.flatMap((rule) =>
-        policyRuleTargetsResolve(rule, policy).flatMap((target) => target.files),
-      ),
+      policy.rules.flatMap((rule) => {
+        const targetsR = policyRuleTargetsResolve(rule, policy);
+        if (isErr(targetsR)) {
+          return [];
+        }
+        return targetsR.Ok.flatMap((target) => target.files);
+      }),
     ),
   );
 

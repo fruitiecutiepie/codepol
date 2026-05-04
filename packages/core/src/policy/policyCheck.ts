@@ -40,28 +40,24 @@ export async function policyCheck(options: PolicyCheckOptions): Promise<Result<P
     cwd = options.cwd;
   }
   
-  // Load config: explicit path or auto-discover
-  let config;
-  let resolvedConfigPath: string;
-  try {
-    if (options.configPath) {
-      const resolvedPath = path.isAbsolute(options.configPath)
-        ? options.configPath
-        : path.resolve(cwd, options.configPath);
-      const result = await configGetFromPath(resolvedPath);
-      config = result.config;
-      resolvedConfigPath = result.configPath;
-    } else {
-      const result = await configGet(cwd);
-      config = result.config;
-      resolvedConfigPath = result.configPath;
-    }
-  } catch (error) {
-    return Err(error instanceof Error ? error.message : String(error));
+  const configR = options.configPath
+    ? await configGetFromPath(
+        path.isAbsolute(options.configPath)
+          ? options.configPath
+          : path.resolve(cwd, options.configPath),
+      )
+    : await configGet(cwd);
+  if (isErr(configR)) {
+    return Err(configR.Err.message);
   }
-  
+  const { config, configPath: resolvedConfigPath } = configR.Ok;
+
   const policy = config as PolicyFile;
-  const matches = await ruleMatchesGet(policy, cwd);
+  const matchesR = await ruleMatchesGet(policy, cwd);
+  if (isErr(matchesR)) {
+    return Err(matchesR.Err.message);
+  }
+  const matches = matchesR.Ok;
   const files = Array.from(new Set(matches.flatMap(match => match.files)));
   const treeViolationsResult = await policyViolationsGetFromDir(policy, cwd, {
     configPath: resolvedConfigPath,

@@ -274,6 +274,21 @@ providers = ["biome"]
 `;
 }
 
+function eslintMissingToolRunConfigContentCreate(): string {
+  return `[[plugins]]
+id = "@codepol/plugin"
+source = { kind = "builtin" }
+
+[targets.src]
+language = "typescript"
+files = ["src/**/*.ts"]
+
+[[rules]]
+ruleId = "@codepol/plugin/no-unused-vars"
+targets = ["src"]
+`;
+}
+
 function processPluginConfigContentCreate(
   pluginScriptPath: string,
   options: {
@@ -1292,6 +1307,70 @@ describe('workspace service integration', () => {
       },
       analysisGeneration: 1,
     });
+  });
+
+  it('completes diagnostics and code actions when ESLint-backed rules lack tools.eslint.runs', async () => {
+    const workspaceRoot = tempWorkspaceCreate('codepol-workspace-eslint-misconfig-');
+    createdDirs.push(workspaceRoot);
+    fs.mkdirSync(path.join(workspaceRoot, 'src'), { recursive: true });
+
+    const configPath = path.join(workspaceRoot, 'codepol.toml');
+    fs.writeFileSync(configPath, eslintMissingToolRunConfigContentCreate(), 'utf8');
+
+    const filePath = path.join(workspaceRoot, 'src', 'app.ts');
+    const uri = workspacePathToUri(filePath);
+    fs.writeFileSync(filePath, 'const x = 1;\n', 'utf8');
+
+    const engine = new WorkspaceServiceEngine({});
+    const service = workspaceServiceCreate({ engine });
+    const attached = await clientWorkspaceAttach(service, {
+      rootPath: workspaceRoot,
+      configPath,
+      clientInstanceId: 'eslint-misconfig-client',
+    });
+
+    await expect(
+      service.queryDiagnostics({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        uri,
+      }),
+    ).resolves.toEqual([]);
+
+    await expect(
+      service.queryCodeActions({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+        uri,
+        version: 0,
+        diagnosticIds: [],
+      }),
+    ).resolves.toEqual([]);
+
+    expect(
+      await service.queryIndexStatus({
+        clientSessionId: attached.clientSessionId,
+        workspaceId: attached.workspaceId,
+      }),
+    ).toMatchObject({
+      workspaceId: attached.workspaceId,
+      workspaceInstanceId: attached.workspaceInstanceId,
+      status: 'ready',
+      featureStatus: {
+        diagnostics: {
+          readiness: 'degraded',
+          detail: expect.stringMatching(/ESLint-backed policy rule found without an ESLint tool run/),
+        },
+        codeActions: { readiness: 'ready' },
+      },
+    });
+
+    const eslintScorecard = analyzerScorecardGet(engine, {
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+    }).find((row) => row.analyzerId === 'eslint');
+    expect(eslintScorecard?.status).toBe('failed');
+    expect(eslintScorecard?.issues.some((i) => /tools\.eslint/.test(i))).toBe(true);
   });
 
   it('prefers a native JS/TS rule over a wrapped analyzer for the same rule id', async () => {

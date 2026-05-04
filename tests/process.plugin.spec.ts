@@ -52,8 +52,11 @@ ${ruleBlocks}
 function ruleTargetsGet(policy: PolicyFile): PolicyRuleTargetContext[] {
   const targets: PolicyRuleTargetContext[] = [];
   for (const rule of policy.rules) {
-    const resolvedTargets = policyRuleTargetsResolve(rule, policy);
-    for (const target of resolvedTargets) {
+    const resolvedTargetsR = policyRuleTargetsResolve(rule, policy);
+    if (isErr(resolvedTargetsR)) {
+      continue;
+    }
+    for (const target of resolvedTargetsR.Ok) {
       targets.push({
         ruleId: rule.ruleId,
         description: rule.description,
@@ -184,7 +187,11 @@ targets = ["src"]
       'utf8',
     );
 
-    const { config } = await configGetFromPath(configPath);
+    const cfgR = await configGetFromPath(configPath);
+    if (isErr(cfgR)) {
+      throw new Error(cfgR.Err.message);
+    }
+    const { config } = cfgR.Ok;
     const policy = config as PolicyFile;
     const pluginsResult = await policyPluginsGet(policy, dir, { configPath });
     if (isErr(pluginsResult)) {
@@ -196,7 +203,11 @@ targets = ["src"]
       throw new Error('Expected process plugin fix provider to be available');
     }
 
-    const matches = await ruleMatchesGet(policy, dir);
+    const matchesR = await ruleMatchesGet(policy, dir);
+    if (isErr(matchesR)) {
+      throw new Error(matchesR.Err.message);
+    }
+    const matches = matchesR.Ok;
     const files = Array.from(new Set(matches.flatMap((match) => match.files)));
     await lookup.plugin.pluginRule.capabilities.fixProvider.apply({
       cwd: dir,

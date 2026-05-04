@@ -16,6 +16,11 @@ import type {
   PolicyDiagnosticLocation,
 } from './policyTypes';
 
+import { WorkspaceFault } from '../workspace/workspaceFault';
+import { Result, Ok, Err, resultFrom, isErr, resultMessageFromUnknown } from '../result/result';
+
+// TODO(result-refactor): validators below still throw WorkspaceFault; migrate to Result — see backlog in result.ts.
+
 export const PROCESS_PLUGIN_PROTOCOL_VERSION = 1 as const;
 const PROCESS_PLUGIN_TIMEOUT_DEFAULT_MS = 10_000;
 const PROCESS_PLUGIN_MAX_BUFFER_BYTES = 10 * 1024 * 1024;
@@ -112,6 +117,10 @@ type ProcessInvocationResolved = {
 
 const describeCache = new Map<string, ProcessPluginDescribeResult>();
 
+function faultMessage(err: unknown): string {
+  return err instanceof WorkspaceFault ? err.message : resultMessageFromUnknown(err);
+}
+
 function valueTypeGet(value: unknown): string {
   if (value === null) return 'null';
   if (Array.isArray(value)) return 'array';
@@ -124,21 +133,21 @@ function recordIs(value: unknown): value is Record<string, unknown> {
 
 function recordExpect(value: unknown, pathLabel: string): Record<string, unknown> {
   if (!recordIs(value)) {
-    throw new Error(`Invalid process plugin response at ${pathLabel}: expected object, received ${valueTypeGet(value)}`);
+    throw new WorkspaceFault(`Invalid process plugin response at ${pathLabel}: expected object, received ${valueTypeGet(value)}`);
   }
   return value;
 }
 
 function stringExpect(value: unknown, pathLabel: string): string {
   if (typeof value !== 'string' || value.length === 0) {
-    throw new Error(`Invalid process plugin response at ${pathLabel}: expected non-empty string`);
+    throw new WorkspaceFault(`Invalid process plugin response at ${pathLabel}: expected non-empty string`);
   }
   return value;
 }
 
 function stringArrayExpect(value: unknown, pathLabel: string): string[] {
   if (!Array.isArray(value)) {
-    throw new Error(`Invalid process plugin response at ${pathLabel}: expected array`);
+    throw new WorkspaceFault(`Invalid process plugin response at ${pathLabel}: expected array`);
   }
   return value.map((entry, index) => stringExpect(entry, `${pathLabel}[${index}]`));
 }
@@ -155,14 +164,14 @@ function booleanOptional(value: unknown, pathLabel: string): boolean | undefined
     return undefined;
   }
   if (typeof value !== 'boolean') {
-    throw new Error(`Invalid process plugin response at ${pathLabel}: expected boolean`);
+    throw new WorkspaceFault(`Invalid process plugin response at ${pathLabel}: expected boolean`);
   }
   return value;
 }
 
 function numberExpect(value: unknown, pathLabel: string): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
-    throw new Error(`Invalid process plugin response at ${pathLabel}: expected number`);
+    throw new WorkspaceFault(`Invalid process plugin response at ${pathLabel}: expected number`);
   }
   return value;
 }
@@ -176,7 +185,7 @@ function fixParse(value: unknown, pathLabel: string): PolicyViolationFix | undef
   let edits: PolicyWorkspaceEdit[] | undefined;
   if (record.edits !== undefined) {
     if (!Array.isArray(record.edits)) {
-      throw new Error(`Invalid process plugin response at ${pathLabel}.edits: expected array`);
+      throw new WorkspaceFault(`Invalid process plugin response at ${pathLabel}.edits: expected array`);
     }
     edits = record.edits.map((edit, index) => {
       const editRecord = recordExpect(edit, `${pathLabel}.edits[${index}]`);
@@ -214,7 +223,7 @@ function fixSuggestionParse(value: unknown, pathLabel: string): PolicyFixSuggest
   const record = recordExpect(value, pathLabel);
   const fix = fixParse(record.fix, `${pathLabel}.fix`);
   if (!fix) {
-    throw new Error(`Invalid process plugin response at ${pathLabel}.fix: expected fix object`);
+    throw new WorkspaceFault(`Invalid process plugin response at ${pathLabel}.fix: expected fix object`);
   }
   return {
     message: stringExpect(record.message, `${pathLabel}.message`),
@@ -251,7 +260,7 @@ function violationParse(value: unknown, pathLabel: string): PolicyViolation {
   let relatedLocations: PolicyDiagnosticLocation[] | undefined;
   if (record.relatedLocations !== undefined) {
     if (!Array.isArray(record.relatedLocations)) {
-      throw new Error(
+      throw new WorkspaceFault(
         `Invalid process plugin response at ${pathLabel}.relatedLocations: expected array`,
       );
     }
@@ -283,7 +292,7 @@ function violationParse(value: unknown, pathLabel: string): PolicyViolation {
               fixSuggestionParse(s, `${pathLabel}.suggestions[${index}]`),
             )
           : (() => {
-              throw new Error(
+              throw new WorkspaceFault(
                 `Invalid process plugin response at ${pathLabel}.suggestions: expected array`,
               );
             })(),
@@ -294,7 +303,7 @@ function describeResultParse(value: unknown): ProcessPluginDescribeResult {
   const record = recordExpect(value, 'result');
   const rawRules = record.rules;
   if (!Array.isArray(rawRules)) {
-    throw new Error('Invalid process plugin response at result.rules: expected array');
+    throw new WorkspaceFault('Invalid process plugin response at result.rules: expected array');
   }
   return {
     pluginId: record.pluginId === undefined ? undefined : stringExpect(record.pluginId, 'result.pluginId'),
@@ -320,7 +329,7 @@ function checkResultParse(value: unknown): PolicyViolation[] {
   const record = recordExpect(value, 'result');
   const rawViolations = record.violations;
   if (!Array.isArray(rawViolations)) {
-    throw new Error('Invalid process plugin response at result.violations: expected array');
+    throw new WorkspaceFault('Invalid process plugin response at result.violations: expected array');
   }
   return rawViolations.map((violation, index) => violationParse(violation, `result.violations[${index}]`));
 }
@@ -328,7 +337,7 @@ function checkResultParse(value: unknown): PolicyViolation[] {
 function processSourceResolve(context: ProcessPluginRuntimeContext): ProcessInvocationResolved {
   const source = context.declaration.source;
   if (source.kind !== 'process') {
-    throw new Error(`Plugin ${context.declaration.id} is not configured as a process plugin`);
+    throw new WorkspaceFault(`Plugin ${context.declaration.id} is not configured as a process plugin`);
   }
 
   const baseDir = context.configPath ? path.dirname(context.configPath) : context.cwd;
@@ -361,28 +370,28 @@ function processResponseParse<T>(
   raw: string,
   parseResult: (value: unknown) => T,
 ): T {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw) as unknown;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Failed to parse process plugin JSON response: ${message}`);
+  const parsedR = resultFrom<unknown, unknown>(() => JSON.parse(raw) as unknown);
+  if (isErr(parsedR)) {
+    throw new WorkspaceFault(
+      `Failed to parse process plugin JSON response: ${resultMessageFromUnknown(parsedR.Err)}`,
+    );
   }
+  const parsed = parsedR.Ok;
 
   const record = recordExpect(parsed, 'response');
   const protocolVersion = numberExpect(record.protocolVersion, 'response.protocolVersion');
   if (protocolVersion !== PROCESS_PLUGIN_PROTOCOL_VERSION) {
-    throw new Error(
+    throw new WorkspaceFault(
       `Unsupported process plugin protocol version ${protocolVersion}. ` +
         `Expected ${PROCESS_PLUGIN_PROTOCOL_VERSION}.`
     );
   }
 
   if (record.ok === false) {
-    throw new Error(stringExpect(record.error, 'response.error'));
+    throw new WorkspaceFault(stringExpect(record.error, 'response.error'));
   }
   if (record.ok !== true) {
-    throw new Error('Invalid process plugin response at response.ok: expected boolean');
+    throw new WorkspaceFault('Invalid process plugin response at response.ok: expected boolean');
   }
   return parseResult(record.result);
 }
@@ -391,8 +400,13 @@ function processInvokeSync<T>(
   context: ProcessPluginRuntimeContext,
   request: ProcessPluginRequest,
   parseResult: (value: unknown) => T,
-): T {
-  const resolved = processSourceResolve(context);
+): Result<T, string> {
+  const resolvedR = resultFrom(() => processSourceResolve(context));
+  if (isErr(resolvedR)) {
+    return Err(faultMessage(resolvedR.Err));
+  }
+  const resolved = resolvedR.Ok;
+
   const result = spawnSync(resolved.command, resolved.args, {
     cwd: resolved.cwd,
     env: resolved.env,
@@ -404,7 +418,7 @@ function processInvokeSync<T>(
   });
 
   if (result.error) {
-    throw new Error(
+    return Err(
       `Failed to execute process plugin ${context.declaration.id}: ${result.error.message}`
     );
   }
@@ -413,15 +427,19 @@ function processInvokeSync<T>(
     const stderr = result.stderr.trim();
     const stdout = result.stdout.trim();
     const detail = stderr || stdout || `exit status ${result.status}`;
-    throw new Error(`Process plugin ${context.declaration.id} failed: ${detail}`);
+    return Err(`Process plugin ${context.declaration.id} failed: ${detail}`);
   }
 
   const stdout = result.stdout.trim();
   if (!stdout) {
-    throw new Error(`Process plugin ${context.declaration.id} produced no response`);
+    return Err(`Process plugin ${context.declaration.id} produced no response`);
   }
 
-  return processResponseParse(stdout, parseResult);
+  const parsedR = resultFrom(() => processResponseParse(stdout, parseResult));
+  if (isErr(parsedR)) {
+    return Err(faultMessage(parsedR.Err));
+  }
+  return Ok(parsedR.Ok);
 }
 
 function projectIndexSnapshotOptional(context: PolicyCheckContext): ProjectIndexSnapshot | undefined {
@@ -460,14 +478,19 @@ export function processPluginCacheClear(): void {
 
 export function processPluginDescribeGet(
   context: ProcessPluginRuntimeContext,
-): ProcessPluginDescribeResult {
-  const resolved = processSourceResolve(context);
+): Result<ProcessPluginDescribeResult, string> {
+  const resolvedR = resultFrom(() => processSourceResolve(context));
+  if (isErr(resolvedR)) {
+    return Err(faultMessage(resolvedR.Err));
+  }
+  const resolved = resolvedR.Ok;
+
   const cached = describeCache.get(resolved.cacheKey);
   if (cached) {
-    return cached;
+    return Ok(cached);
   }
 
-  const described = processInvokeSync(
+  const describedR = processInvokeSync(
     context,
     {
       protocolVersion: PROCESS_PLUGIN_PROTOCOL_VERSION,
@@ -476,15 +499,19 @@ export function processPluginDescribeGet(
     },
     describeResultParse,
   );
+  if (isErr(describedR)) {
+    return describedR;
+  }
+  const described = describedR.Ok;
 
   if (described.pluginId && described.pluginId !== context.declaration.id) {
-    throw new Error(
+    return Err(
       `Process plugin ${context.declaration.id} reported mismatched pluginId ${described.pluginId}`
     );
   }
 
   describeCache.set(resolved.cacheKey, described);
-  return described;
+  return Ok(described);
 }
 
 export function processPluginRuleCheck(
@@ -492,7 +519,7 @@ export function processPluginRuleCheck(
   ruleId: string,
   rule: PolicyRule,
   checkContext: PolicyCheckContext,
-): PolicyViolation[] {
+): Result<PolicyViolation[], string> {
   return processInvokeSync(
     context,
     {
@@ -511,8 +538,8 @@ export function processPluginRuleFix(
   context: ProcessPluginRuntimeContext,
   ruleId: string,
   fixContext: FixProviderContext,
-): void {
-  processInvokeSync(
+): Result<void, string> {
+  return processInvokeSync(
     context,
     {
       protocolVersion: PROCESS_PLUGIN_PROTOCOL_VERSION,

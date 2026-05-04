@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { WorkspaceFault } from '../../scripts/workspaceFault.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const extensionRoot = path.resolve(scriptDir, '..');
@@ -32,7 +33,7 @@ function run(command, args, options = {}) {
 
   if (result.status !== 0) {
     const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
-    throw new Error(`${command} ${args.join(' ')} failed${output ? `\n${output}` : ''}`);
+    throw new WorkspaceFault(`${command} ${args.join(' ')} failed${output ? `\n${output}` : ''}`);
   }
 
   return result;
@@ -48,7 +49,7 @@ function sourceManifestRead() {
 
 function bundleOutputsAssert() {
   if (!fs.existsSync(bundleRoot)) {
-    throw new Error(`Missing bundled runtime at ${bundleRoot}. Run the bundle build first.`);
+    throw new WorkspaceFault(`Missing bundled runtime at ${bundleRoot}. Run the bundle build first.`);
   }
 }
 
@@ -93,13 +94,13 @@ function verifyArchive() {
 
   for (const entry of expectedArchivePaths) {
     if (!archiveEntries.has(entry)) {
-      throw new Error(`VSIX is missing expected entry: ${entry}`);
+      throw new WorkspaceFault(`VSIX is missing expected entry: ${entry}`);
     }
   }
 
   for (const entry of archiveEntries) {
     if (entry.startsWith('extension/node_modules/')) {
-      throw new Error(`VSIX unexpectedly contains node_modules content: ${entry}`);
+      throw new WorkspaceFault(`VSIX unexpectedly contains node_modules content: ${entry}`);
     }
   }
 
@@ -111,7 +112,7 @@ function verifyArchive() {
     parsedManifest.contributes?.views?.codepol?.map((view) => view.id) ?? [],
   );
   if (!contributedViewIds.has('codepol.packageTargets')) {
-    throw new Error('VSIX manifest is missing the codepol.packageTargets view contribution.');
+    throw new WorkspaceFault('VSIX manifest is missing the codepol.packageTargets view contribution.');
   }
 }
 
@@ -119,7 +120,7 @@ function packageVsceBinaryResolve() {
   const binaryName = process.platform === 'win32' ? 'vsce.cmd' : 'vsce';
   const binaryPath = path.join(extensionRoot, 'node_modules', '.bin', binaryName);
   if (!fs.existsSync(binaryPath)) {
-    throw new Error(
+    throw new WorkspaceFault(
       `Missing ${binaryName}. Install extension dev dependencies first so @vscode/vsce is available.`,
     );
   }

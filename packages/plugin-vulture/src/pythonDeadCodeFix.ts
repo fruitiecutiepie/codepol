@@ -9,6 +9,7 @@ import {
   isErr,
   parserGetForFile,
   parserParseTrace,
+  WorkspaceFault,
 } from '@codepol/core';
 import type { Diagnostics } from '@codepol/core';
 import { vultureFindingsGet } from './vultureRunner';
@@ -263,7 +264,7 @@ export function pythonDeadCodeFixApply(
 ): string {
   const findingsResult = vultureFindingsGet([filePath], config);
   if (isErr(findingsResult)) {
-    throw new Error(findingsResult.Err);
+    throw new WorkspaceFault(findingsResult.Err);
   }
   const findings = findingsResult.Ok.filter(f => vultureFindingMatchesFile(f.filePath, filePath));
   if (findings.length === 0) {

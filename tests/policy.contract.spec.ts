@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
-import { configGetFromPathSync, policyRuleTargetsResolve } from '@codepol/core';
+import { configGetFromPathSync, isOk, policyRuleTargetsResolve } from '@codepol/core';
 
-const { config } = configGetFromPathSync(path.resolve(__dirname, '..', 'codepol.toml'));
+const configR = configGetFromPathSync(path.resolve(__dirname, '..', 'codepol.toml'));
+if (!isOk(configR)) {
+  throw new Error(configR.Err.message);
+}
+const { config } = configR.Ok;
 
 describe('policy contract', () => {
   it('rule identifiers are unique', () => {
@@ -13,8 +17,10 @@ describe('policy contract', () => {
 
   it('each rule defines at least one target glob', () => {
     for (const rule of config.rules) {
-      const targets = policyRuleTargetsResolve(rule, config);
-      expect(Array.isArray(targets)).toBe(true);
+      const targetsR = policyRuleTargetsResolve(rule, config);
+      expect(isOk(targetsR)).toBe(true);
+      if (!isOk(targetsR)) return;
+      const targets = targetsR.Ok;
       expect(targets.length).toBeGreaterThan(0);
       for (const target of targets) {
         expect(Array.isArray(target.files)).toBe(true);

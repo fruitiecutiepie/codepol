@@ -3,6 +3,7 @@ import {
   isErr,
   parserGetForFile,
   parserParseTrace,
+  WorkspaceFault,
 } from '@codepol/core';
 import type { Diagnostics } from '@codepol/core';
 import type { SyntaxNode, Tree } from 'web-tree-sitter';
@@ -32,6 +33,8 @@ export type LineColumns = LineColumn & {
 const WRAPPER_NODE_TYPES = new Set(['ambient_declaration', 'export_statement']);
 const IMPORT_STATEMENT = 'import_statement';
 
+// TODO(result-refactor): offer Result-returning parse API and migrate callers (moduleSyntax, checks); backlog in packages/core/src/result/result.ts.
+
 export function parseJsTsSource(
   filePath: string,
   source: string,
@@ -39,7 +42,7 @@ export function parseJsTsSource(
 ): ParsedJsTsSource {
   const parserResult = parserGetForFile(filePath);
   if (isErr(parserResult)) {
-    throw new Error(`Parser not available for "${filePath}": ${parserResult.Err}`);
+    throw new WorkspaceFault(`Parser not available for "${filePath}": ${parserResult.Err}`);
   }
 
   const parseDiag = diag

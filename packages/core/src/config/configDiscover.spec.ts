@@ -11,6 +11,7 @@ import {
   configParseFromSource,
 } from './configDiscover';
 import { defineConfig } from './defineConfig';
+import { isErr, isOk } from '../result/result';
 
 describe('configDiscover', () => {
   let testDir: string;
@@ -135,10 +136,14 @@ describe('configDiscover', () => {
   // ==========================================================================
 
   describe('configGet', () => {
-    it('should throw when no config file is found', async () => {
+    it('should return Err when no config file is found', async () => {
       const emptyDir = fs.mkdtempSync(path.join(testDir, 'configget-empty-'));
 
-      await expect(configGet(emptyDir)).rejects.toThrow('No codepol config found');
+      const r = await configGet(emptyDir);
+      expect(isErr(r)).toBe(true);
+      if (isErr(r)) {
+        expect(r.Err.message).toContain('No codepol config found');
+      }
     });
   });
 
@@ -147,10 +152,14 @@ describe('configDiscover', () => {
   // ==========================================================================
 
   describe('configGetFromPath', () => {
-    it('should throw when config file does not exist', async () => {
+    it('should return Err when config file does not exist', async () => {
       const nonExistent = path.join(testDir, 'does-not-exist.toml');
 
-      await expect(configGetFromPath(nonExistent)).rejects.toThrow('Config file not found');
+      const r = await configGetFromPath(nonExistent);
+      expect(isErr(r)).toBe(true);
+      if (isErr(r)) {
+        expect(r.Err.message).toContain('Config file not found');
+      }
     });
   });
 
@@ -159,10 +168,14 @@ describe('configDiscover', () => {
   // ==========================================================================
 
   describe('configGetFromPathSync', () => {
-    it('should throw when config file does not exist', () => {
+    it('should return Err when config file does not exist', () => {
       const nonExistent = path.join(testDir, 'does-not-exist-sync.toml');
 
-      expect(() => configGetFromPathSync(nonExistent)).toThrow('Config file not found');
+      const r = configGetFromPathSync(nonExistent);
+      expect(isErr(r)).toBe(true);
+      if (isErr(r)) {
+        expect(r.Err.message).toContain('Config file not found');
+      }
     });
   });
 
@@ -186,7 +199,10 @@ targets = ["ts-src"]
 `);
 
       configCacheClear();
-      const { config, configPath: resolvedPath } = await configGetFromPath(configPath);
+      const r = await configGetFromPath(configPath);
+      expect(isOk(r)).toBe(true);
+      if (!isOk(r)) return;
+      const { config, configPath: resolvedPath } = r.Ok;
 
       expect(resolvedPath).toBe(configPath);
       expect(config.rules).toHaveLength(1);
@@ -209,7 +225,10 @@ targets = ["ts-src"]
 `);
 
       configCacheClear();
-      const { config, configPath: resolvedPath } = configGetFromPathSync(configPath);
+      const r = configGetFromPathSync(configPath);
+      expect(isOk(r)).toBe(true);
+      if (!isOk(r)) return;
+      const { config, configPath: resolvedPath } = r.Ok;
 
       expect(resolvedPath).toBe(configPath);
       expect(config.rules).toHaveLength(1);
@@ -229,11 +248,16 @@ ruleId = "test-rule"
 targets = ["ts-src"]
 `);
 
-      await expect(configGetFromPath(configPath)).rejects.toThrow('Invalid codepol config');
+      const bad = await configGetFromPath(configPath);
+      expect(isErr(bad)).toBe(true);
+      if (isErr(bad)) {
+        expect(bad.Err.message).toContain('Invalid codepol config');
+      }
     });
 
     it('should parse config text directly from source', () => {
-      const config = configParseFromSource(`
+      const pr = configParseFromSource(
+        `
 [targets.ts-src]
 language = "typescript"
 files = ["src/**/*.ts"]
@@ -241,9 +265,14 @@ files = ["src/**/*.ts"]
 [[rules]]
 ruleId = "test-rule"
 targets = ["ts-src"]
-`, {
-        configPath: '/tmp/codepol.toml',
-      });
+`,
+        {
+          configPath: '/tmp/codepol.toml',
+        },
+      );
+      expect(isOk(pr)).toBe(true);
+      if (!isOk(pr)) return;
+      const config = pr.Ok;
 
       expect(config.targets['ts-src']).toEqual({
         language: 'typescript',
@@ -263,7 +292,8 @@ targets = ["ts-src"]
     });
 
     it('should parse external tool runs from top-level tools', () => {
-      const config = configParseFromSource(`
+      const pr = configParseFromSource(
+        `
 [targets.ts-src]
 language = "typescript"
 files = ["src/**/*.ts"]
@@ -285,9 +315,14 @@ select = ["E", "F"]
 [[rules]]
 ruleId = "test-rule"
 targets = ["ts-src"]
-`, {
-        configPath: '/tmp/codepol.toml',
-      });
+`,
+        {
+          configPath: '/tmp/codepol.toml',
+        },
+      );
+      expect(isOk(pr)).toBe(true);
+      if (!isOk(pr)) return;
+      const config = pr.Ok;
 
       expect(config.tools).toEqual({
         eslint: {
@@ -315,8 +350,8 @@ targets = ["ts-src"]
     });
 
     it('should reject legacy external bridge rules', () => {
-      expect(() =>
-        configParseFromSource(`
+      const pr = configParseFromSource(
+        `
 [targets.ts-src]
 language = "typescript"
 files = ["src/**/*.ts"]
@@ -325,12 +360,17 @@ files = ["src/**/*.ts"]
 ruleId = "@codepol/plugin/eslint"
 targets = ["ts-src"]
 args.configPath = "./eslint.config.mjs"
-`, {
+`,
+        {
           configPath: '/tmp/codepol.toml',
-        }),
-      ).toThrow(
-        'config.rules[0].ruleId: External ESLint bridge rules are no longer supported.',
+        },
       );
+      expect(isErr(pr)).toBe(true);
+      if (isErr(pr)) {
+        expect(pr.Err.message).toContain(
+          'config.rules[0].ruleId: External ESLint bridge rules are no longer supported.',
+        );
+      }
     });
   });
 });

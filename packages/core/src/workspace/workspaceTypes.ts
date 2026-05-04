@@ -8,6 +8,7 @@ import type {
   PolicyDiagnosticLocation,
   PolicyViolation,
 } from '../policy/policyTypes';
+import { WorkspaceFault } from './workspaceFault';
 
 export type WorkspacePosition = {
   line: number;
@@ -1258,7 +1259,7 @@ export function workspacePathToUri(filePath: string): string {
 export function workspaceUriToPath(uri: string): string {
   const parsed = new URL(uri);
   if (parsed.protocol !== 'file:') {
-    throw new Error(`Unsupported workspace URI scheme: ${parsed.protocol}`);
+    throw new WorkspaceFault(`Unsupported workspace URI scheme: ${parsed.protocol}`);
   }
   return fileURLToPath(parsed);
 }

@@ -17,6 +17,7 @@ import {
   parserInit,
   parserRuntimeIsReady,
   pluginModuleRegister,
+  WorkspaceFault,
 } from '@codepol/core';
 
 /** Resolved at runtime from compiled `dist/runtime.js` (CommonJS). */
@@ -84,7 +85,7 @@ async function runtimeLanguageSupportEnsure(): Promise<void> {
   }
   await runtimeParsersInit(runtimes);
   if (!runtimeParsersReady(runtimes)) {
-    throw new Error('Codepol parser runtime was invalidated during initialization.');
+    throw new WorkspaceFault('Codepol parser runtime was invalidated during initialization.');
   }
 }
 
@@ -110,7 +111,7 @@ function packageRootFindFromEntry(moduleEntryPath: string, expectedName: string)
     }
     const parent = path.dirname(dir);
     if (parent === dir) {
-      throw new Error(`Could not find package root for ${expectedName}`);
+      throw new WorkspaceFault(`Could not find package root for ${expectedName}`);
     }
     dir = parent;
   }

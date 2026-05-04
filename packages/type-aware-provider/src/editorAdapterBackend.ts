@@ -3,6 +3,7 @@ import type {
   WorkspaceTypeAwareBridgeProviderRuntime,
   WorkspaceTypeAwareBridgeTransports,
 } from '@codepol/workspace-service';
+import { WorkspaceFault } from '@codepol/core';
 import type { WorkspaceTypeAwareProviderBackend } from './providerBackend';
 import { workspaceTypeAwareBridgeProviderRuntimeNormalize } from './providerBackend';
 
@@ -64,7 +65,7 @@ export async function workspaceTypeAwareEditorAdapterRuntimeResolve(options: {
   if (runtime) {
     return runtime;
   }
-  throw new Error(
+  throw new WorkspaceFault(
     `Editor type-aware backend "${providerModuleId}" must export ` +
       '`workspaceTypeAwareBridgeProviderCreate`, ' +
       '`workspaceTypeAwareBridgeTransportsCreate`, a default factory, a runtime object, or a plain transports object.',

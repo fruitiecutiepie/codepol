@@ -2,6 +2,7 @@ import { Result } from '../result/result';
 import type { ProjectIndex } from '../index/indexQuery';
 import type { ByteRange } from '../index/indexTypes';
 import type { ModuleGraph } from '../index/moduleGraph';
+import { WorkspaceFault } from '../workspace/workspaceFault';
 
 /**
  * Configuration for importing the logger module.
@@ -452,6 +453,8 @@ export type FixProviderContext = {
 
 /**
  * Fix provider capability.
+ *
+ * TODO(result-refactor): consider Result-returning apply (or parallel Err callback) — backlog in ../result/result.ts.
  */
 export type FixProvider = {
   /** Apply fixes for matched files */
@@ -549,7 +552,7 @@ export type CodepolPluginRule = PluginRuleConfig & {
  */
 export function pluginRuleNew(config: PluginRuleConfig): CodepolPluginRule {
   if (config.id.includes('/')) {
-    throw new Error(
+    throw new WorkspaceFault(
       `Rule plugin id "${config.id}" must not contain '/'. ` +
       `The '/' character is reserved for namespacing (e.g., "@scope/plugin/rule-id").`
     );

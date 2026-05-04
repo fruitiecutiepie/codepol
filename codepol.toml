@@ -11,11 +11,6 @@ targets.python-src.exclude = ["**/venv/**", "**/.venv/**", "**/dist/**", "**/nod
 id = "@codepol/plugin"
 source = { kind = "builtin" }
 
-[tools.eslint]
-[[tools.eslint.runs]]
-targets = ["codepol-src"]
-configPath = "./eslint.config.mjs"
-
 [[rules]]
 id = "no-unused-exports"
 ruleId = "@codepol/plugin/no-unused-exports"

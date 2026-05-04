@@ -7,6 +7,7 @@ import {
   type ParserRuntimeState,
   type RegisteredLang,
 } from './parserRuntimeState';
+import { WorkspaceFault } from '../workspace/workspaceFault';
 
 export type Lang = {
   langId: string;
@@ -82,7 +83,7 @@ function fileExtensionsSetForLang(langId: string, extensions: string[]): string[
     const normalised = (trimmed.startsWith('.') ? trimmed : `.${trimmed}`).toLowerCase();
     const existing = state.fileExtensionsToLangId.get(normalised);
     if (existing && existing !== langId) {
-      throw new Error(
+      throw new WorkspaceFault(
         `File extension "${normalised}" is already registered for language "${existing}".`
       );
     }
@@ -96,10 +97,10 @@ export function langAdd(lang: Lang): void {
   const state = parserRuntimeStateGet();
   const langId = lang.langId.trim();
   if (!langId) {
-    throw new Error('Language lang must include a non-empty langId.');
+    throw new WorkspaceFault('Language lang must include a non-empty langId.');
   }
   if (!lang.fileExtensions || lang.fileExtensions.length === 0) {
-    throw new Error(`Language "${langId}" must include at least one file extension.`);
+    throw new WorkspaceFault(`Language "${langId}" must include at least one file extension.`);
   }
 
   let wasmPath = wasmPathGet(`tree-sitter-${langId}`);
@@ -114,7 +115,7 @@ export function langAdd(lang: Lang): void {
       wasmPathRegistryCanonical(existing.wasmPath) === wasmPathCanonical ||
       wasmGrammarFilesContentEqual(existing.wasmPath, wasmPath);
     if (!pathsEquivalent) {
-      throw new Error(
+      throw new WorkspaceFault(
         `Language "${langId}" is already registered with a different wasmPath.`
       );
     }
@@ -133,7 +134,7 @@ export function langAdd(lang: Lang): void {
 
   const normalisedExtensions = fileExtensionsSetForLang(langId, lang.fileExtensions);
   if (normalisedExtensions.length === 0) {
-    throw new Error(`Language "${langId}" must include valid file extensions.`);
+    throw new WorkspaceFault(`Language "${langId}" must include valid file extensions.`);
   }
   const registeredLang: RegisteredLang = {
     langId,
@@ -168,7 +169,7 @@ export function langSet(
     ? langIdOrLanguage as Language
     : language;
   if (!loadedLanguage) {
-    throw new Error('langSet requires a Language instance.');
+    throw new WorkspaceFault('langSet requires a Language instance.');
   }
   state.loadedLanguages.set(langId, loadedLanguage);
 }

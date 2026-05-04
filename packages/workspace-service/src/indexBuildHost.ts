@@ -113,6 +113,7 @@ function workspaceSubprocessIndexBuildHostCreate(
   return {
     build(input) {
       if (input.signal?.aborted) {
+        // TODO(result-refactor): consistent abort signaling (reject vs throw vs Result) — backlog in packages/core/src/result/result.ts.
         return Promise.reject(indexBuildAbortErrorCreate());
       }
       return new Promise<WorkspaceIndexBuildResult>((resolve, reject) => {

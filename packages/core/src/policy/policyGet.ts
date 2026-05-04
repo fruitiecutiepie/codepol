@@ -3,6 +3,8 @@ import path from 'node:path';
 import fg from 'fast-glob';
 import { minimatch } from 'minimatch';
 import type { PolicyFile, PolicyRule, PolicyRuleTarget, RuleMatch } from './policyTypes';
+import { Err, isErr, Ok, type Result } from '../result/result';
+import { WorkspaceFault } from '../workspace/workspaceFault';
 
 const policyCacheStore = new Map<string, PolicyFile>();
 const RULE_MATCH_GLOB_CONCURRENCY = 8;
@@ -80,19 +82,24 @@ export function policyCacheClear(): void {
  * }
  * ```
  */
-export function policyRuleTargetsResolve(rule: PolicyRule, policy: PolicyFile): PolicyRuleTarget[] {
+export function policyRuleTargetsResolve(
+  rule: PolicyRule,
+  policy: PolicyFile
+): Result<PolicyRuleTarget[], WorkspaceFault> {
   const resolved: PolicyRuleTarget[] = [];
   for (const targetName of rule.targets) {
     const namedTarget = policy.targets[targetName];
     if (!namedTarget) {
-      throw new Error(
-        `Rule "${rule.id ?? rule.ruleId}" references target "${targetName}" ` +
-        `which is not defined in policy.targets`
+      return Err(
+        new WorkspaceFault(
+          `Rule "${rule.id ?? rule.ruleId}" references target "${targetName}" ` +
+            `which is not defined in policy.targets`,
+        ),
       );
     }
     resolved.push(namedTarget);
   }
-  return resolved;
+  return Ok(resolved);
 }
 
 /**
@@ -121,14 +128,17 @@ export function policyFileGetChecked(
   policy: PolicyFile,
   filePath: string,
   cwd: string
-): boolean {
+): Result<boolean, WorkspaceFault> {
   const relative = path.relative(cwd, filePath);
   if (globPatternsGetMatchAny(policy.exclude, relative)) {
-    return false;
+    return Ok(false);
   }
   for (const rule of policy.rules) {
-    const targets = policyRuleTargetsResolve(rule, policy);
-    for (const target of targets) {
+    const targetsR = policyRuleTargetsResolve(rule, policy);
+    if (isErr(targetsR)) {
+      return Err(targetsR.Err);
+    }
+    for (const target of targetsR.Ok) {
       if (globPatternsGetMatchAny(target.files, relative)) {
         if (globPatternsGetMatchAny(target.exclude, relative)) {
           continue;
@@ -136,11 +146,11 @@ export function policyFileGetChecked(
         if (!ruleTargetMatchesLanguage(target, relative)) {
           continue;
         }
-        return true;
+        return Ok(true);
       }
     }
   }
-  return false;
+  return Ok(false);
 }
 
 /**
@@ -180,7 +190,10 @@ export function ruleTargetMatchesLanguage(target: PolicyRuleTarget, filePath: st
  * }
  * ```
  */
-export async function ruleMatchesGet(policy: PolicyFile, cwd: string): Promise<RuleMatch[]> {
+export async function ruleMatchesGet(
+  policy: PolicyFile,
+  cwd: string
+): Promise<Result<RuleMatch[], WorkspaceFault>> {
   const matches: RuleMatch[] = [];
   let globalExclude: string[] = [];
   const fileMatchCache = new Map<string, string[]>();
@@ -188,8 +201,11 @@ export async function ruleMatchesGet(policy: PolicyFile, cwd: string): Promise<R
     globalExclude = policy.exclude;
   }
   for (const rule of policy.rules) {
-    const targets = policyRuleTargetsResolve(rule, policy);
-    for (const target of targets) {
+    const targetsR = policyRuleTargetsResolve(rule, policy);
+    if (isErr(targetsR)) {
+      return Err(targetsR.Err);
+    }
+    for (const target of targetsR.Ok) {
       const cacheKey = ruleMatchCacheKeyCreate({
         cwd,
         target,
@@ -211,5 +227,5 @@ export async function ruleMatchesGet(policy: PolicyFile, cwd: string): Promise<R
       matches.push({ rule: rule, target: target, files: filtered });
     }
   }
-  return matches;
+  return Ok(matches);
 }

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
+import { WorkspaceFault } from '@codepol/core';
 import { smokeWorkspaceCreate, type SmokeWorkspace } from '../workspace';
 
 let smokeWorkspace: SmokeWorkspace | undefined;
@@ -41,7 +42,7 @@ async function workspaceOpen(): Promise<void> {
 async function documentOpen(relativePath: string): Promise<vscode.TextEditor> {
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri;
   if (!workspaceRoot) {
-    throw new Error('No workspace folder available for smoke tests.');
+    throw new WorkspaceFault('No workspace folder available for smoke tests.');
   }
 
   const document = await vscode.workspace.openTextDocument(

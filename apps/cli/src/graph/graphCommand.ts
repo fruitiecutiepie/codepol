@@ -6,7 +6,7 @@
  * resolution that graph commands share with `codepol`.
  */
 import type { Argv, CommandModule } from 'yargs';
-import { configGet, configGetFromPath } from '@codepol/core';
+import { configGet, configGetFromPath, isErr } from '@codepol/core';
 import type {
   WorkspaceImpactRadiusDirection,
   WorkspaceSymbolFlowDirection,
@@ -41,10 +41,13 @@ type GraphResolvedConfig = {
 
 async function graphConfigResolve(args: GraphCommonArgs): Promise<GraphResolvedConfig> {
   const cwd = process.cwd();
-  const { configPath } = args.config
-    ? await configGetFromPath(args.config)
-    : await configGet(cwd);
-  return { cwd, configPath };
+  const r = args.config ? await configGetFromPath(args.config) : await configGet(cwd);
+  if (isErr(r)) {
+    console.error(r.Err.message);
+    process.exit(1);
+    return { cwd, configPath: '' };
+  }
+  return { cwd, configPath: r.Ok.configPath };
 }
 
 function graphCommonOptions(yargs: Argv): Argv<GraphCommonArgs> {

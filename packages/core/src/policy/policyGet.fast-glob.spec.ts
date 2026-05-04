@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { isOk } from '../result/result';
 import type { PolicyFile, PolicyRule, PolicyRuleTarget } from './policyTypes';
 
 const fastGlobMock = vi.fn();
@@ -54,7 +55,10 @@ describe('ruleMatchesGet fast-glob behavior', () => {
       ],
     });
 
-    const matches = await ruleMatchesGet(policy, '/workspace');
+    const matchesR = await ruleMatchesGet(policy, '/workspace');
+    expect(isOk(matchesR)).toBe(true);
+    if (!isOk(matchesR)) return;
+    const matches = matchesR.Ok;
 
     expect(matches).toHaveLength(2);
     expect(matches[0]?.files).toEqual(['/workspace/src/a.ts', '/workspace/src/b.tsx']);

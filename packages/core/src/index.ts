@@ -196,6 +196,8 @@ export {
   lintDiagnosticToWorkspaceDiagnostic,
 } from './types';
 
+export { WorkspaceFault, workspaceThrownMessageFromUnknown } from './workspace/workspaceFault';
+
 /** Default ESLint plugin name for codepol rules */
 export const ESLINT_PLUGIN_NAME_DEFAULT = 'codepol';
 
@@ -212,14 +214,16 @@ import type {
   LintSeverity,
 } from './types';
 
-import { resultFrom, isErr } from './result/result';
+import { resultFrom, isErr, Ok, Err, type Result } from './result/result';
 import { policyRuleTargetsResolve } from './policy/policyGet';
 import { policyPluginsGet, pluginGetForRule } from './policy/policyPluginsGet';
 import { configGet, configGetFromPath } from './config/configDiscover';
+import { WorkspaceFault } from './workspace/workspaceFault';
 
 /**
  * Consumer-facing check function type.
- * Returns plain violations array; errors are thrown as exceptions.
+ * Returns a violations array. {@link treeCheckProviderNew} wraps calls with
+ * {@link resultFrom}, so synchronous throws become `Result.Err` at the provider boundary.
  */
 export type TreeCheckFn = (
   rule: PolicyRule,
@@ -252,6 +256,8 @@ export function eslintProviderCreate(config: {
 /**
  * Factory for creating TreeCheckProvider from a plain check function.
  * Wraps the check function with resultFrom to convert exceptions to Result.Err.
+ *
+ * TODO(result-refactor): allow checks that already return Result (avoid double-wrap) — backlog in ./result/result.ts.
  *
  * @example
  * ```typescript
@@ -330,28 +336,32 @@ export function rulePluginLanguagesGet(plugin: CodepolPluginRule): string[] {
 export async function providerRulesConfigGet(
   provider: string,
   configPath?: string
-): Promise<Record<string, unknown>> {
+): Promise<Result<Record<string, unknown>, WorkspaceFault>> {
   const cwd = process.cwd();
-  
-  // Load config: explicit path or auto-discover
-  const { config, configPath: resolvedConfigPath } = configPath
-    ? await configGetFromPath(configPath)
-    : await configGet(cwd);
+
+  const configR = configPath ? await configGetFromPath(configPath) : await configGet(cwd);
+  if (isErr(configR)) {
+    return configR;
+  }
+  const { config, configPath: resolvedConfigPath } = configR.Ok;
   const policy = config;
-  
+
   const pluginsResult = await policyPluginsGet(policy, cwd, {
     configPath: resolvedConfigPath,
   });
   if (isErr(pluginsResult)) {
-    throw new Error(pluginsResult.Err);
+    return Err(new WorkspaceFault(pluginsResult.Err));
   }
   const pluginsMap = pluginsResult.Ok;
 
   // Build rule targets context
   const ruleTargets: PolicyRuleTargetContext[] = [];
   for (const rule of policy.rules) {
-    const resolvedTargets = policyRuleTargetsResolve(rule, policy);
-    for (const target of resolvedTargets) {
+    const resolvedTargetsR = policyRuleTargetsResolve(rule, policy);
+    if (isErr(resolvedTargetsR)) {
+      return Err(resolvedTargetsR.Err);
+    }
+    for (const target of resolvedTargetsR.Ok) {
       ruleTargets.push({
         ruleId: rule.ruleId,
         description: rule.description,
@@ -371,7 +381,7 @@ export async function providerRulesConfigGet(
 
     const lookup = pluginGetForRule(pluginsMap, rule.ruleId);
     if (!lookup) {
-      throw new Error(`No plugin registered for rule ${rule.ruleId}`);
+      return Err(new WorkspaceFault(`No plugin registered for rule ${rule.ruleId}`));
     }
     const { plugin, resolvedId } = lookup;
 
@@ -399,7 +409,7 @@ export async function providerRulesConfigGet(
     const configKey = `${pluginName}/${ruleNameShort}`;
 
     if (rules[configKey]) {
-      throw new Error(`Duplicate rule configuration: ${configKey}`);
+      return Err(new WorkspaceFault(`Duplicate rule configuration: ${configKey}`));
     }
 
     // Get options from provider or use default adapted options
@@ -429,7 +439,7 @@ export async function providerRulesConfigGet(
     rules[configKey] = [severity, options];
   }
 
-  return rules;
+  return Ok(rules);
 }
 
 /**
@@ -437,20 +447,24 @@ export async function providerRulesConfigGet(
  * This is useful for hosts such as ESLint that need concrete rule objects
  * after built-in and process plugin resolution.
  */
-export async function policyPluginRulesGet(configPath?: string): Promise<CodepolPluginRule[]> {
+export async function policyPluginRulesGet(
+  configPath?: string
+): Promise<Result<CodepolPluginRule[], WorkspaceFault>> {
   const cwd = process.cwd();
-  const { config, configPath: resolvedConfigPath } = configPath
-    ? await configGetFromPath(configPath)
-    : await configGet(cwd);
+  const configR = configPath ? await configGetFromPath(configPath) : await configGet(cwd);
+  if (isErr(configR)) {
+    return configR;
+  }
+  const { config, configPath: resolvedConfigPath } = configR.Ok;
 
   const pluginsResult = await policyPluginsGet(config, cwd, {
     configPath: resolvedConfigPath,
   });
   if (isErr(pluginsResult)) {
-    throw new Error(pluginsResult.Err);
+    return Err(new WorkspaceFault(pluginsResult.Err));
   }
 
-  return Array.from(pluginsResult.Ok.values()).map((entry) => entry.pluginRule);
+  return Ok(Array.from(pluginsResult.Ok.values()).map((entry) => entry.pluginRule));
 }
 
 // Policy loading
@@ -616,7 +630,14 @@ export {
   Err,
   isOk,
   isErr,
+  map,
+  mapErr,
+  andThen,
+  unwrapOr,
+  resultAll,
+  resultMessageFromUnknown,
   resultFrom,
+  resultFromAsync,
   resFrom,
   resFromAsync,
 } from './result/result';

@@ -4,6 +4,7 @@
  */
 
 import type { CodepolPluginRule, EslintProviderConfig } from '@codepol/core';
+import { WorkspaceFault } from '@codepol/core';
 import type { ESLint } from 'eslint';
 
 import {
@@ -52,7 +53,7 @@ function pluginRulesNormalize(input: unknown): CodepolPluginRule[] {
       return obj.default as CodepolPluginRule[];
     }
   }
-  throw new Error(
+  throw new WorkspaceFault(
     'eslintPluginCreate expects an array of CodepolPluginRule. ' +
     'If importing from @codepol/plugin, ensure you are using the default export.'
   );

@@ -12,6 +12,7 @@ import {
   typeScriptCallGraphSourceCreate,
   typeScriptTypeHierarchySourceCreate,
 } from '@codepol/typescript-language-bridge';
+import { WorkspaceFault } from '@codepol/core';
 
 const nodeRequire = createRequire(__filename);
 
@@ -257,7 +258,7 @@ export async function workspaceTypeAwareBridgeProviderResolve(
     if (provider) {
       return provider;
     }
-    throw new Error(
+    throw new WorkspaceFault(
       `Type-aware bridge provider "${providerModuleId}" must export ` +
         '`workspaceTypeAwareBridgeProviderCreate`, ' +
         '`workspaceTypeAwareBridgeTransportsCreate`, a default factory, a runtime object, or a plain transports object.',

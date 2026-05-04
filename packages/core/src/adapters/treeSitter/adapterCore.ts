@@ -14,6 +14,7 @@ import { parserGetForLanguage } from '../../parser/parserInit';
 import { isErr } from '../../result/result';
 import type { Diagnostics } from '../../diagnostics/diagnosticsTypes';
 import { diagnosticsRuntimeGet } from '../../diagnostics/diagnosticsRuntimeGlobal';
+import { WorkspaceFault } from '../../workspace/workspaceFault';
 import type {
   SymbolId,
   ScopeId,
@@ -2010,7 +2011,7 @@ function indexFileWithTreeSitter(
   // long-running daemon, aborts the shared tree-sitter module.
   const parserResult = parserGetForLanguage(cfg.language);
   if (isErr(parserResult)) {
-    throw new Error(
+    throw new WorkspaceFault(
       `Parser unavailable for "${file}": ${parserResult.Err}`,
     );
   }

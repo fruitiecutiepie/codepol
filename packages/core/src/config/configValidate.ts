@@ -12,6 +12,8 @@ import type {
   PolicyTargetMap,
   PolicyTools,
 } from '../policy/policyTypes';
+import { andThen, Err, Ok, type Result, resultAll } from '../result/result';
+import { WorkspaceFault } from '../workspace/workspaceFault';
 
 function valueTypeGet(value: unknown): string {
   if (value === null) return 'null';
@@ -23,280 +25,414 @@ function objectIsRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function validationError(path: string, message: string): never {
-  throw new Error(`Invalid codepol config at ${path}: ${message}`);
+function configErr(path: string, message: string): Result<never, WorkspaceFault> {
+  return Err(new WorkspaceFault(`Invalid codepol config at ${path}: ${message}`));
 }
 
-function recordExpect(value: unknown, path: string): Record<string, unknown> {
+function recordExpect(
+  value: unknown,
+  path: string
+): Result<Record<string, unknown>, WorkspaceFault> {
   if (!objectIsRecord(value)) {
-    validationError(path, `expected object, received ${valueTypeGet(value)}`);
+    return configErr(path, `expected object, received ${valueTypeGet(value)}`);
   }
-  return value;
+  return Ok(value);
 }
 
-function stringExpect(value: unknown, path: string): string {
+function stringExpect(value: unknown, path: string): Result<string, WorkspaceFault> {
   if (typeof value !== 'string') {
-    validationError(path, `expected string, received ${valueTypeGet(value)}`);
+    return configErr(path, `expected string, received ${valueTypeGet(value)}`);
   }
   if (value.length === 0) {
-    validationError(path, 'must not be empty');
+    return configErr(path, 'must not be empty');
   }
-  return value;
+  return Ok(value);
 }
 
-function stringOptional(value: unknown, path: string): string | undefined {
+function stringOptional(
+  value: unknown,
+  path: string
+): Result<string | undefined, WorkspaceFault> {
   if (value === undefined) {
-    return undefined;
+    return Ok(undefined);
   }
   return stringExpect(value, path);
 }
 
-function stringArrayExpect(value: unknown, path: string): string[] {
+function stringArrayExpect(value: unknown, path: string): Result<string[], WorkspaceFault> {
   if (!Array.isArray(value)) {
-    validationError(path, `expected array, received ${valueTypeGet(value)}`);
+    return configErr(path, `expected array, received ${valueTypeGet(value)}`);
   }
-  return value.map((entry, index) => stringExpect(entry, `${path}[${index}]`));
+  const parts: Result<string, WorkspaceFault>[] = value.map((entry, index) =>
+    stringExpect(entry, `${path}[${index}]`)
+  );
+  return resultAll(parts);
 }
 
-function stringArrayOptional(value: unknown, path: string): string[] | undefined {
+function stringArrayOptional(
+  value: unknown,
+  path: string
+): Result<string[] | undefined, WorkspaceFault> {
   if (value === undefined) {
-    return undefined;
+    return Ok(undefined);
   }
   return stringArrayExpect(value, path);
 }
 
-function integerOptional(value: unknown, path: string): number | undefined {
+function integerOptional(
+  value: unknown,
+  path: string
+): Result<number | undefined, WorkspaceFault> {
   if (value === undefined) {
-    return undefined;
+    return Ok(undefined);
   }
   if (typeof value !== 'number' || !Number.isInteger(value)) {
-    validationError(path, `expected integer, received ${valueTypeGet(value)}`);
+    return configErr(path, `expected integer, received ${valueTypeGet(value)}`);
   }
   if (value <= 0) {
-    validationError(path, 'must be greater than 0');
+    return configErr(path, 'must be greater than 0');
   }
-  return value;
+  return Ok(value);
 }
 
-function keysAllowed(record: Record<string, unknown>, allowed: string[], path: string): void {
+function keysAllowed(
+  record: Record<string, unknown>,
+  allowed: string[],
+  path: string
+): Result<void, WorkspaceFault> {
   const allowedSet = new Set(allowed);
   for (const key of Object.keys(record)) {
     if (!allowedSet.has(key)) {
-      validationError(path, `unknown key "${key}"`);
+      return configErr(path, `unknown key "${key}"`);
     }
   }
+  return Ok(undefined);
 }
 
-function severityOptional(value: unknown, path: string): LintSeverity | undefined {
+function severityOptional(
+  value: unknown,
+  path: string
+): Result<LintSeverity | undefined, WorkspaceFault> {
   if (value === undefined) {
-    return undefined;
+    return Ok(undefined);
   }
-  const severity = stringExpect(value, path);
-  if (severity !== 'error' && severity !== 'warn' && severity !== 'off') {
-    validationError(path, `expected one of "error", "warn", "off", received "${severity}"`);
-  }
-  return severity;
+  return andThen(stringExpect(value, path), (severity) => {
+    if (severity !== 'error' && severity !== 'warn' && severity !== 'off') {
+      return configErr(path, `expected one of "error", "warn", "off", received "${severity}"`);
+    }
+    return Ok(severity);
+  });
 }
 
-function fixModeOptional(value: unknown, path: string): PolicyRuleFixMode | undefined {
+function fixModeOptional(
+  value: unknown,
+  path: string
+): Result<PolicyRuleFixMode | undefined, WorkspaceFault> {
   if (value === undefined) {
-    return undefined;
+    return Ok(undefined);
   }
-  const mode = stringExpect(value, path);
-  if (mode !== 'on-save' && mode !== 'manual' && mode !== 'never') {
-    validationError(
-      path,
-      `expected one of "on-save", "manual", "never", received "${mode}"`,
+  return andThen(stringExpect(value, path), (mode) => {
+    if (mode !== 'on-save' && mode !== 'manual' && mode !== 'never') {
+      return configErr(
+        path,
+        `expected one of "on-save", "manual", "never", received "${mode}"`,
+      );
+    }
+    return Ok(mode);
+  });
+}
+
+function envOptional(
+  value: unknown,
+  path: string
+): Result<Record<string, string> | undefined, WorkspaceFault> {
+  if (value === undefined) {
+    return Ok(undefined);
+  }
+  return andThen(recordExpect(value, path), (record) => {
+    let combined: Result<Record<string, string>, WorkspaceFault> = Ok({});
+    for (const [key, entry] of Object.entries(record)) {
+      combined = andThen(combined, (env) =>
+        andThen(stringExpect(entry, `${path}.${key}`), (s) => Ok({ ...env, [key]: s }))
+      );
+    }
+    return combined;
+  });
+}
+
+function pluginSourceParse(
+  value: unknown,
+  path: string
+): Result<PolicyPluginSource, WorkspaceFault> {
+  return andThen(recordExpect(value, path), (record) =>
+    andThen(stringExpect(record.kind, `${path}.kind`), (kind): Result<PolicyPluginSource, WorkspaceFault> => {
+      if (kind === 'builtin') {
+        return andThen(keysAllowed(record, ['kind'], path), () => Ok({ kind: 'builtin' }));
+      }
+      if (kind === 'process') {
+        return andThen(
+          keysAllowed(record, ['kind', 'command', 'args', 'cwd', 'env', 'timeoutMs'], path),
+          () =>
+            andThen(stringExpect(record.command, `${path}.command`), (command) =>
+              andThen(stringArrayOptional(record.args, `${path}.args`), (args) =>
+                andThen(stringOptional(record.cwd, `${path}.cwd`), (cwd) =>
+                  andThen(envOptional(record.env, `${path}.env`), (env) =>
+                    andThen(integerOptional(record.timeoutMs, `${path}.timeoutMs`), (timeoutMs) =>
+                      Ok({
+                        kind: 'process',
+                        command,
+                        args,
+                        cwd,
+                        env,
+                        timeoutMs,
+                      })
+                    )
+                  )
+                )
+              )
+            )
+        );
+      }
+      return configErr(`${path}.kind`, `expected "builtin" or "process", received "${kind}"`);
+    })
+  );
+}
+
+function pluginDeclarationParse(
+  value: unknown,
+  path: string
+): Result<PolicyPluginDeclaration, WorkspaceFault> {
+  return andThen(recordExpect(value, path), (record) =>
+    andThen(keysAllowed(record, ['id', 'source'], path), () =>
+      andThen(stringExpect(record.id, `${path}.id`), (id) =>
+        andThen(pluginSourceParse(record.source, `${path}.source`), (source) =>
+          Ok({ id, source })
+        )
+      )
+    )
+  );
+}
+
+function targetParse(value: unknown, path: string): Result<PolicyRuleTarget, WorkspaceFault> {
+  return andThen(recordExpect(value, path), (record) =>
+    andThen(keysAllowed(record, ['language', 'parser', 'files', 'exclude'], path), () =>
+      andThen(stringExpect(record.language, `${path}.language`), (language) =>
+        andThen(stringOptional(record.parser, `${path}.parser`), (parser) =>
+          andThen(stringArrayExpect(record.files, `${path}.files`), (files) =>
+            andThen(stringArrayOptional(record.exclude, `${path}.exclude`), (exclude) =>
+              Ok({ language, parser, files, exclude })
+            )
+          )
+        )
+      )
+    )
+  );
+}
+
+function targetsParse(value: unknown, path: string): Result<PolicyTargetMap, WorkspaceFault> {
+  return andThen(recordExpect(value, path), (record) => {
+    const entries = Object.entries(record).map(([name, target]) =>
+      andThen(targetParse(target, `${path}.${name}`), (t) => Ok([name, t] as const))
     );
-  }
-  return mode;
+    return andThen(resultAll(entries), (pairs) => {
+      const targets: PolicyTargetMap = {};
+      for (const [name, t] of pairs) {
+        targets[name] = t;
+      }
+      return Ok(targets);
+    });
+  });
 }
 
-function envOptional(value: unknown, path: string): Record<string, string> | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  const record = recordExpect(value, path);
-  const env: Record<string, string> = {};
-  for (const [key, entry] of Object.entries(record)) {
-    env[key] = stringExpect(entry, `${path}.${key}`);
-  }
-  return env;
-}
-
-function pluginSourceParse(value: unknown, path: string): PolicyPluginSource {
-  const record = recordExpect(value, path);
-  const kind = stringExpect(record.kind, `${path}.kind`);
-
-  if (kind === 'builtin') {
-    keysAllowed(record, ['kind'], path);
-    return { kind: 'builtin' };
-  }
-
-  if (kind === 'process') {
-    keysAllowed(record, ['kind', 'command', 'args', 'cwd', 'env', 'timeoutMs'], path);
-    return {
-      kind: 'process',
-      command: stringExpect(record.command, `${path}.command`),
-      args: stringArrayOptional(record.args, `${path}.args`),
-      cwd: stringOptional(record.cwd, `${path}.cwd`),
-      env: envOptional(record.env, `${path}.env`),
-      timeoutMs: integerOptional(record.timeoutMs, `${path}.timeoutMs`),
-    };
-  }
-
-  validationError(`${path}.kind`, `expected "builtin" or "process", received "${kind}"`);
-}
-
-function pluginDeclarationParse(value: unknown, path: string): PolicyPluginDeclaration {
-  const record = recordExpect(value, path);
-  keysAllowed(record, ['id', 'source'], path);
-  return {
-    id: stringExpect(record.id, `${path}.id`),
-    source: pluginSourceParse(record.source, `${path}.source`),
-  };
-}
-
-function targetParse(value: unknown, path: string): PolicyRuleTarget {
-  const record = recordExpect(value, path);
-  keysAllowed(record, ['language', 'parser', 'files', 'exclude'], path);
-  return {
-    language: stringExpect(record.language, `${path}.language`),
-    parser: stringOptional(record.parser, `${path}.parser`),
-    files: stringArrayExpect(record.files, `${path}.files`),
-    exclude: stringArrayOptional(record.exclude, `${path}.exclude`),
-  };
-}
-
-function targetsParse(value: unknown, path: string): PolicyTargetMap {
-  const record = recordExpect(value, path);
-  const targets: PolicyTargetMap = {};
-  for (const [name, target] of Object.entries(record)) {
-    targets[name] = targetParse(target, `${path}.${name}`);
-  }
-  return targets;
-}
-
-function ruleParse(value: unknown, path: string): PolicyRule {
-  const record = recordExpect(value, path);
-  keysAllowed(
-    record,
-    ['id', 'ruleId', 'description', 'severity', 'providers', 'args', 'targets', 'fix'],
-    path,
+function ruleParse(value: unknown, path: string): Result<PolicyRule, WorkspaceFault> {
+  return andThen(recordExpect(value, path), (record) =>
+    andThen(
+      keysAllowed(
+        record,
+        ['id', 'ruleId', 'description', 'severity', 'providers', 'args', 'targets', 'fix'],
+        path,
+      ),
+      () =>
+        andThen(stringOptional(record.id, `${path}.id`), (id) =>
+          andThen(stringExpect(record.ruleId, `${path}.ruleId`), (ruleId) =>
+            andThen(stringOptional(record.description, `${path}.description`), (description) =>
+              andThen(severityOptional(record.severity, `${path}.severity`), (severity) =>
+                andThen(stringArrayOptional(record.providers, `${path}.providers`), (providers) =>
+                  andThen(stringArrayExpect(record.targets, `${path}.targets`), (targets) =>
+                    andThen(fixModeOptional(record.fix, `${path}.fix`), (fix) =>
+                      Ok({
+                        id,
+                        ruleId,
+                        description,
+                        severity,
+                        providers,
+                        args: record.args,
+                        targets,
+                        fix,
+                      })
+                    )
+                  )
+                )
+              )
+            )
+          )
+        )
+    )
   );
-  return {
-    id: stringOptional(record.id, `${path}.id`),
-    ruleId: stringExpect(record.ruleId, `${path}.ruleId`),
-    description: stringOptional(record.description, `${path}.description`),
-    severity: severityOptional(record.severity, `${path}.severity`),
-    providers: stringArrayOptional(record.providers, `${path}.providers`),
-    args: record.args,
-    targets: stringArrayExpect(record.targets, `${path}.targets`),
-    fix: fixModeOptional(record.fix, `${path}.fix`),
-  };
 }
 
-function rulesParse(value: unknown, path: string): PolicyRule[] {
+function rulesParse(value: unknown, path: string): Result<PolicyRule[], WorkspaceFault> {
   if (!Array.isArray(value)) {
-    validationError(path, `expected array, received ${valueTypeGet(value)}`);
+    return configErr(path, `expected array, received ${valueTypeGet(value)}`);
   }
-  return value.map((rule, index) => ruleParse(rule, `${path}[${index}]`));
+  return resultAll(value.map((rule, index) => ruleParse(rule, `${path}[${index}]`)));
 }
 
-function eslintRunParse(value: unknown, path: string): PolicyEslintRun {
-  const record = recordExpect(value, path);
-  keysAllowed(record, ['targets', 'configPath'], path);
-  return {
-    targets: stringArrayExpect(record.targets, `${path}.targets`),
-    configPath: stringExpect(record.configPath, `${path}.configPath`),
-  };
-}
-
-function biomeRunParse(value: unknown, path: string): PolicyBiomeRun {
-  const record = recordExpect(value, path);
-  keysAllowed(record, ['targets', 'biomeBin', 'configPath', 'extraArgs'], path);
-  return {
-    targets: stringArrayExpect(record.targets, `${path}.targets`),
-    biomeBin: stringOptional(record.biomeBin, `${path}.biomeBin`),
-    configPath: stringOptional(record.configPath, `${path}.configPath`),
-    extraArgs: stringArrayOptional(record.extraArgs, `${path}.extraArgs`),
-  };
-}
-
-function ruffRunParse(value: unknown, path: string): PolicyRuffRun {
-  const record = recordExpect(value, path);
-  keysAllowed(
-    record,
-    ['targets', 'ruffBin', 'select', 'ignore', 'configPath', 'fixable', 'extraArgs'],
-    path,
+function eslintRunParse(value: unknown, path: string): Result<PolicyEslintRun, WorkspaceFault> {
+  return andThen(recordExpect(value, path), (record) =>
+    andThen(keysAllowed(record, ['targets', 'configPath'], path), () =>
+      andThen(stringArrayExpect(record.targets, `${path}.targets`), (targets) =>
+        andThen(stringExpect(record.configPath, `${path}.configPath`), (configPath) =>
+          Ok({ targets, configPath })
+        )
+      )
+    )
   );
-  return {
-    targets: stringArrayExpect(record.targets, `${path}.targets`),
-    ruffBin: stringOptional(record.ruffBin, `${path}.ruffBin`),
-    select: stringArrayOptional(record.select, `${path}.select`),
-    ignore: stringArrayOptional(record.ignore, `${path}.ignore`),
-    configPath: stringOptional(record.configPath, `${path}.configPath`),
-    fixable: stringArrayOptional(record.fixable, `${path}.fixable`),
-    extraArgs: stringArrayOptional(record.extraArgs, `${path}.extraArgs`),
-  };
+}
+
+function biomeRunParse(value: unknown, path: string): Result<PolicyBiomeRun, WorkspaceFault> {
+  return andThen(recordExpect(value, path), (record) =>
+    andThen(
+      keysAllowed(record, ['targets', 'biomeBin', 'configPath', 'extraArgs'], path),
+      () =>
+        andThen(stringArrayExpect(record.targets, `${path}.targets`), (targets) =>
+          andThen(stringOptional(record.biomeBin, `${path}.biomeBin`), (biomeBin) =>
+            andThen(stringOptional(record.configPath, `${path}.configPath`), (configPath) =>
+              andThen(stringArrayOptional(record.extraArgs, `${path}.extraArgs`), (extraArgs) =>
+                Ok({ targets, biomeBin, configPath, extraArgs })
+              )
+            )
+          )
+        )
+    )
+  );
+}
+
+function ruffRunParse(value: unknown, path: string): Result<PolicyRuffRun, WorkspaceFault> {
+  return andThen(recordExpect(value, path), (record) =>
+    andThen(
+      keysAllowed(
+        record,
+        ['targets', 'ruffBin', 'select', 'ignore', 'configPath', 'fixable', 'extraArgs'],
+        path,
+      ),
+      () =>
+        andThen(stringArrayExpect(record.targets, `${path}.targets`), (targets) =>
+          andThen(stringOptional(record.ruffBin, `${path}.ruffBin`), (ruffBin) =>
+            andThen(stringArrayOptional(record.select, `${path}.select`), (select) =>
+              andThen(stringArrayOptional(record.ignore, `${path}.ignore`), (ignore) =>
+                andThen(stringOptional(record.configPath, `${path}.configPath`), (configPath) =>
+                  andThen(stringArrayOptional(record.fixable, `${path}.fixable`), (fixable) =>
+                    andThen(stringArrayOptional(record.extraArgs, `${path}.extraArgs`), (extraArgs) =>
+                      Ok({
+                        targets,
+                        ruffBin,
+                        select,
+                        ignore,
+                        configPath,
+                        fixable,
+                        extraArgs,
+                      })
+                    )
+                  )
+                )
+              )
+            )
+          )
+        )
+    )
+  );
 }
 
 function toolRunsParse<T>(
   value: unknown,
   path: string,
-  runParse: (value: unknown, path: string) => T,
-): T[] {
+  runParse: (value: unknown, path: string) => Result<T, WorkspaceFault>
+): Result<T[], WorkspaceFault> {
   if (!Array.isArray(value)) {
-    validationError(path, `expected array, received ${valueTypeGet(value)}`);
+    return configErr(path, `expected array, received ${valueTypeGet(value)}`);
   }
-  return value.map((run, index) => runParse(run, `${path}[${index}]`));
+  return resultAll(value.map((run, index) => runParse(run, `${path}[${index}]`)));
 }
 
-function eslintToolParse(value: unknown, path: string): NonNullable<PolicyTools['eslint']> {
-  const record = recordExpect(value, path);
-  keysAllowed(record, ['runs'], path);
-  return {
-    runs: toolRunsParse(record.runs, `${path}.runs`, eslintRunParse),
-  };
+function eslintToolParse(
+  value: unknown,
+  path: string
+): Result<NonNullable<PolicyTools['eslint']>, WorkspaceFault> {
+  return andThen(recordExpect(value, path), (record) =>
+    andThen(keysAllowed(record, ['runs'], path), () =>
+      andThen(toolRunsParse(record.runs, `${path}.runs`, eslintRunParse), (runs) => Ok({ runs }))
+    )
+  );
 }
 
-function biomeToolParse(value: unknown, path: string): NonNullable<PolicyTools['biome']> {
-  const record = recordExpect(value, path);
-  keysAllowed(record, ['runs'], path);
-  return {
-    runs: toolRunsParse(record.runs, `${path}.runs`, biomeRunParse),
-  };
+function biomeToolParse(
+  value: unknown,
+  path: string
+): Result<NonNullable<PolicyTools['biome']>, WorkspaceFault> {
+  return andThen(recordExpect(value, path), (record) =>
+    andThen(keysAllowed(record, ['runs'], path), () =>
+      andThen(toolRunsParse(record.runs, `${path}.runs`, biomeRunParse), (runs) => Ok({ runs }))
+    )
+  );
 }
 
-function ruffToolParse(value: unknown, path: string): NonNullable<PolicyTools['ruff']> {
-  const record = recordExpect(value, path);
-  keysAllowed(record, ['runs'], path);
-  return {
-    runs: toolRunsParse(record.runs, `${path}.runs`, ruffRunParse),
-  };
+function ruffToolParse(
+  value: unknown,
+  path: string
+): Result<NonNullable<PolicyTools['ruff']>, WorkspaceFault> {
+  return andThen(recordExpect(value, path), (record) =>
+    andThen(keysAllowed(record, ['runs'], path), () =>
+      andThen(toolRunsParse(record.runs, `${path}.runs`, ruffRunParse), (runs) => Ok({ runs }))
+    )
+  );
 }
 
-function toolsParse(value: unknown, path: string): PolicyTools | undefined {
+function toolsParse(value: unknown, path: string): Result<PolicyTools | undefined, WorkspaceFault> {
   if (value === undefined) {
-    return undefined;
+    return Ok(undefined);
   }
-  const record = recordExpect(value, path);
-  keysAllowed(record, ['eslint', 'biome', 'ruff'], path);
-  return {
-    eslint: record.eslint === undefined ? undefined : eslintToolParse(record.eslint, `${path}.eslint`),
-    biome: record.biome === undefined ? undefined : biomeToolParse(record.biome, `${path}.biome`),
-    ruff: record.ruff === undefined ? undefined : ruffToolParse(record.ruff, `${path}.ruff`),
-  };
+  return andThen(recordExpect(value, path), (record) =>
+    andThen(keysAllowed(record, ['eslint', 'biome', 'ruff'], path), () =>
+      andThen(
+        record.eslint === undefined
+          ? Ok(undefined)
+          : eslintToolParse(record.eslint, `${path}.eslint`),
+        (eslint) =>
+          andThen(
+            record.biome === undefined ? Ok(undefined) : biomeToolParse(record.biome, `${path}.biome`),
+            (biome) =>
+              andThen(
+                record.ruff === undefined ? Ok(undefined) : ruffToolParse(record.ruff, `${path}.ruff`),
+                (ruff) => Ok({ eslint, biome, ruff })
+              )
+          )
+      )
+    )
+  );
 }
 
-function pluginsParse(value: unknown, path: string): PolicyPluginDeclaration[] | undefined {
+function pluginsParse(
+  value: unknown,
+  path: string
+): Result<PolicyPluginDeclaration[] | undefined, WorkspaceFault> {
   if (value === undefined) {
-    return undefined;
+    return Ok(undefined);
   }
   if (!Array.isArray(value)) {
-    validationError(path, `expected array, received ${valueTypeGet(value)}`);
+    return configErr(path, `expected array, received ${valueTypeGet(value)}`);
   }
-  return value.map((plugin, index) => pluginDeclarationParse(plugin, `${path}[${index}]`));
+  return resultAll(value.map((plugin, index) => pluginDeclarationParse(plugin, `${path}[${index}]`)));
 }
 
 const ESLINT_CONFIG_PATH_MIGRATION_MESSAGE =
@@ -339,30 +475,44 @@ const LEGACY_EXTERNAL_TOOL_RULE_MIGRATIONS = new Map<string, string>([
   ],
 ]);
 
-function legacyExternalToolRulesValidate(rules: PolicyRule[]): void {
+function legacyExternalToolRulesValidate(
+  rules: PolicyRule[]
+): Result<void, WorkspaceFault> {
   for (const [index, rule] of rules.entries()) {
     const message = LEGACY_EXTERNAL_TOOL_RULE_MIGRATIONS.get(rule.ruleId);
     if (message) {
-      validationError(`config.rules[${index}].ruleId`, message);
+      return configErr(`config.rules[${index}].ruleId`, message);
     }
   }
+  return Ok(undefined);
 }
 
-export function configValidate(raw: unknown): CodepolConfig {
-  const record = recordExpect(raw, 'config');
-  if ('eslintConfigPath' in record) {
-    validationError('config.eslintConfigPath', ESLINT_CONFIG_PATH_MIGRATION_MESSAGE);
-  }
-  keysAllowed(record, ['targets', 'rules', 'exclude', 'plugins', 'tools'], 'config');
-
-  const config: CodepolConfig = {
-    targets: targetsParse(record.targets, 'config.targets'),
-    rules: rulesParse(record.rules, 'config.rules'),
-    exclude: stringArrayOptional(record.exclude, 'config.exclude'),
-    plugins: pluginsParse(record.plugins, 'config.plugins'),
-    tools: toolsParse(record.tools, 'config.tools'),
-  };
-  legacyExternalToolRulesValidate(config.rules);
-
-  return config;
+export function configValidate(raw: unknown): Result<CodepolConfig, WorkspaceFault> {
+  return andThen(recordExpect(raw, 'config'), (record) => {
+    if ('eslintConfigPath' in record) {
+      return configErr('config.eslintConfigPath', ESLINT_CONFIG_PATH_MIGRATION_MESSAGE);
+    }
+    return andThen(
+      keysAllowed(record, ['targets', 'rules', 'exclude', 'plugins', 'tools'], 'config'),
+      () =>
+        andThen(targetsParse(record.targets, 'config.targets'), (targets) =>
+          andThen(rulesParse(record.rules, 'config.rules'), (rules) =>
+            andThen(stringArrayOptional(record.exclude, 'config.exclude'), (exclude) =>
+              andThen(pluginsParse(record.plugins, 'config.plugins'), (plugins) =>
+                andThen(toolsParse(record.tools, 'config.tools'), (tools) => {
+                  const config: CodepolConfig = {
+                    targets,
+                    rules,
+                    exclude,
+                    plugins,
+                    tools,
+                  };
+                  return andThen(legacyExternalToolRulesValidate(config.rules), () => Ok(config));
+                })
+              )
+            )
+          )
+        )
+    );
+  });
 }

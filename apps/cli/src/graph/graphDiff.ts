@@ -30,6 +30,7 @@ import type {
   WorkspaceDependencyDiffResult,
   WorkspaceDependencyGraphResult,
 } from '@codepol/core';
+import { WorkspaceFault } from '@codepol/core';
 import { graphWorkspaceSessionCreate } from './graphWorkspaceResolve';
 import {
   graphJsonStringify,
@@ -52,7 +53,7 @@ export async function graphDiffRun(options: GraphDiffOptions): Promise<number> {
   const format: GraphOutputFormat = graphOutputFormatParse(options.format);
 
   if (options.baselineLabel !== undefined && options.baselineFile !== undefined) {
-    throw new Error('Specify only one of --baseline-label or --baseline-file');
+    throw new WorkspaceFault('Specify only one of --baseline-label or --baseline-file');
   }
 
   let baselineGraph: WorkspaceDependencyGraphResult | undefined;
@@ -101,7 +102,7 @@ function graphDiffBaselineFileLoad(filePath: string): WorkspaceDependencyGraphRe
   try {
     raw = fs.readFileSync(filePath, 'utf8');
   } catch (error) {
-    throw new Error(
+    throw new WorkspaceFault(
       `Failed to read baseline file ${filePath}: ${
         error instanceof Error ? error.message : String(error)
       }`,
@@ -111,7 +112,7 @@ function graphDiffBaselineFileLoad(filePath: string): WorkspaceDependencyGraphRe
   try {
     parsed = JSON.parse(raw);
   } catch (error) {
-    throw new Error(
+    throw new WorkspaceFault(
       `Failed to parse baseline file ${filePath} as JSON: ${
         error instanceof Error ? error.message : String(error)
       }`,
@@ -125,7 +126,7 @@ function graphDiffBaselinePayloadNormalize(
   filePath: string,
 ): WorkspaceDependencyGraphResult {
   if (!payload || typeof payload !== 'object') {
-    throw new Error(`Baseline file ${filePath} is not a JSON object`);
+    throw new WorkspaceFault(`Baseline file ${filePath} is not a JSON object`);
   }
   const candidate = payload as Partial<GraphSnapshot> & Partial<WorkspaceDependencyGraphResult>;
 
@@ -159,7 +160,7 @@ function graphDiffBaselinePayloadNormalize(
     return candidate as WorkspaceDependencyGraphResult;
   }
 
-  throw new Error(
+  throw new WorkspaceFault(
     `Baseline file ${filePath} is not a GraphSnapshot or WorkspaceDependencyGraphResult payload`,
   );
 }

@@ -13,7 +13,10 @@ import {
   configParseFromSource,
   crossFileResolveForFile,
   indexStoreNew,
+  Err,
   isErr,
+  isOk,
+  Ok,
   diagnosticsRuntimeGet,
   lintDiagnosticToWorkspaceDiagnostic,
   moduleDeadModulesCompute,
@@ -51,6 +54,8 @@ import {
   workspacePackageRecordFromManifestSource,
   workspacePackageRecordsDiscover,
   workspaceUriToPath,
+  WorkspaceFault,
+  workspaceThrownMessageFromUnknown,
   type ClientSessionId,
   type CodepolConfig,
   type PolicyBiomeRun,
@@ -211,6 +216,7 @@ export {
   type DaemonSelfWatchEntryFileOptions,
 } from './daemonSelfWatch';
 export { builtinPluginsRefresh, ensureWorkspaceRuntimeReady } from './runtime';
+export { WorkspaceFault, workspaceThrownMessageFromUnknown } from '@codepol/core';
 export {
   workspaceIndexBuildHostCreate,
   type WorkspaceIndexBuildHost,
@@ -1373,7 +1379,12 @@ async function workspaceContextRefreshFromDisk(workspace: WorkspaceState): Promi
     return;
   }
   configCacheClear();
-  const { config, configPath: resolvedConfigPath } = await configGetFromPath(workspace.configPath);
+  const cfgR = await configGetFromPath(workspace.configPath);
+  if (isErr(cfgR)) {
+    workspace.configDirty = false;
+    return;
+  }
+  const { config, configPath: resolvedConfigPath } = cfgR.Ok;
   workspace.config = config;
   workspace.configPath = resolvedConfigPath;
   workspace.externalToolConfigs = externalToolConfigsResolve(
@@ -1427,7 +1438,7 @@ function workspaceGet(
 ): WorkspaceState {
   const workspace = workspaces.get(workspaceId);
   if (!workspace) {
-    throw new Error(`Unknown workspace: ${workspaceId}`);
+    throw new WorkspaceFault(`Unknown workspace: ${workspaceId}`);
   }
   return workspace;
 }
@@ -1438,7 +1449,7 @@ function clientSessionGet(
 ): ClientSessionState {
   const clientSession = clientSessions.get(clientSessionId);
   if (!clientSession) {
-    throw new Error(`Unknown client session: ${clientSessionId}`);
+    throw new WorkspaceFault(`Unknown client session: ${clientSessionId}`);
   }
   return clientSession;
 }
@@ -1457,7 +1468,7 @@ function workspaceSessionGet(
   const clientSession = clientSessionGet(clientSessions, clientSessionId);
   const workspaceSession = clientSession.workspaces.get(workspaceId);
   if (!workspaceSession) {
-    throw new Error(
+    throw new WorkspaceFault(
       `Client session ${clientSessionId} is not attached to workspace ${workspaceId}`,
     );
   }
@@ -1578,13 +1589,17 @@ async function externalToolRunMatchesCollect(
   if (runs.length === 0) {
     return [];
   }
-  return ruleMatchesGet(
+  const r = await ruleMatchesGet(
     {
       ...policy,
       rules: runs.map((run) => run.rule),
     },
     cwd,
   );
+  if (isErr(r)) {
+    return [];
+  }
+  return r.Ok;
 }
 
 function lintProviderEntryReportRuleIdsCollect(entries: LintProviderEntry[]): string[] {
@@ -1883,11 +1898,16 @@ function externalToolConfigsResolve(
   return entries;
 }
 
-function policyRuleTargetsGet(policy: PolicyFile): PolicyRuleTargetContext[] {
+function policyRuleTargetsGet(
+  policy: PolicyFile
+): Result<PolicyRuleTargetContext[], WorkspaceFault> {
   const targets: PolicyRuleTargetContext[] = [];
   for (const rule of policy.rules) {
-    const resolvedTargets = policyRuleTargetsResolve(rule, policy);
-    for (const target of resolvedTargets) {
+    const resolvedTargetsR = policyRuleTargetsResolve(rule, policy);
+    if (isErr(resolvedTargetsR)) {
+      return Err(resolvedTargetsR.Err);
+    }
+    for (const target of resolvedTargetsR.Ok) {
       targets.push({
         ruleId: rule.ruleId,
         description: rule.description,
@@ -1896,7 +1916,7 @@ function policyRuleTargetsGet(policy: PolicyFile): PolicyRuleTargetContext[] {
       });
     }
   }
-  return targets;
+  return Ok(targets);
 }
 
 function eslintConfigGet(
@@ -1928,7 +1948,11 @@ function eslintConfigGet(
     const pluginName = eslintConfig.pluginName ?? ESLINT_PLUGIN_NAME_DEFAULT;
     const configKey = `${pluginName}/${ruleNameShort}`;
     if (rules[configKey]) {
-      throw new Error(`Duplicate ESLint rule configuration detected: ${configKey}.`);
+      diagnosticsRuntimeGet().getDiagnostics('workspace.analyzer').warn(
+        'eslint.duplicate_rule_configuration_skipped',
+        { configKey, ruleId: entry.ruleId },
+      );
+      continue;
     }
     const options =
       eslintConfig.ruleOptions?.({
@@ -2481,8 +2505,11 @@ function workspaceLintRuleSummariesStaticBuild(input: {
     const state = workspaceLintRuleSummaryBuilderStateGet(states, lookup.resolvedId);
     state.severities.add(rule.severity ?? 'error');
 
-    const targets = policyRuleTargetsResolve(rule, input.policy);
-    for (const target of targets) {
+    const targetsR = policyRuleTargetsResolve(rule, input.policy);
+    if (isErr(targetsR)) {
+      continue;
+    }
+    for (const target of targetsR.Ok) {
       for (const pattern of target.files) {
         state.targetPatterns.add(pattern);
       }
@@ -4222,19 +4249,17 @@ function workspaceConfigTargetRenameRegistryResolve(
   }
 
   const source = workspaceSourceGet(state, workspace.configPath);
-  let config: CodepolConfig;
-  try {
-    config = configParseFromSource(source, {
-      configPath: workspace.configPath,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+  const configR = configParseFromSource(source, {
+    configPath: workspace.configPath,
+  });
+  if (isErr(configR)) {
     return {
       ok: false,
       code: 'unsupported_context',
-      message: `Active Codepol config source is not parseable: ${message}`,
+      message: `Active Codepol config source is not parseable: ${configR.Err.message}`,
     };
   }
+  const config = configR.Ok;
 
   if (!Object.prototype.hasOwnProperty.call(config.targets, targetName)) {
     return {
@@ -6617,7 +6642,7 @@ export function workspaceDocumentVersionValidate(
   if (!document || document.version === input.documentVersion) {
     return;
   }
-  throw new Error(
+  throw new WorkspaceFault(
     `Document version mismatch for ${input.uri}: expected ${document.version}, received ${input.documentVersion}`,
   );
 }
@@ -6634,7 +6659,7 @@ export function workspaceAnalysisGenerationValidate(
   if (state.analysisGeneration === input.analysisGeneration) {
     return;
   }
-  throw new Error(
+  throw new WorkspaceFault(
     `Analysis generation mismatch: expected ${state.analysisGeneration}, received ${input.analysisGeneration}`,
   );
 }
@@ -6876,7 +6901,7 @@ async function workspaceIndexGetOrBuild(input: {
   }
 
   if (!indexState) {
-    throw new Error('Workspace index unavailable');
+    throw new WorkspaceFault('Workspace index unavailable');
   }
   const indexedFiles = new Set(indexState.files);
   let updated = false;
@@ -7939,7 +7964,12 @@ async function workspaceWarmCacheSnapshotRestore(input: {
       input.workspace,
       currentAnalyzerLintProviderEntries,
     );
-    const matches = await ruleMatchesGet(policy, input.workspace.rootPath);
+    const matchesR = await ruleMatchesGet(policy, input.workspace.rootPath);
+    if (isErr(matchesR)) {
+      await input.warmCache.delete(cacheKey);
+      return undefined;
+    }
+    const matches = matchesR.Ok;
     const externalToolRunMatches = await externalToolRunMatchesCollect(
       policy,
       currentExternalToolRuns,
@@ -8274,8 +8304,11 @@ async function workspaceIndexRequirementResolve(
     if (!configuredRulesRequireProjectIndex(policy.rules, pluginRulesResult.Ok)) {
       return false;
     }
-    const matches = await ruleMatchesGet(policy, workspace.rootPath);
-    return matchedRulesRequireProjectIndex(matches, pluginRulesResult.Ok);
+    const matchesR = await ruleMatchesGet(policy, workspace.rootPath);
+    if (isErr(matchesR)) {
+      return undefined;
+    }
+    return matchedRulesRequireProjectIndex(matchesR.Ok, pluginRulesResult.Ok);
   } catch {
     return undefined;
   }
@@ -8385,7 +8418,12 @@ function workspaceTreeAnalyzerRun(
       );
       if (isErr(result)) {
         if (input.strictErrors) {
-          throw new Error(result.Err);
+          const issue =
+            `Tree check failed for ${match.rule.ruleId} in ` +
+            `${workspaceRelativePathCreate(input.rootPath, filePath)}: ${result.Err}`;
+          console.warn(issue);
+          issues.push(issue);
+          continue;
         }
         const relativePath = workspaceRelativePathCreate(input.rootPath, filePath);
         if (!firstTreeCheckFailure) {
@@ -8622,16 +8660,6 @@ async function eslintAnalyzerRun(
     );
   }
 
-  const hasToolRunEntry = eligibleEntries.some(
-    (entry) => entry.source === 'external_tool_run',
-  );
-  if (!hasToolRunEntry) {
-    throw new Error(
-      'ESLint-backed policy rule found without an ESLint tool run. ' +
-      ESLINT_TOOL_RUN_MIGRATION_HINT,
-    );
-  }
-
   const executableEntries = eligibleEntries.filter(
     (entry) => !workspaceLintProviderEntryIsNativePreferred(entry, input.nativeOwnedWrappedRuleIds),
   );
@@ -8641,6 +8669,31 @@ async function eslintAnalyzerRun(
     ),
   );
   const ownedRuleIds = lintProviderEntryReportRuleIdsCollect(executableEntries);
+
+  const hasToolRunEntry = eligibleEntries.some(
+    (entry) => entry.source === 'external_tool_run',
+  );
+  if (!hasToolRunEntry) {
+    const issue =
+      'ESLint-backed policy rule found without an ESLint tool run. ' +
+      ESLINT_TOOL_RUN_MIGRATION_HINT;
+    console.warn(issue);
+    return workspaceAnalyzerRunResultCreate(
+      workspaceAnalyzerScorecardCreate({
+        analyzerId: 'eslint',
+        platform: 'eslint',
+        languages: [...WORKSPACE_NATIVE_OWNERSHIP_LANGUAGES],
+        ownedRuleIds,
+        skippedRuleIds,
+        diagnosticCount: 0,
+        violationCount: 0,
+        fileCount: 0,
+        fixMode: 'external',
+        status: 'failed',
+        issues: [issue.replace(/\n/g, ' ')],
+      }),
+    );
+  }
 
   if (executableEntries.length === 0) {
     return workspaceAnalyzerRunResultCreate(
@@ -8659,9 +8712,24 @@ async function eslintAnalyzerRun(
 
   const groups = eslintGroupsBuild(executableEntries, input.configPath);
   if (groups.size === 0) {
-    throw new Error(
+    const issue =
       '`tools.eslint.runs` requires `configPath` (e.g. "./eslint.config.mjs"). ' +
-      ESLINT_TOOL_RUN_MIGRATION_HINT,
+      ESLINT_TOOL_RUN_MIGRATION_HINT;
+    console.warn(issue);
+    return workspaceAnalyzerRunResultCreate(
+      workspaceAnalyzerScorecardCreate({
+        analyzerId: 'eslint',
+        platform: 'eslint',
+        languages: [...WORKSPACE_NATIVE_OWNERSHIP_LANGUAGES],
+        ownedRuleIds,
+        skippedRuleIds,
+        diagnosticCount: 0,
+        violationCount: 0,
+        fileCount: 0,
+        fixMode: 'external',
+        status: 'failed',
+        issues: [issue.replace(/\n/g, ' ')],
+      }),
     );
   }
 
@@ -8749,6 +8817,7 @@ async function eslintAnalyzerRun(
   }
 
   const startedAt = Date.now();
+  try {
   const lintResults: EslintLintResult[] = [];
   const formatterOutputs: string[] = [];
   const codepolEslintPlugin = eslintPluginCreate(
@@ -8818,10 +8887,35 @@ async function eslintAnalyzerRun(
     try {
       groupRun = await eslintGroupRun(true);
     } catch (error) {
-      if (!eslintPluginRedefinitionErrorIs(error, ESLINT_PLUGIN_NAME_DEFAULT)) {
-        throw error;
+      if (eslintPluginRedefinitionErrorIs(error, ESLINT_PLUGIN_NAME_DEFAULT)) {
+        groupRun = await eslintGroupRun(false);
+      } else {
+        const msg = error instanceof Error ? error.message : String(error);
+        console.warn(`ESLint failed: ${msg}`);
+        return workspaceAnalyzerRunResultCreate(
+          workspaceAnalyzerScorecardCreate({
+            analyzerId: 'eslint',
+            platform: 'eslint',
+            languages: [...WORKSPACE_NATIVE_OWNERSHIP_LANGUAGES],
+            ownedRuleIds,
+            skippedRuleIds,
+            skippedReason: skippedRuleIds.length > 0 ? 'native_preferred' : undefined,
+            diagnosticCount: 0,
+            violationCount: 0,
+            fileCount: allFiles.size,
+            fixMode: 'external',
+            status: 'failed',
+            latencyMs: Date.now() - startedAt,
+            issues: [`ESLint failed: ${msg.replace(/\n/g, ' ')}`],
+          }),
+          {
+            diagnostics: [],
+            violations: [],
+            output: '',
+            hasErrors: false,
+          },
+        );
       }
-      groupRun = await eslintGroupRun(false);
     }
 
     lintResults.push(...groupRun.results);
@@ -8902,6 +8996,33 @@ async function eslintAnalyzerRun(
       violations,
     },
   );
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.warn(`ESLint run failed: ${msg}`);
+    return workspaceAnalyzerRunResultCreate(
+      workspaceAnalyzerScorecardCreate({
+        analyzerId: 'eslint',
+        platform: 'eslint',
+        languages: [...WORKSPACE_NATIVE_OWNERSHIP_LANGUAGES],
+        ownedRuleIds,
+        skippedRuleIds,
+        skippedReason: skippedRuleIds.length > 0 ? 'native_preferred' : undefined,
+        diagnosticCount: 0,
+        violationCount: 0,
+        fileCount: allFiles.size,
+        fixMode: 'external',
+        status: 'failed',
+        latencyMs: Date.now() - startedAt,
+        issues: [`ESLint run failed: ${msg.replace(/\n/g, ' ')}`],
+      }),
+      {
+        diagnostics: [],
+        violations: [],
+        output: '',
+        hasErrors: false,
+      },
+    );
+  }
 }
 
 async function biomeAnalyzerRun(
@@ -9202,6 +9323,81 @@ async function ruffAnalyzerRun(
   );
 }
 
+function workspaceAnalysisPluginLoadFailedCompose(input: {
+  policy: PolicyFile;
+  files: string[];
+  workspaceIndexRequired: boolean;
+  issue: string;
+  lintProviderEntries: LintProviderEntry[];
+  ruleTargets: PolicyRuleTargetContext[];
+}): WorkspaceAnalysis {
+  type PluginRulesLoaded = Awaited<ReturnType<typeof policyPluginsGet>> extends Result<infer T, string>
+    ? T
+    : never;
+  const pluginRulesMap = new Map() as PluginRulesLoaded;
+  const issueLine = input.issue.replace(/\n/g, ' ');
+  const treeFailed = workspaceAnalyzerRunResultCreate(
+    workspaceAnalyzerScorecardCreate({
+      analyzerId: 'codepol/tree',
+      platform: 'codepol_tree',
+      languages: [...WORKSPACE_NATIVE_OWNERSHIP_LANGUAGES, 'python'],
+      ownedRuleIds: [],
+      diagnosticCount: 0,
+      violationCount: 0,
+      fileCount: input.files.length,
+      fixMode: 'inline',
+      status: 'failed',
+      issues: [`Failed to load policy plugins: ${issueLine}`],
+    }),
+  );
+  const eslintSkipped = workspaceAnalyzerRunResultCreate(
+    workspaceAnalyzerScorecardCreate({
+      analyzerId: 'eslint',
+      platform: 'eslint',
+      languages: [...WORKSPACE_NATIVE_OWNERSHIP_LANGUAGES],
+      ownedRuleIds: [],
+      fixMode: 'external',
+      status: 'skipped',
+      skippedReason: 'no_matching_rules',
+    }),
+  );
+  const biomeSkipped = workspaceAnalyzerRunResultCreate(
+    workspaceAnalyzerScorecardCreate({
+      analyzerId: 'biome',
+      platform: 'biome',
+      languages: [...WORKSPACE_NATIVE_OWNERSHIP_LANGUAGES],
+      ownedRuleIds: [],
+      fixMode: 'external',
+      status: 'skipped',
+      skippedReason: 'no_matching_rules',
+    }),
+  );
+  const ruffSkipped = workspaceAnalyzerRunResultCreate(
+    workspaceAnalyzerScorecardCreate({
+      analyzerId: 'ruff',
+      platform: 'ruff',
+      languages: ['python'],
+      ownedRuleIds: [],
+      fixMode: 'external',
+      status: 'skipped',
+      skippedReason: 'no_matching_rules',
+    }),
+  );
+  return workspaceAnalysisCompose({
+    treeResult: treeFailed,
+    eslintResult: eslintSkipped,
+    biomeResult: biomeSkipped,
+    ruffResult: ruffSkipped,
+    policy: input.policy,
+    files: input.files,
+    pluginRulesMap,
+    lintProviderEntries: input.lintProviderEntries,
+    ruleTargets: input.ruleTargets,
+    projectIndex: undefined,
+    workspaceIndexRequired: input.workspaceIndexRequired,
+  });
+}
+
 function workspaceAnalysisCompose(input: {
   treeResult: WorkspaceAnalyzerRunResult;
   eslintResult: WorkspaceAnalyzerRunResult;
@@ -9489,10 +9685,58 @@ async function workspaceAnalysisRun(
     configPath: workspace.configPath,
   });
   if (isErr(pluginRulesResult)) {
-    throw new Error(pluginRulesResult.Err);
+    const issue = pluginRulesResult.Err;
+    console.warn(`Failed to load policy plugins: ${issue}`);
+    const matchesR = await ruleMatchesGet(policy, workspace.rootPath);
+    const matches = isOk(matchesR) ? matchesR.Ok : [];
+    const externalToolRuns = externalToolRunsCollect(policy);
+    const externalToolRunMatches = await externalToolRunMatchesCollect(
+      policy,
+      externalToolRuns,
+      workspace.rootPath,
+    );
+    const analyzerMatches = [...matches, ...externalToolRunMatches];
+    const files = Array.from(new Set(analyzerMatches.flatMap((match) => match.files)));
+    const workspaceIndexRequired =
+      (state.workspaceIndexRequired ?? false) ||
+      matchedRulesRequireProjectIndex(matches, new Map() as PolicyPluginsMap);
+    state.workspaceIndexRequired = workspaceIndexRequired;
+    state.toolFingerprints = workspaceToolFingerprintsRead(workspace, []);
+    const ruleTargetsR = policyRuleTargetsGet(policy);
+    const ruleTargets = isOk(ruleTargetsR) ? ruleTargetsR.Ok : [];
+    return workspaceAnalysisPluginLoadFailedCompose({
+      policy,
+      files,
+      workspaceIndexRequired,
+      issue,
+      lintProviderEntries: [],
+      ruleTargets,
+    });
   }
   const pluginRulesMap = pluginRulesResult.Ok;
-  const ruleTargets = policyRuleTargetsGet(policy);
+  const ruleTargetsR = policyRuleTargetsGet(policy);
+  if (isErr(ruleTargetsR)) {
+    const matchesR0 = await ruleMatchesGet(policy, workspace.rootPath);
+    const matches0 = isOk(matchesR0) ? matchesR0.Ok : [];
+    const externalToolRuns0 = externalToolRunsCollect(policy);
+    const externalToolRunMatches0 = await externalToolRunMatchesCollect(
+      policy,
+      externalToolRuns0,
+      workspace.rootPath,
+    );
+    const analyzerMatches0 = [...matches0, ...externalToolRunMatches0];
+    const files0 = Array.from(new Set(analyzerMatches0.flatMap((match) => match.files)));
+    state.toolFingerprints = workspaceToolFingerprintsRead(workspace, []);
+    return workspaceAnalysisPluginLoadFailedCompose({
+      policy,
+      files: files0,
+      workspaceIndexRequired: state.workspaceIndexRequired ?? false,
+      issue: ruleTargetsR.Err.message,
+      lintProviderEntries: [],
+      ruleTargets: [],
+    });
+  }
+  const ruleTargets = ruleTargetsR.Ok;
   const lintProviderEntries = lintProviderEntriesCollect(policy, pluginRulesMap);
   const externalToolRuns = externalToolRunsCollect(policy);
   const analyzerLintProviderEntries = [
@@ -9500,7 +9744,19 @@ async function workspaceAnalysisRun(
     ...externalToolRunEntriesCollect(externalToolRuns),
   ];
   const fixProviders = fixProvidersCollect(pluginRulesMap);
-  const matches = await ruleMatchesGet(policy, workspace.rootPath);
+  const matchesR = await ruleMatchesGet(policy, workspace.rootPath);
+  if (isErr(matchesR)) {
+    state.toolFingerprints = workspaceToolFingerprintsRead(workspace, analyzerLintProviderEntries);
+    return workspaceAnalysisPluginLoadFailedCompose({
+      policy,
+      files: [],
+      workspaceIndexRequired: state.workspaceIndexRequired ?? false,
+      issue: matchesR.Err.message,
+      lintProviderEntries,
+      ruleTargets,
+    });
+  }
+  const matches = matchesR.Ok;
   const externalToolRunMatches = await externalToolRunMatchesCollect(
     policy,
     externalToolRuns,
@@ -9679,11 +9935,12 @@ async function workspaceAnalysisRunFullPath(
       projectIndex,
     });
     if (isErr(treeFixViolationsResult)) {
-      throw new Error(treeFixViolationsResult.Err);
+      console.warn(`Tree fix preparation failed: ${treeFixViolationsResult.Err}`);
+    } else {
+      treeCheckFixesApply(treeFixViolationsResult.Ok);
+      state.indexState = undefined;
+      projectIndex = undefined;
     }
-    treeCheckFixesApply(treeFixViolationsResult.Ok);
-    state.indexState = undefined;
-    projectIndex = undefined;
   }
 
   workspaceAbortSignalThrowIfAborted(options.signal);
@@ -10162,7 +10419,20 @@ async function workspaceLintRulesResultCreate(input: {
     configPath: input.workspace.configPath,
   });
   if (isErr(pluginRulesResult)) {
-    throw new Error(pluginRulesResult.Err);
+    return {
+      analysisGeneration: input.workspaceSession.analysisGeneration,
+      workspaceReady: false,
+      rules: [],
+    };
+  }
+
+  const ruleTargetsR = policyRuleTargetsGet(policy);
+  if (isErr(ruleTargetsR)) {
+    return {
+      analysisGeneration: input.workspaceSession.analysisGeneration,
+      workspaceReady: false,
+      rules: [],
+    };
   }
 
   const analysisAvailable =
@@ -10170,7 +10440,7 @@ async function workspaceLintRulesResultCreate(input: {
   const summaries = workspaceLintRuleSummariesStaticBuild({
     policy,
     pluginRulesMap: pluginRulesResult.Ok,
-    ruleTargets: policyRuleTargetsGet(policy),
+    ruleTargets: ruleTargetsR.Ok,
     analysisState:
       input.workspaceSession.status === 'error'
         ? 'error'
@@ -10569,7 +10839,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
     }
     await this.workspaceSessionAnalysisEnsure(workspace, workspaceSession, options);
     if (!workspaceSession.indexState) {
-      throw new Error('Workspace index unavailable');
+      throw new WorkspaceFault('Workspace index unavailable');
     }
     return workspaceSession.indexState.index;
   }
@@ -10736,7 +11006,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
         existing.clientKind !== input.clientKind ||
         existing.clientInstanceId !== input.clientInstanceId
       ) {
-        throw new Error(
+        throw new WorkspaceFault(
           `Client session ${clientSessionId} is already registered with a different identity`,
         );
       }
@@ -10810,7 +11080,11 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       configPath,
     });
     configCacheClear();
-    const { config, configPath: resolvedConfigPath } = await configGetFromPath(configPath);
+    const cfgR = await configGetFromPath(configPath);
+    if (isErr(cfgR)) {
+      throw cfgR.Err;
+    }
+    const { config, configPath: resolvedConfigPath } = cfgR.Ok;
     const clientSession = clientSessionGet(this.clientSessions, input.clientSessionId);
     const workspaceId = workspaceIdCreate(rootPath, resolvedConfigPath);
 
@@ -10964,7 +11238,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       input.workspaceId,
     );
     if (workspaceSession.workspaceInstanceId !== input.workspaceInstanceId) {
-      throw new Error(
+      throw new WorkspaceFault(
         `Workspace instance mismatch for ${input.workspaceId}: expected ${workspaceSession.workspaceInstanceId}, received ${input.workspaceInstanceId}`,
       );
     }
@@ -10997,7 +11271,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       input.workspaceId,
     );
     if (workspaceSession.workspaceInstanceId !== input.workspaceInstanceId) {
-      throw new Error(
+      throw new WorkspaceFault(
         `Workspace instance mismatch for ${input.workspaceId}: expected ${workspaceSession.workspaceInstanceId}, received ${input.workspaceInstanceId}`,
       );
     }
@@ -11853,7 +12127,7 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       (input.baselineLabel === undefined && input.baselineGraph === undefined) ||
       (input.baselineLabel !== undefined && input.baselineGraph !== undefined)
     ) {
-      throw new Error(
+      throw new WorkspaceFault(
         'queryDependencyDiff requires exactly one of baselineLabel or baselineGraph',
       );
     }
@@ -11879,14 +12153,14 @@ export class WorkspaceServiceEngine implements WorkspaceService {
       const store = graphSnapshotStoreCreateInternal({ rootPath: workspace.rootPath });
       const snapshot = await store.graphSnapshotRead({ label: input.baselineLabel! });
       if (!snapshot) {
-        throw new Error(
+        throw new WorkspaceFault(
           `No graph snapshot found for label "${input.baselineLabel}". ` +
             `Capture one with \`codepol graph snapshot --label ${input.baselineLabel}\`.`,
         );
       }
       const expectedRootId = graphSnapshotWorkspaceRootIdComputeInternal(workspace.rootPath);
       if (snapshot.workspaceRootId !== expectedRootId) {
-        throw new Error(
+        throw new WorkspaceFault(
           `Graph snapshot for label "${input.baselineLabel}" was captured in a different workspace ` +
             `(snapshot rootId ${snapshot.workspaceRootId}, current rootId ${expectedRootId}).`,
         );
@@ -12704,9 +12978,12 @@ async function configResolve(
   }
   const resolvedConfigPath = path.resolve(options.cwd, options.configPath);
   const result = await configGetFromPath(resolvedConfigPath);
+  if (isErr(result)) {
+    throw result.Err;
+  }
   return {
-    config: result.config,
-    configPath: result.configPath,
+    config: result.Ok.config,
+    configPath: result.Ok.configPath,
   };
 }
 
@@ -12746,5 +13023,9 @@ export async function configDiscover(
   cwd: string,
 ): Promise<{ config: CodepolConfig; configPath: string }> {
   await ensureWorkspaceRuntimeReady();
-  return configGet(cwd);
+  const r = await configGet(cwd);
+  if (isErr(r)) {
+    throw r.Err;
+  }
+  return r.Ok;
 }
