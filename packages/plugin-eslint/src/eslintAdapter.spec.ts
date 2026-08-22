@@ -135,9 +135,10 @@ describe('eslintAdapter suggestion fixes', () => {
     const replaceTextRange = vi.fn((range, text) => ({ range, text }));
     descriptor.suggest[0].fix({ replaceTextRange } as never);
 
+    // Same-file suggestion edits are normalized (order follows normalized ranges).
     expect(replaceTextRange.mock.calls).toEqual([
-      [[17, 25], 'badName'],
       [[6, 14], 'badName'],
+      [[17, 25], 'badName'],
     ]);
   });
 });
