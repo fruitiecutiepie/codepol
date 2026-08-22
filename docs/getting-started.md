@@ -83,9 +83,14 @@ import = { module = "@your-org/logger", named = "logger" }
 The config file is auto-discovered from your project root. Supported format:
 - `codepol.toml`
 
-> **Tip:** Multiple rules can reference the same target. See [Policy Schema Reference](./policy-schema.md) for more details.
+This example enables one rule so the walkthrough stays short. Codepol ships
+around twenty more — naming and casing, module hygiene, and architecture
+constraints. See the [Rule Catalog](./rules/index.md) for the full list, and
+[Policy Schema](./policy-schema.md) for every field a rule accepts.
 
-> **Tip:** Multiple rules can reference the same target. See [Policy Schema Reference](./policy-schema.md) for more details.
+> **Tip:** Multiple rules can reference the same target, and one rule can span
+> several targets.
+
 
 ## Step 3: Configure ESLint
 
@@ -102,11 +107,22 @@ import {
 import codepolBuiltin from '@codepol/plugin';
 import tseslint from 'typescript-eslint';
 
+// The codepol loader functions return a Result — unwrap before use.
+function codepolUnwrap(result, label) {
+  if ('Err' in result) {
+    console.error(`[eslint.config] ${label}: ${result.Err?.message ?? result.Err}`);
+    process.exit(1);
+  }
+  return result.Ok;
+}
+
 await providerParserRuntimeInit('eslint');
 
 pluginBuiltinRegister('@codepol/plugin', codepolBuiltin);
 
-const codepol = eslintPluginCreate(await policyPluginRulesGet());
+const codepol = eslintPluginCreate(
+  codepolUnwrap(await policyPluginRulesGet(), 'policyPluginRulesGet'),
+);
 
 export default [
   {
@@ -122,7 +138,7 @@ export default [
       codepol,
     },
     rules: {
-      ...await providerRulesConfigGet('eslint'),
+      ...codepolUnwrap(await providerRulesConfigGet('eslint'), 'providerRulesConfigGet'),
       eqeqeq: 'error',
     },
   },
@@ -281,6 +297,76 @@ fix = "on-save"
 runs on save. `fix = "never"` (or `severity = "off"`) hides the rule
 from every autofix surface.
 
+## Optional: Architecture Rules
+
+Beyond per-file style, Codepol can enforce constraints on how your modules
+depend on each other. These rules read the semantic index and run once over the
+whole module graph:
+
+```toml
+[[rules]]
+ruleId = "@codepol/plugin/no-cycles"
+severity = "error"
+targets = ["typescript-src"]
+
+[[rules]]
+ruleId = "@codepol/plugin/max-fan-out"
+targets = ["typescript-src"]
+args.max = 15
+
+[[rules]]
+ruleId = "@codepol/plugin/no-layer-violation"
+targets = ["typescript-src"]
+
+[rules.args.layers.domain]
+files = ["src/domain/**"]
+denies = ["infra"]
+
+[rules.args.layers.infra]
+files = ["src/infra/**"]
+allows = ["domain"]
+```
+
+The same graph is queryable from the CLI:
+
+```bash
+codepol graph cycles                    # what cycles exist?
+codepol graph impact src/core/index.ts  # what would changing this touch?
+codepol graph metrics                   # graph health
+```
+
+If your codebase already has cycles, do not start by requiring zero. Record a
+baseline and gate on regressions instead:
+
+```bash
+codepol graph snapshot --label main
+codepol graph diff main --fail-on-new-cycle
+```
+
+See [Architecture Analysis](./architecture-analysis.md) for the model behind
+this, and the [CLI Reference](./cli-reference.md) for every `graph` subcommand.
+
+## Optional: Editor Integration
+
+Install the VS Code extension for diagnostics, quickfixes, cross-file rename
+with preview, dependency-graph and call-graph panels, and cycle decorations. It
+activates when your workspace contains `codepol.toml`.
+
+```jsonc
+// .vscode/settings.json
+{
+  "codepol.diagnostics.environment": "dev",
+  "codepol.architecture.baselineLabel": "main",
+  "editor.codeActionsOnSave": {
+    "source.fixAll.codepol": "explicit"
+  }
+}
+```
+
+Analysis is served by a background daemon that is started automatically, so the
+semantic index is built once and shared between your editor and the CLI. See
+[Editor Integration](./editor-integration.md).
+
 ## Optional: esbuild Integration
 
 If you use esbuild, add build-time enforcement:
@@ -433,6 +519,11 @@ for the programmatic surface.
 
 ## Next Steps
 
-- [Policy Schema Reference](./policy-schema.md) - All configuration options
+- [Rule Catalog](./rules/index.md) - Every built-in rule and its arguments
+- [Policy Schema](./policy-schema.md) - All configuration options
+- [CLI Reference](./cli-reference.md) - All commands and flags
+- [Architecture Analysis](./architecture-analysis.md) - Module graph, architecture rules, baselines
+- [Editor Integration](./editor-integration.md) - LSP, daemon, and VS Code extension
+- [Language Support](./language-support.md) - What works for TypeScript vs Python
 - [Creating Custom Plugins](./creating-custom-plugins.md) - Build your own rule plugins
 - [API Reference](./api-reference.md) - Programmatic usage and type definitions

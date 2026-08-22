@@ -2,6 +2,43 @@
 
 Programmatic API for integrating codepol into your tools and scripts.
 
+## Conventions
+
+### Errors are returned, not thrown
+
+Most loader, resolver, and check entry points return
+`Result<T, E>` rather than throwing. Unwrap before using the value:
+
+```typescript
+import { configGet, isErr } from '@codepol/core';
+
+const r = await configGet();
+if (isErr(r)) {
+  console.error(r.Err.message);
+  return;
+}
+const { config, configPath } = r.Ok;
+```
+
+A common mistake is spreading or destructuring the `Result` directly — that
+yields an `Ok` key, not your value. See [Result Utilities](#result-utilities).
+
+### Scope of this page
+
+This page documents the entry points most integrations need. It is not an
+exhaustive listing of the package's exports. Notably not covered here:
+
+| Area | Where to look |
+| ---- | ------------- |
+| Module-graph query functions (`moduleImpactRadiusCompute`, `moduleDependencyPathCompute`, `moduleDeadModulesCompute`, `moduleDependencyDiffCompute`, and the metrics computations) | [Architecture Analysis](./architecture-analysis.md), and `packages/core/src/index/moduleGraph*.ts` |
+| Symbol-level graphs (`symbolCallGraphCompute`, `symbolTypeHierarchyCompute`, `symbolImportersCompute`) | `packages/core/src/index/symbolGraphQueries.ts` |
+| Architecture rule plumbing (`policyArchitectureViolationsGetFromDir`, `pluginsMapHasArchitectureProvider`) | `packages/core/src/policy/policyArchitectureCheck.ts` |
+| Index snapshots (`projectIndexSnapshotCreate`, `projectIndexStoreSnapshotCreate`, `projectIndexStoreRestore`) | `packages/core/src/index/indexSnapshot.ts` |
+| The `Workspace*` editor-facing type layer and its converters | `packages/core/src/workspace/workspaceTypes.ts` |
+| Workspace edit application (`fileWorkspaceEditsNormalize`, `fileWorkspaceEditsApply`) | `packages/core/src/policy/policyWorkspaceEdits.ts` |
+| Process-plugin protocol (`PROCESS_PLUGIN_PROTOCOL_VERSION`, `processPluginDescribeResultParse`) | `packages/core/src/policy/policyPluginProcess.ts` |
+| Type-aware source registries | `packages/core/src/index/typeAware*.ts` |
+
 ## @codepol/core
 
 The core package provides policy loading, checking, and formatting utilities.
@@ -134,23 +171,30 @@ const config = defineConfig({
 Discovers and loads the codepol config file by walking up from the current directory.
 
 ```typescript
-async function configGet(cwd?: string): Promise<ConfigFileResult>
+async function configGet(
+  cwd?: string
+): Promise<Result<ConfigFileResult, WorkspaceFault>>
 ```
 
 **Parameters:**
 
 - `cwd`: Working directory to start search from (default: `process.cwd()`)
 
-**Returns:** Object with `config` (CodepolConfig) and `configPath` (string)
-
-**Throws:** If no config file is found
+**Returns:** `Result` wrapping `{ config, configPath }`. Discovery failure, parse
+failure, and validation failure all come back as `Err` — this function does not
+throw.
 
 **Example:**
 
 ```typescript
-import { configGet } from '@codepol/core';
+import { configGet, isErr } from '@codepol/core';
 
-const { config, configPath } = await configGet();
+const r = await configGet();
+if (isErr(r)) {
+  console.error(r.Err.message);
+  return;
+}
+const { config, configPath } = r.Ok;
 console.log(`Loaded config from: ${configPath}`);
 console.log(`Rules: ${config.rules.length}`);
 ```
@@ -166,21 +210,25 @@ console.log(`Rules: ${config.rules.length}`);
 Loads a config file from a specific path. Use this when you have an explicit path (e.g., from `--config` flag).
 
 ```typescript
-async function configGetFromPath(configPath: string): Promise<ConfigFileResult>
+async function configGetFromPath(
+  configPath: string
+): Promise<Result<ConfigFileResult, WorkspaceFault>>
 ```
 
 **Parameters:**
 
 - `configPath`: Path to the config file (absolute or relative)
 
-**Returns:** Object with `config` (CodepolConfig) and `configPath` (string)
+**Returns:** `Result` wrapping `{ config, configPath }`.
 
 **Example:**
 
 ```typescript
-import { configGetFromPath } from '@codepol/core';
+import { configGetFromPath, isErr } from '@codepol/core';
 
-const { config } = await configGetFromPath('./config/codepol.toml');
+const r = await configGetFromPath('./config/codepol.toml');
+if (isErr(r)) throw new Error(r.Err.message);
+const { config } = r.Ok;
 ```
 
 ---
@@ -206,23 +254,23 @@ function configFileDiscover(startDir: string): string | null
 Synchronous version of `configGet`. Used by the ESLint adapter, which requires sync execution.
 
 ```typescript
-function configGetSync(cwd?: string): ConfigFileResult
+function configGetSync(cwd?: string): Result<ConfigFileResult, WorkspaceFault>
 ```
 
 **Parameters:**
 
 - `cwd`: Working directory to start search from (default: `process.cwd()`)
 
-**Returns:** Object with `config` (CodepolConfig) and `configPath` (string)
-
-**Throws:** If no config file is found
+**Returns:** `Result` wrapping `{ config, configPath }`.
 
 **Example:**
 
 ```typescript
-import { configGetSync } from '@codepol/core';
+import { configGetSync, isErr } from '@codepol/core';
 
-const { config, configPath } = configGetSync();
+const r = configGetSync();
+if (isErr(r)) throw new Error(r.Err.message);
+const { config, configPath } = r.Ok;
 ```
 
 ---
@@ -232,23 +280,25 @@ const { config, configPath } = configGetSync();
 Synchronous version of `configGetFromPath`. Used by the ESLint adapter, which requires sync execution.
 
 ```typescript
-function configGetFromPathSync(configPath: string): ConfigFileResult
+function configGetFromPathSync(
+  configPath: string
+): Result<ConfigFileResult, WorkspaceFault>
 ```
 
 **Parameters:**
 
 - `configPath`: Path to the config file (absolute or relative)
 
-**Returns:** Object with `config` (CodepolConfig) and `configPath` (string)
-
-**Throws:** If the config file does not exist
+**Returns:** `Result` wrapping `{ config, configPath }`.
 
 **Example:**
 
 ```typescript
-import { configGetFromPathSync } from '@codepol/core';
+import { configGetFromPathSync, isErr } from '@codepol/core';
 
-const { config } = configGetFromPathSync('./config/codepol.toml');
+const r = configGetFromPathSync('./config/codepol.toml');
+if (isErr(r)) throw new Error(r.Err.message);
+const { config } = r.Ok;
 ```
 
 ---
@@ -352,17 +402,18 @@ Generates lint provider rules config from the codepol config. Users spread this 
 
 ```typescript
 async function providerRulesConfigGet(
-  provider: 'eslint',
+  provider: string,
   configPath?: string
-): Promise<Record<string, unknown>>
+): Promise<Result<Record<string, unknown>, WorkspaceFault>>
 ```
 
 **Parameters:**
 
-- `provider`: The lint provider platform (`'eslint'`)
+- `provider`: The lint provider platform (currently `'eslint'`)
 - `configPath`: Path to config file (auto-discovered if not specified)
 
-**Returns:** Rules config object for the lint provider
+**Returns:** `Result` wrapping the rules config object. Unwrap it before
+spreading — spreading the `Result` itself yields a `{ Ok: ... }` key, not rules.
 
 **Example:**
 
@@ -377,16 +428,26 @@ import {
 } from '@codepol/core';
 import codepolBuiltin from '@codepol/plugin';
 
+function codepolUnwrap(result, label) {
+  if ('Err' in result) {
+    console.error(`[eslint.config] ${label}: ${result.Err?.message ?? result.Err}`);
+    process.exit(1);
+  }
+  return result.Ok;
+}
+
 await providerParserRuntimeInit('eslint');
 
 pluginBuiltinRegister('@codepol/plugin', codepolBuiltin);
 
-const codepol = eslintPluginCreate(await policyPluginRulesGet());
+const codepol = eslintPluginCreate(
+  codepolUnwrap(await policyPluginRulesGet(), 'policyPluginRulesGet'),
+);
 
 export default [{
   plugins: { codepol },
   rules: {
-    ...await providerRulesConfigGet('eslint'),
+    ...codepolUnwrap(await providerRulesConfigGet('eslint'), 'providerRulesConfigGet'),
     'no-console': 'warn',
   },
 }];
@@ -452,7 +513,7 @@ Tree-sitter WASM parsers must be initialized before any policy checking or index
 Initializes the web-tree-sitter WASM runtime and loads registered language grammars. Must be called before any scanning or indexing operations. Safe to call multiple times (subsequent calls load newly registered languages only).
 
 ```typescript
-async function parserInit(): Promise<void>
+async function parserInit(diag?: Diagnostics): Promise<void>
 ```
 
 **Example:**
@@ -639,7 +700,7 @@ Resolves the targets for a policy rule by looking up each target name in the pol
 function policyRuleTargetsResolve(
   rule: PolicyRule,
   policy: PolicyFile
-): PolicyRuleTarget[]
+): Result<PolicyRuleTarget[], WorkspaceFault>
 ```
 
 **Parameters:**
@@ -682,10 +743,10 @@ to the canonical API names listed below.
 Collects all files matching each policy rule.
 
 ```typescript
-function ruleMatchesGet(
+async function ruleMatchesGet(
   policy: PolicyFile,
   cwd: string
-): Promise<RuleMatch[]>
+): Promise<Result<RuleMatch[], WorkspaceFault>>
 ```
 
 **Parameters:**
@@ -721,7 +782,7 @@ function policyFileGetChecked(
   policy: PolicyFile,
   filePath: string,
   cwd: string
-): boolean
+): Result<boolean, WorkspaceFault>
 ```
 
 **Parameters:**
@@ -816,7 +877,10 @@ function policyViolationsGetForFile(
   target: PolicyRuleTarget,
   policy: PolicyFile,
   pluginsMap: PolicyPluginsMap,
-  dir: string
+  dir: string,
+  configPath?: string,
+  projectIndex?: ProjectIndex,
+  sourceOverride?: string
 ): Result<PolicyViolation[], string>
 ```
 
@@ -871,9 +935,14 @@ if ('Ok' in violationsResult) {
 Checks all files matching the policy for violations.
 
 ```typescript
-function policyViolationsGetFromDir(
+async function policyViolationsGetFromDir(
   policy: PolicyFile,
-  cwd: string
+  dir: string,
+  options?: {
+    configPath?: string;
+    sourceByFilePath?: ReadonlyMap<string, string>;
+    projectIndex?: ProjectIndex;
+  }
 ): Promise<Result<PolicyViolation[], string>>
 ```
 
@@ -1322,7 +1391,7 @@ Factory for creating a `TreeCheckProvider` from a plain check function. Wraps th
 
 ```typescript
 function treeCheckProviderNew(config: {
-  languages: string[];
+  languages?: string[];
   check: TreeCheckFn;
 }): TreeCheckProvider
 ```
@@ -2885,61 +2954,23 @@ export default [
 
 ---
 
-### eslintAdapterInit
+### policyCacheClear / projectIndexCacheClear
 
-Pre-initializes a `TreeCheckProvider` for use with ESLint. Call this before running ESLint
-to ensure async initialization completes (e.g., loading Tree-sitter WASM parsers).
-
-```typescript
-async function eslintAdapterInit(
-  provider: CodepolPluginRule,
-  policy: PolicyFile,
-  cwd: string
-): Promise<void>
-```
-
-**Parameters:**
-
-- `provider`: The `CodepolPluginRule` to initialize
-- `policy`: The loaded policy file
-- `cwd`: Current working directory
-
-**Example:**
+Utility functions for clearing cached state (useful for testing, or when config
+or sources change out from under a long-lived ESLint process).
 
 ```typescript
-import { eslintAdapterInit, eslintAdapter } from '@codepol/plugin-eslint';
-import { configGet, parserInit, langAdd } from '@codepol/core';
-import { loggerEnterExitRule } from '@codepol/plugin';
-
-// Initialize tree-sitter languages
-langAdd({ langId: 'typescript', fileExtensions: ['.ts'] });
-await parserInit();
-
-// Initialize the provider
-const { config } = await configGet();
-await eslintAdapterInit(loggerEnterExitRule, config, process.cwd());
-
-// Now the adapted rule will work without async init warnings
-const rule = eslintAdapter.adapt(loggerEnterExitRule);
-```
-
----
-
-### policyCacheClear / providerInitStateClear
-
-Utility functions for clearing cached state (useful for testing).
-
-```typescript
-import { policyCacheClear, providerInitStateClear } from '@codepol/plugin-eslint';
+import { policyCacheClear, projectIndexCacheClear } from '@codepol/plugin-eslint';
 
 // Clear cached policy files
 policyCacheClear();
 
-// Clear provider initialization state
-providerInitStateClear();
+// Clear the adapter's incremental project-index cache
+projectIndexCacheClear();
 ```
 
-Note: The old names `clearPolicyCache` and `clearProviderInitState` are still available but deprecated.
+`projectIndexCacheClear` drops the synchronous project-index cache the ESLint
+adapter maintains for rules that declare `requiresProjectIndex`.
 
 ---
 

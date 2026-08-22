@@ -13,9 +13,9 @@ Skipping any of these produces correctness bugs. The analysis cache in particula
 
 The canonical references are:
 
-- [`packages/plugin-biome`](../packages/plugin-biome) — spawns an external binary.
-- [`packages/plugin-ruff`](../packages/plugin-ruff) — spawns an external binary, per-file input.
-- [`packages/plugin-eslint`](../packages/plugin-eslint) — loaded as a Node module; fingerprints `package.json`.
+- [`packages/plugin-biome`](https://github.com/fruitiecutiepie/codepol/tree/master/packages/plugin-biome) — spawns an external binary.
+- [`packages/plugin-ruff`](https://github.com/fruitiecutiepie/codepol/tree/master/packages/plugin-ruff) — spawns an external binary, per-file input.
+- [`packages/plugin-eslint`](https://github.com/fruitiecutiepie/codepol/tree/master/packages/plugin-eslint) — loaded as a Node module; fingerprints `package.json`.
 
 Read at least one end-to-end before starting.
 
@@ -71,7 +71,7 @@ const denoProvider: LintProvider<DenoProviderConfig> = {
 
 ## Step 2: Create the runner package
 
-Scaffold `packages/plugin-deno` modelled on [`packages/plugin-biome`](../packages/plugin-biome). The public surface is split across four files:
+Scaffold `packages/plugin-deno` modelled on [`packages/plugin-biome`](https://github.com/fruitiecutiepie/codepol/tree/master/packages/plugin-biome). The public surface is split across four files:
 
 - `denoTypes.ts` — re-exports `DenoProviderConfig`, declares the raw tool output shape (`DenoDiagnostic`, `DenoReport`, …).
 - `denoRunner.ts` — `denoCheckAsync(files, config, { signal })` and `denoFixAsync(...)`, each returning `Result<PolicyViolation[], string>`.
