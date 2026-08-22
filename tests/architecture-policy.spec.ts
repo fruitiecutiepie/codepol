@@ -14,6 +14,14 @@ import {
 import codepolBuiltin from '@codepol/plugin';
 
 /**
+ * These fixtures build a full project index (multi-package, cyclic imports),
+ * which measured ~5.6s locally and longer on CI runners — the 5s default is
+ * not enough. Verified this is inherent to the index build, not daemon
+ * spawn: `CODEPOL_WORKSPACE_SERVICE_MODE=in_process` takes the same time.
+ */
+const ARCHITECTURE_POLICY_TEST_TIMEOUT_MS = 120_000;
+
+/**
  * End-to-end exercise of the {@link ArchitectureCheckProvider}
  * capability: load a `codepol.toml` that declares the four built-in
  * architecture rules (`no-cycles`, `no-layer-violation`,
@@ -29,7 +37,9 @@ describe('architecture-policy end-to-end', () => {
     await parserInit();
     pluginBuiltinRegister('@codepol/plugin', codepolBuiltin);
 
-    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-arch-policy-'));
+    testDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-arch-policy-')),
+    );
 
     // Layer setup:
     //   src/domain/* → may import shared
@@ -250,7 +260,7 @@ interfaces = ["I*"]
     for (const id of archIds) {
       expect(treeViolations.some((v) => v.ruleId === id)).toBe(true);
     }
-  });
+  }, ARCHITECTURE_POLICY_TEST_TIMEOUT_MS);
 });
 
 /**
@@ -271,7 +281,9 @@ describe('architecture-policy phase-3 user-facing rules end-to-end', () => {
     await parserInit();
     pluginBuiltinRegister('@codepol/plugin', codepolBuiltin);
 
-    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-arch-policy-userface-'));
+    testDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-arch-policy-userface-')),
+    );
 
     // Workspace skeleton with two packages, each with a public entry
     // point at src/index.ts. Tests for `no-cross-package-internal-import`.
@@ -494,5 +506,5 @@ entries = ["packages/*/src/index.ts"]
     // must NOT be reported.
     const indexHit = entries!.find((v) => v.filePath.endsWith(path.join('src', 'index.ts')));
     expect(indexHit).toBeUndefined();
-  });
+  }, ARCHITECTURE_POLICY_TEST_TIMEOUT_MS);
 });

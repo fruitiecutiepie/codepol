@@ -3,13 +3,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { CodepolConfig } from '@codepol/core';
+import { isErr } from '@codepol/core';
 import { policyCheck } from '../apps/cli/src/index';
 import { configValidate } from '../packages/core/src/config/configValidate';
 
 const FIXTURES_DIR = path.join(__dirname, 'fixtures', 'external-bridge');
 
 function tempProjectCreate(prefix: string): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  // realpath: macOS os.tmpdir() is a symlink and the engine canonicalizes
+  // indexed paths, so raw mkdtemp paths would not match reported file paths.
+  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
 }
 
 /**
@@ -251,13 +254,18 @@ describe('external tool runs integration', () => {
   });
 
   it('top-level eslintConfigPath: configValidate rejects with a migration message', () => {
-    expect(() =>
-      configValidate({
-        eslintConfigPath: './eslint.config.mjs',
-        targets: {},
-        rules: [],
-      }),
-    ).toThrowError(/tools\.eslint/);
+    // configValidate returns Result rather than throwing, so the migration
+    // message arrives as an Err payload.
+    const result = configValidate({
+      eslintConfigPath: './eslint.config.mjs',
+      targets: {},
+      rules: [],
+    });
+    expect(isErr(result)).toBe(true);
+    const message = isErr(result)
+      ? String((result.Err as { message?: unknown }).message ?? result.Err)
+      : '';
+    expect(message).toMatch(/tools\.eslint/);
   });
 
   it('codepol-defined ESLint rule without tools.eslint.runs: policy check completes without ESLint violations', async () => {

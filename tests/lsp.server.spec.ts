@@ -24,8 +24,18 @@ import {
 import { CodepolLspServer } from '../apps/lsp/src/server';
 import { lspWorkspaceServiceResolve } from '../apps/lsp/src/serviceFactory';
 
+/**
+ * These cases drive a full LSP session over a real workspace index. Measured
+ * ~5s+ locally and slower on CI runners, so the 5s default is too tight; one
+ * case already needed 15s and still timed out in CI. Verified the cost is the
+ * index build, not daemon spawn (in_process takes the same time).
+ */
+const LSP_INDEX_HEAVY_TEST_TIMEOUT_MS = 120_000;
+
 function tempWorkspaceCreate(prefix: string): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  // realpath: macOS os.tmpdir() is a symlink and the engine canonicalizes
+  // indexed paths, so raw mkdtemp paths would not match reported URIs.
+  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
 }
 
 function noInterfaceConfigContentCreate(): string {
@@ -3340,7 +3350,7 @@ describe('CodepolLspServer', () => {
 
     const finalPublish = messages.filter((message) => message.method === 'textDocument/publishDiagnostics')[2];
     expect(finalPublish?.params.diagnostics).toHaveLength(1);
-  });
+  }, LSP_INDEX_HEAVY_TEST_TIMEOUT_MS);
 
   it('publishes architecture cycle diagnostics under the codepol/architecture source', async () => {
     // Phase 6 user-facing surface: cycles flagged by the architecture
@@ -3422,7 +3432,7 @@ describe('CodepolLspServer', () => {
     );
     const bUri = pathToFileURL(bPath).href;
     expect(relatedUris).toContain(bUri);
-  }, 15000);
+  }, LSP_INDEX_HEAVY_TEST_TIMEOUT_MS);
 
   it('forwards the current document version when querying diagnostics for open overlays', async () => {
     const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');
@@ -4945,7 +4955,7 @@ describe('CodepolLspServer', () => {
 
     const executeResponse = messages.find((message) => message.id === 3);
     expect(executeResponse?.result).toBeNull();
-  });
+  }, LSP_INDEX_HEAVY_TEST_TIMEOUT_MS);
 
   it('prepares and previews workspace package rename and applies it through workspace/applyEdit', async () => {
     const workspaceRoot = tempWorkspaceCreate('codepol-lsp-');

@@ -22,7 +22,9 @@ import {
 } from '@codepol/workspace-service';
 
 function tempWorkspaceCreate(prefix: string): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  // realpath: macOS os.tmpdir() is a symlink and the engine canonicalizes
+  // indexed paths, so raw mkdtemp paths would not match reported URIs.
+  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
 }
 
 function noInterfaceConfigContentCreate(): string {
@@ -1329,13 +1331,22 @@ describe('workspace service integration', () => {
       clientInstanceId: 'eslint-misconfig-client',
     });
 
-    await expect(
-      service.queryDiagnostics({
-        clientSessionId: attached.clientSessionId,
-        workspaceId: attached.workspaceId,
-        uri,
-      }),
-    ).resolves.toEqual([]);
+    // `no-unused-vars` has a native tree-check provider as well as an ESLint
+    // lint provider, and native ownership takes precedence. The missing
+    // `tools.eslint.runs` therefore degrades the ESLint analyzer (asserted via
+    // the scorecard below) without losing the diagnostic itself — the rule is
+    // still enforced natively. See the sibling
+    // "prefers a native JS/TS rule over a wrapped analyzer" case.
+    const diagnostics = await service.queryDiagnostics({
+      clientSessionId: attached.clientSessionId,
+      workspaceId: attached.workspaceId,
+      uri,
+    });
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({
+      code: '@codepol/plugin/no-unused-vars',
+      source: 'codepol',
+    });
 
     await expect(
       service.queryCodeActions({

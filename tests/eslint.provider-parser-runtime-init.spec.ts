@@ -21,6 +21,22 @@ const configPath = path.join(tempDir, 'codepol.toml');
 const filePath = path.join(tempDir, 'src', 'contracts.ts');
 const source = `interface DemoContract {\n  name: string;\n}\n`;
 
+/**
+ * Codepol loader APIs return `Result`, so tests must unwrap before use.
+ * Spreading or casting the `Result` itself yields an `Ok` key, not the value.
+ */
+function resultUnwrap<T>(result: { Ok: T } | { Err: unknown }): T {
+  if ('Err' in result) {
+    const err = (result as { Err: unknown }).Err;
+    const message =
+      typeof err === 'object' && err !== null && 'message' in err
+        ? String((err as { message: unknown }).message)
+        : String(err);
+    throw new Error(message);
+  }
+  return (result as { Ok: T }).Ok;
+}
+
 describe('providerParserRuntimeInit eslint integration', () => {
   let cwdSpy: ReturnType<typeof vi.spyOn>;
 
@@ -53,10 +69,11 @@ targets = ["src"]
   });
 
   it('keeps adapted-rule parser bootstrap explicit', async () => {
-    const plugin = eslintPluginCreate(await policyPluginRulesGet(configPath));
-    const providerRules = await providerRulesConfigGet(
-      'eslint',
-      configPath,
+    const plugin = eslintPluginCreate(
+      resultUnwrap(await policyPluginRulesGet(configPath)),
+    );
+    const providerRules = resultUnwrap(
+      await providerRulesConfigGet('eslint', configPath),
     ) as Linter.RulesRecord;
     const overrideConfig: Linter.Config[] = [
       {
