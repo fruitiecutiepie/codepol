@@ -1,115 +1,202 @@
 # Codepol
 
-**Policy-driven code enforcement for TypeScript projects.**
+**Policy-driven code enforcement and architecture analysis.**
 
-Codepol is a policy enforcement framework for TypeScript that combines ESLint rules, Tree-sitter structural checks, and build-time enforcement. Define custom rules once, enforce them everywhere.
+Codepol enforces coding standards *and* architectural constraints from a single
+declarative policy file. It builds a semantic index of your codebase with
+tree-sitter, uses it to answer cross-file and whole-graph questions, and
+surfaces the results through a CLI, a language server, and an editor UI.
+
+Define rules once in `codepol.toml`, enforce them in CI, and navigate them in
+your editor.
+
+```bash
+npx codepol                             # check policy
+npx codepol graph cycles                # find circular dependencies
+npx codepol graph diff main --fail-on-new-cycle
+```
+
+## What it does
+
+**Style and naming** — casing conventions per symbol kind and per path segment,
+banned words, banned declaration families, verb-prefixed function names.
+Cross-file autofix, including project-wide renames.
+
+**Module hygiene** — unused exports, unused variables, duplicate exports across
+files, mixed default/named exports, star-export collisions.
+
+**Architecture** — circular imports, layering violations, fan-in/fan-out
+budgets, dead modules, cross-package internal imports, entry-point allowlists,
+undeclared interface implementers.
+
+**Architecture queries** — dependency paths, impact radius, dead-module
+detection, graph health metrics, and baseline diffing so you can gate on
+*regressions* rather than requiring a clean slate.
+
+**Editor integration** — diagnostics, quickfixes and fix-on-save, cross-file
+rename with preview, dependency-graph and call-graph panels, cycle gutter
+decorations, importer-count CodeLens, and architecture peek.
+
+Languages: TypeScript/JS and Python for structural analysis; type-aware
+enrichment additionally bridges to gopls and rust-analyzer. See
+[language support](./docs/language-support.md).
 
 ## Architecture
 
 ```text
-┌────────────────────────────────────────────┐
-│             Consumer Codebase              │
-│   ┌───────────────────┐  ┌─────────────┐   │
-│   │  codepol.toml    │  │ src/**/*.ts │   │
-│   └─────────┬─────────┘  └─────────────┘   │
-└─────────────┼──────────────────────────────┘
-              │
-              ▼
-┌────────────────────────────────────────────┐
-│               @codepol/core                │
-│   • Load and parse codepol.toml            │
-│   • Tree-sitter structural analysis        │
-│   • Violation detection and formatting     │
-└─────────────────────┬──────────────────────┘
-                      │
-          ┌───────────┼───────────┐
-          ▼           ▼           ▼
-    ┌──────────┐ ┌──────────┐ ┌──────────┐
-    │  ESLint  │ │ esbuild  │ │   CLI    │
-    │  Plugin  │ │  Plugin  │ │          │
-    └──────────┘ └──────────┘ └──────────┘
+codepol.toml
+     │
+     ▼
+┌──────────────────────────────────────────────────────────┐
+│  @codepol/core                                           │
+│  tree-sitter adapters · semantic index · module graph    │
+│  policy engine · plugin registry                         │
+└────────────────────────┬─────────────────────────────────┘
+                         ▼
+┌──────────────────────────────────────────────────────────┐
+│  @codepol/workspace-service                              │
+│  sessions · overlays · warm cache · analyzer scheduling  │
+└──┬──────────────┬────────────────┬───────────────────────┘
+   ▼              ▼                ▼
+┌──────┐   ┌────────────┐   ┌─────────────┐   ┌───────────────┐
+│ CLI  │   │ LSP server │   │   daemon    │   │ ESLint/Biome/ │
+│      │   │            │   │             │   │  Ruff/esbuild │
+└──────┘   └─────┬──────┘   └─────────────┘   └───────────────┘
+                 ▼
+         ┌───────────────┐
+         │ VS Code ext.  │
+         └───────────────┘
 ```
+
+Both the CLI and the language server talk to a shared `WorkspaceService`
+interface, implemented either in-process or by the daemon over a socket. The
+daemon owns the expensive state — parsers, semantic index, file watchers, unsaved
+buffer overlays — so a cold index build is paid once and reused across editor
+sessions and CLI invocations.
 
 ## Packages
 
+**Core**
+
 | Package | Description |
 | ------- | ----------- |
-| [@codepol/core](./packages/core) | Core policy loading, Tree-sitter checks, and enforcement |
-| [@codepol/plugin-eslint](./packages/plugin-eslint) | ESLint rule with autofix for logger instrumentation |
-| [@codepol/plugin-esbuild](./packages/plugin-esbuild) | esbuild plugin for build-time enforcement |
-| [@codepol/plugin](./packages/plugin/README.md) | Logger plugin with Tree-sitter + ESLint capabilities |
-| [@codepol/cli](./apps/cli) | Command-line interface for running checks |
+| [@codepol/core](./packages/core) | Policy engine, tree-sitter adapters, semantic index, module graph |
+| [@codepol/workspace-service](./packages/workspace-service) | Shared analysis engine: sessions, overlays, caching, scheduling |
 
-## Quick Start
+**Runtimes**
 
-### Installation
+| Package | Description |
+| ------- | ----------- |
+| [@codepol/cli](./apps/cli) | `codepol` — policy checks and `codepol graph` queries |
+| [@codepol/lsp](./apps/lsp) | Language server |
+| [@codepol/daemon](./apps/daemon) | Background analysis daemon |
+| [extension-vscode](./extension-vscode) | VS Code client |
+
+**Rules and tool adapters**
+
+| Package | Description |
+| ------- | ----------- |
+| [@codepol/plugin](./packages/plugin) | All built-in rules |
+| [@codepol/plugin-eslint](./packages/plugin-eslint) | Runs Codepol rules as ESLint rules |
+| [@codepol/plugin-biome](./packages/plugin-biome) | Biome integration |
+| [@codepol/plugin-ruff](./packages/plugin-ruff) | Ruff integration (Python) |
+| [@codepol/plugin-vulture](./packages/plugin-vulture) | Vulture dead-code detection (Python) |
+| [@codepol/plugin-esbuild](./packages/plugin-esbuild) | Build-time enforcement |
+
+**Type-aware bridges**
+
+| Package | Description |
+| ------- | ----------- |
+| [@codepol/type-aware-provider](./packages/type-aware-provider) | Editor-native or subprocess backends: Pyright, gopls, rust-analyzer |
+| [@codepol/typescript-language-bridge](./packages/typescript-language-bridge) | tsserver-backed call graph and type hierarchy |
+| [@codepol/python-language-bridge](./packages/python-language-bridge) | Pyright/Pylance-backed call graph and type hierarchy |
+
+The bridge packages never spawn a language server themselves — the host supplies
+the transport.
+
+## Quick start
 
 ```bash
-# Install the CLI (includes all dependencies)
 pnpm add -D @codepol/cli
-
-# Or install individual packages
-pnpm add -D @codepol/core @codepol/plugin-eslint @codepol/plugin
 ```
-
-### Choose Your Runtime
-
-- **Node-capable projects (JS/TS toolchain available):** use `@codepol/cli` via `npx codepol`.
-- **Non-Node projects:** use the standalone binary bundle (see "Use the Standalone Binary").
-
-### Use Codepol in 3 Steps
-
-1) Add a `codepol.toml` file in your project root.
-2) If you run ESLint directly, assemble the `codepol` plugin from resolved rule plugins in `eslint.config.*`.
-3) Run checks with:
-
-```bash
-# Run once
-npx codepol
-
-# Apply fixes
-npx codepol --fix
-
-# Watch mode
-npx codepol --watch
-```
-
-Codepol auto-discovers `codepol.toml` from the current directory upward. Use `--config` if your config is elsewhere.
-
-### Create a Config File
 
 Create `codepol.toml` in your project root:
 
 ```toml
-exclude = ["dist/**"]
+exclude = ["dist/**", "node_modules/**"]
 
 [[plugins]]
 id = "@codepol/plugin"
 source = { kind = "builtin" }
 
-[targets.typescript-src]
+[targets.src]
 language = "typescript"
 files = ["src/**/*.ts", "src/**/*.tsx"]
-exclude = ["**/*.spec.ts", "**/*.test.ts"]
+exclude = ["**/*.spec.ts"]
 
+# Style
 [[rules]]
-id = "function-logging"
-ruleId = "@codepol/plugin/require-logger-enter-exit"
-description = "Ensure all functions have logger instrumentation"
-targets = ["typescript-src"]
+ruleId = "@codepol/plugin/enforce-casing"
+targets = ["src"]
+fix = "on-save"
 
-[rules.args.logger]
-identifier = "logger"
-enterMethod = "enter"
-exitMethod = "exit"
-import = { module = "@your-org/logger", named = "logger" }
+[rules.args.symbols]
+function = ["camelCase"]
+class = ["PascalCase"]
+type = ["PascalCase"]
+
+# Module hygiene
+[[rules]]
+ruleId = "@codepol/plugin/no-unused-exports"
+targets = ["src"]
+args.ignorePackageEntryPoints = true
+
+# Architecture
+[[rules]]
+ruleId = "@codepol/plugin/no-cycles"
+severity = "error"
+targets = ["src"]
 ```
 
-### Configure ESLint
+Then run:
 
-Add to your `eslint.config.js` if you want direct ESLint integration:
+```bash
+npx codepol            # check
+npx codepol --fix      # apply fixes
+npx codepol --watch    # watch mode
+```
+
+Config is auto-discovered by walking up from the current directory. Use
+`--config` if it lives elsewhere.
+
+For projects without a Node toolchain, use the standalone binary — see
+[Getting Started](./docs/getting-started.md#use-the-standalone-binary-recommended-for-non-node-projects).
+
+## Editor setup
+
+Install the VS Code extension. It activates when your workspace contains
+`codepol.toml`.
+
+```jsonc
+// .vscode/settings.json
+{
+  "codepol.architecture.baselineLabel": "main",
+  "editor.codeActionsOnSave": {
+    "source.fixAll.codepol": "explicit"
+  }
+}
+```
+
+Rules tagged `fix = "on-save"` then apply automatically on save; everything else
+stays available as a quickfix. See
+[Editor Integration](./docs/editor-integration.md).
+
+## ESLint integration
+
+To run Codepol rules inside an existing ESLint setup:
 
 ```javascript
+// eslint.config.mjs
 import { eslintPluginCreate } from '@codepol/plugin-eslint';
 import {
   pluginBuiltinRegister,
@@ -119,163 +206,88 @@ import {
 } from '@codepol/core';
 import codepolBuiltin from '@codepol/plugin';
 
-await providerParserRuntimeInit('eslint');
+function codepolUnwrap(result, label) {
+  if ('Err' in result) {
+    console.error(`[eslint.config] ${label}: ${result.Err?.message ?? result.Err}`);
+    process.exit(1);
+  }
+  return result.Ok;
+}
 
+await providerParserRuntimeInit('eslint');
 pluginBuiltinRegister('@codepol/plugin', codepolBuiltin);
 
-const codepol = eslintPluginCreate(await policyPluginRulesGet());
+const codepol = eslintPluginCreate(
+  codepolUnwrap(await policyPluginRulesGet(), 'policyPluginRulesGet'),
+);
 
 export default [
   {
-    plugins: {
-      codepol,
-    },
+    plugins: { codepol },
     rules: {
-      ...await providerRulesConfigGet('eslint'),
+      ...codepolUnwrap(await providerRulesConfigGet('eslint'), 'providerRulesConfigGet'),
     },
   },
 ];
 ```
 
-### Plugin Loading
+These loader functions return a `Result`, so unwrap before use — see
+[API Reference](./docs/api-reference.md#providerrulesconfigget).
 
-Codepol loads rule-level plugin capabilities from `codepol.toml` declarations. Built-in plugins resolve from an
-in-process registry, while universal custom plugins can run through the subprocess protocol. The CLI uses the
-enabled rule plugins to decide which fixes and adapted ESLint rules to run, while Tree-sitter checking continues to
-use the policy rules and their associated tree check providers.
+`@codepol/plugin-eslint` is a thin adapter: any rule with a tree-check provider
+is auto-adapted into an ESLint rule. Cross-file fixes that touch other files are
+dropped in this path, since ESLint can only edit the current file — run the CLI
+or use the editor to apply those in full.
 
-The `@codepol/plugin-eslint` package is a thin adapter that aggregates rules from capability plugins such as
-`@codepol/plugin`. Use `eslintPluginCreate(pluginRules)` to assemble the ESLint adapter from any set of
-`CodepolPluginRule` instances.
+## CI
 
-### Run Checks
-
-```bash
-# Using CLI
-npx codepol
-
-# With autofix
-npx codepol --fix
-
-# Watch mode
-npx codepol --watch
+```yaml
+- run: npx codepol
+- run: npx codepol graph cycles
+- run: npx codepol graph diff main --fail-on-new-cycle
 ```
 
-### Use the Standalone Binary (Recommended for Non-Node Projects)
-
-For non-Node projects, this is the recommended way to run codepol.
-For Node-capable projects, you can use either this binary bundle or `npx codepol`.
-Download binaries from [GitHub Releases](https://github.com/fruitiecutiepie/codepol/releases) (or CI artifacts) instead of committing `dist-binary` to your repo.
-
-The release bundle contains the binary and required WASM files (must stay in the same directory):
-
-- `codepol`
-- `tree-sitter.wasm`
-- `tree-sitter-typescript.wasm`
-- `tree-sitter-tsx.wasm`
-- `tree-sitter-python.wasm`
-
-Install to `~/.local/bin` so `codepol` is available on PATH:
-
-```bash
-# Pick a release tag, for example v1.2.3
-TAG=v1.2.3
-
-# Download and install to ~/.local/bin
-curl -fL "https://github.com/fruitiecutiepie/codepol/releases/download/${TAG}/codepol-binary-${TAG}-linux-x64.tar.gz" \
-  | tar -xz -C ~/.local/bin
-
-# Alternative: download from a workflow artifact (requires gh auth)
-# gh run download <run-id> --name codepol-binary --dir ~/.local/bin
-```
-
-Make sure `~/.local/bin` is on your PATH (most systems include it by default).
-
-Run from your project root:
-
-```bash
-codepol
-# or
-codepol --config ./codepol.toml
-```
-
-## Runtime diagnostics
-
-Codepol ships a runtime diagnostics runtime that is configured per environment, not per caller. Business code depends on a `Diagnostics` / `ExecutionContext` interface; what actually flows out to console, file, or OTEL is decided once at the process boundary.
-
-The control knobs are named presets — pick the one that matches the job:
-
-| Preset | Posture |
-| ------ | ------- |
-| `user` | Safe field posture (default). warn / strict redaction / stdout sink. |
-| `dev` | Productive daily engineering. debug / console + file / cheap invariants. |
-| `test` | Deterministic CI verification. warn / memory sink / no tracing. |
-| `verbose` | Explicit investigation. trace / console + file / full invariants / profiling on. |
-
-Control surfaces:
-
-- **CLI**: `--env <preset>`, `--override <dim=value>` (repeatable), `--escalate <scope=level@ttlSec:reason>` (repeatable). Env var `CODEPOL_ENV` sets the preset without a flag; legacy `CODEPOL_DEBUG_PARSE` / `CODEPOL_DEBUG_PARSE_FILE` continue to work as overlays.
-- **VSCode**: settings `codepol.diagnostics.environment`, `codepol.diagnostics.overrides`, `codepol.diagnostics.escalations`, commands `Codepol: Set Diagnostics Environment`, `Codepol: Add Diagnostics Escalation`, `Codepol: Clear Diagnostics Escalations`, `Codepol: Show Current Diagnostics Config`.
-- **Daemon IPC / LSP**: `set_diagnostics_config`, `set_diagnostics_escalation`, `revoke_diagnostics_escalation`, `list_diagnostics_escalations`, plus LSP command `codepol.diagnostics.configure` and request `codepol/diagnosticsConfig`.
-- **Programmatic API**: `diagnosticsRuntimeSetEnvironment`, `diagnosticsRuntimeSetOverrides`, `diagnosticsRuntimeSetConfig`, `diagnosticsRuntimeEscalate`, `diagnosticsRuntimeRevokeEscalation` exported from `@codepol/core`.
-
-The canonical reference — model, resolution rules, escalation semantics, redaction pipeline, sink pipeline — lives at [packages/core/src/diagnostics/README.md](./packages/core/src/diagnostics/README.md).
-
-## What It Enforces
-
-Codepol enforces custom policy rules defined by plugins. For example, a `no-duplicate-exports` rule that prevents naming collisions across your codebase:
-
-```toml
-[[plugins]]
-id = "@your-org/plugin"
-
-[plugins.source]
-kind = "process"
-command = "python3"
-args = ["./tools/your_codepol_plugin.py"]
-
-[targets.src]
-language = "typescript"
-files = ["src/**/*.ts"]
-
-[[rules]]
-ruleId = "@your-org/plugin/no-duplicate-exports"
-targets = ["src"]
-
-[rules.args]
-include = ["function", "class", "type"]
-```
-
-This rule uses Tree-sitter to scan all files for exported identifiers, then reports conflicts:
-
-```
-src/auth/UserService.ts:5 - Duplicate export 'UserService' (also in src/legacy/UserService.ts:12)
-```
-
-The built-in `@codepol/plugin` includes a `require-logger-enter-exit` rule, but you can create plugins for any structural pattern. See [Creating Custom Plugins](./docs/creating-custom-plugins.md).
+Baseline diffing is the recommended way to adopt architecture rules on an
+existing codebase: block new problems while you work the existing ones down. See
+[Architecture Analysis](./docs/architecture-analysis.md#baselines-and-diffing).
 
 ## Documentation
 
-- [Getting Started](./docs/getting-started.md) - Step-by-step setup guide
-- [Creating Custom Plugins](./docs/creating-custom-plugins.md) - Build custom Codepol plugins
-- [Policy Schema](./docs/policy-schema.md) - Complete configuration reference
-- [API Reference](./docs/api-reference.md) - Programmatic usage guide
+| Guide | Contents |
+| ----- | -------- |
+| [Getting Started](./docs/getting-started.md) | Install, configure, first check |
+| [Rule Catalog](./docs/rules/index.md) | Every built-in rule and its arguments |
+| [Policy Schema](./docs/policy-schema.md) | Complete `codepol.toml` reference |
+| [CLI Reference](./docs/cli-reference.md) | All commands and flags |
+| [Architecture Analysis](./docs/architecture-analysis.md) | Module graph, architecture rules, baselines |
+| [Editor Integration](./docs/editor-integration.md) | LSP, daemon, VS Code extension |
+| [Language Support](./docs/language-support.md) | What works where |
+| [Semantic Index](./docs/semantic-index.md) | How the index is built |
+| [ProjectIndex API](./docs/project-index-api.md) | Query API for rule authors |
+| [Creating Custom Plugins](./docs/creating-custom-plugins.md) | Write your own rules |
+| [Cross-File Analysis](./docs/cross-file-analysis.md) | Rules that read the index |
+| [Creating Language Adapters](./docs/creating-language-adapters.md) | Add a language |
+| [Adding a Lint Provider](./docs/adding-a-lint-provider.md) | Add a tool integration |
+| [API Reference](./docs/api-reference.md) | Programmatic surface |
+
+Run the docs site locally with `pnpm docs:dev`.
 
 ## Development
 
 ```bash
-# Install dependencies
 pnpm install
-
-# Build all packages
-pnpm build
-
-# Run tests
-pnpm test
-
-# Type check
+pnpm build            # build WASM grammars, then all packages
+pnpm test             # unit + integration
+pnpm test:unit
+pnpm test:integration
 pnpm typecheck
+pnpm lint
 ```
+
+Codepol enforces its own policy on itself — see [`codepol.toml`](./codepol.toml).
+That config is intentionally strict and idiosyncratic (`snake_case` functions,
+no `interface`, no `class`, no `var`), which explains the naming style throughout
+this repo. It is a dogfooding config, not a recommendation.
 
 ## License
 
