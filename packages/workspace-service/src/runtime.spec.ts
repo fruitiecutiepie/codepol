@@ -22,19 +22,30 @@ describe('builtinPluginsRefresh', () => {
 });
 
 describe('ensureWorkspaceRuntimeReady', () => {
-  it('reinitializes when another parser owner invalidates global parser state', async () => {
+  it('keeps parser readiness isolated from unrelated parser owners', async () => {
     const runtime = await import('./runtime.js');
     await runtime.ensureWorkspaceRuntimeReady();
 
     const core = await import('@codepol/core');
     expect(core.parserRuntimeIsReady()).toBe(true);
 
+    // Registering an unrelated owner must not mark this owner uninitialized:
+    // parser state is scoped per web-tree-sitter module instance, so an
+    // editor host loading a second package copy cannot invalidate ours.
     const { parserRuntimeStateForOwnerGet } = await import(
       '../../core/src/parser/parserRuntimeState.js'
     );
     parserRuntimeStateForOwnerGet({ owner: 'runtime-spec' });
-    expect(core.parserRuntimeIsReady()).toBe(false);
 
+    expect(core.parserRuntimeIsReady()).toBe(true);
+    expect(core.isErr(core.parserGetForFile('example.ts'))).toBe(false);
+  });
+
+  it('stays ready across repeated calls', async () => {
+    const runtime = await import('./runtime.js');
+    const core = await import('@codepol/core');
+
+    await runtime.ensureWorkspaceRuntimeReady();
     await runtime.ensureWorkspaceRuntimeReady();
 
     expect(core.parserRuntimeIsReady()).toBe(true);
