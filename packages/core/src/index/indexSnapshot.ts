@@ -120,6 +120,13 @@ export function projectIndexStoreSnapshotCreate(
           ...store.importBindingsInFileGet(file),
           ...store.exportsInFileGet(file),
           ...store.typeRelationsInFileGet(file),
+          // Symbol-flow and member-shape relations are part of the store's
+          // relation set, so they must round-trip too. Omitting them silently
+          // empties `querySymbolFlow` and structural type-hierarchy matches for
+          // every consumer that restores from a snapshot — the subprocess index
+          // build host and the warm cache both do.
+          ...store.memberShapesInFileGet(file),
+          ...store.symbolFlowsInFileGet(file),
         ],
         cfgs: store.cfgsInFileGet(file),
       };
