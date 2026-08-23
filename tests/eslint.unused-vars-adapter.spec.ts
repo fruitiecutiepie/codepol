@@ -187,6 +187,22 @@ ruleTester.run('adapted-no-unused-vars', eslintRule as any, {
   ],
 });
 
+/**
+ * Codepol loader APIs return `Result`, so tests must unwrap before use.
+ * Spreading or casting the `Result` itself yields an `Ok` key, not the value.
+ */
+function resultUnwrap<T>(result: { Ok: T } | { Err: unknown }): T {
+  if ('Err' in result) {
+    const err = (result as { Err: unknown }).Err;
+    const message =
+      typeof err === 'object' && err !== null && 'message' in err
+        ? String((err as { message: unknown }).message)
+        : String(err);
+    throw new Error(message);
+  }
+  return (result as { Ok: T }).Ok;
+}
+
 describe('eslint adapter with native no-unused-vars', () => {
   it('adapts the native rule through treeCheckProvider metadata', () => {
     expect(eslintRule).toBeDefined();
@@ -199,9 +215,8 @@ describe('eslint adapter with native no-unused-vars', () => {
     const shippedRule = (plugin as any).rules['no-unused-vars'];
     expect(shippedRule).toBeDefined();
 
-    const providerRules = await providerRulesConfigGet(
-      'eslint',
-      configPath,
+    const providerRules = resultUnwrap(
+      await providerRulesConfigGet('eslint', configPath),
     ) as Linter.RulesRecord;
     expect(providerRules['codepol/no-unused-vars']).toBeDefined();
 
@@ -258,9 +273,8 @@ describe('eslint adapter with native no-unused-vars', () => {
 
   it('does not emit tool runs as a direct ESLint rule', async () => {
     const plugin = eslintPluginCreate(pluginRules);
-    const providerRules = await providerRulesConfigGet(
-      'eslint',
-      toolsConfigPath,
+    const providerRules = resultUnwrap(
+      await providerRulesConfigGet('eslint', toolsConfigPath),
     ) as Linter.RulesRecord;
 
     expect(providerRules['codepol/eslint']).toBeUndefined();

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
   pluginModuleRegister,
   pluginRuleNew,
@@ -16,7 +16,12 @@ const TEST_PLUGIN_MULTI_ID = 'test-biome-multi-config-plugin';
 const TEST_PLUGIN_CONFLICT_ID = 'test-biome-conflict-plugin';
 
 function tempProjectCreate(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-biome-integration-'));
+  // realpath: on macOS os.tmpdir() is a symlink (/var -> /private/var) and the
+  // engine canonicalizes indexed paths, so violation file paths would not match
+  // the raw mkdtemp path.
+  const dir = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), 'codepol-biome-integration-')),
+  );
 
   fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
   fs.writeFileSync(
@@ -130,6 +135,24 @@ function policyConfigCreate(biomeBin: string): CodepolConfig {
 
 describe('biome provider integration', () => {
   const createdDirs: string[] = [];
+  let previousServiceMode: string | undefined;
+
+  // `policyCheck` defaults to the daemon, and the daemon process cannot see
+  // plugins registered in *this* process via `pluginModuleRegister`, so the
+  // mock rule would never resolve and biome would never run. Pin the
+  // in-process engine, like the other CLI-pipeline integration specs do.
+  beforeAll(() => {
+    previousServiceMode = process.env.CODEPOL_WORKSPACE_SERVICE_MODE;
+    process.env.CODEPOL_WORKSPACE_SERVICE_MODE = 'in_process';
+  });
+
+  afterAll(() => {
+    if (previousServiceMode === undefined) {
+      delete process.env.CODEPOL_WORKSPACE_SERVICE_MODE;
+    } else {
+      process.env.CODEPOL_WORKSPACE_SERVICE_MODE = previousServiceMode;
+    }
+  });
 
   afterEach(() => {
     for (const dir of createdDirs.splice(0)) {
